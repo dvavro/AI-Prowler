@@ -19,6 +19,7 @@ Run: run_tests_gui_jobs_e2e.bat --human -k test_photos
 """
 import base64
 import json
+import os
 import re
 import shutil
 import uuid
@@ -29,7 +30,9 @@ from playwright.sync_api import expect
 
 from api import http, local_api_origin
 
-AI_ROOT = Path.home() / "Documents" / "AI-Prowler"
+# 2026-10-13: the APP's home — in --sandbox runs the time machine's server has
+# its own home folder (E2E_APP_HOME), not the tester's.
+AI_ROOT = Path(os.environ.get("E2E_APP_HOME") or Path.home()) / "Documents" / "AI-Prowler"
 PHOTOS_ROOT = AI_ROOT / "JobPhotos"
 TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")

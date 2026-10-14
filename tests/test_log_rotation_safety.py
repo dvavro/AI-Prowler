@@ -31,7 +31,9 @@ import tempfile
 import textwrap
 from pathlib import Path
 
-SRC_PATH = Path(r"C:\Users\jamie\Documents\AI-Prowler_V910_to_V920\AI-Prowler\ai_prowler_mcp.py")
+# The repo's own copy (was a hard-coded path on Jamie's machine, so these
+# tests failed with FileNotFoundError everywhere else).
+SRC_PATH = Path(__file__).resolve().parents[1] / "ai_prowler_mcp.py"
 CLASS_NAME = "_SafeRotatingFileHandler"
 TIMEOUT_SEC = 8
 

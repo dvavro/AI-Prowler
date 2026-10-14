@@ -45,15 +45,20 @@ def test_RE_07_remove_cancel_keeps_stop(route, routed_four):
     route.expect_stops_include(routed_four)
 
 
-def test_RE_08_remove_ok_moves_job_to_not_on_route(route, routed_four, api):
+def test_RE_08_remove_ok_takes_the_job_off_the_date(route, routed_four, api):
     jid = routed_four[0]
     msg = route.stop(jid).remove(confirm=True)
     assert "kept" in msg.lower() and "not deleted" in msg.lower()
     route.pick_date(SANDBOX_DATE)
     route.expect_stops_include(routed_four[1:])
-    route.expect_not_on_route([jid])
-    jobs = api.read("Jobs_Schedule")
-    assert any(j.get("JobID (JOB-####)") == jid for j in jobs), "job was deleted, not just un-routed"
+    # Current design (see the confirm text): the job is kept but its Service
+    # Date is cleared, so it leaves this date entirely — it is NOT listed under
+    # "not on this route" and won't come back on a re-route.
+    route.expect_not_on_route([])
+    jobs = [j for j in api.read("Jobs_Schedule") if j.get("JobID (JOB-####)") == jid]
+    assert jobs, "job was deleted, not just taken off the route"
+    assert not (jobs[0].get("Service Date") or "").strip(), \
+        f"the removed job should have no Service Date now, has {jobs[0].get('Service Date')!r}"
 
 
 def test_RE_09_job_added_after_routing_appears_not_on_route(route, routed_four, data):

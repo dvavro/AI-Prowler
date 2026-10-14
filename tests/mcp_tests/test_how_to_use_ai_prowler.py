@@ -241,3 +241,73 @@ class TestFooterVariesCorrectly:
         assert jake_result != vicki_result  # footers differ
         assert "Jake R" in jake_result and "Jake R" not in vicki_result
         assert "Vicki Vavro" in vicki_result and "Vicki Vavro" not in jake_result
+
+class TestHRAppsGuideIntegration:
+    """2026-10-12 (David): the HR apps (HR Admin + HR Portal) and their hr_*
+    tools must work with the MCP Tool Configuration in server mode - described
+    in the guide body on every connector, and correctly reported as
+    enabled/disabled by the THIS CONNECTION footer."""
+
+    def _server_result(self, mcp_mod, monkeypatch, disabled):
+        monkeypatch.setattr(mcp_mod, "_IS_SERVER_MODE", True)
+        monkeypatch.setattr(mcp_mod, "_USER_DISABLED_TOOLS", frozenset(disabled))
+        monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: None)
+        monkeypatch.setattr(mcp_mod, "_user_private_write_dir",
+                            lambda ctx: ("personal", None))
+        return mcp_mod.how_to_use_ai_prowler(ctx=None)
+
+    def test_hr_section_in_guide_body(self, mcp_mod, monkeypatch):
+        """The body describes the HR apps and hr_* tools (it was missing
+        entirely before this fix) - on every connector by design."""
+        monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: None)
+        monkeypatch.setattr(mcp_mod, "_user_private_write_dir",
+                            lambda ctx: ("personal", None))
+        body = _strip_footer(mcp_mod.how_to_use_ai_prowler(ctx=None))
+        assert "HR Admin" in body
+        assert "HR Portal" in body
+        assert "hr_list_employees" in body
+        assert "hr_send_notification" in body
+        assert "server only" in body.lower()
+        assert "thirteen tool families" in body
+
+    def test_hr_body_identical_server_and_personal(self, mcp_mod, monkeypatch):
+        """The HR section does not vary per connector - only the footer does."""
+        monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: None)
+        monkeypatch.setattr(mcp_mod, "_user_private_write_dir",
+                            lambda ctx: ("personal", None))
+        personal_body = _strip_footer(mcp_mod.how_to_use_ai_prowler(ctx=None))
+        user = _user("owner")
+        monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
+        server_body = _strip_footer(
+            mcp_mod.how_to_use_ai_prowler(ctx=_make_ctx(user)))
+        assert personal_body == server_body
+        assert "HR Admin" in server_body
+
+    def test_footer_lists_hr_disabled_when_switch_off(self, mcp_mod, monkeypatch):
+        """Server mode, HR switch OFF: the footer names the hr_* tools as
+        DISABLED under their category label."""
+        result = self._server_result(mcp_mod, monkeypatch, mcp_mod._HR_TOOLS)
+        assert "DISABLED by this install" in result
+        assert "HR apps (HR Admin + HR Portal)" in result
+        assert "hr_list_employees" in result
+        assert "hr_send_notification" in result
+
+    def test_footer_counts_hr_enabled_when_switch_on(self, mcp_mod, monkeypatch):
+        """Server mode, HR switch ON: nothing disabled, no hr_* names leak
+        into the THIS CONNECTION footer."""
+        result = self._server_result(mcp_mod, monkeypatch, frozenset())
+        assert "Nothing is disabled" in result
+        assert "hr_list_employees" not in result.split("THIS CONNECTION")[1]
+
+    def test_hr_catalog_category_is_server_only(self, mcp_mod):
+        """All 20 hr_* tools sit in the 'hr' catalog category, SERVER mode."""
+        cat = mcp_mod._tool_catalog
+        hr_tools = cat.tools_in_category("hr")
+        assert len(hr_tools) == 20
+        assert set(hr_tools) == set(mcp_mod._HR_TOOLS)
+        avail_server = cat.tools_available_in_mode("server")
+        avail_personal = cat.tools_available_in_mode("personal")
+        for name in hr_tools:
+            assert name in avail_server, name
+            assert name not in avail_personal, name
+

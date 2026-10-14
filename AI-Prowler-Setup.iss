@@ -359,6 +359,27 @@ Source: "remote\manifest.json"; DestDir: "{app}\remote"; Flags: ignoreversion
 Source: "remote\sw.js"; DestDir: "{app}\remote"; Flags: ignoreversion
 Source: "remote\icon-192.png"; DestDir: "{app}\remote"; Flags: ignoreversion
 Source: "remote\icon-512.png"; DestDir: "{app}\remote"; Flags: ignoreversion
+; HR apps (2026-10-11, David) — HR Admin (hr_admin\) + HR Portal (hr_portal\),
+; the HR scheduler and the HR data files the code reads. AI-Prowler SERVER
+; only and OFF until the owner turns them on (Settings -> MCP Tool
+; Configuration -> HR apps); a personal install answers "server only".
+; Runtime files only — not the dev/deploy scripts in hr_portal\ or the
+; internal .docx specs in hr_portal\docs\.
+Source: "hr_scheduler.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "hr_state_rules.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "hr_task_templates.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "hr_forms_library.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "hr_admin\index.html"; DestDir: "{app}\hr_admin"; Flags: ignoreversion
+Source: "hr_admin\manifest.json"; DestDir: "{app}\hr_admin"; Flags: ignoreversion
+Source: "hr_admin\sw.js"; DestDir: "{app}\hr_admin"; Flags: ignoreversion
+Source: "hr_admin\icon-192.png"; DestDir: "{app}\hr_admin"; Flags: ignoreversion
+Source: "hr_admin\icon-512.png"; DestDir: "{app}\hr_admin"; Flags: ignoreversion
+Source: "hr_portal\index.html"; DestDir: "{app}\hr_portal"; Flags: ignoreversion
+Source: "hr_portal\employee_manifest.json"; DestDir: "{app}\hr_portal"; Flags: ignoreversion
+Source: "hr_portal\icon-192.png"; DestDir: "{app}\hr_portal"; Flags: ignoreversion
+Source: "hr_portal\icon-512.png"; DestDir: "{app}\hr_portal"; Flags: ignoreversion
+Source: "hr_portal\docs\*.html"; DestDir: "{app}\hr_portal\docs"; Flags: ignoreversion
+Source: "hr_portal\docs\*.pdf"; DestDir: "{app}\hr_portal\docs"; Flags: ignoreversion
 
 ; --- v8.0.0 Analysis Tasks & Scheduling ---
 ; custom_tasks_manager.py  : My Custom Analyses CRUD, scheduling, due-date logic,

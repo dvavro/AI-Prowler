@@ -43,6 +43,8 @@ def _isolate_tqa_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(tqa, "AI_PROWLER_CONFIG_PATH", tmp_path / ".ai-prowler" / "config.json")
     monkeypatch.setattr(tqa, "GENERATED_MCP_CONFIG_PATH", tmp_path / ".ai-prowler" / "claude_mcp_config.json")
     monkeypatch.setattr(tqa, "API_KEY_PATH", tmp_path / ".ai-prowler" / "claude_api_key.txt")
+    # 2026-10-12: same isolation for the Grok key file.
+    monkeypatch.setattr(tqa, "GROK_API_KEY_PATH", tmp_path / ".ai-prowler" / "grok_api_key.txt")
     # v8.1.6: same isolation requirement for the new OAuth-token files —
     # without this, tests would read/write the REAL
     # ~/.ai-prowler/claude_oauth_token.json on the machine running them.
@@ -677,7 +679,7 @@ def test_test_setup_updates_status_from_dry_run_report(gui, monkeypatch):
             {"name": "AI-Prowler HTTP MCP server (port 8000)", "ok": True, "detail": "responded 200"},
         ],
     }
-    monkeypatch.setattr(tqa, "dry_run_check", lambda: fake_report)
+    monkeypatch.setattr(tqa, "dry_run_check", lambda auth=None: fake_report)   # auth: 2026-10-12
     gui.app._tqa_test_setup()
     _pump(gui)
     # Status display should have re-run and reflect current (disabled) state —
@@ -1493,7 +1495,8 @@ def test_autonomous_ai_task_queue_header_and_note_rendered(gui):
     assert "🤖  Autonomous Task Queue" not in text  # old un-renamed header must be gone
     assert "AI-assisted tasks that can be queued and stored" in text
     assert "repeated and/or future execution" in text
-    assert "Claude AI has tools to manage" in text
+    # 2026-10-12 (David): AI-Prowler serves Claude, Muse, or Grok over MCP
+    assert "Claude, Muse, or Grok has tools to manage" in text
     assert "AI-Prowler MCP tools remotely" in text
 
 
@@ -1504,7 +1507,7 @@ def test_my_custom_ai_analyses_header_and_note_rendered(gui):
     assert "My Custom AI Analyses" in text
     assert "📋  My Custom Analyses" not in text  # old un-renamed header must be gone
     assert "user custom-defined tasks are AI-assisted tasks" in text
-    assert "Claude can also create and add these via AI-Prowler MCP tools remotely" in text
+    assert "Claude, Muse, or Grok can also create and add these via AI-Prowler MCP tools remotely" in text
 
 
 # ── v9.0.0: armed display auto-refreshes every 60 seconds ─────────────────

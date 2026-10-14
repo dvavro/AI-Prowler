@@ -16,22 +16,29 @@ import re
 import pytest
 from playwright.sync_api import expect
 
-from safety import ZTEST_PREFIX
+from safety import SANDBOX_DATE, ZTEST_PREFIX
 
 CUST_NAME = f"{ZTEST_PREFIX} Projections Weekly"
 
 
 @pytest.fixture
-def recurring_customer(clean_slate, api):
-    """A weekly recurring customer whose next visits are projections, not jobs."""
-    last_svc = (_dt.date.today() - _dt.timedelta(days=7)).isoformat()
+def recurring_customer(clean_slate, api, data):
+    """A weekly recurring customer whose next visits are projections, not jobs.
+
+    2026-10-13: "Last Service Date" is never a stored value (Case D / David's
+    2026-10-05 rule) — the server computes it from the customer's COMPLETED
+    jobs on past dates, and ignores what create_customer is given. So the
+    customer gets a real Complete job a week ago, which is what makes it a
+    recurring customer with a last service the calendar can project from."""
+    last_svc = (_dt.date.fromisoformat(SANDBOX_DATE) - _dt.timedelta(days=7)).isoformat()
     out = api.call("create_customer", {"updates": {
         "Company Name": CUST_NAME,
         "City": "New Smyrna Beach", "State": "FL", "ZIP": "32168",
         "Status Active/Inactive": "Active",
-        "Frequency": "Weekly",
-        "Last Service Date": last_svc}})
+        "Frequency": "Weekly"}})
     cid = out.split("NEW_CUST_ID=")[1].splitlines()[0].strip()
+    data.job("YRP last weekly visit", date=last_svc, CustomerID=cid,
+             **{"Customer Name / Company": CUST_NAME, "Job Status": "Complete"})
     return cid
 
 
@@ -43,6 +50,16 @@ def _overview_projections(app, page):
     expect(label).to_have_count(1, timeout=30_000)
     app.log("YEARLY scroll to the 12-Month Overview")
     label.scroll_into_view_if_needed()
+    app.log("YEARLY diag: " + str(page.evaluate("""async () => { try {
+        const raw = await mcpCall('read_job_spreadsheet', {sheet_name: 'Customers', max_rows: 500});
+        const rows = _routeParseSheetText(raw || '');
+        const r = rows.find(x => (x['Company Name'] || '').indexOf('Projections') !== -1) || {};
+        const p = _calRecurringProjections(rows);
+        const cal = Object.values(window._calLastByDate || {}).flat().filter(x => x && x.projected).length;
+        return JSON.stringify({rows: rows.length, status: r['Status Active/Inactive'], freq: r['Frequency'],
+                               last: r['Last Service Date'], proj: p.length, onCalendar: cal,
+                               devents: document.querySelectorAll('#calendarContent .devent').length});
+      } catch (e) { return 'ERR ' + e; } }""")))
     return page.locator(f'#calendarContent .devent[data-customer="{CUST_NAME}"]')
 
 

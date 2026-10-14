@@ -43,6 +43,12 @@ def _email_route(srv, key, crew):
         return st, raw[:200]
 
 
+def _refused_nothing_sent(res):
+    """No email went out: no route saved, or (since 2026-10-05) not approved.
+    Both replies name the crew whose route was checked."""
+    return "Nothing to email" in res or "only allowed for approved routes" in res
+
+
 @pytest.fixture
 def empty_day(clean_slate, owner_api):
     if not _no_route_on_sandbox_date(owner_api):
@@ -56,7 +62,7 @@ def test_SRV_SCOPE_13_crew_email_route_is_forced_to_own_route(srv, owner_api, em
     assert _no_route_on_sandbox_date(owner_api)          # re-checked right before the call
     st, res = _email_route(srv, "U3", asked)
     log.info(f"[SRV-SCOPE-13] Samual email_route_now(crew={asked!r}) -> HTTP {st}: {res.splitlines()[0][:160]}")
-    assert st == 200 and res.lstrip().startswith("⚠️") and "Nothing to email" in res, res[:200]
+    assert st == 200 and res.lstrip().startswith("⚠️") and _refused_nothing_sent(res), res[:200]
     # the server lower-cases the crew name in this message ("(samual cronin)")
     assert f"({CREW})".lower() in res.lower(), f"Samual's request wasn't limited to his own route: {res[:200]!r}"
     assert OTHER.lower() not in res.lower(), f"the server looked up Vicki's route for Samual: {res[:200]!r}"
@@ -66,5 +72,5 @@ def test_SRV_SCOPE_13_control_owner_can_ask_for_another_crews_route(srv, owner_a
     assert _no_route_on_sandbox_date(owner_api)
     st, res = _email_route(srv, "U1", OTHER)
     log.info(f"[SRV-SCOPE-13] David email_route_now(crew='{OTHER}') -> HTTP {st}: {res.splitlines()[0][:160]}")
-    assert st == 200 and "Nothing to email" in res and f"({OTHER})".lower() in res.lower(), \
+    assert st == 200 and _refused_nothing_sent(res) and f"({OTHER})".lower() in res.lower(), \
         f"owner's request for Vicki's route wasn't honoured: {res[:200]!r}"

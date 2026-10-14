@@ -96,6 +96,7 @@ _HR_TRACKING_DEFAULT = {
         "last_weekly_owner_summary": None,
         "last_reminder_email_check": None,
         "last_employee_backup": None,
+        "last_lifecycle_advance": None,      # 2026-10-12 R-090 job_lifecycle_advance
     },
     "digest_state": {
         "last_digest_at": None,
@@ -651,6 +652,28 @@ def job_doc_expiration_check() -> str:
         return "doc_expiration_check: error"
 
 
+def job_lifecycle_advance() -> str:
+    """Job 13 — daily 5am (2026-10-12, R-090). Advance employee status with the
+    calendar: Pre-Start -> Onboarding on the start date, Onboarding -> Active
+    when every onboarding task is done, Offboarding -> Terminated the day after
+    the last day (which ends HR Portal access). Rules in
+    ai_prowler_mcp._hr_advance_lifecycle."""
+    try:
+        from ai_prowler_mcp import _hr_db_lock, _hr_load_db, _hr_save_db, _hr_advance_lifecycle
+    except Exception:
+        return "lifecycle_advance: HR backend not importable, skipped"
+    try:
+        with _hr_db_lock:
+            db = _hr_load_db()
+            changes = _hr_advance_lifecycle(db)
+            if changes:
+                _hr_save_db(db)
+        return "lifecycle_advance: " + (", ".join(f"{i} {o}->{n}" for i, o, n in changes) or "no changes")
+    except Exception:
+        _log.warning("job_lifecycle_advance failed:\n%s", traceback.format_exc())
+        return "lifecycle_advance: error"
+
+
 def job_weekly_owner_summary() -> str:
     """Job 10 — Monday 7am. New hires (start_date within the last 7 days),
     CRITICAL-overdue count, and employees at 0% task completion: email the
@@ -792,6 +815,9 @@ JOB_REGISTRY = {
     "reminder_email":          {"cadence": ("daily", 7, 0), "tracking_key": "last_reminder_email_check",
                                  "fn": job_reminder_email,
                                  "label": "Business Reminder Email"},
+    "lifecycle_advance":       {"cadence": ("daily", 5, 0), "tracking_key": "last_lifecycle_advance",
+                                 "fn": job_lifecycle_advance,
+                                 "label": "Employee Status Advance"},
     "employee_backup":         {"cadence": _employee_backup_cadence, "tracking_key": "last_employee_backup",
                                  "fn": job_employee_backup,
                                  "label": "Employee Backup"},

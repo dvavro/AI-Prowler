@@ -8,11 +8,14 @@ Self-Service (email + PIN). Both must survive a page reload via
 localStorage, and both must recover cleanly from a 401 (clear stored
 credential, show login) rather than looping.
 
-Safe: reads hr/index.html as plain text only and drives small,
+Safe: reads hr_admin/index.html as plain text only and drives small,
 self-contained localStorage-simulation snippets through Node — it never
 imports ai_prowler_mcp.py, never opens a real network connection, and
 never touches hr_db.json or a live server.
 """
+# 2026-10-11 (David): the original /hr/ app is retired — HR Admin (hr_admin/) is
+# the same app, so this test now reads hr_admin/. HR is AI-Prowler server only.
+
 from __future__ import annotations
 
 import json
@@ -29,7 +32,7 @@ _real_Popen = subprocess.Popen
 
 SRC_ROOT = Path(os.environ.get("AI_PROWLER_SRC", "")) if os.environ.get("AI_PROWLER_SRC") \
     else Path(__file__).resolve().parent.parent.parent
-HR_INDEX = SRC_ROOT / "hr" / "index.html"
+HR_INDEX = SRC_ROOT / "hr_admin" / "index.html"
 
 
 def _run_node_harness(js_snippet: str) -> dict:

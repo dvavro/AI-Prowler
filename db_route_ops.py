@@ -608,7 +608,7 @@ def db_drop_cancelled_job_stops(db_path: str, job_ids) -> int:
 # NEITHER ever touches original_start_time/original_end_time, by design
 # (see that column's own schema comment): the customer's actually-agreed
 # schedule changes only through a genuine manual edit or an explicit
-# Claude instruction, never as a side effect of trying out a route. This
+# Claude, Muse, or Grok instruction, never as a side effect of trying out a route. This
 # is what lets a route be approved and un-approved through any number of
 # trial-and-error passes without ever losing track of the real target.
 

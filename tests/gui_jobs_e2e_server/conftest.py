@@ -440,6 +440,11 @@ def windows(browser, srv, guard, request):
 # ── SUMMARY.txt ───────────────────────────────────────────────────────────────
 def pytest_sessionfinish(session, exitstatus):
     oc = STATE["outcomes"]
+    # 2026-10-14: same guard as tests/gui_jobs_e2e/conftest.py -- a plain
+    # run_tests.bat deselects this suite; don't write a FAIL SUMMARY.txt or force
+    # exit status 1 then. Via run_gui_jobs_e2e.py --server, E2E_RUN_DIR is set.
+    if not oc and not os.environ.get("E2E_RUN_DIR"):
+        return
     passed = sum(1 for o in oc.values() if o[0] == "passed")
     failed = [(k, v) for k, v in oc.items() if v[0] == "failed"]
     skipped = sum(1 for o in oc.values() if o[0] == "skipped")

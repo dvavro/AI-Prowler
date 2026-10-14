@@ -205,7 +205,7 @@ def test_DB_03_add_customer(db, app, api):
     r = _rec(api, "Customers", "Company Name", name)
     assert r, "not in the database"
     cid = r[CUST_ID_COL]
-    assert re.fullmatch(r"CUST-\d+", cid), cid
+    assert re.fullmatch(r"CUST-(\d{4}-)?\d+", cid), cid    # year-based ids (CUST-2026-52) since Oct 2026
     assert r["Phone"] == "386-555-0199" and r["City"] == "New Smyrna Beach"
     row = _row(page, cid)
     expect(row).to_be_visible(timeout=15_000)

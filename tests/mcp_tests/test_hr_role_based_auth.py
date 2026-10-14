@@ -164,8 +164,7 @@ class TestMvpSimplificationIsGone:
     unconditional assignment pattern is absent from the server-mode block."""
 
     def test_no_longer_grants_admin_unconditionally_on_any_token(self, ai_prowler_source):
-        hr_srv_block = ai_prowler_source.split(
-            'if path.startswith("/hr-api"):', 2)[1].split("# ── end HR", 1)[0]
+        hr_srv_block = _server_hr_block(ai_prowler_source)
         # The old bug pattern: "if ... in _srv_access_tokens:" immediately
         # followed (next non-comment line) by an unconditional
         # `_hrsrv_auth = {"role": "admin"}` with no role check in between.
@@ -175,19 +174,25 @@ class TestMvpSimplificationIsGone:
         )
 
     def test_resolve_user_and_load_users_are_used_for_hr_auth(self, ai_prowler_source):
-        hr_srv_block = ai_prowler_source.split(
-            'if path.startswith("/hr-api"):', 2)[1].split("# ── end HR", 1)[0]
-        assert "_resolve_user(_load_users()" in hr_srv_block
+        hr_srv_block = _server_hr_block(ai_prowler_source)
+        # 2026-10-11: re-reads users.json on every request (_hot_reload_users),
+        # so a suspended or re-tokened user takes effect without a restart.
+        assert "_resolve_user(_hot_reload_users(users_data)" in hr_srv_block
 
 
-class TestPersonalModeUnaffected:
-    """Personal mode is single-user by design — 'any valid token = admin'
-    there is correct behavior, not a gap, and must remain untouched."""
+def _server_hr_block(src):
+    s = src.index("# \u2500\u2500 HR apps \u2014 HR Admin + HR Portal, AI-Prowler SERVER only")
+    return src[s:src.index("# \u2500\u2500 end HR REST API", s)]
 
-    def test_personal_mode_hr_block_still_grants_admin_on_valid_token(self, ai_prowler_source):
-        hrp_block = ai_prowler_source.split(
-            'if path.startswith("/hr-api"):', 2)[2].split("# ── end HR", 1)[0]
-        assert '_hrp_auth = {"role": "admin"}' in hrp_block
-        # Must NOT have been accidentally changed to require role resolution —
-        # personal mode has no users.json / role concept at all.
-        assert "_resolve_user" not in hrp_block
+
+class TestPersonalModeHasNoHr:
+    """2026-10-11 (David): the HR apps are AI-Prowler SERVER only. Personal
+    mode used to treat any valid token as HR admin; now it has no HR sign-in
+    at all — every HR route answers "server only"."""
+
+    def test_personal_mode_hr_block_answers_server_only(self, ai_prowler_source):
+        s = ai_prowler_source.index("# \u2500\u2500 HR apps \u2014 AI-Prowler SERVER only (2026-10-11")
+        hrp_block = ai_prowler_source[s:ai_prowler_source.index("# \u2500\u2500 end HR REST API", s)]
+        assert "_HR_SERVER_ONLY_MESSAGE" in hrp_block
+        assert '_hrp_auth = {"role": "admin"}' not in hrp_block
+        assert "_hr_api_route(" not in hrp_block

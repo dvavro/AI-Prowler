@@ -5,7 +5,7 @@ Regression guard for a real production data-loss bug found 2026-08-29
 while verifying a separate fix (the HR state-dir PermissionError) against
 the user's live deployment.
 
-THE BUG (fixed in this same pass, see hr/index.html's wizardNext()):
+THE BUG (fixed in this same pass, see hr_admin/index.html's wizardNext()):
 renderWizardStep(step) replaces #wizard-steps-container's entire innerHTML
 on every step transition, tearing down the previous step's form elements.
 The original wizardNext() only read field values via document.getElementById()
@@ -24,16 +24,19 @@ CURRENT step's field values inside wizardNext(), before either advancing to
 the next step or submitting -- i.e. while that step's elements still exist.
 
 This test drives the real, shipped wizardNext()/renderWizardStep()/
-WIZARD_STEPS straight out of hr/index.html through all 10 steps end to end,
+WIZARD_STEPS straight out of hr_admin/index.html through all 10 steps end to end,
 with a mock DOM that enforces the real failure mode (getElementById only
 resolves ids belonging to whichever step is currently "mounted" -- exactly
 like a real browser after innerHTML replacement), and asserts every one of
 the 14 fields survives into the final POST /setup/complete payload.
 
-Safe: reads hr/index.html as plain text only, runs the extracted JS in an
+Safe: reads hr_admin/index.html as plain text only, runs the extracted JS in an
 isolated Node subprocess with mocked globals. Never imports ai_prowler_mcp.py,
 never touches hr_db.json or a live server.
 """
+# 2026-10-11 (David): the original /hr/ app is retired — HR Admin (hr_admin/) is
+# the same app, so this test now reads hr_admin/. HR is AI-Prowler server only.
+
 from __future__ import annotations
 
 import os
@@ -47,7 +50,7 @@ _real_Popen = subprocess.Popen
 
 _SRC = os.environ.get("AI_PROWLER_SRC")
 SRC_ROOT = Path(_SRC).resolve() if _SRC else Path(__file__).resolve().parent.parent.parent
-HR_INDEX = SRC_ROOT / "hr" / "index.html"
+HR_INDEX = SRC_ROOT / "hr_admin" / "index.html"
 
 
 @pytest.fixture(scope="module")
@@ -193,7 +196,7 @@ function setStepValues(stepIndex, values) {
 }
 
 // One value per field, keyed by step index, matching the real WIZARD_STEPS
-// shipped in hr/index.html (10 steps, 14 fields total).
+// shipped in hr_admin/index.html (10 steps, 14 fields total).
 const TEST_DATA = [
   { company_name: 'Acme Corp LLC', company_dba: 'Acme Co', entity_type: 'LLC',
     company_address: '123 Main St, City, ST 12345' },
@@ -246,7 +249,7 @@ function check(name, cond) { results.push([name, !!cond]); }
 
 class TestWizardCapturesEveryStepEndToEnd:
     """Drives the real wizardNext()/renderWizardStep()/WIZARD_STEPS from
-    hr/index.html through all 10 steps against a mock DOM that reproduces
+    hr_admin/index.html through all 10 steps against a mock DOM that reproduces
     the exact failure mode of the original bug (elements only exist for
     whichever step is currently rendered). Proves all 14 fields across all
     10 steps survive into the final /setup/complete payload -- the thing

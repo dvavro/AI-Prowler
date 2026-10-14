@@ -67,6 +67,16 @@ REM Auto-install Playwright for the GUI E2E suites (separate check: pytest may
 REM already be installed while playwright is not). --quiet keeps the log clean.
 "%PYTHON%" -c "import playwright" 2>nul || "%PYTHON%" -m pip install playwright pytest-playwright --quiet
 
+REM ── Personal Jobs app E2E in a throwaway sandbox (2026-10-13, David) ───────
+REM   run_tests.bat jobs-sandbox --human                 watch it, test date = today
+REM   run_tests.bat jobs-sandbox --human -k CAL          just the calendar tests
+REM   run_tests.bat jobs-sandbox --human --date 2026-11-02   another test date
+REM Runs ALL personal Jobs-app tests against the time machine's throwaway copy
+REM of AI-Prowler (empty database, email/SMS caught, server and browser clocks
+REM on the test date) — the real install and its jobs are never touched.
+REM Results: tests\gui_jobs_e2e\artifacts\latest\SUMMARY.txt
+if /i "%~1"=="jobs-sandbox" goto :jobs_sandbox
+
 REM Default to tests\ with verbose output if no args given.
 REM Deliberately NOT passing an explicit -m here — pytest.ini's own addopts
 REM already carries the full, current exclusion list (e2e, manual,
@@ -128,7 +138,7 @@ REM one-time UTF-16LE -> UTF-8 conversion pass AFTER the run finishes,
 REM rather than per-line during it.
 set "LOGFILE_RAW=%LOGFILE%.rawutf16"
 if "%~1"=="" (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "& '%PYTHON%' -m pytest tests\ -v -m 'not live_worker' --ignore=tests/e2e --ignore=tests/gui_remote_e2e 2>&1 | Tee-Object -FilePath '%LOGFILE_RAW%'; exit $LASTEXITCODE"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "& '%PYTHON%' -m pytest tests\ -v --ignore=tests/e2e --ignore=tests/gui_remote_e2e 2>&1 | Tee-Object -FilePath '%LOGFILE_RAW%'; exit $LASTEXITCODE"
 ) else (
     powershell -NoProfile -ExecutionPolicy Bypass -Command "& '%PYTHON%' -m pytest %* 2>&1 | Tee-Object -FilePath '%LOGFILE_RAW%'; exit $LASTEXITCODE"
 )
@@ -140,4 +150,12 @@ del "%LOGFILE_RAW%" >nul 2>&1
 echo.
 echo [run_tests] Full log saved to: %LOGFILE%
 
+endlocal & exit /b %TEST_RC%
+
+:jobs_sandbox
+set "RT_REST="
+for /f "tokens=1,*" %%a in ("%*") do set "RT_REST=%%b"
+echo [run_tests] Personal Jobs app E2E in the time machine sandbox: %RT_REST%
+"%PYTHON%" "%~dp0tests\run_gui_jobs_e2e.py" --sandbox --no-open %RT_REST%
+set "TEST_RC=%ERRORLEVEL%"
 endlocal & exit /b %TEST_RC%

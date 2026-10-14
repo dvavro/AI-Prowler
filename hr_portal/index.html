@@ -818,18 +818,20 @@
     <img src="/hr_admin/icon-192.png" style="width:72px;height:72px;border-radius:18px;margin-bottom:12px" onerror="this.style.display='none'">
     <div style="font-size:26px;font-weight:800;color:var(--text);letter-spacing:-0.5px">AI-Prowler</div>
     <div style="font-size:14px;font-weight:600;color:var(--accent);margin-top:2px">Employee Portal</div>
-      <div style="font-size:12px;color:var(--muted);margin-top:6px">Sign in with your email and your AI-Prowler access token</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:6px">Sign in with your AI-Prowler account — your name and AI-Prowler token</div>
   </div>
+  <!-- 2026-10-11 (David): HR Portal sign-in uses the employee's AI-Prowler account
+       (linked to their employee record by HR in HR Admin). -->
   <div style="width:100%;max-width:360px;background:var(--surface);border-radius:16px;border:1px solid var(--border);padding:24px">
     <div class="field" style="margin-bottom:14px">
-      <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:6px">Email</label>
-      <input type="email" id="login-email" placeholder="you@company.com" autocomplete="email"
+      <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:6px">Your name</label>
+      <input type="text" id="login-name" placeholder="As set up on this AI-Prowler server" autocomplete="username"
         style="width:100%;padding:11px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:14px;outline:none;box-sizing:border-box"
         onkeydown="if(event.key==='Enter')document.getElementById('login-pass').focus()">
     </div>
     <div class="field" style="margin-bottom:20px">
-      <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:6px">AI-Prowler Access Token</label>
-      <input type="password" id="login-pass" placeholder="Paste your AI-Prowler token (or your PIN)" autocomplete="current-password"
+      <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:6px">AI-Prowler token</label>
+      <input type="password" id="login-pass" placeholder="Your AI-Prowler password / token" autocomplete="current-password"
         style="width:100%;padding:11px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:14px;outline:none;box-sizing:border-box"
         onkeydown="if(event.key==='Enter')doLogin()">
     </div>
@@ -839,7 +841,7 @@
     </button>
     <div class="login-error" id="login-err" style="display:none;margin-top:12px;padding:10px 14px;background:#f8534920;border:1px solid var(--danger);border-radius:8px;font-size:13px;color:var(--danger)"></div>
     <div style="margin-top:16px;font-size:12px;color:var(--muted);text-align:center">
-      Don't have your AI-Prowler token, or lost it? Ask HR — they can make you a new one in HR Admin.
+      Use the same name and token you use for the other AI-Prowler apps. Can't sign in? Ask HR to link your AI-Prowler account to your employee record.
     </div>
   </div>
 </div>
@@ -3675,36 +3677,38 @@
   }
 
   async function doLogin() {
-    const email = document.getElementById('login-email').value.trim().toLowerCase();
-    const pin   = document.getElementById('login-pass').value.trim();
+    // 2026-10-11 (David): AI-Prowler account sign-in (server only). The server
+    // checks name + token and finds the employee record HR linked to that account.
+    const name  = document.getElementById('login-name').value.trim();
+    const token = document.getElementById('login-pass').value.trim();
     const err   = document.getElementById('login-err');
     err.classList.remove('show');
     const btn = document.getElementById('login-btn');
     if (btn) { btn.textContent = 'Signing in…'; btn.disabled = true; }
 
-    if (!email || !pin) {
-      err.textContent = 'Please enter your email and PIN.'; err.classList.add('show');
+    if (!name || !token) {
+      err.textContent = 'Please enter your name and AI-Prowler token.'; err.classList.add('show');
       if (btn) { btn.textContent = 'Sign in'; btn.disabled = false; }
       return;
     }
     try {
-      const res = await fetch(`${API}/hr-api/auth/employee`, {
+      const res = await fetch(`${API}/hr-api/auth/aiprowler`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, pin })
+        body: JSON.stringify({ name, token })
       });
-      const data = await res.json();
+      let data = {};
+      try { data = await res.json(); } catch(e) {}
       if (!res.ok || !data.session) {
-        err.textContent = data.error === 'invalid_credentials'
-          ? 'Email or AI-Prowler token not recognised. Ask HR for a new token if yours was lost.'
-          : 'Login failed. Please try again.';
+        err.textContent = data.message || 'Sign-in failed. Please try again.';
         err.classList.add('show');
         if (btn) { btn.textContent = 'Sign in'; btn.disabled = false; }
         return;
       }
+      document.getElementById('login-pass').value = '';
       authState.session = data.session;
-      authState.email   = email;
-      authState.name    = data.session.name || email;
+      authState.email   = '';
+      authState.name    = data.session.name || name;
       // Fetch full profile
       await fetchMyProfile();
       localStorage.setItem('hr_portal_session', JSON.stringify(authState));
@@ -3931,7 +3935,7 @@
     document.getElementById('login-screen').style.display = 'flex';
     document.getElementById('app').classList.remove('visible');
     { const aiChat = document.getElementById('ai-chat'); if (aiChat) aiChat.style.display = 'none'; }
-    document.getElementById('login-email').value = '';
+    document.getElementById('login-name').value = '';
     document.getElementById('login-pass').value = '';
   }
 

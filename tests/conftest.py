@@ -52,6 +52,58 @@ except (AttributeError, OSError) as _e:
     print(f"\n[conftest] _setmaxstdio failed: {_e}", flush=True)
 from pathlib import Path
 
+# ── Never touch the real task-queue key / token files (2026-10-12) ───────────
+# The Grok GUI tests had no isolation and overwrote the REAL
+# ~/.ai-prowler/claude_api_key.txt and grok_api_key.txt with test values.
+# Safety net for EVERY test: task_queue_automation's credential paths point
+# into the test's own tmp folder. (Modules that set their own fake HOME keep
+# doing so — their monkeypatches run after this and win.)
+import pytest as _pytest_keys
+
+
+@_pytest_keys.fixture(autouse=True)
+def _never_touch_real_tqa_credentials(tmp_path, monkeypatch):
+    try:
+        import task_queue_automation as _tqa_iso
+    except Exception:
+        yield
+        return
+    _home = tmp_path / "_tqa_cred_isolation"
+    for _name, _rel in (("API_KEY_PATH", "claude_api_key.txt"),
+                        ("GROK_API_KEY_PATH", "grok_api_key.txt"),
+                        ("OAUTH_TOKEN_PATH", "claude_oauth_token.json"),
+                        ("OAUTH_TOKEN_PLAIN_PATH", "claude_oauth_token.txt"),
+                        ("AI_ROUTING_USER_TOKEN_DIR", "ai_routing/user_tokens")):
+        if hasattr(_tqa_iso, _name):
+            monkeypatch.setattr(_tqa_iso, _name, _home / _rel)
+    yield
+
+
+# ── Default-off groups (2026-10-12, David) ───────────────────────────────────
+# "Job Tracker & Routing" and "SMS & WhatsApp" start OFF on a NEW install. The
+# suite's throwaway state dir looks like a new install, which would switch off
+# the Jobs app and every jobs/SMS tool the existing tests exercise. Record both
+# groups as ON there (both modes) BEFORE ai_prowler_mcp is imported, so the
+# suite keeps testing an install that uses them. The default-off behaviour
+# itself is tested in its own folders (tests/unit/test_default_off_groups.py).
+_tsd = os.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
+if _tsd:
+    try:
+        _tc_path = Path(_tsd) / "tool_config.json"
+        Path(_tsd).mkdir(parents=True, exist_ok=True)
+        _tc_data = {}
+        if _tc_path.exists():
+            _tc_data = json.loads(_tc_path.read_text(encoding="utf-8-sig") or "{}")
+        _tc_data.setdefault("schema_version", 1)
+        _og = _tc_data.setdefault("optional_groups", {})
+        for _m in ("personal", "server"):
+            _sec = _og.setdefault(_m, {})
+            for _g in ("job_tracker", "sms_whatsapp"):
+                _sec.setdefault(_g, True)
+        _tc_path.write_text(json.dumps(_tc_data, indent=2), encoding="utf-8")
+    except Exception as _e:
+        print(f"\n[conftest] could not pre-enable default-off groups: {_e}", flush=True)
+
 import pytest
 
 # ──────────────────────────────────────────────────────────────────────────────

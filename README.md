@@ -1,7 +1,7 @@
 # 🐾 AI-Prowler — Agentic RAG Knowledge Base & Small Business Assistant
 **Version 9.2.0** · Windows 10/11 · Local-first · Agent-powered
 
-**Connect your documents and your business to Claude — and let AI actively research and run the day-to-day for you.**
+**Connect your documents and your business to Claude, Muse, or Grok — and let AI actively research and run the day-to-day for you.**
 
 No technical knowledge required &nbsp;•&nbsp; One-click installer &nbsp;•&nbsp; Works with Claude Desktop & Claude.ai &nbsp;•&nbsp; Your data stays on your PC
 
@@ -22,22 +22,22 @@ AI-Prowler and Claude Desktop are ready to use as soon as the install finishes. 
 
 ## 🎯 What Is AI-Prowler?
 
-AI-Prowler is an **Agentic RAG (Retrieval-Augmented Generation)** knowledge base for Windows. It indexes your local documents into a private vector database and exposes them to Claude as a set of intelligent search tools — so Claude can actively research your documents, follow leads, reformulate queries, and synthesize comprehensive answers on its own.
+AI-Prowler is an **Agentic RAG (Retrieval-Augmented Generation)** knowledge base for Windows. It indexes your local documents into a private vector database and exposes them to Claude, Muse, or Grok as a set of intelligent search tools — so Claude, Muse, or Grok can actively research your documents, follow leads, reformulate queries, and synthesize comprehensive answers on its own.
 
 ```
-You ask Claude:    "Summarise the key risks in our Q3 contracts."
+You ask Claude, Muse, or Grok:    "Summarise the key risks in our Q3 contracts."
 
-Claude thinks:     I should look at what contract documents are indexed...
-Claude calls:      get_knowledge_base_overview()
-Claude calls:      search_documents("Q3 contract risks")
-Claude calls:      search_documents("liability indemnification clauses")
-Claude calls:      expand_search_result("contract_q3.pdf", 14)
-Claude answers:    A detailed synthesis across all relevant documents.
+Claude, Muse, or Grok thinks:     I should look at what contract documents are indexed...
+Claude, Muse, or Grok calls:      get_knowledge_base_overview()
+Claude, Muse, or Grok calls:      search_documents("Q3 contract risks")
+Claude, Muse, or Grok calls:      search_documents("liability indemnification clauses")
+Claude, Muse, or Grok calls:      expand_search_result("contract_q3.pdf", 14)
+Claude, Muse, or Grok answers:    A detailed synthesis across all relevant documents.
 ```
 
-Beyond documents, AI-Prowler gives Claude a complete **small business toolkit** — customers, jobs, scheduling, quotes, invoices, route planning, time tracking and messaging — plus phone apps for you and your crew.
+Beyond documents, AI-Prowler gives Claude, Muse, or Grok a complete **small business toolkit** — customers, jobs, scheduling, quotes, invoices, route planning, time tracking and messaging — plus phone apps for you and your crew.
 
-Your documents **never leave your machine**. Claude sees only the relevant excerpts it retrieves.
+Your documents **never leave your machine**. Claude, Muse, or Grok sees only the relevant excerpts it retrieves.
 
 ---
 
@@ -47,13 +47,13 @@ Traditional RAG systems retrieve a chunk and hand it to a small local model that
 
 | | Classic RAG | AI-Prowler Agentic RAG |
 |---|---|---|
-| **Who reasons** | Small local model | Claude (full intelligence) |
+| **Who reasons** | Small local model | Claude, Muse, or Grok (full intelligence) |
 | **Search strategy** | Single fixed query | Multiple adaptive queries |
 | **Follow-up** | None | Automatic multi-hop |
 | **Hardware** | GPU + large local model | Any PC — no GPU needed |
-| **Quality** | Limited by local model | Full Claude capability |
+| **Quality** | Limited by local model | Full Claude, Muse, or Grok capability |
 
-Claude decides what to search for, evaluates what it finds, identifies gaps, and searches again — just like a research assistant would.
+Claude, Muse, or Grok decides what to search for, evaluates what it finds, identifies gaps, and searches again — just like a research assistant would.
 
 ---
 
@@ -65,7 +65,7 @@ Claude Desktop connects to AI-Prowler via MCP (Model Context Protocol) on your o
 - Set up automatically by the installer
 - No AI-Prowler subscription required
 - Requires a Claude account (free tier available)
-- Full agentic RAG — Claude calls your knowledge base and business tools automatically
+- Full agentic RAG — Claude, Muse, or Grok calls your knowledge base and business tools automatically
 
 ### Option 2 — Claude.ai on Any Device (Mobile Subscription)
 AI-Prowler's HTTP server and Cloudflare Tunnel make your knowledge base reachable from Claude.ai on your phone, tablet or any browser — and power the two phone apps (below).
@@ -82,7 +82,7 @@ AI-Prowler's HTTP server and Cloudflare Tunnel make your knowledge base reachabl
 4. Authorize when prompted
 5. In any Claude.ai conversation, enable AI-Prowler from the Connectors/Tools panel
 
-> **Tip:** Claude.ai in the browser lets you download any files Claude generates (code, reports, documents) directly to your device. If downloading Claude's outputs matters to your workflow, use Claude.ai in the browser.
+> **Tip:** Claude.ai in the browser lets you download any files Claude, Muse, or Grok generates (code, reports, documents) directly to your device. If downloading Claude/Muse/Grok's outputs matters to your workflow, use Claude.ai in the browser.
 
 ---
 
@@ -93,10 +93,10 @@ AI-Prowler's HTTP server and Cloudflare Tunnel make your knowledge base reachabl
 - 🔍 **Semantic search** — finds relevant content even when exact words don't match
 - ⚡ **Incremental indexing** — only re-processes files that changed; deleted files are purged automatically
 - 🕑 **Automatic re-indexing** — a file watcher plus a scheduled catch-up keep the index current
-- 🧠 **Self-learning** — Claude records lessons, corrections and preferences, and checks them before answering
+- 🧠 **Self-learning** — Claude, Muse, or Grok records lessons, corrections and preferences, and checks them before answering
 - 🔒 **Local** — your documents and index never leave your machine
 
-| Tool | What Claude uses it for |
+| Tool | What Claude, Muse, or Grok uses it for |
 |---|---|
 | `get_knowledge_base_overview` | Orients itself — what's indexed, what types |
 | `search_documents` / `multi_query_search` | Semantic search, one or several phrasings at once |
@@ -105,10 +105,10 @@ AI-Prowler's HTTP server and Cloudflare Tunnel make your knowledge base reachabl
 | `grep_documents` | Exact text / code search with line numbers |
 | `how_to_use_ai_prowler` | Self-orienting guidance tool |
 
-Claude can also manage the index, edit files in folders you allow, and run analysis tasks — all from a conversation. Every tool can be switched on or off in **Settings → 🧩 MCP Tool Configuration**.
+Claude, Muse, or Grok can also manage the index, edit files in folders you allow, and run analysis tasks — all from a conversation. Every tool can be switched on or off in **Settings → 🧩 MCP Tool Configuration**.
 
 ### Small Business Job Tracker
-A complete contractor workflow that Claude reads and writes in plain English — "what's on today?", "invoice the Torres job", "route tomorrow for Jake".
+A complete contractor workflow that Claude, Muse, or Grok reads and writes in plain English — "what's on today?", "invoice the Torres job", "route tomorrow for Jake".
 
 - 👥 **Customers, jobs, quotes, invoices, time logs and pricing** in a local database (`ai_prowler_jobs.db`) — created automatically, nothing to set up
 - 📋 **Job Board** — a live board of the day's jobs; drag a card to change its status, with updates from the crew appearing within a minute
@@ -129,7 +129,7 @@ A complete contractor workflow that Claude reads and writes in plain English —
 - 🤖 **AI task queue** — recurring or one-off analysis tasks (e.g. "check overdue invoices every Monday") that run on their own and record what they find
 
 ### Business Server Mode (Business Plan)
-- 🏢 One shared company knowledge base and job database on a server PC, reached by every employee from Claude on their own phone or laptop
+- 🏢 One shared company knowledge base and job database on a server PC, reached by every employee from Claude, Muse, or Grok on their own phone or laptop
 - 👤 **Roles and scopes** — owner, manager, staff and field crew each see and do only what they should; field crew see only their own jobs
 
 ### OCR, Email & GPU
@@ -163,7 +163,7 @@ A lapsed subscription gets a 30-day grace period before remote access is suspend
 | Internet | Install only for Claude Desktop | Always on for remote access and phone apps |
 | Claude account | Required | Claude Pro (or Team) for Claude.ai connectors |
 
-> **RAM note:** Claude does the reasoning, so AI-Prowler only runs a small embedding model (~400 MB) and its database locally. No large local AI model is needed.
+> **RAM note:** Claude, Muse, or Grok does the reasoning, so AI-Prowler only runs a small embedding model (~400 MB) and its database locally. No large local AI model is needed.
 
 ---
 
@@ -212,7 +212,7 @@ The installer itself (`AI-Prowler_INSTALL.exe`) is published on the **[Releases 
 | ✅ Does | ❌ Does NOT |
 |---|---|
 | Store your documents, index and job data on your PC | Upload your documents anywhere |
-| Send only retrieved excerpts to Claude | Send document content, queries or file paths to us |
+| Send only retrieved excerpts to Claude, Muse, or Grok | Send document content, queries or file paths to us |
 | Run indexing and embeddings locally | Share any data with third parties |
 | Keep credentials in your local config | Send your name, email or credentials |
 
@@ -261,7 +261,7 @@ Found a bug? Open an **[Issue](https://github.com/dvavro/AI-Prowler/issues)** an
 - 🖥️ Auto-start after reboot
 
 ### v4.x
-- 🤖 **Agentic RAG** — Claude actively researches your knowledge base
+- 🤖 **Agentic RAG** — Claude, Muse, or Grok actively researches your knowledge base
 - 📱 Claude.ai connector with mobile subscriptions and secure sign-in
 
 ### v3.0 and earlier

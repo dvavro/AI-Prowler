@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-needle = sys.argv[1]
+needle = sys.argv[1].replace("~", " ")      # '~' = a space (args are split on spaces)
 for f in sys.argv[2:]:
     for n, line in enumerate((ROOT / f).read_text(encoding="utf-8", errors="replace").splitlines(), 1):
         if needle in line:

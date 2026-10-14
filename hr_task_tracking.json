@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "description": "HR task scheduler state: digest timestamps, notification logs, and scheduler heartbeat. Managed by the background scheduler — do not edit manually.",
+    "description": "HR task scheduler state: digest timestamps, notification logs, and scheduler heartbeat. Managed by the background scheduler \u2014 do not edit manually.",
     "spec_version": "v2.1"
   },
   "scheduler": {
@@ -16,7 +16,8 @@
     "last_doc_expiration_check": null,
     "last_weekly_owner_summary": null,
     "last_reminder_email_check": null,
-      "last_employee_backup": null
+    "last_employee_backup": null,
+    "last_lifecycle_advance": null
   },
   "digest_state": {
     "last_digest_at": null,

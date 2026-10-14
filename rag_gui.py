@@ -997,7 +997,7 @@ class RAGGui:
             # the window finishes drawing first. Silent background thread.
             self.root.after(3000, self._trigger_prewarm)
         else:
-            # Local-LLM mode is OFF — Claude MCP is the only AI interface.
+            # Local-LLM mode is OFF — MCP (Claude, Muse, or Grok) is the only AI interface.
             # Ensure the Ollama Windows Service cannot auto-start on reboot:
             # a previous session with SUPPORT_LOCAL_HW_LLM=True may have set
             # the service to 'auto'. Silently correct that in the background.
@@ -1040,7 +1040,7 @@ class RAGGui:
         # ----- Code Tools write-side: approval-queue poll -----
         # The Code Tools write-side tools (create_file, write_file,
         # str_replace_in_file, etc.) queue write-approval requests to
-        # ~/.rag_writable_pending.json when Claude tries to write to a
+        # ~/.rag_writable_pending.json when Claude, Muse, or Grok tries to write to a
         # directory that's not yet in the writable allowlist. This
         # background poll picks them up and shows a modal dialog so the
         # user can grant or deny access. Poll runs every 5 seconds.
@@ -1400,7 +1400,7 @@ class RAGGui:
                 _tk.Label(frame,
                           text=f"\nA copy of the new template has been placed "
                                f"alongside your file:\n{result.template_path}\n\n"
-                               f"You can ask Claude to help migrate your data to "
+                               f"You can ask Claude, Muse, or Grok to help migrate your data to "
                                f"the new template, or copy it manually.",
                           wraplength=480, justify="left",
                           fg="#555").pack(anchor="w", pady=(6, 0))
@@ -1680,7 +1680,7 @@ class RAGGui:
             ("title", "AI-Prowler — Agentic RAG Knowledge Base"),
             ("sub",   f"Version {APP_VERSION}"),
             ("body",  "Your AI-powered knowledge assistant. Index your documents "
-                      "once, then ask Claude questions from your desktop or phone."),
+                      "once, then ask Claude, Muse, or Grok questions from your desktop or phone."),
 
             ("head",  "KNOWLEDGE BASE (RAG)"),
             ("body",  "• MCP tools for search, indexing, learnings, jobs, messaging "
@@ -1706,18 +1706,32 @@ class RAGGui:
                       "• Lint, syntax check, compile check, and script runner"),
 
             ("head",  "SELF-LEARNING (🧠 tab)"),
-            ("body",  "• Claude remembers facts across sessions\n"
+            ("body",  "• Claude, Muse, or Grok remembers facts across sessions\n"
                       "• Record, retrieve, update, delete, and export learnings\n"
                       "• Conflict detection and supersession chains"),
 
             ("head",  "SMALL BUSINESS (🏢 tab)"),
             ("body",  "• Job tracker database — customers, quotes, jobs, invoices — "
-                      "from Claude or the Jobs app on your phone\n"
+                      "from Claude, Muse, or Grok or the Jobs app on your phone\n"
                       "• Route optimization, weather, geocoding (free, no API key)\n"
                       "• Invoicing, recurring jobs, time tracking, AR aging\n"
                       "• Export to Excel/CSV, backup and restore\n"
                       "• QuickBooks-aware analysis — detects QB MCP automatically\n"
-                      "• Square payment integration via Claude MCP connector"),
+                      "• Square payment integration via MCP (Claude, Muse, or Grok) connector"),
+
+              # 2026-10-12 (David): HR apps are server-only and off by default —
+              # the About box describes them so owners know the switch exists.
+              ("head",  "HR APPS (server mode)"),
+              ("body",  "• HR Admin — owners/managers: employee records, onboarding "
+                        "tasks, approvals, documents, time off, time clock, "
+                        "compliance reports\n"
+                        "• HR Portal — employees: clock in/out, time-off requests, "
+                        "own documents and tasks\n"
+                        "• 20 hr_* MCP tools so Claude, Muse, or Grok can work with "
+                        "the same HR data\n"
+                        "• Off by default — turn on \"HR apps (HR Admin + HR Portal)\" "
+                        "in Settings → 🧩 MCP Tool Configuration "
+                        "(server restart applies it)"),
 
             ("head",  "COMMON BUSINESS AI ANALYSIS"),
             ("body",  "• One-click analysis buttons (Quick Links tab)\n"
@@ -1726,13 +1740,13 @@ class RAGGui:
                       "• ▶ Queue to schedule; runs on the next Task Queue pass"),
 
             ("head",  "PROACTIVE ALERTS SCHEDULER"),
-            ("body",  "• Background email alerts — no Claude session needed\n"
+            ("body",  "• Background email alerts — no Claude, Muse, or Grok session needed\n"
                       "• Zero API cost — calls AI-Prowler tools directly\n"
                       "• Configurable jobs: briefing, invoices, weather & more\n"
                       "• Personal mode only — hidden in server mode"),
 
             ("head",  "JOB IMAGE STORAGE"),
-            ("body",  "• Save job photos from Claude chat to local storage\n"
+            ("body",  "• Save job photos from Claude, Muse, or Grok chat to local storage\n"
                       "• JPEG, HEIC, PNG, WebP, DNG, RAW & more\n"
                       "• iPhone (HEIC) and Android (WebP/DNG) fully supported\n"
                       "• Metadata index per job — searchable without pixel data"),
@@ -1743,7 +1757,7 @@ class RAGGui:
                       "configure email\n"
                       "• Outlook backend: Classic Outlook (OUTLOOK.EXE) — no password "
                       "needed; pick the default account in Settings, or override per "
-                      "send in Claude: \"Send this from my Yahoo account\"\n"
+                      "send in Claude, Muse, or Grok: \"Send this from my Yahoo account\"\n"
                       "• SMTP backend: Gmail, iCloud, Outlook.com, Microsoft 365, "
                       "Yahoo, or any custom SMTP server with an app password\n"
                       "• Both backends can be active: Outlook primary, SMTP auto-fallback\n"
@@ -2118,7 +2132,7 @@ class RAGGui:
 
     def _open_guide_window(self, title, sections, deep_links=None,
                            extra_buttons=None, width=820, height=640):
-        """Generic guide-window factory used by both Cloudflare and Claude
+        """Generic guide-window factory used by both Cloudflare and Claude, Muse, or Grok
         connector guides.
 
         sections: list of (heading, body_lines) tuples — body_lines is a list
@@ -2299,7 +2313,7 @@ class RAGGui:
                 "2. Click 'Activate' to install cloudflared as a Windows service.",
                 "   (You'll see a UAC prompt — this is normal.)",
                 "3. The status indicator should turn green.",
-                "4. Now click 'How to Connect Claude →' to finish the setup",
+                "4. Now click 'How to Connect Claude, Muse, or Grok →' to finish the setup",
                 "   on Claude.ai.",
             ]),
         ]
@@ -2349,7 +2363,7 @@ class RAGGui:
         except Exception:
             pass
 
-        # Recommended connector name: distinct per mode so Claude (and the
+        # Recommended connector name: distinct per mode so Claude, Muse, or Grok (and the
         # person) can tell multiple connected AI-Prowler instances apart —
         # e.g. someone with both a personal seat AND the shared company
         # server connected sees "AI-Prowler Local" vs "AI-Prowler Server"
@@ -2372,7 +2386,7 @@ class RAGGui:
             ]),
 
             ("Step 0 — Prerequisites", [
-                "Before connecting Claude, make sure:",
+                "Before connecting Claude, Muse, or Grok, make sure:",
                 "1. AI-Prowler HTTP server is running (Settings → Start HTTP Server).",
                 "2. Your Named Tunnel is active (Settings → Remote Access).",
                 "3. Your Bearer Token is saved (Settings → Bearer Token field).",
@@ -2405,11 +2419,11 @@ class RAGGui:
                 "MCP Server URL: (click 'Copy URL' below, then paste)",
                 "",
                 "IMPORTANT — use this exact Name (not just \"AI-Prowler\"):",
-                "  Claude uses the connector's Name to tell instances apart.",
+                "  Claude, Muse, or Grok uses the connector's Name to tell instances apart.",
                 "  If you (or a teammate) ever connect BOTH a personal seat",
                 "  AND the shared company server in the same Claude account,",
                 "  distinct names — \"AI-Prowler Local\" vs \"AI-Prowler",
-                "  Server\" — let Claude know which one it's talking to and",
+                "  Server\" — let Claude, Muse, or Grok know which one it's talking to and",
                 "  route requests to the right one instead of guessing.",
                 "",
                 "Advanced settings — OAuth fields:",
@@ -2426,24 +2440,24 @@ class RAGGui:
 
             ("Step 4 — Save and verify", [
                 "1. Click 'Save' or 'Connect'.",
-                "2. Claude will attempt to connect to your tunnel.",
+                "2. Claude, Muse, or Grok will attempt to connect to your tunnel.",
                 "3. If successful, you'll see 'Connected' or a green indicator.",
                 "4. AI-Prowler tools will be listed in the connector.",
                 "",
                 "IMPORTANT — Enable tools after connecting:",
                 "  In the connector panel, click 'Always allow' on the",
                 "  tool permissions section to enable all AI-Prowler tools.",
-                "  Without this, Claude will ask permission for every tool call.",
+                "  Without this, Claude, Muse, or Grok will ask permission for every tool call.",
             ]),
 
             ("Step 5 — Test it", [
-                "Open a new chat with Claude and try one of these:",
+                "Open a new chat with Claude, Muse, or Grok and try one of these:",
                 "",
                 "  • 'What documents do I have indexed in AI-Prowler?'",
                 "  • 'Search my documents for [topic].'",
                 "  • 'Show me the chunks containing [keyword].'",
                 "",
-                "Claude should respond using your local knowledge base.",
+                "Claude, Muse, or Grok should respond using your local knowledge base.",
             ]),
 
             ("Troubleshooting", [
@@ -2458,7 +2472,7 @@ class RAGGui:
                 "  → Named Tunnel hostname not yet propagated (wait 5 min)",
                 "    or typo in hostname. Check Settings → Remote Access.",
                 "",
-                "Claude doesn't see the connector:",
+                "Claude, Muse, or Grok doesn't see the connector:",
                 "  → MCP connectors require Claude Pro. Free accounts don't",
                 "    have this feature.",
             ]),
@@ -2466,7 +2480,7 @@ class RAGGui:
 
         deep_links = [
             ("Open Claude.ai", "https://claude.ai/"),
-            ("Claude Settings", "https://claude.ai/settings/connectors"),
+            ("Claude, Muse, or Grok Settings", "https://claude.ai/settings/connectors"),
         ]
 
         # Helper buttons that copy to clipboard with feedback
@@ -2995,8 +3009,8 @@ class RAGGui:
 
 A local database is your customer list, daily schedule, quotes, invoices,
 time clock, and pricing catalog — all cross-linked, all readable and
-writable by Claude in plain English, and all usable from the Jobs App on
-your phone without ever needing to talk to Claude at all. No app to log
+writable by Claude, Muse, or Grok in plain English, and all usable from the Jobs App on
+your phone without ever needing to talk to Claude, Muse, or Grok at all. No app to log
 into beyond AI-Prowler itself, no separate CRM subscription, no
 double-entry between "the schedule" and "the invoice."
 
@@ -3008,15 +3022,15 @@ Same tables you'll see on the Jobs App's own Database tab:
 |---|---|
 | `Customers` | Your customer list — address, service type, frequency, phone, email, gate codes, access notes |
 | `Jobs_Schedule` | Every appointment — date, time, address, assigned crew member, weather, route, billing |
-| `Route_Planner` | Daily route optimization — Claude fills in lat/lon and map links |
+| `Route_Planner` | Daily route optimization — Claude, Muse, or Grok fills in lat/lon and map links |
 | `Quotes` | Estimates sent before a job is booked |
 | `Invoices` | Billing and payment tracking, feeds the AR aging report |
 | `TimeLog` | Clock-in / clock-out per job, per employee |
 | `Services_Pricing` | Your service catalog — base prices, multipliers, tax rates |
 | `Settings` | Business info (name, address, tax rate) and other config |
 
-Nothing here is manual bookkeeping. Ask Claude "mark the Miller job
-complete and record invoice #1048" and Claude finds the row, updates
+Nothing here is manual bookkeeping. Ask Claude, Muse, or Grok "mark the Miller job
+complete and record invoice #1048" and Claude, Muse, or Grok finds the row, updates
 `Job Status`, `Invoice Total`, `Invoice Sent Date` — whatever you asked
 for — in one step. Or tap the same job open in the Jobs App and edit it
 directly — both paths write to the exact same database.
@@ -3026,12 +3040,12 @@ directly — both paths write to the exact same database.
 This is a real scheduling system for a crew, not a single-user tool:
 
 - **Every job has a `Crew / Technician` field.** Assign "Mike C." to one
-  job and "Sarah T." to another — Claude reads and writes this like any
-  other field. Ask "what's on Mike's schedule tomorrow?" and Claude
+  job and "Sarah T." to another — Claude, Muse, or Grok reads and writes this like any
+  other field. Ask "what's on Mike's schedule tomorrow?" and Claude, Muse, or Grok
   filters to just his jobs.
 
 - **In Server mode, each employee automatically only sees their own jobs.**
-  When a staff or field-crew member asks Claude to clock in, look up
+  When a staff or field-crew member asks Claude, Muse, or Grok to clock in, look up
   today's schedule, or schedule the next recurring visit, AI-Prowler
   scopes the search to jobs where `Crew / Technician` matches *their own
   name* — automatically, with no filter to remember. Owners and managers
@@ -3062,27 +3076,27 @@ This is a real scheduling system for a crew, not a single-user tool:
 
 Each employee gets their own seat and their own mobile login to the
 company server (set up once in the Admin tab) — from that point on, they
-can talk to Claude from their phone the same way you do from your desktop,
+can talk to Claude, Muse, or Grok from their phone the same way you do from your desktop,
 and every "clock me in," "what's my next job," or "text the customer I'm
 on my way" reads and writes the exact same shared database in real time.
 There's no separate mobile app to install for this part — it's the same
-Claude conversation, on any device with a browser.
+Claude, Muse, or Grok conversation, on any device with a browser.
 
 ## The Jobs App — A Dedicated Screen for the Truck, Not Just a Chat Window
 
-Alongside talking to Claude directly, each employee also gets their own
+Alongside talking to Claude, Muse, or Grok directly, each employee also gets their own
 lightweight app screen purpose-built for the field: tap Jobs on their
 phone's home screen (added once from the browser, no app store) and they
 land straight on today's schedule — filtered to just their own jobs
 automatically, same as everywhere else in Server mode. This is the primary
-day-to-day interface for most crew members — Claude is there for anything
+day-to-day interface for most crew members — Claude, Muse, or Grok is there for anything
 that's easier said as a sentence than tapped through a screen.
 
 - **Jobs, Board, Calendar, Clock, Photos, Messages, and Database tabs** —
   a full working view of the day, the week, and the whole crew's data, not
   just a job list.
 - **Clock in / clock out** with one tap — writes straight to `TimeLog` and
-  back to `Jobs_Schedule`, same as asking Claude to do it.
+  back to `Jobs_Schedule`, same as asking Claude, Muse, or Grok to do it.
 - **Drag-and-drop scheduling** on the Board tab — reschedule or reassign a
   job by dragging its card, no typing required.
 - **Snap and attach job photos** directly from the camera — before/after
@@ -3091,19 +3105,19 @@ that's easier said as a sentence than tapped through a screen.
   tap-to-navigate banner right at the top of the Jobs tab, and a small
   route indicator on the Calendar's weekly and monthly views too.
 - **Email or text an invoice** for a job right from the app, no need to
-  open a conversation with Claude to ask for it.
+  open a conversation with Claude, Muse, or Grok to ask for it.
 - **Log in once, stay logged in.** An employee enters their personal
   token the first time they open the app; after that, it's just a tap to
   open, exactly like any other app on their phone. Closing or restarting
   the app never signs anyone out — to switch users or sign out, use
   **Sign Out / Change Device** on the profile screen.
 - **Same scoping as everywhere else.** The Jobs App reads and writes the
-  same shared master database as Claude does — an employee can only clock
+  same shared master database as Claude, Muse, or Grok does — an employee can only clock
   in, upload photos, or send invoices for jobs actually assigned to them.
 
-This is a second way in, not a replacement for talking to Claude — the
+This is a second way in, not a replacement for talking to Claude, Muse, or Grok — the
 Jobs App is faster for the things you do every day (clocking in, checking
-today's list, snapping a photo); Claude is better for anything more
+today's list, snapping a photo); Claude, Muse, or Grok is better for anything more
 open-ended, like rescheduling a week's worth of jobs, asking which
 customers are overdue on payment, or making bulk changes across many jobs
 at once.
@@ -3115,14 +3129,14 @@ Two different paths, depending on what you actually need:
 ### Option 1 — Live QuickBooks connector (real-time, requires QuickBooks)
 
 If you connect the QuickBooks Online MCP connector in Claude.ai (Settings
-→ Connectors), Claude automatically detects it and can pull real
+→ Connectors), Claude, Muse, or Grok automatically detects it and can pull real
 financial data — invoices, payments, customer records, P&L — directly
 into your workflow. This already powers the Quick Links business-analysis
 prompts (Analyze My Business, Weekly Business Advisor, Find Problems,
 Growth Opportunities), which use QuickBooks as the primary source when
 it's connected and fall back to your AI-Prowler data when it's not.
 
-Because Claude has both the QuickBooks connector *and* your job data
+Because Claude, Muse, or Grok has both the QuickBooks connector *and* your job data
 tools available in the same conversation, you can also ask it to bridge
 the two directly — for example, pulling a customer list from QuickBooks
 and adding any that are missing from your Customers table, instead of
@@ -3134,7 +3148,7 @@ retyping names, addresses, and phone numbers by hand. Try:
 > *"Cross-check today's invoices in QuickBooks against my Invoices data
 > and flag anything that's out of sync."*
 
-This isn't a separate one-click sync button — it's Claude reasoning
+This isn't a separate one-click sync button — it's Claude, Muse, or Grok reasoning
 across both tools in one request, which means you can phrase it however
 fits what you actually need done.
 
@@ -3175,7 +3189,7 @@ pass without setting up a live connector, use the **Export to Excel** or
 
 - **One system, not three** — no separate CRM, invoicing tool, and time
   clock that all need to agree with each other.
-- **No typing into forms** — every update is a sentence to Claude, or a
+- **No typing into forms** — every update is a sentence to Claude, Muse, or Grok, or a
   tap in the Jobs App.
 - **Scales with your crew** — one owner or ten employees, the same
   database and the same conversational or app-based workflow, with
@@ -3205,29 +3219,29 @@ pass without setting up a live connector, use the **Export to Excel** or
         current as mobile-specific tools are added."""
         return """# Small Business Service Tools
 
-Claude acts as your field-service assistant through these MCP tools — ask
+Claude, Muse, or Grok acts as your field-service assistant through these MCP tools — ask
 in a normal conversation, no forms to fill out, no menus to navigate.
 Free tools (weather, routing, maps) work immediately with no setup.
 Job data tools use the default database if you don't specify a file.
 Contractor tools (invoicing, SMS, time logging, AR aging) need
-Twilio and/or SMTP configured — see Settings, or ask Claude to run
+Twilio and/or SMTP configured — see Settings, or ask Claude, Muse, or Grok to run
 `check_tools_status()` for a full readiness report.
 
 ## End-to-End Workflow — A Typical Day
 
 This is the whole loop, start to finish — everything happens by talking to
-Claude. The same actions are available with a tap in the Jobs App instead
+Claude, Muse, or Grok. The same actions are available with a tap in the Jobs App instead
 (clock in/out, photos, invoicing) — this walks through the Claude-
 conversation version.
 
 **1. Check the morning schedule**
 > *"What's on my schedule today?"*
-Claude reads `Jobs_Schedule` and lists today's jobs.
+Claude, Muse, or Grok reads `Jobs_Schedule` and lists today's jobs.
 
 **2. Add or update a job or customer, if needed**
 > *"Add a new customer: Sunshine Realty LLC, 125 Harbor Blvd, New Smyrna Beach FL 32168, monthly window cleaning, contact Karen at karen@sunshine.com."*
 > *"Schedule a window cleaning for the Walsh account next Monday at 8am."*
-Claude writes the new row(s) straight into your job database.
+Claude, Muse, or Grok writes the new row(s) straight into your job database.
 
 **3. Check the weather before heading out**
 > *"What's the weather forecast for New Smyrna Beach today?"*
@@ -3235,11 +3249,11 @@ Flags rain risk so you can reschedule outdoor jobs before you're already on the 
 
 **4. Optimize the route**
 > *"Optimize my route for today's jobs."*
-Claude calls `optimize_route()` and returns the fastest stop order with estimated arrival times.
+Claude, Muse, or Grok calls `optimize_route()` and returns the fastest stop order with estimated arrival times.
 
 **5. Get a tap-to-navigate link and send it to your phone**
 > *"Email me a Google Maps link for that route."*  /  *"Text me the route."*
-Claude calls `build_maps_url()` and sends the link via `send_alert()` or `send_sms()` — open it on your phone, tap it, and Google/Apple Maps opens in navigation mode. Connect to CarPlay or Android Auto from there.
+Claude, Muse, or Grok calls `build_maps_url()` and sends the link via `send_alert()` or `send_sms()` — open it on your phone, tap it, and Google/Apple Maps opens in navigation mode. Connect to CarPlay or Android Auto from there.
 
 **6. Clock in at the job site**
 > *"Clock me in on the Miller Windows job."*
@@ -3247,7 +3261,7 @@ The Jobs App PWA passes your GPS location automatically.
 
 **7. Complete the job and invoice on the spot**
 > *"Mark the Miller Windows job complete and create an invoice for $312."*
-Claude updates the job status and calls `create_invoice()` — no trip back to the office needed.
+Claude, Muse, or Grok updates the job status and calls `create_invoice()` — no trip back to the office needed.
 
 **8. Send the invoice**
 > *"Email that invoice to the customer."*  /  *"Text them the invoice."*
@@ -3332,7 +3346,7 @@ phone, can run the whole workflow without a laptop:
 | `check_sms_configured()` | Quick yes/no — is an SMS provider configured? |
 | `configure_email(smtp_host, …)` | One-time SMTP setup — after this, invoicing and receipts work automatically. |
 
-## Example Prompts to Use with Claude
+## Example Prompts to Use with Claude, Muse, or Grok
 
 | Category | Try saying… |
 |---|---|
@@ -3356,16 +3370,16 @@ Version {APP_VERSION}
   OVERVIEW
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-AI-Prowler is an Agentic RAG platform — it gives Claude
+AI-Prowler is an Agentic RAG platform — it gives Claude, Muse, or Grok
 powerful MCP tools to search, cross-reference, and synthesize
 answers from your own documents. You ask a question;
-Claude researches your knowledge base and answers it.
+Claude, Muse, or Grok researches your knowledge base and answers it.
 
 AI-Prowler has two operating modes. Choose the one that
 fits your situation:
 
   🖥️  Path 1 — Claude Desktop only (no subscription needed)
-      Use Claude on your Windows PC only. Full RAG capability,
+      Use Claude, Muse, or Grok on your Windows PC only. Full RAG capability,
       no HTTP server or tunnel required, works with any
       Claude account including free.
 
@@ -3398,7 +3412,7 @@ re-processed on subsequent runs. No need to start over.
   PATH 1 — CLAUDE DESKTOP (DESKTOP ONLY)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Use this when you only need Claude on this Windows PC.
+Use this when you only need Claude, Muse, or Grok on this Windows PC.
 No subscription, no HTTP server, no tunnel required.
 
   ✅ Full agentic RAG — all 99 personal-mode MCP tools
@@ -3426,7 +3440,7 @@ Setup:
      "What does my insurance policy say about flooding?"
      "Find everything related to Project Alpha"
 
-  Claude calls multiple search tools, follows leads, and
+  Claude, Muse, or Grok calls multiple search tools, follows leads, and
   synthesizes a comprehensive answer automatically.
 
 
@@ -3434,7 +3448,7 @@ Setup:
   PATH 2 — CLAUDE.AI (MOBILE + WEB ACCESS)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Use this when you want Claude on your phone, tablet,
+Use this when you want Claude, Muse, or Grok on your phone, tablet,
 or any web browser — in addition to Claude Desktop.
 
 What you get beyond Path 1:
@@ -3525,7 +3539,7 @@ Email backend options (configure once in Settings → Email Configuration):
   ✅  Both backends can be active simultaneously — Outlook sends
       first, SMTP is the automatic fallback if Outlook fails.
 
-Once configured, ask Claude:
+Once configured, ask Claude, Muse, or Grok:
     "Text Karen that we're 20 minutes away"
     "Send me an alert — the Johnson job is running late"
     "Export the job tracker to Excel and email it to myself"
@@ -3547,7 +3561,7 @@ manually in Settings → Remote Access if you need it.
 
 • Click "🔄 Update Index" tab → "Update All" after
   adding or changing files in tracked directories
-• Or ask Claude: "Update my knowledge base" — it calls
+• Or ask Claude, Muse, or Grok: "Update my knowledge base" — it calls
   update_tracked_directories() automatically
 • Set up auto-scheduling in the ⏰ Schedule tab
   (default: once a day at 2:00 AM)
@@ -3909,20 +3923,20 @@ or from the Help menu."""
         self._ad_defaults = {
             'headline':  'Welcome to AI-Prowler v8.0.0',
             'body': (
-                'Your Personal Agentic AI Knowledge Base for Claude.\n\n'
+                'Your Personal Agentic AI Knowledge Base for Claude, Muse, or Grok.\n\n'
                 'AI-Prowler™ Home v8.0.0 for Windows 11 — index your local documents '
                 'and put 81 AI-powered tools at Claude\'s fingertips, on desktop, web, and mobile.\n\n'
                 '★ Index local and OneDrive documents from any folder — 65+ file formats '
                 'supported including scanned PDFs and images with full OCR text extraction.\n\n'
-                '★ ChromaDB vector database with semantic search — Claude queries '
+                '★ ChromaDB vector database with semantic search — Claude, Muse, or Grok queries '
                 'intelligently across 10,000+ files with provenance-aware results.\n\n'
                 '★ 81 MCP tools across 12 categories: Agentic RAG, Code Tools, '
                 'Self-Learning, Action Tools, Email, SMS, Scheduling, Dev Tools, '
                 'Indexing, Job Tracking, Analysis, and Health checks.\n\n'
-                '★ Code Tools — Claude can create, edit, back up, and restore files '
+                '★ Code Tools — Claude, Muse, or Grok can create, edit, back up, and restore files '
                 'in pre-authorized directories with a double-lock security model and '
                 'per-session circuit breaker.\n\n'
-                '★ Self-Learning system — Claude records business lessons, corrections, '
+                '★ Self-Learning system — Claude, Muse, or Grok records business lessons, corrections, '
                 'and insights into a persistent knowledge base and applies them '
                 'automatically in future sessions.\n\n'
                 '★ Connect via Claude Desktop (local/stdio) or Claude.ai and the '
@@ -6531,11 +6545,11 @@ or from the Help menu."""
         self._query_scroll_cmd = _on_mousewheel
 
         # Title
-        ttk.Label(query_frame, text="Quick Links — Connect to Claude",
+        ttk.Label(query_frame, text="Quick Links — Connect to Claude, Muse, or Grok",
                   font=('Arial', 16, 'bold')).pack(pady=10)
 
-        # ── Claude connection panel (formerly the "RECOMMENDED" banner) ──────
-        # Redesigned in v6.0: dropped the ⭐ RECOMMENDED badge because Claude is
+        # ── Claude, Muse, or Grok connection panel (formerly the "RECOMMENDED" banner) ──────
+        # Redesigned in v6.0: dropped the ⭐ RECOMMENDED badge because Claude, Muse, or Grok is
         # now the only supported AI. Rewrote the body text to give clear
         # desktop-vs-mobile guidance, and reordered the action buttons so the
         # preferred path (Claude.ai mobile/web) is on top.
@@ -6558,7 +6572,7 @@ or from the Help menu."""
                  anchor='w').pack(anchor='w')
 
         tk.Label(_text_col,
-                 text="Claude uses all AI-Prowler tools to actively research your knowledge "
+                 text="Claude, Muse, or Grok uses all AI-Prowler tools to actively research your knowledge "
                       "base — multiple searches, follow-up queries, and full document reading.",
                  bg='#0f3460', fg='#aaccee',
                  font=('Arial', 8),
@@ -6567,7 +6581,8 @@ or from the Help menu."""
 
         # Two-line guidance — desktop-only vs mobile/web
         tk.Label(_text_col,
-                 text="📱  Mobile (or any device):  Claude.ai web or mobile app — preferred, "
+                 text="📱  Mobile (or any device):  Mobile Subscription enables MCP HTTPS "
+                      "connections to the Claude.ai, Muse.ai and Grok.com web apps — "
                       "works on phone, tablet, and desktop browsers.",
                  bg='#0f3460', fg='#d8e8ff',
                  font=('Arial', 8, 'bold'),
@@ -6599,7 +6614,7 @@ or from the Help menu."""
                 except Exception:
                     pass
 
-                # Fallback: PowerShell dynamic lookup (works after Claude updates)
+                # Fallback: PowerShell dynamic lookup (works after Claude, Muse, or Grok updates)
                 try:
                     ps = (
                         '$pkg = Get-AppxPackage | '
@@ -6651,21 +6666,36 @@ or from the Help menu."""
             _wb.open('https://claude.ai')
             self.status_var.set("Browser opened — claude.ai")
 
+        # 2026-10-12 (David): Muse and Grok connect over MCP HTTPS too — same
+        # web addresses Setup uses (setup_wizard.py "Connect your AI").
+        def _open_muse_ai_web():
+            import webbrowser as _wb
+            _wb.open('https://muse.ai')
+            self.status_var.set("Browser opened — muse.ai")
+
+        def _open_grok_web():
+            import webbrowser as _wb
+            _wb.open('https://grok.com')
+            self.status_var.set("Browser opened — grok.com")
+
         # ─ Right side buttons — stacked vertically ────────────────────────────
-        # Order matters: preferred path (Claude.ai) on top, alternative path
-        # (Claude Desktop) second, install action (Download) at bottom.
+        # The three web apps (Claude.ai, Muse.ai, Grok.com) on top, then
+        # Claude Desktop, then its install action at the bottom.
         _btn_col = tk.Frame(_banner_inner, bg='#0f3460')
         _btn_col.pack(side='right', padx=(12, 0))
 
-        # 1️⃣  Preferred: Claude.ai (web/mobile) — biggest, brightest button
-        tk.Button(_btn_col,
-                  text="🌐  Open Claude.ai (Preferred)",
-                  bg='#1a7a4a', fg='white',
-                  activebackground='#239c5e', activeforeground='white',
-                  font=('Arial', 10, 'bold'),
-                  relief='flat', padx=16, pady=5,
-                  cursor='hand2',
-                  command=_open_claude_ai_web).pack(fill='x', pady=(0, 4))
+        # 1️⃣  The web apps (any device, MCP over HTTPS)
+        for _txt, _cmd in (("🌐  Open Claude.ai", _open_claude_ai_web),
+                           ("🌐  Open Muse.ai", _open_muse_ai_web),
+                           ("🌐  Open Grok.com", _open_grok_web)):
+            tk.Button(_btn_col,
+                      text=_txt,
+                      bg='#1a7a4a', fg='white',
+                      activebackground='#239c5e', activeforeground='white',
+                      font=('Arial', 10, 'bold'),
+                      relief='flat', padx=16, pady=5,
+                      cursor='hand2',
+                      command=_cmd).pack(fill='x', pady=(0, 4))
 
         # 2️⃣  Alternative: Claude Desktop (desktop-only use)
         tk.Button(_btn_col,
@@ -6689,8 +6719,8 @@ or from the Help menu."""
 
         # ── Initial connection test panel ────────────────────────────────────
         # A copy-to-clipboard helper for the recommended first prompt of every
-        # new Claude chat. Paste this in once per chat to (a) verify the MCP
-        # link is live and (b) prime Claude to check learnings before answering.
+        # new Claude, Muse, or Grok chat. Paste this in once per chat to (a) verify the MCP
+        # link is live and (b) prime Claude, Muse, or Grok to check learnings before answering.
         _conntest_banner = tk.Frame(query_frame, bg='#2c3e50',
                                     highlightthickness=1,
                                     highlightbackground='#3a5066')
@@ -6704,15 +6734,15 @@ or from the Help menu."""
         _ct_text_col.pack(side='left', fill='both', expand=True, padx=(0, 12))
 
         tk.Label(_ct_text_col,
-                 text="✅  Initial Connection Test (recommended at start of every chat)",
+                 text="✅  Initial Connection Test",
                  bg='#2c3e50', fg='#ffffff',
                  font=('Arial', 11, 'bold'),
                  anchor='w').pack(anchor='w')
 
         tk.Label(_ct_text_col,
-                 text="For best results and initial connection test, copy this command "
-                      "into every new Claude chat once — it verifies the MCP link is "
-                      "live and primes Claude to list all available AI-Prowler tools.",
+                 text="Optional — MCP finds AI-Prowler's tools on its own. To check the "
+                      "connection, paste this command into a Claude, Muse, or Grok chat: it "
+                      "verifies the MCP link is live and lists all available AI-Prowler tools.",
                  bg='#2c3e50', fg='#aaccee',
                  font=('Arial', 8),
                  wraplength=520, justify='left',
@@ -6801,7 +6831,7 @@ or from the Help menu."""
         #   2. Writes a task record to ~/.ai-prowler/pending_tasks.json
         #      with any selected scope_dirs included in the task record
         #   3. Copies the run-queue command to the clipboard
-        #   4. User pastes into Claude → Claude calls get_pending_analysis_tasks()
+        #   4. User pastes into Claude, Muse, or Grok → Claude, Muse, or Grok calls get_pending_analysis_tasks()
         #      → executes the analysis → records findings as learnings
         #      → calls complete_analysis_task() to mark done.
         # Not available in server mode (GUI-suppressed).
@@ -6834,7 +6864,7 @@ or from the Help menu."""
                  anchor='w').pack(side='left')
 
         # v8.1.6 fix: removed the "Click a button → queues task & copies
-        # command · Paste into Claude to run ALL queued tasks" hint here —
+        # command · Paste into Claude, Muse, or Grok to run ALL queued tasks" hint here —
         # stale leftover from the copy/paste workflow this panel no
         # longer uses (see the bottom hint label below the button rows
         # for the current, accurate explanation).
@@ -6846,7 +6876,7 @@ or from the Help menu."""
         # Each entry includes a "description" shown in the popup so the user
         # knows exactly what will happen before they click Queue Analysis.
         # Prompts are QuickBooks-aware: if the QB MCP connector is active,
-        # Claude uses it as the primary financial data source; otherwise falls
+        # Claude, Muse, or Grok uses it as the primary financial data source; otherwise falls
         # back to read_job_spreadsheet() and get_ar_aging_report().
         _ANALYSIS_TASKS = [
             {
@@ -7396,7 +7426,7 @@ or from the Help menu."""
             # unconditionally overstated the concern. Now only visible
             # when schedule == "daily" AND times/day > 1, matching the
             # My Custom AI Analyses editor exactly. Static GUI text, not
-            # something Claude says in chat.
+            # something Claude, Muse, or Grok says in chat.
             _credit_warn_lbl = tk.Label(
                 _pad,
                 text='⚠️ If the Autonomous AI Task Queue is enabled, '
@@ -7922,12 +7952,12 @@ or from the Help menu."""
         # each one can be queued and stored for repeated and/or future
         # execution. Also notes the MCP path explicitly, since everything
         # below this note is the manual/GUI configuration path only —
-        # Claude can also create and add these tasks remotely via
+        # Claude, Muse, or Grok can also create and add these tasks remotely via
         # AI-Prowler MCP tools, without touching this panel at all.
         tk.Label(_custom_outer,
                  text="These user custom-defined tasks are AI-assisted tasks that "
                       "can be queued and stored for repeated and/or future "
-                      "execution. In addition to manual configuration here, Claude "
+                      "execution. In addition to manual configuration here, Claude, Muse, or Grok "
                       "can also create and add these via AI-Prowler MCP tools "
                       "remotely.",
                  bg='#0d1a26', fg='#7a92a8',
@@ -8058,7 +8088,7 @@ or from the Help menu."""
                     self.root.clipboard_clear()
                     self.root.clipboard_append(_cmd)
                     self.root.update()
-                    self.status_var.set(f"\u2705 '{t['label']}' queued \u2014 paste into Claude to run ALL tasks")
+                    self.status_var.set(f"\u2705 '{t['label']}' queued \u2014 paste into Claude, Muse, or Grok to run ALL tasks")
                     self.root.after(3000, lambda: self.status_var.set("Ready"))
                     _refresh_queue_count()
                     if _queue_expanded.get():
@@ -8139,7 +8169,7 @@ or from the Help menu."""
             # Prompt
             tk.Label(pad, text="Prompt:", font=('Arial', 9, 'bold'),
                      anchor='w').pack(anchor='w')
-            tk.Label(pad, text="Describe what Claude should analyze and report on.",
+            tk.Label(pad, text="Describe what Claude, Muse, or Grok should analyze and report on.",
                      font=('Arial', 8), fg='gray', anchor='w').pack(anchor='w')
             prompt_box = tk.Text(pad, height=6, width=60, wrap='word',
                                  font=('Arial', 9))
@@ -8360,7 +8390,7 @@ or from the Help menu."""
             # or weekly task barely costs anything, so showing this
             # unconditionally overstated the concern. Now only visible
             # when schedule == "daily" AND times/day > 1. Static GUI text,
-            # not something Claude says in chat.
+            # not something Claude, Muse, or Grok says in chat.
             credit_warn_lbl = tk.Label(
                 pad,
                 text='⚠️ If the Autonomous AI Task Queue is enabled, '
@@ -8559,7 +8589,7 @@ or from the Help menu."""
                             self.root.clipboard_append(_cmd)
                             self.root.update()
                             self.status_var.set(
-                                  f"✅ '{label}' saved & queued — paste into Claude to run ALL tasks")
+                                  f"✅ '{label}' saved & queued — paste into Claude, Muse, or Grok to run ALL tasks")
                             self.root.after(3000,
                                 lambda: self.status_var.set("Ready"))
                             _refresh_queue_count()
@@ -8619,9 +8649,9 @@ or from the Help menu."""
         _refresh_custom_list()
 
         # ── Live refresh when the custom-tasks file changes externally ──────
-        # create_analysis_task() (the MCP tool Claude calls) writes to this
+        # create_analysis_task() (the MCP tool Claude, Muse, or Grok calls) writes to this
         # same custom_analysis_tasks.json file from a SEPARATE process (the
-        # MCP server) — without this, a task Claude creates during a
+        # MCP server) — without this, a task Claude, Muse, or Grok creates during a
         # conversation wouldn't appear here until some other GUI action
         # happened to rebuild this panel. Poll the file's mtime periodically
         # and auto-refresh only when it actually changed — same
@@ -8713,7 +8743,7 @@ or from the Help menu."""
         _al_status_lbl.pack(side='right')
 
         tk.Label(_al_inner,
-                 text="Email alerts pushed to you automatically — no Claude session needed. "
+                 text="Email alerts pushed to you automatically — no Claude, Muse, or Grok session needed. "
                       "Zero API cost. Sends via your configured email.",
                  bg='#1a2e1a', fg='#8ab88a',
                  font=('Arial', 8),
@@ -8911,7 +8941,7 @@ or from the Help menu."""
             # user asked about directly — sitting on this tab (or anywhere
             # in the app) while a change lands in email_config.json or
             # config.json (owner name/address) from ANY source: the three
-            # Settings Save buttons, configure_email() called from a Claude
+            # Settings Save buttons, configure_email() called from a Claude, Muse, or Grok
             # conversation, or a direct file edit. Runs unconditionally
             # every 3s regardless of which tab is currently selected,
             # matching the custom-tasks poll's behavior exactly. Diffs on
@@ -9257,12 +9287,12 @@ or from the Help menu."""
         # v8.2.0: note added right after the section header/rename to
         # "Autonomous AI Task Queue" — clarifies that everything queued
         # here is itself AI-assisted, and that this panel isn't the only
-        # way to manage it: Claude has tools to add, manage, and run
+        # way to manage it: Claude, Muse, or Grok has tools to add, manage, and run
         # these task queues remotely via AI-Prowler MCP tools, in
         # addition to the manual controls below.
         tk.Label(_tqa_inner,
                  text="These are AI-assisted tasks that can be queued and stored "
-                      "for repeated and/or future execution. Claude AI has tools to "
+                      "for repeated and/or future execution. Claude, Muse, or Grok has tools to "
                       "manage, add, and run these task queues via AI-Prowler MCP "
                       "tools remotely.",
                  bg='#1a1e2e', fg='#8899bb',
@@ -9270,17 +9300,27 @@ or from the Help menu."""
                  wraplength=680, justify='left').pack(anchor='w', pady=(0, 4))
 
         tk.Label(_tqa_inner,
-                 text="Runs your queued analysis tasks on a schedule via Claude Code, "
+                 text="Runs your queued analysis tasks on a schedule via Claude Code or the Grok API, "
                       "without opening a chat and pasting the run command yourself.",
                  bg='#1a1e2e', fg='#a0a8cc',
                  font=('Arial', 8),
                  wraplength=680, justify='left').pack(anchor='w', pady=(0, 2))
 
+        # 2026-10-12 (David): unattended runs now support Grok API keys too.
+        # Muse has no API key released yet — Muse still uses the manual flow.
         tk.Label(_tqa_inner,
-                 text="ℹ️  Requires a Claude Pro subscription or higher to use Claude "
-                      "Code CLI — the free Claude tier does not include Claude Code "
-                      "access. (Not required if you use an API Key instead — see Auth "
-                      "below.)",
+                 text="Unattended runs work with Claude (via the Claude Code CLI) and Grok (via an xAI API key) — "
+                      "pick the auth method in the Auth section below. Muse has no API key released yet, "
+                      "so with Muse, queue the tasks here (\u25b6 Queue), then open a Muse chat and paste "
+                      "the run command (Ctrl+V).",
+                 bg='#1a1e2e', fg='#e0c060',
+                 font=('Arial', 8, 'bold'),
+                 wraplength=680, justify='left').pack(anchor='w', pady=(0, 2))
+
+        tk.Label(_tqa_inner,
+                 text="\u2139\ufe0f  The Claude paths need a Claude Pro subscription or higher for the Claude "
+                      "Code CLI — the free Claude tier does not include Claude Code access. (Not required "
+                      "if you use a Claude API key or Grok instead — see Auth below.)",
                  bg='#1a1e2e', fg='#8899bb',
                  font=('Arial', 8, 'italic'),
                  wraplength=680, justify='left').pack(anchor='w', pady=(0, 8))
@@ -9403,11 +9443,15 @@ or from the Help menu."""
                 # hidden detail buried in a dry-run report only checked on
                 # demand. Branches on which auth method is active.
                 if _tqa_cfg.get("use_api_key"):
-                    if _tqa.has_api_key():
-                        _tqa_token_var.set("🔑 API key configured (metered billing)")
+                    # 2026-10-12: name the provider — "API key" alone no longer
+                    # says which key the runs will bill to.
+                    _sd_prov = _tqa.effective_api_key_provider(_tqa_cfg)
+                    _sd_name = "Grok (xAI)" if _sd_prov == "grok" else "Claude (Anthropic)"
+                    if _tqa.has_api_key(_sd_prov):
+                        _tqa_token_var.set(f"\U0001F511 {_sd_name} API key configured (metered billing)")
                         _tqa_token_lbl.config(fg='#6ab86a')
                     else:
-                        _tqa_token_var.set("🔑 No API key saved yet — enter one below and Save Key")
+                        _tqa_token_var.set(f"\U0001F511 No {_sd_name} API key saved yet — enter one below and Save Key")
                         _tqa_token_lbl.config(fg='#cc8800')
                     return
                 _tok = _tqa.check_token_expiry()
@@ -9467,7 +9511,7 @@ or from the Help menu."""
             # explicit check times evenly spread across [Start time, End
             # time] via the exact same custom_tasks_manager.compute_daily_
             # run_times() the task editors use, shown live below. Static
-            # GUI warning, not something Claude says in chat — same "if
+            # GUI warning, not something Claude, Muse, or Grok says in chat — same "if
             # they set it for 10 times per day" scenario David asked to
             # have flagged right here.
             _initial_times_per_day = _tqa_cfg.get("check_times_per_day")
@@ -9659,8 +9703,29 @@ or from the Help menu."""
             # "how to actually do this" pointer under each radio so the two
             # credentials (a Claude Code OAuth sign-in vs. a pasted API key
             # string) are never confused for each other again.
-            _tqa_auth_var = tk.StringVar(
-                value="api_key" if _tqa_cfg.get("use_api_key") else "oauth")
+            # 2026-10-12 (David): three auth methods now. "api_key" keeps its
+            # existing meaning (Anthropic/Claude) so saved configs and tests
+            # don't migrate; "api_key_grok" is the new xAI option.
+            _tqa_auth_var = tk.StringVar(value=(
+                "api_key_grok"
+                if (_tqa_cfg.get("use_api_key")
+                    and _tqa.effective_api_key_provider(_tqa_cfg) == "grok")
+                else "api_key" if _tqa_cfg.get("use_api_key") else "oauth"))
+
+            def _tqa_selected_provider():
+                """'oauth' | 'anthropic' | 'grok' from the auth radio."""
+                _v = _tqa_auth_var.get()
+                if _v == "api_key_grok":
+                    return "grok"
+                if _v == "api_key":
+                    return "anthropic"
+                return "oauth"
+
+            def _tqa_key_provider():
+                """Which saved API key the key row works on: 'grok' when Grok is
+                selected, otherwise 'anthropic' (also while Subscription is
+                selected — the key functions only know anthropic/grok)."""
+                return "grok" if _tqa_selected_provider() == "grok" else "anthropic"
 
             _tqa_row3 = tk.Frame(_tqa_inner, bg='#1a1e2e')
             _tqa_row3.pack(fill='x', pady=(0, 2))
@@ -9671,8 +9736,13 @@ or from the Help menu."""
                            bg='#1a1e2e', fg='#ffffff', selectcolor='#1a1e2e',
                            activebackground='#1a1e2e',
                            font=('Arial', 9)).pack(side='left', padx=(4, 0))
-            tk.Radiobutton(_tqa_row3, text="API Key (metered billing) — separate pay-as-you-go account",
+            tk.Radiobutton(_tqa_row3, text="Claude API Key (metered billing) — Anthropic",
                            variable=_tqa_auth_var, value="api_key",
+                           bg='#1a1e2e', fg='#ffffff', selectcolor='#1a1e2e',
+                           activebackground='#1a1e2e',
+                           font=('Arial', 9)).pack(side='left', padx=(4, 0))
+            tk.Radiobutton(_tqa_row3, text="Grok API Key (metered billing) — xAI",
+                           variable=_tqa_auth_var, value="api_key_grok",
                            bg='#1a1e2e', fg='#ffffff', selectcolor='#1a1e2e',
                            activebackground='#1a1e2e',
                            font=('Arial', 9)).pack(side='left', padx=(4, 0))
@@ -9692,11 +9762,15 @@ or from the Help menu."""
                      wraplength=680, justify='left')
             _tqa_hint_lbl.pack(anchor='w', pady=(0, 6))
 
+            # 2026-10-12: the API-key row's frame (shown/hidden by
+            # _tqa_on_auth_change) — its creation line was lost in the Grok edits.
             _tqa_row4 = tk.Frame(_tqa_inner, bg='#1a1e2e')
             tk.Label(_tqa_row4, text="API key:", bg='#1a1e2e', fg='#a0a8cc',
                      font=('Arial', 9)).pack(side='left')
             _tqa_apikey_var = tk.StringVar(
-                value="••••••••" if _tqa.has_api_key() else "")
+                value="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+                if (_tqa_selected_provider() in ("anthropic", "grok")
+                    and _tqa.has_api_key(_tqa_key_provider())) else "")
             _tqa_apikey_entry = tk.Entry(_tqa_row4, textvariable=_tqa_apikey_var,
                                           width=40, show='•', font=('Arial', 9))
             _tqa_apikey_entry.pack(side='left', padx=(4, 4))
@@ -9707,7 +9781,7 @@ or from the Help menu."""
                     messagebox.showwarning("No Key Entered",
                                             "Type a key into the field first.")
                     return
-                _tqa.save_api_key(val)
+                _tqa.save_api_key(val, _tqa_key_provider())
                 _tqa_apikey_var.set("••••••••")
                 messagebox.showinfo("Saved", "API key saved. It is never "
                                      "displayed again or logged anywhere — "
@@ -9725,7 +9799,7 @@ or from the Help menu."""
                 to Subscription) had no path to deletion; the masked Entry
                 field also isn't a live reflection of storage, so clearing
                 the on-screen text alone did nothing persistent."""
-                if not _tqa.has_api_key():
+                if not _tqa.has_api_key(_tqa_key_provider()):
                     messagebox.showinfo("Nothing to Clear",
                                          "No API key is currently saved.")
                     return
@@ -9735,7 +9809,7 @@ or from the Help menu."""
                         "You can paste a new one later, or use Subscription "
                         "(OAuth) instead."):
                     return
-                _tqa.delete_api_key()
+                _tqa.delete_api_key(_tqa_key_provider())
                 _tqa_apikey_var.set("")
                 messagebox.showinfo("Cleared", "The saved API key has been removed.")
                 _tqa_refresh_status_display()
@@ -9745,7 +9819,10 @@ or from the Help menu."""
 
             def _tqa_open_api_key_console():
                 import webbrowser
-                webbrowser.open("https://console.anthropic.com/settings/keys")
+                if _tqa_selected_provider() == "grok":
+                    webbrowser.open("https://console.x.ai/")
+                else:
+                    webbrowser.open("https://console.anthropic.com/settings/keys")
 
             _tqa_last_run_var = tk.StringVar(value="Last: (never run)")
             tk.Label(_tqa_inner, textvariable=_tqa_last_run_var,
@@ -9820,7 +9897,8 @@ or from the Help menu."""
                 # here surfaces naturally via the checklist's own "MCP
                 # config file" check, not a separate popup.
                 _tqa_generate_mcp_config(silent=True)
-                report = _tqa.dry_run_check()
+                # 2026-10-12: check the auth method selected right now
+                report = _tqa.dry_run_check(auth=_tqa_selected_provider())
                 _tqa_render_checklist(report)
                 _tqa_refresh_status_display()
 
@@ -9902,7 +9980,10 @@ or from the Help menu."""
                 cfg["schedule_end_time"]  = _tqa_end_time_var.get().strip() or "23:00"
                 cfg["notify_on_complete"] = _tqa_notify_var.get()
                 cfg["notify_method"]      = _tqa_method_var.get()
-                cfg["use_api_key"]        = (_tqa_auth_var.get() == "api_key")
+                cfg["use_api_key"] = _tqa_selected_provider() in ("anthropic", "grok")
+                # 2026-10-12: persist which API-key provider the key belongs
+                # to, so the radio (and the scheduled wrapper) pick it back up.
+                cfg["api_key_provider"] = _tqa_selected_provider()
 
                 # v9.0.1: times_per_day now stored directly and losslessly
                 # (check_times_per_day) instead of round-tripped through
@@ -9950,7 +10031,7 @@ or from the Help menu."""
                     except Exception:
                         pass  # best-effort — a catch-up failure shouldn't block enabling
 
-                if cfg["use_api_key"] and not _tqa.has_api_key():
+                if cfg["use_api_key"] and not _tqa.has_api_key(cfg["api_key_provider"]):
                     messagebox.showwarning(
                         "API Key Needed",
                         "API Key auth is selected but no key is saved yet. "
@@ -9994,6 +10075,7 @@ or from the Help menu."""
                         wrapper_dir, cfg["mcp_config_path"], cfg["allowed_tools"],
                         cfg["notify_on_complete"], cfg["notify_method"],
                         cfg["use_api_key"],
+                        api_key_provider=cfg.get("api_key_provider", "anthropic"),
                         check_mode=cfg["check_mode"],
                         active_days=cfg.get("active_days"),
                         active_start_time=cfg.get("active_start_time", "00:00"),
@@ -10158,7 +10240,7 @@ or from the Help menu."""
                                                command=_tqa_email_token)
             _tqa_btn_test = ttk.Button(_tqa_btn_row, text="🧪 Test Setup (Dry Run)",
                                         command=_tqa_test_setup)
-            _tqa_btn_get_api_key = ttk.Button(_tqa_btn_row, text="🌐 Get an API Key (backup)",
+            _tqa_btn_get_api_key = ttk.Button(_tqa_btn_row, text="🌐 Get an Anthropic API Key (backup)",
                                                command=_tqa_open_api_key_console)
 
             def _tqa_relayout_buttons():
@@ -10172,7 +10254,7 @@ or from the Help menu."""
                 for _b in (_tqa_btn_get_token, _tqa_btn_copy_token, _tqa_btn_email_token,
                            _tqa_btn_test, _tqa_btn_get_api_key):
                     _b.pack_forget()
-                is_api_key = (_tqa_auth_var.get() == "api_key")
+                is_api_key = _tqa_selected_provider() in ("anthropic", "grok")
                 if not is_api_key:
                     _tqa_btn_get_token.pack(side='left', padx=(0, 6))
                     # Copy / Email the OAuth token — only meaningful on the
@@ -10191,23 +10273,72 @@ or from the Help menu."""
                 layout. Called once immediately below to set correct
                 initial state, then again automatically via the trace
                 every time the user clicks a radio button."""
-                is_api_key = (_tqa_auth_var.get() == "api_key")
-                if is_api_key:
+                _prov = _tqa_selected_provider()
+                _is_key = _prov in ("anthropic", "grok")
+                if _prov == "grok":
+                    _tqa_hint_var.set(
+                        "☝  Grok API Key: paste a key from console.x.ai "
+                        "into the field below, then click Save Key. Unattended runs "
+                        "call the xAI API directly (metered by xAI) — no Claude "
+                        "Code CLI needed.")
+                elif _prov == "anthropic":
                     _tqa_hint_var.set(
                         "☝  API Key: paste a real key from console.anthropic.com "
                         "into the field below, then click Save Key. This is a "
                         "separate pay-as-you-go account — not your Claude "
                         "Pro/Max subscription.")
-                    if not _tqa_row4.winfo_ismapped():
-                        _tqa_row4.pack(fill='x', pady=(0, 4), after=_tqa_hint_lbl)
                 else:
                     _tqa_hint_var.set(
                         "☝  Subscription: click 🔑 Get / Renew Token below to "
                         "sign in — there is nothing to type in below for this "
                         "option.")
+                # The masked field mirrors the SELECTED provider's saved key,
+                # so switching radios can't show one provider's dots for the
+                # other. (Typed-but-unsaved text is intentionally replaced —
+                # saving is always per the currently selected provider.)
+                _tqa_apikey_var.set(
+                    "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+                    if (_is_key and _tqa.has_api_key(_prov)) else "")
+                if _is_key:
+                    if not _tqa_row4.winfo_ismapped():
+                        _tqa_row4.pack(fill='x', pady=(0, 4), after=_tqa_hint_lbl)
+                else:
                     if _tqa_row4.winfo_ismapped():
                         _tqa_row4.pack_forget()
+                _tqa_btn_get_api_key.config(
+                    text="🔑 Get Grok API Key" if _prov == "grok" else "🔑 Get Claude API Key")
                 _tqa_relayout_buttons()
+                _tqa_persist_auth(_prov)
+
+            def _tqa_persist_auth(prov):
+                """2026-10-12 (David): picking an Auth option takes effect at once —
+                saved to the queue settings, and (when the queue is on) the
+                scheduled run's script is rewritten so the next run uses it.
+                Before, it only changed on Apply/toggle, so Test Setup and the
+                scheduled run kept using the previously saved method."""
+                want_key = prov in ("anthropic", "grok")
+                want_prov = prov if want_key else _tqa_cfg.get("api_key_provider", "anthropic")
+                if (bool(_tqa_cfg.get("use_api_key")) == want_key
+                        and (not want_key or _tqa_cfg.get("api_key_provider") == prov)):
+                    return                                   # nothing changed
+                try:
+                    cfg = dict(_tqa.load_config())
+                    cfg["use_api_key"] = want_key
+                    cfg["api_key_provider"] = want_prov
+                    _tqa.save_config(cfg)
+                    _tqa_cfg.update(cfg)
+                    if cfg.get("enabled") and cfg.get("mcp_config_path"):
+                        _tqa.install_wrapper_script(
+                            _tqa.AI_PROWLER_HOME, cfg["mcp_config_path"], cfg["allowed_tools"],
+                            cfg["notify_on_complete"], cfg["notify_method"], cfg["use_api_key"],
+                            api_key_provider=cfg.get("api_key_provider", "anthropic"),
+                            check_mode=cfg.get("check_mode", "daily"),
+                            active_days=cfg.get("active_days"),
+                            active_start_time=cfg.get("active_start_time", "00:00"),
+                            active_end_time=cfg.get("active_end_time", "23:59"))
+                    _tqa_refresh_status_display()
+                except Exception as _e_auth:
+                    self.status_var.set(f"Couldn't save the auth choice: {_e_auth}")
 
             _tqa_auth_var.trace_add('write', _tqa_on_auth_change)
             _tqa_on_auth_change()
@@ -10786,10 +10917,10 @@ or from the Help menu."""
         # Legend explaining the row prefixes
         legend = ttk.Label(
             tracked_frame,
-            text="[W]  writable — Claude can modify files in this path "
+            text="[W]  writable — Claude, Muse, or Grok can modify files in this path "
                  "(from desktop AND mobile).      "
                  "[W*] writable in a subdirectory only — double-click to widen.      "
-                 "[R]  read-only — Claude can search but not edit.      "
+                 "[R]  read-only — Claude, Muse, or Grok can search but not edit.      "
                  "Double-click a row to toggle.",
             font=('Arial', 8),
             foreground='gray',
@@ -10887,7 +11018,7 @@ or from the Help menu."""
 
         ttk.Label(
             access_frame,
-            text="Folders Claude may READ without indexing. Never touched by "
+            text="Folders Claude, Muse, or Grok may READ without indexing. Never touched by "
                  "the auto-update sweep. Double-click a row to toggle write "
                  "access (Mobile Write Zones).",
             font=('Arial', 8),
@@ -12216,6 +12347,30 @@ or from the Help menu."""
                 n for n in _tool_cfg_data.get(_tool_cfg_mode_key, {}).get("disabled_tools", [])
                 if n in _tc.TOOL_CATALOG and not _tc.is_locked(n)
             )
+            # 2026-10-11 (David): the "HR apps (HR Admin + HR Portal)" group is
+            # the one switch for both HR apps — server only, OFF until turned
+            # on. Its state lives in tool_config.json's own "hr_apps_enabled"
+            # key (a disabled-tools list can't say "off unless turned on").
+            _tool_cfg_hr_tools = [n for n in _tc.tools_in_category("hr")
+                                  if _tool_cfg_mode_key in _tc.modes_of(n)]
+            if _tool_cfg_hr_tools and _tool_cfg_data.get("hr_apps_enabled") is not True:
+                _tool_cfg_disabled_now |= set(_tool_cfg_hr_tools)
+            # 2026-10-12 (David): "Job Tracker & Routing" and "SMS & WhatsApp"
+            # start OFF on a new install (both modes); an install that already
+            # uses them keeps them on (tool_config_store.group_enabled).
+            _tool_cfg_default_off = {}   # group -> [its tools in this mode]
+            try:
+                import tool_config_store as _tcs_g
+                for _grp in _tcs_g.DEFAULT_OFF_GROUPS:
+                    _gt = [n for n in _tc.tools_in_category(_grp)
+                           if _tool_cfg_mode_key in _tc.modes_of(n) and not _tc.is_locked(n)]
+                    if not _gt:
+                        continue
+                    _tool_cfg_default_off[_grp] = _gt
+                    if not _tcs_g.group_enabled(_tool_cfg_mode_key, _grp):
+                        _tool_cfg_disabled_now |= set(_gt)
+            except Exception:
+                _tool_cfg_default_off = {}
 
             _tool_cfg_vars = {}  # tool_name -> tk.BooleanVar (True = ENABLED)
             _tool_cfg_counter_var = tk.StringVar()
@@ -12507,9 +12662,23 @@ or from the Help menu."""
                     return
                 try:
                     _tcs.save_disabled_tools(_disabled_now, _tool_cfg_mode_key)
+                    _hr_msg = ""
+                    if _tool_cfg_hr_tools:
+                        # HR apps switch (server only): on while any HR tool is ticked.
+                        _hr_on = any(_tool_cfg_vars[n].get() for n in _tool_cfg_hr_tools
+                                     if n in _tool_cfg_vars)
+                        _tcs.set_hr_apps_enabled(_hr_on)
+                        _hr_msg = (" HR apps are ON — HR Admin and HR Portal open now; Claude/Muse/Grok's "
+                                   "HR tools after the restart." if _hr_on else
+                                   " HR apps are OFF — HR Admin and HR Portal are closed.")
+                    # Default-off groups: record the choice (on while any tool is ticked)
+                    for _grp, _gt in _tool_cfg_default_off.items():
+                        _tcs.set_group_enabled(
+                            _tool_cfg_mode_key, _grp,
+                            any(_tool_cfg_vars[n].get() for n in _gt if n in _tool_cfg_vars))
                     _tool_cfg_status_var.set(
                         "✅ Saved MCP tool choices only — your other settings were not "
-                        "changed. Restart AI-Prowler to apply.")
+                        "changed. Restart AI-Prowler to apply." + _hr_msg)
                 except Exception as _e:
                     _tool_cfg_status_var.set(
                         f"❌ Could not save: {_e}. Your other settings were not changed.")
@@ -12519,6 +12688,13 @@ or from the Help menu."""
                 # disk until Save, and Save only ever writes tool_config.json.
                 for v in _tool_cfg_vars.values():
                     v.set(True)
+                for n in _tool_cfg_hr_tools:          # HR apps default to OFF
+                    if n in _tool_cfg_vars:
+                        _tool_cfg_vars[n].set(False)
+                for _gt in _tool_cfg_default_off.values():   # so do Job Tracker + SMS
+                    for n in _gt:
+                        if n in _tool_cfg_vars:
+                            _tool_cfg_vars[n].set(False)
                 _tool_cfg_changed()
                 _tool_cfg_status_var.set(
                     "Reset in this panel only — click Save to keep it (MCP tools "
@@ -12624,7 +12800,7 @@ or from the Help menu."""
         # localhost:11434 (Ollama) and on machines where Ollama is not
         # installed it hammers the port every 10s indefinitely, flooding
         # the MCP server log and wasting threads. SUPPORT_LOCAL_HW_LLM=False
-        # means Claude MCP is the only AI interface, so no Ollama is needed.
+        # means MCP (Claude, Muse, or Grok) is the only AI interface, so no Ollama is needed.
         if SUPPORT_LOCAL_HW_LLM:
             self.root.after(500, self._start_model_poller)
 
@@ -12785,9 +12961,9 @@ or from the Help menu."""
         # ── Email Configuration ────────────────────────────────────────────
         # Shown in BOTH personal and server mode, but serves different purposes:
         #
-        # Personal mode: this is YOUR email account. Claude uses send_email /
+        # Personal mode: this is YOUR email account. Claude, Muse, or Grok uses send_email /
         #   send_alert to send from it. configure_email() MCP tool is also
-        #   available for Claude to set this from conversation.
+        #   available for Claude, Muse, or Grok to set this from conversation.
         #
         # Server mode: this is the COMPANY'S shared SMTP account. Field crew
         #   members cannot configure email themselves (configure_email() is
@@ -12860,7 +13036,7 @@ or from the Help menu."""
                         _ol_mode_intro +
                         "ℹ️  New Outlook (olk.exe) detected — no COM interface.\n"
                         "    Use SMTP below to send automatically, or use the\n"
-                        "    Gmail connector in Claude for a no-password option."
+                        "    Gmail connector in Claude, Muse, or Grok for a no-password option."
                     )
                 else:
                     _ol_status_var.set(
@@ -13079,7 +13255,7 @@ or from the Help menu."""
             values=[], width=32, state='readonly')
         _ol_acct_combo.grid(row=0, column=1, **_ep)
         ttk.Label(_ol_acct_frame,
-                  text='Default sending account (you can override per-send in Claude)',
+                  text='Default sending account (you can override per-send in Claude, Muse, or Grok)',
                   font=('Segoe UI', 8), foreground='#0066aa').grid(
             row=0, column=2, sticky='w')
 
@@ -14720,13 +14896,13 @@ or from the Help menu."""
 
         # ── Remote Access ─────────────────────────────────────────────────────
         remote_frame = ttk.LabelFrame(scrollable_frame,
-                                      text="📡 Remote Access — Claude on Mobile",
+                                      text="📡 Remote Access — Claude, Muse, or Grok on Mobile",
                                       padding=(10, 8))
         remote_frame.pack(fill='x', padx=20, pady=(5, 10))
 
         # Intro
         ttk.Label(remote_frame, justify='left', font=('Arial', 9),
-                  text=("Query AI-Prowler from Claude on your phone via a Cloudflare Tunnel.\n"
+                  text=("Query AI-Prowler from Claude, Muse, or Grok on your phone via a Cloudflare Tunnel.\n"
                         "The HTTP server runs locally on this laptop; Cloudflare provides the secure public URL."),
                   foreground='gray').pack(anchor='w', pady=(0, 8))
 
@@ -17453,9 +17629,8 @@ or from the Help menu."""
         kir_frame.pack(fill='x', pady=(10, 6))
 
         ttk.Label(kir_frame, foreground='gray',
-                  text=("Sleep mode disconnects the MCP server \u2014 mobile Claude will\n"
-                        "stop responding until you wake the laptop AND restart the server\n"
-                        "via Claude Desktop \u2192 Settings \u2192 Developer \u2192 MCP Servers.")
+                  text=("Sleep mode disconnects the MCP server \u2014 mobile Claude, Muse, or Grok will\n"
+                        "stop responding until you wake the laptop.")
                   ).pack(anchor='w')
 
         ttk.Label(kir_frame, foreground='gray',
@@ -17969,17 +18144,17 @@ or from the Help menu."""
 
         ttk.Label(banner, justify='left', font=('Arial', 9), wraplength=760,
                   text=(
-                      "Claude AI can act as your field-service assistant by adding customers, "
+                      "Claude, Muse, or Grok can act as your field-service assistant by adding customers, "
                       "job scheduling, and job tracking, time logging, multiple crews — ask in "
                       "a conversation, no forms to fill out. Tools such as a job board, weather, "
                       "routing all work on your cell phone/tablet with the free Jobs mobile App. "
                       "Contractor customer tools like quotes/invoicing/receipt, SMS texting "
-                      "(with setup), Email, AR aging reports all available by Claude AI "
+                      "(with setup), Email, AR aging reports all available by Claude, Muse, or Grok "
                       "text/voice or through the Jobs Mobile App."
                   )).pack(anchor='w')
 
         # v8.1.3: the Job Tracker's real value — multi-employee scheduling,
-        # mobile crew access, QuickBooks + Claude autofill — was previously
+        # mobile crew access, QuickBooks + Claude, Muse, or Grok autofill — was previously
         # undersold here (just a "Job Spreadsheet Updater" tool description
         # further down). This button opens a full explainer/guide instead.
         ttk.Button(banner, text="📊  What Can the Job Tracker Do for My Business?  →",
@@ -18125,7 +18300,10 @@ or from the Help menu."""
         hr_admin_lf = ttk.LabelFrame(f,
                                 text="👥 HR Admin — Mobile URL for HR Admin Portal",
                                 padding=(8, 4))
-        hr_admin_lf.pack(fill='x', padx=16, pady=(0, 6))
+        # 2026-10-11 (David): the HR apps are AI-Prowler SERVER only — the
+        # section is built but only shown on a server.
+        if self._is_business_server_mode():
+            hr_admin_lf.pack(fill='x', padx=16, pady=(0, 6))
 
         def _load_hr_admin_url():
             try:
@@ -18217,12 +18395,26 @@ or from the Help menu."""
         ttk.Button(hr_admin_url_row, text="📋 Copy",
                    command=_copy_hr_admin_url).pack(side='left', padx=(0, 4))
         ttk.Button(hr_admin_url_row, text="📧 Email to user",
-                   command=_email_hr_admin_url).pack(side='left', padx=(0, 8))
+                   command=_email_hr_admin_url).pack(side='left', padx=(0, 4))
+
+        def _qr_hr_admin_url():
+            # 2026-10-12 (David): same shared QR window as the Jobs app row.
+            try:
+                import setup_wizard as _sw_q
+                _sw_q.show_qr_window(self.root, "HR Admin — scan with your phone",
+                                     _hr_admin_url_var.get().strip(),
+                                     "Opens AI-Prowler HR Admin (owners and managers).")
+            except Exception as _e_q:
+                messagebox.showerror("QR code", f"Couldn't show the QR code:\n{_e_q}")
+
+        ttk.Button(hr_admin_url_row, text="📱 QR",
+                   command=_qr_hr_admin_url).pack(side='left', padx=(0, 8))
 
         ttk.Label(hr_admin_url_row, text="← send to managers/admins",
                   font=('Arial', 8), foreground='gray').pack(side='left')
 
-        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+        if self._is_business_server_mode():          # HR sections are server only
+            ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
         # ── end HR Admin Application ──────────────────────────────────────────
 
         # ── HR Portal (Employee Self-Service) ─────────────────────────────────
@@ -18231,7 +18423,8 @@ or from the Help menu."""
         hr_portal_lf = ttk.LabelFrame(f,
                                 text="🧑‍💼 HR Portal — Mobile URL for Employee Self-Service",
                                 padding=(8, 4))
-        hr_portal_lf.pack(fill='x', padx=16, pady=(0, 6))
+        if self._is_business_server_mode():          # 2026-10-11: HR is server only
+            hr_portal_lf.pack(fill='x', padx=16, pady=(0, 6))
 
         def _load_hr_portal_url():
             try:
@@ -18323,12 +18516,27 @@ or from the Help menu."""
         ttk.Button(hr_portal_url_row, text="📋 Copy",
                    command=_copy_hr_portal_url).pack(side='left', padx=(0, 4))
         ttk.Button(hr_portal_url_row, text="📧 Email to user",
-                   command=_email_hr_portal_url).pack(side='left', padx=(0, 8))
+                   command=_email_hr_portal_url).pack(side='left', padx=(0, 4))
+
+        def _qr_hr_portal_url():
+            # 2026-10-12 (David): same shared QR window as the Jobs app row.
+            try:
+                import setup_wizard as _sw_q
+                _sw_q.show_qr_window(self.root, "HR Portal — scan with your phone",
+                                     _hr_portal_url_var.get().strip(),
+                                     "Opens the AI-Prowler HR Portal (employees sign in with "
+                                     "their AI-Prowler account).")
+            except Exception as _e_q:
+                messagebox.showerror("QR code", f"Couldn't show the QR code:\n{_e_q}")
+
+        ttk.Button(hr_portal_url_row, text="📱 QR",
+                   command=_qr_hr_portal_url).pack(side='left', padx=(0, 8))
 
         ttk.Label(hr_portal_url_row, text="← send to employees",
                   font=('Arial', 8), foreground='gray').pack(side='left')
 
-        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+        if self._is_business_server_mode():          # HR sections are server only
+            ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
         # ── end HR Portal ─────────────────────────────────────────────────────
 
         # ── Employee Backups ────────────────────────────────────────────────
@@ -18344,7 +18552,8 @@ or from the Help menu."""
         backup_lf = ttk.LabelFrame(f,
                                 text="🗄️ Employee Backups — full record + documents, auto-pruned",
                                 padding=(8, 6))
-        backup_lf.pack(fill="x", padx=16, pady=(0, 6))
+        if self._is_business_server_mode():          # 2026-10-11: HR is server only
+            backup_lf.pack(fill="x", padx=16, pady=(0, 6))
 
         ttk.Label(backup_lf, justify="left", font=("Arial", 8), foreground="gray",
                   text=("Recurring, scheduled backup of every actively-employed employee's "
@@ -18865,7 +19074,7 @@ or from the Help menu."""
         # ── Scheduled automatic backups (Job Board Architecture Spec §12.8) ────
         # A direct, code-based periodic check rather than routing through the
         # AI-driven custom-analysis-task queue (create_analysis_task) — that
-        # queue's tasks are natural-language prompts an autonomous Claude loop
+        # queue's tasks are natural-language prompts an autonomous Claude, Muse, or Grok loop
         # interprets, which is the wrong dependency for something as basic and
         # important as "back up my data on a schedule": it should keep working
         # even if the Autonomous AI Task Queue toggle is off, or no AI call
@@ -18996,7 +19205,7 @@ or from the Help menu."""
         # custom analysis task in the Links & Analysis tab's My Custom
         # Analyses queue — calls custom_tasks_manager directly (same module
         # create_analysis_task()/list_analysis_tasks() already use), so the
-        # task this button makes is indistinguishable from one Claude creates
+        # task this button makes is indistinguishable from one Claude, Muse, or Grok creates
         # via create_analysis_task() in a conversation — same file, same
         # queue, same Run/Queue controls over there.
         #
@@ -19077,7 +19286,7 @@ or from the Help menu."""
         # mode is built for small businesses — but this section does not. Its
         # task half feeds the Links & Analysis task queue, which doesn't exist in
         # server mode, and its runner half duplicates the Admin tab's "AI Route
-        # runner" panel (the server's real setup, with the per-user Claude
+        # runner" panel (the server's real setup, with the per-user Claude, Muse, or Grok
         # accounts). Built but never packed, so nothing below needs changing.
         if self._is_business_server_mode():
             ttk.Label(f, justify='left', font=('Arial', 8), foreground='gray', wraplength=620,
@@ -19368,7 +19577,7 @@ or from the Help menu."""
         Dedicated tab for viewing and managing the Self-Learning knowledge base.
 
         Sections:
-          1. Overview banner — what self-learning is and how Claude uses it
+          1. Overview banner — what self-learning is and how Claude, Muse, or Grok uses it
           2. Stats panel — live counts by category, status, outcome
           3. Learnings table — Treeview with all learnings, click to expand
           4. Detail panel — shows full content of selected learning
@@ -19403,12 +19612,12 @@ or from the Help menu."""
 
         ttk.Label(banner, justify='left', font=('Arial', 9),
                   text=(
-                      "Claude automatically records learnings from your conversations — "
+                      "Claude, Muse, or Grok automatically records learnings from your conversations — "
                       "business lessons,\nfact corrections, project insights, client preferences, "
                       "and process improvements.\n\n"
                       "Learnings are stored in a JSON file and indexed in ChromaDB for "
                       "instant semantic retrieval.\n"
-                      "Claude checks this knowledge base BEFORE answering questions, "
+                      "Claude, Muse, or Grok checks this knowledge base BEFORE answering questions, "
                       "and records new learnings\nautomatically when it detects corrections, "
                       "outcomes, or improvements — always with confirmation."
                   )).pack(anchor='w')
@@ -19418,7 +19627,7 @@ or from the Help menu."""
         ex_frame.pack(fill='x', pady=(8, 0))
 
         examples = [
-            ("🔍  Check",      '"What do we know about Client X?"  →  Claude calls search_learnings()'),
+            ("🔍  Check",      '"What do we know about Client X?"  →  Claude, Muse, or Grok calls search_learnings()'),
             ("📝  Record",     '"Remember: always submit permits 2 weeks before job start"'),
             ("📊  Post-Op",    '"Analyze the Johnson project — what went right and wrong?"'),
             ("🔄  Correct",    '"Actually, the correct phone number is 555-0200"'),
@@ -19917,7 +20126,7 @@ or from the Help menu."""
             if not messagebox.askyesno(
                     "Archive Learning",
                     f"Archive \"{l.get('title', 'Untitled')}\"?\n\n"
-                    "It will be hidden from Claude's search results "
+                    "It will be hidden from Claude/Muse/Grok's search results "
                     "but kept for historical reference."):
                 return
             if SELF_LEARNING_AVAILABLE:
@@ -19931,7 +20140,7 @@ or from the Help menu."""
                 messagebox.showinfo(
                     "Unavailable",
                     "self_learning.py not found — cannot modify learnings "
-                    "from the GUI.\nUse Claude: "
+                    "from the GUI.\nUse Claude, Muse, or Grok: "
                     "update_learning(id, {status: 'archived'})")
 
         def _delete_selected():
@@ -19973,7 +20182,7 @@ or from the Help menu."""
                 messagebox.showinfo(
                     "Unavailable",
                     "self_learning.py not found — cannot delete learnings "
-                    "from the GUI.\nUse Claude: delete_learning(id)")
+                    "from the GUI.\nUse Claude, Muse, or Grok: delete_learning(id)")
 
         def _reindex():
             if not SELF_LEARNING_AVAILABLE:
@@ -20055,7 +20264,7 @@ or from the Help menu."""
                 messagebox.showinfo(
                     "Not Found",
                     f"Learnings file does not exist yet:\n{_learnings_file}\n\n"
-                    "It will be created the first time Claude records a learning.")
+                    "It will be created the first time Claude, Muse, or Grok records a learning.")
 
         def _open_folder():
             folder = _learnings_file.parent
@@ -22229,7 +22438,7 @@ or from the Help menu."""
                    command=self._admin_ai_route_refresh_status).pack(side='left')
         ttk.Label(ai_lf, font=('Segoe UI', 8), foreground='gray', wraplength=720, justify='left',
                   text=("Do these once, on this server. Setting up the runner needs one Windows "
-                        "confirmation prompt. After that, each user connects their own Claude "
+                        "confirmation prompt. After that, each user connects their own Claude, Muse, or Grok "
                         "account from the Jobs app the first time they tap AI Route — or use "
                         "🤖 AI Route Token above to paste one for them.")
                   ).pack(anchor='w', pady=(6, 0))
@@ -22941,7 +23150,7 @@ or from the Help menu."""
         lines = [
             f"{'✅' if cli else '❌'} Claude Code CLI: {'installed' if cli else 'not installed'}",
             f"{'✅' if runner else '❌'} On-demand runner: {'set up' if runner else 'not set up yet'}",
-            f"👤 Users connected to Claude: {connected} of {len(users)}",
+            f"👤 Users connected to Claude, Muse, or Grok: {connected} of {len(users)}",
         ]
         if cli and runner:
             lines.append("AI Routing is ready — users connect their own Claude account "
@@ -23249,7 +23458,7 @@ or from the Help menu."""
                   font=('Segoe UI', 10, 'bold')).pack(anchor='w')
         ttk.Label(frm, wraplength=440, justify='left',
                   text="Send this to the employee securely. They paste it into "
-                       "their Claude MCP connector to authenticate to this server. "
+                       "their MCP (Claude, Muse, or Grok) connector to authenticate to this server. "
                        "Treat it like a password — this is the only time it's "
                        "shown in full.").pack(anchor='w', pady=(2, 8))
 
@@ -23827,7 +24036,7 @@ or from the Help menu."""
                 # becomes visible — not just after the three specific
                 # Settings-tab Save buttons. This is the general fix: it
                 # also catches changes made via configure_email() from a
-                # Claude conversation, direct edits to email_config.json /
+                # Claude, Muse, or Grok conversation, direct edits to email_config.json /
                 # config.json, or any future settings path this GUI doesn't
                 # explicitly wire — anything the user does elsewhere, then
                 # switches back to this tab to check, is always current.
@@ -23862,7 +24071,7 @@ or from the Help menu."""
         """
         Called at startup when SUPPORT_LOCAL_HW_LLM is False (Claude-MCP-only mode).
 
-        Ollama is not needed when Claude MCP is the only AI interface.
+        Ollama is not needed when MCP (Claude, Muse, or Grok) is the only AI interface.
         This method silently:
           1. Kills the 'ollama app' tray watchdog (it relaunches ollama.exe if left alive)
           2. Removes 'ollama app' from the Windows startup registry so it never
@@ -25736,7 +25945,7 @@ or from the Help menu."""
         """Refresh tracked directories list from the auto-update tracking file.
 
         Each row is rendered with a write-permission prefix indicating whether
-        Claude can modify files in that path (Mobile Write Zones). The raw
+        Claude, Muse, or Grok can modify files in that path (Mobile Write Zones). The raw
         path is stored in self._tracked_raw_paths at the same index so
         callers can look it up without parsing the display string.
         """
@@ -25844,7 +26053,7 @@ or from the Help menu."""
     # ══════════════════════════════════════════════════════════════════════
     # Mobile Write Zones — write-permission management for the tracked-path
     # list. The writable allowlist (~/.rag_writable_dirs.json) is read by
-    # ai_prowler_mcp.py's _resolve_writable_path() to decide whether Claude
+    # ai_prowler_mcp.py's _resolve_writable_path() to decide whether Claude, Muse, or Grok
     # can modify a given file. This GUI lets the user pre-authorize zones
     # from the desktop, so mobile sessions don't stall waiting on dialogs.
     # ══════════════════════════════════════════════════════════════════════
@@ -26046,7 +26255,7 @@ or from the Help menu."""
 
     def _add_access_only_path(self, directory: str) -> bool:
         """2026-10-10 (David): the shared add rules (rag_preprocessor.
-        access_only_add_check — same as Claude's grant_access and the Remote
+        access_only_add_check — same as Claude/Muse/Grok's grant_access and the Remote
         app): folders only (always recursive), no duplicates, nothing already
         covered by an access-only or indexed folder. A folder that contains
         access-only folders replaces them. Returns True when added."""
@@ -26094,7 +26303,7 @@ or from the Help menu."""
         if not messagebox.askyesno(
                 "Remove access-only folder",
                 f"Remove '{directory}' from the access-only list?\n\n"
-                f"Claude will no longer be able to read files there "
+                f"Claude, Muse, or Grok will no longer be able to read files there "
                 f"(unless the path is also tracked)."):
             return
         norm = os.path.normcase(os.path.abspath(directory))
@@ -26187,7 +26396,7 @@ or from the Help menu."""
             entries_block = "\n".join(f"   • {p}" for p in narrower)
             if not messagebox.askyesno(
                     "Widen Mobile Write Zone?",
-                    f"This path is partially writable — Claude can already "
+                    f"This path is partially writable — Claude, Muse, or Grok can already "
                     f"modify files inside the following narrower zone"
                     f"{'s' if len(narrower) > 1 else ''}:\n\n"
                     f"{entries_block}\n\n"
@@ -26195,7 +26404,7 @@ or from the Help menu."""
                     f"covering this entire path:\n\n"
                     f"   {raw_path}\n\n"
                     f"After widening, every file and subdirectory here "
-                    f"becomes writable to Claude from all sessions (including "
+                    f"becomes writable to Claude, Muse, or Grok from all sessions (including "
                     f"mobile). The hard blocklist (Windows, Program Files, "
                     f".git, .ssh, .aws, the job tracker, and AppData except "
                     f"AI-Prowler's own state) still applies.\n\n"
@@ -26217,7 +26426,7 @@ or from the Help menu."""
         # state == "none"  → ── GRANT ── significant action, require confirmation
         if not messagebox.askyesno(
                 "Grant write access — Mobile Write Zone?",
-                f"Allow Claude to modify files in:\n\n"
+                f"Allow Claude, Muse, or Grok to modify files in:\n\n"
                 f"   {raw_path}\n\n"
                 f"This grants write access from ALL sessions, including "
                 f"mobile, with no further prompt. The hard blocklist "

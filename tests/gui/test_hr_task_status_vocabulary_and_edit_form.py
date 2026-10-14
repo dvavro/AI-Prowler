@@ -9,14 +9,17 @@ renders as its own literal, unstyled JSON string).
 
 ADAPTATION FROM THE PLAN: the plan's own code stub lists 6 statuses
 (Not Started, In Progress, Completed, Overdue, Waived, Blocked). The real
-shipped hr_state_rules.json and hr/index.html both use the full 8-status
+shipped hr_state_rules.json and hr_admin/index.html both use the full 8-status
 vocabulary (adding Awaiting Document and Escalated), matching what the HR
 Backend Engine actually generates. EXPECTED_STATUSES below uses all 8,
 per Section 13.0's "test against real shipped source" philosophy.
 
-Safe: reads hr/index.html and hr_state_rules.json as plain text/JSON only.
+Safe: reads hr_admin/index.html and hr_state_rules.json as plain text/JSON only.
 Never imports ai_prowler_mcp.py, never writes anywhere.
 """
+# 2026-10-11 (David): the original /hr/ app is retired — HR Admin (hr_admin/) is
+# the same app, so this test now reads hr_admin/. HR is AI-Prowler server only.
+
 from __future__ import annotations
 
 import json
@@ -28,7 +31,7 @@ import pytest
 
 SRC_ROOT = Path(os.environ.get("AI_PROWLER_SRC", "")) if os.environ.get("AI_PROWLER_SRC") \
     else Path(__file__).resolve().parent.parent.parent
-HR_INDEX = SRC_ROOT / "hr" / "index.html"
+HR_INDEX = SRC_ROOT / "hr_admin" / "index.html"
 HR_STATE_RULES = SRC_ROOT / "hr_state_rules.json"
 
 EXPECTED_STATUSES = [
@@ -72,7 +75,7 @@ class TestIndexHtmlRenderVocabularyMatchesStateRules:
     @pytest.mark.parametrize("status", EXPECTED_STATUSES)
     def test_status_string_appears_verbatim_in_index(self, hr_index_text, status):
         assert status in hr_index_text, (
-            f"'{status}' from hr_state_rules.json not found verbatim in hr/index.html"
+            f"'{status}' from hr_state_rules.json not found verbatim in hr_admin/index.html"
         )
 
 

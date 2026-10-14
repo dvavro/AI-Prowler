@@ -25,7 +25,11 @@ INVENTORY_JS = r"""
     if (seen.has(el)) continue;
     seen.add(el);
     const oc = el.getAttribute('onclick') || '';
-    const fn = (oc.match(/([A-Za-z_$][\w$]*)\s*\(/) || [])[1] || '';
+    // 2026-10-13: skip event.stopPropagation()/preventDefault() — name the
+    // button after the function it really calls (they were all lumped together
+    // as "stopPropagation", which hid new buttons from the coverage check).
+    const fn = (oc.replace(/\bevent\.(stopPropagation|preventDefault)\(\)\s*;?/g, '')
+                  .match(/([A-Za-z_$][\w$]*)\s*\(/) || [])[1] || '';
     out.push({
       tag: el.tagName.toLowerCase(),
       text: (el.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 60),
@@ -80,16 +84,22 @@ from playwright.sync_api import expect                 # noqa: E402
 from safety import SANDBOX_DATE                        # noqa: E402
 
 KNOWN = {
+    # 2026-10-13: the Jobs screen's route buttons (Route Today / AI Route /
+    # Email Route) moved to the Route screen — the Jobs screen now has one
+    # "Go to Route" button, the Date / Status / Billing view switch, and a
+    # ⏸️ pause toggle on each job card (2026-10-05/06 redesign).
     "jobs": {"jobsWizardBtn": "SAFE", "jobsAddBtn": "SAFE", "refreshJobsBtn": "SAFE",
-             "job-card": "SAFE", "routeTodayBtn": "WRITE", "jobsAiRouteBtn": "GUARDED",
-             "jobsEmailRouteBtn": "GUARDED"},
+             "job-card": "SAFE", "jobsGoRouteBtn": "SAFE",
+             "jobsViewDateBtn": "SAFE", "jobsViewStatusBtn": "SAFE", "jobsViewBillingBtn": "SAFE",
+             "job-pause": "WRITE"},
     "route": {"refreshRouteBtn": "SAFE", "routeTodayBtnRoute": "WRITE",
               "routeAiSuggestBtn": "GUARDED", "routeEmailRouteBtn": "GUARDED",
               # found by the coverage check in --human mode (2026-09-26), once
               # the map and the job list had finished loading:
               "+": "SAFE", "−": "SAFE",            # map zoom in / out
               "🏠": "SAFE", "🏁": "SAFE",           # map start / finish markers
-              "unrouted-edit": "SAFE"},             # ✏️ on a job that isn't a stop yet
+              "unrouted-edit": "SAFE",              # ✏️ on a job that isn't a stop yet
+              "unrouted-pause": "WRITE"},           # ⏸️ on a job that isn't a stop yet
 }
 
 
@@ -169,15 +179,58 @@ def test_BTN_JOBS_job_card_opens_the_job(app, page, two_jobs):
     expect(page.locator("#jobModal")).not_to_have_class(re.compile(r"\bopen\b"))
 
 
-def test_BTN_JOBS_route_today_builds_todays_route(app, page, two_jobs):
-    from app import RouteScreen
+def test_BTN_JOBS_go_route_opens_the_route_screen(app, page, two_jobs):
+    """2026-10-13: replaces Route Today on the Jobs screen — building, AI
+    routing and emailing a route now live on the Route screen (tested by the
+    BTN_ROUTE_* tests below)."""
     app.goto("jobs")
-    with _api_request(page, "suggest_route_schedule"):
-        page.locator("#routeTodayBtn").click()
-    expect(page.locator("#routeTodayBtn")).to_be_enabled(timeout=60_000)
-    # confirm it the way a user would: today's route on the Route screen holds both jobs
+    page.locator("#jobsGoRouteBtn").click()
+    expect(page.locator("#screen-route")).to_be_visible(timeout=15_000)
+
+
+@pytest.mark.parametrize("btn,title", [("jobsViewStatusBtn", "All Jobs"), ("jobsViewBillingBtn", "Billing"),
+                                       ("jobsViewDateBtn", "Today's Jobs")])
+def test_BTN_JOBS_view_switch(app, page, two_jobs, btn, title):
+    app.goto("jobs")
+    page.locator(f"#{btn}").click()
+    expect(page.locator(f"#{btn}")).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#jobsPageTitle")).to_have_text(title)
+    page.evaluate("() => setJobsViewMode('date')")       # leave the default view behind
+
+
+def _paused_in_db(api, jid):
+    for j in api.read("Jobs_Schedule"):
+        if j.get("JobID (JOB-####)") == jid:
+            return any(re.match(r"^(1|true|yes)$", str(v).strip(), re.I)
+                       for k, v in j.items() if "paus" in k.lower() and "date" not in k.lower()
+                       and "comment" not in k.lower() and "reason" not in k.lower())
+    return None
+
+
+def test_BTN_JOBS_pause_toggle_pauses_the_job(app, page, two_jobs, api):
+    app.goto("jobs")
+    card = page.locator(f"[data-testid='job-card'][data-jobid='{two_jobs[0]}']")
+    with page.expect_response(lambda r: "/pwa-api" in r.url and "pause_job" in (r.request.post_data or ""),
+                              timeout=30_000):
+        card.get_by_test_id("job-pause").click()
+    expect(page.locator("#pauseReasonModal")).to_be_visible(timeout=10_000)   # reason prompt follows a pause
+    page.locator("#pauseReasonModal").get_by_role("button", name="Skip").click()
+    expect(page.locator("#pauseReasonModal")).to_be_hidden()
+    assert _paused_in_db(api, two_jobs[0]) is True, "the job isn't stored as paused"
+
+
+def test_BTN_ROUTE_unrouted_pause_pauses_the_job(app, page, two_jobs):
+    from app import RouteScreen
     app.goto("route")
-    RouteScreen(page, app.log).pick_date(SANDBOX_DATE).expect_stops_include(two_jobs)
+    RouteScreen(page, app.log).pick_date(SANDBOX_DATE)
+    btn = page.get_by_test_id("unrouted-pause").first
+    expect(btn).to_be_visible(timeout=15_000)
+    with page.expect_response(lambda r: "/pwa-api" in r.url and "pause_job" in (r.request.post_data or ""),
+                              timeout=30_000):
+        btn.click()
+    m = page.locator("#pauseReasonModal")
+    if m.is_visible():
+        m.get_by_role("button", name="Skip").click()
 
 
 def _click_guarded(app, page, guard, button_sel: str, tool: str):
@@ -212,17 +265,9 @@ def _click_guarded(app, page, guard, button_sel: str, tool: str):
     return calls[-1]
 
 
-def test_BTN_JOBS_ai_route_is_guarded(app, page, two_jobs, guard):
-    app.goto("jobs")
-    call = _click_guarded(app, page, guard, "#jobsAiRouteBtn", "start_ai_routing")
-    assert call["args"].get("route_date") == SANDBOX_DATE
-
-
-def test_BTN_JOBS_email_route_is_guarded(app, page, two_jobs, guard):
-    app.goto("jobs")
-    call = _click_guarded(app, page, guard, "#jobsEmailRouteBtn", "email_route_now")
-    assert call["args"].get("route_date") == SANDBOX_DATE
-    assert guard.real_emails_sent == 0
+# (2026-10-13) AI Route and Email Route left the Jobs screen — the Route
+# screen's buttons are tested by BTN_ROUTE_ai_route_is_guarded and
+# BTN_ROUTE_email_route_is_guarded below.
 
 
 # ── Route screen ─────────────────────────────────────────────────────────────

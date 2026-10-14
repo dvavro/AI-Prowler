@@ -231,10 +231,15 @@ DEFAULT_CONFIG = {
     "notify_on_complete": False,   # Phase 6 — see build_wrapper_script_content
     "notify_method": "sms",        # "sms" or "whatsapp" — which AI-Prowler tool to use
     "use_api_key": False,          # False = OAuth setup-token (default, uses subscription
-                                    # allowance). True = ANTHROPIC_API_KEY (separate,
-                                    # metered billing, no expiry/refresh risk). See
-                                    # spec §5.3 for the tradeoff — this does NOT affect
-                                    # agentic tool access, only billing + reliability.
+                                    # allowance). True = API key (separate, metered
+                                    # billing, no expiry/refresh risk) — which
+                                    # provider's key is chosen by api_key_provider
+                                    # below. See spec §5.3 for the tradeoff — this
+                                    # does NOT affect agentic tool access, only
+                                    # billing + reliability.
+    "api_key_provider": "anthropic",  # 2026-10-12: which API key "use_api_key" means —
+                                    # "anthropic" (Claude) or "grok" (xAI). Muse has
+                                    # no public API key yet, so it is not an option.
 
     # v8.1.11: independently configurable check frequency + active window.
     # This is DELIBERATELY decoupled from any individual custom task's own
@@ -329,7 +334,8 @@ def _write_last_run(status: str, detail: str, task_count: int | None = None) -> 
 def build_wrapper_script_content(mcp_config_path: str, allowed_tools: str,
                                   notify_on_complete: bool = False,
                                   notify_method: str = "sms",
-                                  use_api_key: bool = False,
+                                    use_api_key: bool = False,
+                                    api_key_provider: str = "anthropic",
                                   check_mode: str = "daily",
                                   active_days: list | None = None,
                                   active_start_time: str = "00:00",
@@ -343,14 +349,14 @@ def build_wrapper_script_content(mcp_config_path: str, allowed_tools: str,
     send_sms/send_whatsapp tool as its own last step; the PostToolUse hook
     then logs that call in the audit trail like any other tool use.
 
-    use_api_key: when True, the script reads a key from API_KEY_PATH at
-    RUNTIME and sets ANTHROPIC_API_KEY before invoking claude. The actual
-    key value is never embedded in this generated script text — only the
-    file-read mechanism is, so the .bat file itself stays safe to open in
-    a text editor without exposing the secret. Claude Code's own
-    documented auth priority means ANTHROPIC_API_KEY, when present in the
-    environment, is used in preference to any subscription/OAuth
-    credential automatically — no extra flag needed to force this.
+    use_api_key / api_key_provider: when use_api_key is True, the script reads
+    the selected provider's key from its file at RUNTIME and exports it before
+    invoking the runner — ANTHROPIC_API_KEY for "anthropic" (Claude Code picks
+    it up automatically via its documented auth priority), XAI_API_KEY for
+    "grok" (read by run_grok_queue_headless). The actual key value is never
+    embedded in this generated script text — only the file-read mechanism is,
+    so the .bat file itself stays safe to open in a text editor without
+    exposing the secret.
 
     v8.1.14: always cd's into AI_PROWLER_HOME (~/.ai-prowler), which now
     also holds .claude/ (settings.json's PostToolUse audit-log hook,
@@ -488,46 +494,83 @@ if not "%AIP_WINDOW_CHECK%"=="RUN" (
     prompt = QUEUE_RUNNER_PROMPT + notify_clause
 
     api_key_block = ""
-    if use_api_key:
-        api_key_block = f"""REM Use ANTHROPIC_API_KEY instead of the OAuth subscription token —
+    # 2026-10-12: which credential actually drives the run. Grok has no
+    # Claude-Code-style CLI, so its branch exports XAI_API_KEY and invokes
+    # the in-module Grok runner (run_grok_queue_headless) instead of
+    # shelling out to `claude -p`.
+    _provider = _normalize_provider(api_key_provider)
+    if use_api_key and _provider == "grok":
+        _grok_path = api_key_path("grok")
+        api_key_block = f"""REM Use XAI_API_KEY (Grok) instead of Claude auth \u2014
+REM metered xAI billing, no OAuth expiry/refresh risk. Read from a
+REM dedicated file at runtime so the actual key never appears in this
+REM script's own text.
+if exist "{_grok_path}" (
+    set /p XAI_API_KEY=<"{_grok_path}"
+) else (
+    echo [ERROR] Grok API key auth is selected but {_grok_path} was not found.
+    exit /b 1
+)
+
+"""
+        _tqa_parent = str(LOCAL_MCP_SCRIPT_PATH.parent)
+        # _self_gate_python_invocation() — NOT a naively-quoted path: the
+        # v8.1.13 cmd.exe quote quirk breaks "path" -c "..." outright.
+        _invoke_block = (
+            f'{_self_gate_python_invocation()} -c "import sys; '
+            f"sys.path.insert(0, r'{_tqa_parent}'); "
+            "import task_queue_automation as _tqa; "
+            '_tqa.run_grok_queue_headless()" '
+            '> "%USERPROFILE%\\\\.ai-prowler\\\\last_headless_run.json" 2>&1\n'
+        )
+    else:
+        if use_api_key:
+            api_key_block = f"""REM Use ANTHROPIC_API_KEY instead of the OAuth subscription token \u2014
 REM metered billing, but no OAuth expiry/refresh risk. Read from a
 REM dedicated file at runtime so the actual key never appears in this
 REM script's own text.
 if exist "{API_KEY_PATH}" (
-    set /p ANTHROPIC_API_KEY=<"{API_KEY_PATH}"
+    set /p ANTHROPIC_API_KEY=<{API_KEY_PATH}
 ) else (
     echo [ERROR] use_api_key is enabled but {API_KEY_PATH} was not found.
     exit /b 1
 )
 
 """
-    else:
-        # v8.1.6 second fix: `claude -p` in a Scheduled Task context has
-        # no interactive terminal and no guarantee of inheriting the same
-        # environment as an interactively-signed-in session, so it can't
-        # rely on ambient ~/.claude/.credentials.json the way a manual
-        # `claude` session would. CLAUDE_CODE_OAUTH_TOKEN is Claude Code's
-        # documented mechanism for exactly this — headless/CI auth via a
-        # setup-token-generated token. Read from OAUTH_TOKEN_PLAIN_PATH
-        # with a plain `set /p`, identical to the ANTHROPIC_API_KEY block
-        # above — the first attempt at this parsed JSON via a PowerShell
-        # one-liner invoked through `for /f` + backticks, which turned
-        # out to fail with cryptic "could not be parsed" errors despite
-        # valid JSON (nested-quoting fragility, same class of bug as the
-        # setup-token launch command itself — see
-        # build_setup_token_batch_content()'s docstring). Keeping the
-        # runtime read as simple as the already-proven API-key path
-        # avoids that whole category of problem.
-        api_key_block = f"""REM Use the Claude Code OAuth token captured from setup-token —
+        else:
+            # v8.1.6 second fix: `claude -p` in a Scheduled Task context has
+            # no interactive terminal and no guarantee of inheriting the same
+            # environment as an interactively-signed-in session, so it can't
+            # rely on ambient ~/.claude/.credentials.json the way a manual
+            # `claude` session would. CLAUDE_CODE_OAUTH_TOKEN is Claude Code's
+            # documented mechanism for exactly this — headless/CI auth via a
+            # setup-token-generated token. Read from OAUTH_TOKEN_PLAIN_PATH
+            # with a plain `set /p`, identical to the ANTHROPIC_API_KEY block
+            # above — the first attempt at this parsed JSON via a PowerShell
+            # one-liner invoked through `for /f` + backticks, which turned
+            # out to fail with cryptic "could not be parsed" errors despite
+            # valid JSON (nested-quoting fragility, same class of bug as the
+            # setup-token launch command itself — see
+            # build_setup_token_batch_content()'s docstring). Keeping the
+            # runtime read as simple as the already-proven API-key path
+            # avoids that whole category of problem.
+            api_key_block = f"""REM Use the Claude Code OAuth token captured from setup-token \u2014
 REM see OAUTH_TOKEN_PLAIN_PATH / try_capture_setup_token() in task_queue_automation.py.
 if exist "{OAUTH_TOKEN_PLAIN_PATH}" (
-    set /p CLAUDE_CODE_OAUTH_TOKEN=<"{OAUTH_TOKEN_PLAIN_PATH}"
+    set /p CLAUDE_CODE_OAUTH_TOKEN=<{OAUTH_TOKEN_PLAIN_PATH}
 ) else (
-    echo [ERROR] No Claude Code OAuth token found — click Get / Renew Token in AI-Prowler first.
+    echo [ERROR] No Claude Code OAuth token found \u2014 click Get / Renew Token in AI-Prowler first.
     exit /b 1
 )
 
 """
+        _invoke_block = (
+            f'"{_get_claude_exe()}" -p "{prompt}" ^\n'
+            f'  --mcp-config "{mcp_config_path}" ^\n'
+            f'  --allowedTools "{allowed_tools}" ^\n'
+            "  --output-format json ^\n"
+            '  --permission-mode bypassPermissions > "%USERPROFILE%\\\\.ai-prowler\\\\last_headless_run.json" 2>&1\n'
+        )
 
     return rf"""@echo off
 chcp 65001 >nul
@@ -576,11 +619,7 @@ REM bound. Two backup files kept: .log.1 (previous run) and .log.2 (oldest).
 REM Best-effort — failure is silently ignored so it never blocks the run.
 "{_get_python_exe()}" -c "import sys; sys.path.insert(0,r'{str(LOCAL_MCP_SCRIPT_PATH.parent)}'); import task_queue_automation as _tqa; _tqa.rotate_audit_log()" >nul 2>&1
 
-{api_key_block}"{_get_claude_exe()}" -p "{prompt}" ^
-  --mcp-config "{mcp_config_path}" ^
-  --allowedTools "{allowed_tools}" ^
-  --output-format json ^
-  --permission-mode bypassPermissions > "%USERPROFILE%\\.ai-prowler\\last_headless_run.json" 2>&1
+{api_key_block}{_invoke_block}
 
 set RC=%ERRORLEVEL%
 exit /b %RC%
@@ -590,7 +629,8 @@ exit /b %RC%
 def install_wrapper_script(target_dir: Path, mcp_config_path: str, allowed_tools: str,
                             notify_on_complete: bool = False,
                             notify_method: str = "sms",
-                            use_api_key: bool = False,
+                               use_api_key: bool = False,
+                               api_key_provider: str = "anthropic",
                             check_mode: str = "daily",
                             active_days: list | None = None,
                             active_start_time: str = "00:00",
@@ -619,18 +659,21 @@ def install_wrapper_script(target_dir: Path, mcp_config_path: str, allowed_tools
     # actually-reliable fix for this specific invocation path -- plain
     # "utf-8" (no BOM) here.
     script_path.write_text(
-        build_wrapper_script_content(mcp_config_path, allowed_tools,
-                                      notify_on_complete, notify_method,
-                                      use_api_key,
-                                      check_mode, active_days,
-                                      active_start_time, active_end_time),
+          build_wrapper_script_content(mcp_config_path, allowed_tools,
+                                         notify_on_complete, notify_method,
+                                         use_api_key,
+                                           api_key_provider=api_key_provider,
+                                           check_mode=check_mode,
+                                           active_days=active_days,
+                                           active_start_time=active_start_time,
+                                           active_end_time=active_end_time),
         encoding="utf-8")
     return script_path
 
 
 # ── Dry-run validation (safe — never invokes `claude -p` for real) ──────
 
-def dry_run_check() -> dict:
+def dry_run_check(auth: str | None = None) -> dict:
     """Validates every precondition for a real run WITHOUT triggering one.
     Returns a report dict the GUI renders as a checklist. This is the
     button-safe operation — it never touches pending_tasks.json, never
@@ -652,56 +695,88 @@ def dry_run_check() -> dict:
     _ensure_hook_uses_absolute_python()
     checks = []
 
-    # 1a. Is claude.exe findable (PATH or well-known disk location)?
-    #     Two-level check so we can give the user a precise action when it's
-    #     on disk but PATH is broken — the exact failure mode from 2026-08-10.
-    claude_path = shutil.which("claude")
-    _default_disk = Path.home() / ".local" / "bin" / "claude.exe"
-    _on_disk = _default_disk.exists()
-    if claude_path is not None:
-        _cli_detail = claude_path
-    elif _on_disk:
-        _cli_detail = (f"Found at {_default_disk} but not on PATH — "
-                       "click \u2b07 Install Claude Code CLI to register it.")
-    else:
-        _cli_detail = ("`claude` not found — click \u2b07 Install Claude Code CLI.")
-    checks.append({
-        "name": "Claude Code CLI on PATH",
-        "ok": claude_path is not None,
-        "detail": _cli_detail,
-    })
+    # 2026-10-12 (David): test the auth method actually SELECTED in the panel
+    # when the GUI passes it — 'oauth' (subscription token), 'anthropic'
+    # (Claude API key) or 'grok' (Grok API key). Each needs only its own
+    # credential. None = the saved setting (scheduled run / older callers).
+    _sel = (auth or "").strip().lower()
+    if _sel not in ("oauth", "anthropic", "grok"):
+        _sel = effective_api_key_provider()
 
-    # 1b. Will Task Scheduler actually find it? dry_run_check() runs in the
-    #     GUI process (full user PATH), but the Scheduled Task runs in a
-    #     stripped environment that often lacks user PATH entries. This check
-    #     verifies that _get_claude_exe() resolved an absolute path — meaning
-    #     the wrapper .bat will use a hard path and never depend on PATH at all.
-    _claude_abs = _get_claude_exe()
-    _sched_ok = _claude_abs != "claude"   # resolved to something absolute
-    checks.append({
-        "name": "Claude Code CLI — Task Scheduler path",
-        "ok": _sched_ok,
-        "detail": (f"Wrapper will use absolute path: {_claude_abs}"
-                   if _sched_ok else
-                   "No absolute path found — Task Scheduler will fail. "
-                   "Click \u2b07 Install Claude Code CLI to fix."),
-    })
-
-    # 2. Is there a setup-token / valid auth? We don't invoke a real call;
-    #    `claude --version` is a safe, read-only smoke test that at least
-    #    confirms the binary runs.
-    if claude_path:
+    # 2026-10-12: the runner-auth checks branch on the selected provider.
+    # Grok needs no CLI at all — it calls the xAI API directly — so the
+    # Claude Code CLI checks are skipped for it, replaced with a light
+    # xAI reachability probe (any HTTP response, even 401, proves reachability).
+    _prov = _sel
+    if _prov == "grok":
         try:
-            r = subprocess.run(["claude", "--version"], capture_output=True,
-                                text=True, timeout=10,
-                                creationflags=subprocess.CREATE_NO_WINDOW)
-            checks.append({
-                "name": "Claude Code CLI runs",
-                "ok": r.returncode == 0,
-                "detail": (r.stdout or r.stderr or "").strip()[:200],
-            })
-        except Exception as e:
-            checks.append({"name": "Claude Code CLI runs", "ok": False, "detail": str(e)})
+            import urllib.request as _gr
+            import urllib.error as _ge
+            _greq = _gr.Request(XAI_MODELS_URL, method="GET")
+            try:
+                with _gr.urlopen(_greq, timeout=8) as _gresp:
+                    _grok_net = (True, f"xAI API reachable (HTTP {_gresp.status})")
+            except _ge.HTTPError as _he:
+                _grok_net = (True, f"xAI API reachable (HTTP {_he.code})")
+        except Exception as _e:
+            _grok_net = (False, f"xAI API not reachable: {_e}")
+        checks.append({
+            "name": "xAI API reachable",
+            "ok": _grok_net[0],
+            "detail": _grok_net[1],
+        })
+    else:
+        # 1a. Is claude.exe findable (PATH or well-known disk location)?
+        #     Two-level check so we can give the user a precise action when it's
+        #     on disk but PATH is broken — the exact failure mode from 2026-08-10.
+        claude_path = shutil.which("claude")
+        _default_disk = Path.home() / ".local" / "bin" / "claude.exe"
+        _on_disk = _default_disk.exists()
+        if claude_path is not None:
+            _cli_detail = claude_path
+        elif _on_disk:
+            _cli_detail = (f"Found at {_default_disk} but not on PATH — "
+                "click \\u2b07 Install Claude Code CLI to register it.")
+        else:
+            _cli_detail = ("`claude` not found — click \\u2b07 Install Claude Code CLI.")
+        checks.append({
+            "name": "Claude Code CLI on PATH",
+            "ok": claude_path is not None,
+            "detail": _cli_detail,
+        })
+
+        # 1b. Will Task Scheduler actually find it? dry_run_check() runs in the
+        #     GUI process (full user PATH), but the Scheduled Task runs in a
+        #     stripped environment that often lacks user PATH entries. This check
+        #     verifies that _get_claude_exe() resolved an absolute path — meaning
+        #     the wrapper .bat will use a hard path and never depend on PATH at all.
+        _claude_abs = _get_claude_exe()
+        _sched_ok = _claude_abs != "claude"   # resolved to something absolute
+        checks.append({
+            "name": "Claude Code CLI — Task Scheduler path",
+            "ok": _sched_ok,
+
+            "detail": (f"Wrapper will use absolute path: {_claude_abs}"
+                if _sched_ok else
+                "No absolute path found — Task Scheduler will fail. "
+                "Click \\u2b07 Install Claude Code CLI to fix."),
+        })
+
+        # 2. Is there a setup-token / valid auth? We don't invoke a real call;
+        #    `claude --version` is a safe, read-only smoke test that at least
+        #    confirms the binary runs.
+        if claude_path:
+            try:
+                r = subprocess.run(["claude", "--version"], capture_output=True,
+                    text=True, timeout=10,
+                    creationflags=subprocess.CREATE_NO_WINDOW)
+                checks.append({
+                    "name": "Claude Code CLI runs",
+                    "ok": r.returncode == 0,
+                    "detail": (r.stdout or r.stderr or "").strip()[:200],
+                })
+            except Exception as e:
+                checks.append({"name": "Claude Code CLI runs", "ok": False, "detail": str(e)})
 
     # 3. Is AI-Prowler's own HTTP MCP server reachable? (read-only health
     #    check, same one the LED reconciliation loop uses)
@@ -743,11 +818,13 @@ def dry_run_check() -> dict:
     # the assumption v8.1.14 removed, for the admin-elevation reasons
     # documented above.
     skill_path = AI_PROWLER_HOME / ".claude" / "skills" / "ai-prowler-tasks" / "SKILL.md"
-    checks.append({
-        "name": "AI-Prowler Skill file",
-        "ok": skill_path.exists(),
-        "detail": str(skill_path),
-    })
+    # 2026-10-12: Claude Code only — a Grok run doesn't use the Skill file.
+    if _sel != "grok":
+        checks.append({
+            "name": "AI-Prowler Skill file",
+            "ok": skill_path.exists(),
+            "detail": str(skill_path),
+        })
 
     # 5. Is an MCP config path configured?
     mcp_cfg_ok = bool(cfg.get("mcp_config_path")) and Path(cfg["mcp_config_path"]).exists()
@@ -758,10 +835,19 @@ def dry_run_check() -> dict:
     })
 
     # 6. Auth check — branches on which mechanism is configured. Only one
-    # of these is relevant at a time; showing the other would be noise
+    # of these is relevant at a time; showing the others would be noise
     # (and, in the API-key case, checking OAuth expiry is meaningless).
-    if cfg.get("use_api_key"):
-        key_ok = has_api_key()
+    _auth_prov = _sel
+    if _auth_prov == "grok":
+        _grok_key_ok = has_api_key("grok")
+        checks.append({
+            "name": "Grok API key (xAI)",
+            "ok": _grok_key_ok,
+            "detail": ("configured (value never displayed)" if _grok_key_ok
+                       else "not set — paste one in the Auth section and click Save Key"),
+        })
+    elif _auth_prov == "anthropic":
+        key_ok = has_api_key("anthropic")
         checks.append({
             "name": "Claude API key",
             "ok": key_ok,
@@ -1257,7 +1343,7 @@ def generate_mcp_config(prefer_remote: bool = False) -> tuple[bool, str]:
 
 
 
-# ── ANTHROPIC_API_KEY fallback (Phase 1 addendum) ─────────────────────────
+# ── API KEY storage, per provider (2026-10-12: Grok added) ────────────────
 # Alternative to the OAuth setup-token path. Same agentic tool access —
 # this is purely a billing/auth-mechanism choice. Trades subscription
 # billing for metered per-token billing, in exchange for no expiry/refresh
@@ -1268,34 +1354,437 @@ def generate_mcp_config(prefer_remote: bool = False) -> tuple[bool, str]:
 # tradeoff AI-Prowler's own config.json already makes for the Bearer token —
 # not introducing a new class of risk, just being deliberate about where.
 
+API_KEY_PROVIDERS = ("anthropic", "grok")
+# The Anthropic file keeps its historical "claude_api_key.txt" name so an
+# already-saved Claude key is never orphaned by this change.
 API_KEY_PATH = AI_PROWLER_HOME / "claude_api_key.txt"
+GROK_API_KEY_PATH = AI_PROWLER_HOME / "grok_api_key.txt"
 
 
-def save_api_key(key: str) -> None:
-    AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
-    API_KEY_PATH.write_text(key.strip(), encoding="utf-8")
+def _normalize_provider(provider: str | None) -> str:
+    """Coerce to a known provider; unknown/blank values fall back to
+    "anthropic" rather than raising — a hand-edited config must never crash
+    the queue, it just runs on Claude like before."""
+    p = (provider or "anthropic").strip().lower()
+    p = {"xai": "grok", "claude": "anthropic"}.get(p, p)
+    return p if p in API_KEY_PROVIDERS else "anthropic"
 
 
-def load_api_key() -> str | None:
-    if not API_KEY_PATH.exists():
+def api_key_path(provider: str = "anthropic") -> Path:
+    """File holding the saved API key for a provider. Reads the module-level
+    constants at CALL time (not import time) so tests can monkeypatch them,
+    matching the pattern used for every other path in this module.
+
+    Strict: unknown providers raise ValueError rather than silently landing
+    in the wrong file. Config-originated values go through _normalize_provider
+    first (graceful fallback); direct callers must name a real provider."""
+    p = (provider or "").strip().lower()
+    if p in ("grok", "xai"):
+        return GROK_API_KEY_PATH
+    if p in ("anthropic", "claude"):
+        return API_KEY_PATH
+    raise ValueError(f"Unknown API key provider: {provider!r}")
+
+
+def save_api_key(key: str, provider: str = "anthropic") -> None:
+    _p = api_key_path(provider)
+    _p.parent.mkdir(parents=True, exist_ok=True)      # the key file's own folder
+    _p.write_text(key.strip(), encoding="utf-8")
+
+
+def load_api_key(provider: str = "anthropic") -> str | None:
+    path = api_key_path(provider)
+    if not path.exists():
         return None
-    val = API_KEY_PATH.read_text(encoding="utf-8").strip()
+    val = path.read_text(encoding="utf-8").strip()
     return val or None
 
 
-def has_api_key() -> bool:
+def has_api_key(provider: str = "anthropic") -> bool:
     """Presence check only — never returns or logs the actual key value.
     Use this for GUI/dry-run display; use load_api_key() only where the
     real value is actually needed (i.e. never, in this module — the
     wrapper .bat reads the file itself at runtime, see
     build_wrapper_script_content)."""
-    return load_api_key() is not None
+    return load_api_key(provider) is not None
 
 
-def delete_api_key() -> None:
-    if API_KEY_PATH.exists():
-        API_KEY_PATH.unlink()
+def delete_api_key(provider: str = "anthropic") -> None:
+    path = api_key_path(provider)
+    if path.exists():
+        path.unlink()
 
+
+def effective_api_key_provider(cfg: dict | None = None) -> str:
+    """Which credential the queue will actually run on: "anthropic", "grok",
+    or "oauth". Returns "oauth" whenever use_api_key is falsy — the GUI
+    writes both keys, so callers never have to reconcile them by hand."""
+    cfg = cfg if cfg is not None else load_config()
+    if not cfg.get("use_api_key"):
+        return "oauth"
+    return _normalize_provider(cfg.get("api_key_provider"))
+
+# ── Grok (xAI) headless runner ──────────────────────────────────────────
+# 2026-10-12: unattended queue execution on a Grok API key. Muse and Grok
+# have no Claude-Code-style CLI, so unlike the Claude path (which shells out
+# to `claude -p`), the Grok path runs IN-PROCESS here:
+#   1. spawn AI-Prowler's own MCP server over stdio (the same proven shape
+#      the scheduled task's --mcp-config uses — no port, no Bearer, no
+#      tunnel needed; safe overnight when the GUI is closed),
+#   2. list its tools and expose them to Grok as OpenAI-style functions,
+#   3. drive the standard multi-turn function-calling loop against
+#      https://api.x.ai/v1/chat/completions.
+# Muse has no public API key yet, so there is no third runner.
+
+XAI_API_URL = "https://api.x.ai/v1/chat/completions"
+XAI_MODELS_URL = "https://api.x.ai/v1/models"
+# 2026-10-12: grok-4.3 — xAI's recommended model for agentic tool calling; the
+# old grok-4-1-fast slug is not one of the documented post-May-15-2026 redirects.
+GROK_MODEL = "grok-4.3"   # override per-install via task_automation_config.json "grok_model"
+GROK_MAX_TOOL_ROUNDS = 40
+GROK_HTTP_TIMEOUT = 300          # seconds per xAI call
+GROK_SINGLE_PROMPT_TIMEOUT = 600
+GROK_QUEUE_DEADLINE = 30 * 60    # seconds for a whole queue run
+GROK_MAX_TOOLS = 120             # xAI accepts at most 128 tools per request
+
+# Which AI-Prowler tools a Grok run is offered when allowed_tools is broad
+# ("mcp__*"): the queue essentials first, then whole feature groups, then
+# READ-ONLY Jobs tools — capped at GROK_MAX_TOOLS. Never anything that writes
+# files, runs scripts or restores data (an unattended run doesn't need it).
+GROK_ESSENTIAL_TOOLS = (
+    "get_pending_analysis_tasks", "get_all_queued_tasks", "complete_analysis_task",
+    "save_analysis_report", "how_to_use_ai_prowler", "check_ai_prowler_status",
+    "search_documents", "multi_query_search", "read_document", "expand_search_result",
+    "get_knowledge_base_overview", "list_indexed_documents", "search_within_directory",
+    "search_learnings", "record_learning", "list_learnings", "get_learning",
+    "get_learning_stats", "get_learnings_report",
+    "send_email", "send_sms", "send_whatsapp", "get_weather",
+)
+GROK_GROUP_ORDER = ("core_kb", "self_learning", "agentic_analysis", "status_system",
+                    "email", "sms_whatsapp")
+GROK_READ_ONLY_PREFIXES = ("get_", "read_", "list_", "find_", "search_", "check_",
+                           "export_", "build_maps_url", "geocode_")
+GROK_NEVER_OFFER = frozenset({
+    "create_file", "write_file", "edit_file", "str_replace_in_file", "line_replace_in_file",
+    "delete_file", "run_script", "run_script_start", "untrack_directory", "reindex_all",
+    "restore_backup", "restore_job_database", "grant_access", "grant_write_access",
+    "revoke_access", "revoke_write_access",
+})
+
+GROK_QUEUE_RUNNER_PROMPT = (
+    QUEUE_RUNNER_PROMPT
+    .replace(
+        "Use AI-Prowler's own MCP tools, mcp__ai-prowler__ prefixed, as the "
+        "first choice for anything they can answer.",
+        "Use AI-Prowler's own MCP tools (exposed to you as functions) as the "
+        "first choice for anything they can answer.")
+    .replace(
+        "to WebSearch or WebFetch for anything current or specific that "
+        "requires looking up",
+        # 2026-10-12: no web search in a Grok run — xAI's built-in web_search
+        # is a Responses-API tool, and this runner uses Chat Completions.
+        "to your own general knowledge for anything current or specific (there "
+        "is no web search in this run — say so in the report where it matters)")
+)
+
+
+class _StdioMCPClient:
+    """Minimal JSON-RPC-over-stdio MCP client: initialize, tools/list,
+    tools/call. Spawns AI-Prowler's own server as a subprocess — the same
+    shape the scheduled task's Claude --mcp-config uses, so no port, Bearer
+    token, or tunnel is needed."""
+
+    def __init__(self, mcp_script=None, python_exe=None):
+        import queue as _queue
+        import threading as _threading
+        script = str(mcp_script or LOCAL_MCP_SCRIPT_PATH)
+        self._proc = subprocess.Popen(
+            [(python_exe or _get_python_exe()), script],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env={**os.environ,
+                 "PYTHONIOENCODING": "utf-8",
+                 "PYTHONUNBUFFERED": "1",
+                 "PYTHONWARNINGS": "ignore",
+                 "PYTHONNOUSERSITE": "1"},
+            text=True, bufsize=1,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self._next_id = 1
+        self._lines = _queue.Queue()
+        self._reader = _threading.Thread(target=self._pump, daemon=True)
+        self._reader.start()
+
+    def _pump(self):
+        try:
+            for line in self._proc.stdout:
+                self._lines.put(line)
+        except Exception:
+            pass
+
+    def _request(self, method, params=None, timeout=180):
+        rid = self._next_id
+        self._next_id += 1
+        self._proc.stdin.write(json.dumps(
+            {"jsonrpc": "2.0", "id": rid, "method": method,
+             "params": params or {}}) + "\n")
+        self._proc.stdin.flush()
+        deadline = time.time() + timeout
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise TimeoutError(f"MCP {method} timed out after {timeout}s")
+            try:
+                line = self._lines.get(timeout=min(remaining, 5))
+            except Exception:
+                continue
+            try:
+                msg = json.loads(line)
+            except Exception:
+                continue
+            if msg.get("id") != rid:
+                continue  # a notification or someone else's response
+            if "error" in msg:
+                raise RuntimeError(f"MCP {method} error: {msg['error']}")
+            return msg.get("result")
+
+    def initialize(self, timeout=300):
+        result = self._request("initialize", {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "ai-prowler-grok-runner", "version": "1.0"},
+        }, timeout=timeout)
+        self._proc.stdin.write(json.dumps(
+            {"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+        self._proc.stdin.flush()
+        return result
+
+    def list_tools(self):
+        return (self._request("tools/list") or {}).get("tools", [])
+
+    def call_tool(self, name, arguments=None, timeout=300):
+        res = self._request("tools/call",
+                            {"name": name, "arguments": arguments or {}},
+                            timeout=timeout) or {}
+        parts = [c.get("text", "") for c in res.get("content", [])
+                 if isinstance(c, dict) and c.get("type") == "text"]
+        text = "\n".join(parts)
+        if res.get("isError"):
+            raise RuntimeError(text or f"tool {name} reported an error")
+        return text
+
+    def close(self):
+        try:
+            if self._proc.stdin:
+                self._proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            self._proc.terminate()
+        except Exception:
+            pass
+
+
+def _grok_chat(api_key, messages, tools, model=None):
+    """One chat-completions call against the xAI API. Returns the assistant
+    message dict. Raises RuntimeError carrying the API's own error text."""
+    import urllib.request as _ur
+    import urllib.error as _ue
+    body = {"model": (model or GROK_MODEL),
+            "messages": messages,
+            "tool_choice": "auto"}
+    if tools:
+        body["tools"] = tools
+    req = _ur.Request(
+        XAI_API_URL, data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json",
+                 "Authorization": "Bearer " + api_key},
+        method="POST")
+    try:
+        with _ur.urlopen(req, timeout=GROK_HTTP_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except _ue.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            detail = str(e)
+        raise RuntimeError(f"xAI API HTTP {e.code}: {detail}")
+    except Exception as e:
+        raise RuntimeError(f"xAI API request failed: {e}")
+    choices = (data or {}).get("choices") or []
+    if not choices or not isinstance(choices[0].get("message"), dict):
+        raise RuntimeError(f"xAI API returned no message: {str(data)[:300]}")
+    return choices[0]["message"]
+
+
+def _mcp_tool_to_xai_function(tool):
+    """Convert one MCP tools/list entry to an xAI/OpenAI function tool."""
+    schema = tool.get("inputSchema")
+    if not isinstance(schema, dict) or schema.get("type") != "object":
+        schema = {"type": "object", "properties": {}}
+    return {"type": "function",
+            "function": {"name": tool.get("name", "unnamed_tool"),
+                         "description": str(tool.get("description") or "")[:1000],
+                         "parameters": schema}}
+
+
+def _grok_select_tools(allowed_tools, mcp_tools):
+    """Map the queue's allowed_tools string (Claude-style names) onto the
+    MCP tools actually available. Returns (xai_tools, web_search_enabled).
+    "mcp__ai-prowler__*" / "mcp__*" / "*" select everything; a bare
+    "mcp__ai-prowler__<name>" selects one; WebSearch/WebFetch enable xAI's
+    server-side web_search tool (metered by xAI per call)."""
+    wanted = {t.strip() for t in (allowed_tools or "").split(",") if t.strip()}
+    broad = bool(wanted & {"mcp__ai-prowler__*", "mcp__*", "*"})
+    specific = set()
+    for w in wanted:
+        if w.startswith("mcp__ai-prowler__") and not w.endswith("*"):
+            specific.add(w[len("mcp__ai-prowler__"):])
+        elif w.startswith("mcp__") and not w.endswith("*") and "__" in w:
+            specific.add(w.split("__", 1)[1])
+    web = bool(wanted & {"WebSearch", "WebFetch"})
+    by_name = {t.get("name", ""): t for t in (mcp_tools or []) if t.get("name")}
+    if broad:
+        # 2026-10-12: rank and cap (xAI's 128-tool limit) — see GROK_ESSENTIAL_TOOLS.
+        avail = {n for n in by_name if n not in GROK_NEVER_OFFER}
+        order = [n for n in GROK_ESSENTIAL_TOOLS if n in avail]
+        try:
+            import mcp_tool_catalog as _cat
+            for _g in GROK_GROUP_ORDER:
+                order += sorted(n for n in _cat.tools_in_category(_g) if n in avail and n not in order)
+            order += sorted(n for n in _cat.tools_in_category("job_tracker")
+                            if n in avail and n not in order and n.startswith(GROK_READ_ONLY_PREFIXES))
+        except Exception:
+            order += sorted(n for n in avail if n not in order and n.startswith(GROK_READ_ONLY_PREFIXES))
+        # fill spare room with everything else available (ranked tools first)
+        order += sorted(n for n in avail if n not in order)
+        names = order[:GROK_MAX_TOOLS]
+    else:
+        names = [n for n in by_name if n in specific][:GROK_MAX_TOOLS]
+    return [_mcp_tool_to_xai_function(by_name[n]) for n in names], web
+
+
+def _grok_audit(text):
+    """One audit-log line for a Grok run — same file the Claude hook writes."""
+    try:
+        AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
+        with AUDIT_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(f"{datetime.now(timezone.utc).isoformat()} [grok] {text}\n")
+    except Exception:
+        pass
+
+
+def _grok_tool_loop(api_key, prompt, xai_tools, mcp_client, model, timeout_sec):
+    """The multi-turn function-calling loop. Returns (ok, summary)."""
+    messages = [
+        {"role": "system",
+         "content": ("You are Grok, running AI-Prowler's scheduled analysis task "
+                     "queue headlessly. Be efficient: make the tool calls the task "
+                     "needs, then finish with complete_analysis_task for each task "
+                     "and a short final summary. Never ask the user questions — "
+                     "there is no one to answer.")},
+        {"role": "user", "content": prompt},
+    ]
+    deadline = time.time() + timeout_sec
+    for _round in range(GROK_MAX_TOOL_ROUNDS):
+        if time.time() > deadline:
+            return False, "overall time budget exceeded before the queue finished"
+        try:
+            msg = _grok_chat(api_key, messages, xai_tools, model)
+        except Exception as e:
+            return False, f"xAI API call failed: {e}"
+        assistant_msg = {"role": "assistant"}
+        if msg.get("content"):
+            assistant_msg["content"] = msg["content"]
+        tool_calls = msg.get("tool_calls") or []
+        if tool_calls:
+            assistant_msg["tool_calls"] = [
+                {"id": tc.get("id"),
+                 "type": "function",
+                 "function": {"name": (tc.get("function") or {}).get("name", ""),
+                              "arguments": (tc.get("function") or {}).get("arguments") or "{}"}}
+                for tc in tool_calls]
+        messages.append(assistant_msg)
+        if not tool_calls:
+            return True, (msg.get("content") or "Run finished.").strip()[:4000]
+        for tc in tool_calls:
+            fn = tc.get("function") or {}
+            name = fn.get("name", "")
+            raw_args = fn.get("arguments") or "{}"
+            try:
+                args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+            except Exception:
+                args = {}
+            _grok_audit(f"tool_call {name}")
+            try:
+                result = mcp_client.call_tool(name, args)
+            except Exception as e:
+                result = f"ERROR calling {name}: {e}"
+            messages.append({"role": "tool",
+                             "tool_call_id": tc.get("id"),
+                             "content": str(result)[:20000]})
+    return False, f"stopped after {GROK_MAX_TOOL_ROUNDS} tool rounds without a final summary"
+
+
+def _run_grok_headless(prompt, timeout_sec, run_label):
+    """Shared machinery for run_grok_queue_headless / run_grok_prompt_headless."""
+    api_key = os.environ.get("XAI_API_KEY", "").strip() or (load_api_key("grok") or "")
+    if not api_key:
+        detail = "No Grok API key: XAI_API_KEY is not set and no key is saved (Auth section)."
+        _write_last_run("failure", f"Grok {run_label}: {detail}")
+        return False, detail
+    if not LOCAL_MCP_SCRIPT_PATH.exists():
+        detail = f"ai_prowler_mcp.py not found at {LOCAL_MCP_SCRIPT_PATH} — reinstall AI-Prowler."
+        _write_last_run("failure", f"Grok {run_label}: {detail}")
+        return False, detail
+    rotate_audit_log()
+    client = None
+    try:
+        try:
+            client = _StdioMCPClient()
+            client.initialize()
+            mcp_tools = client.list_tools()
+        except Exception as e:
+            detail = f"Could not start AI-Prowler's MCP server: {e}"
+            _write_last_run("failure", f"Grok {run_label}: {detail}")
+            return False, detail
+        cfg = load_config()
+        xai_tools, web = _grok_select_tools(cfg.get("allowed_tools", ""), mcp_tools)
+        # 2026-10-12: no {"type": "web_search"} here — xAI's built-in tools are
+        # documented for the Responses API, not /v1/chat/completions (a 400
+        # would fail every run). The Grok prompt says to use general knowledge.
+        model = (cfg.get("grok_model") or GROK_MODEL).strip() or GROK_MODEL
+        _grok_audit(f"run start model={model} tools={len(xai_tools)}")
+        ok, detail = _grok_tool_loop(api_key, prompt, xai_tools, client, model, timeout_sec)
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+    _write_last_run("success" if ok else "failure", f"Grok {run_label} — {detail[:220]}")
+    return ok, detail
+
+
+def run_grok_queue_headless(timeout_sec=GROK_QUEUE_DEADLINE):
+    """Runs the pending analysis task queue right now via the xAI API (Grok),
+    headless — the Grok equivalent of the `claude -p` scheduled run. Called
+    by the generated .bat when the queue's auth method is Grok; also usable
+    directly. Returns (success, detail)."""
+    cfg = load_config()
+    prompt = GROK_QUEUE_RUNNER_PROMPT
+    if cfg.get("notify_on_complete"):
+        tool = "send_sms" if cfg.get("notify_method", "sms") == "sms" else "send_whatsapp"
+        prompt += (f" After completing all tasks (or confirming the queue was empty), "
+                   f"call AI-Prowler's {tool} tool with a one- or two-sentence summary "
+                   f"of what ran and what was found. If {tool} is not configured/available, "
+                   f"skip this step silently rather than treating it as a task failure.")
+    return _run_grok_headless(prompt, timeout_sec, "queue run")
+
+
+def run_grok_prompt_headless(prompt, timeout_sec=GROK_SINGLE_PROMPT_TIMEOUT):
+    """Runs one ad-hoc prompt via the xAI API (Grok) — the Grok equivalent of
+    run_single_prompt_now()'s `claude -p` call. Returns (success, detail)."""
+    return _run_grok_headless(prompt, timeout_sec, "single prompt run")
 
 # ── CLAUDE_CODE_OAUTH_TOKEN persistence (v8.1.6 fix) ──────────────────────
 # `claude setup-token` does NOT write ~/.claude/.credentials.json — that
@@ -1722,10 +2211,13 @@ def purge_old_jobs(max_age_days: int = 2) -> int:
 
 
 def run_queue_now(mcp_config_path: str, allowed_tools: str,
-                   use_api_key: bool = False,
-                   notify_on_complete: bool = False,
-                   notify_method: str = "sms",
-                   timeout: int = 600) -> tuple[bool, str]:
+                  use_api_key: bool = False,
+                  notify_on_complete: bool = False,
+                  notify_method: str = "sms",
+                  timeout: int = 600,
+                  api_key_provider: str = "anthropic") -> tuple[bool, str]:
+    # 2026-10-12: api_key_provider is LAST (keyword) so existing positional
+    # callers keep their notify_on_complete / notify_method / timeout meaning.
     """Runs the task queue right now via a real headless Claude Code
     session — the exact same command the Scheduled Task runs, just
     triggered immediately instead of waiting for the clock. This is
@@ -1756,9 +2248,10 @@ def run_queue_now(mcp_config_path: str, allowed_tools: str,
     Returns (success, detail) — detail is either the tail of the
     session's real output (truncated to keep dialog boxes reasonable)
     or a plain-language reason it never ran."""
-    if not claude_code_cli_installed():
+    _provider_now = _normalize_provider(api_key_provider) if use_api_key else "oauth"
+    if _provider_now != "grok" and not claude_code_cli_installed():
         return False, ("Claude Code CLI is not installed. Install it from "
-                        "the 🤖 Autonomous AI Task Queue panel above, then try again.")
+                        "the \U0001F916 Autonomous AI Task Queue panel above, then try again.")
     if not mcp_config_path:
         return False, ("No MCP config is set up yet. Click 'Generate MCP "
                         "Config' in the 🤖 Autonomous AI Task Queue panel above, "
@@ -1771,7 +2264,8 @@ def run_queue_now(mcp_config_path: str, allowed_tools: str,
     wrapper_dir = AI_PROWLER_HOME / "manual_run"
     wrapper_path = install_wrapper_script(
         wrapper_dir, mcp_config_path, allowed_tools,
-        notify_on_complete, notify_method, use_api_key)
+        notify_on_complete, notify_method, use_api_key,
+        api_key_provider=api_key_provider)
 
     try:
         r = subprocess.run([str(wrapper_path)], capture_output=True,
@@ -1865,7 +2359,8 @@ def _sanitize_prompt_for_batch(prompt: str) -> str:
 
 def build_single_prompt_wrapper_content(prompt: str, mcp_config_path: str,
                                          allowed_tools: str,
-                                         use_api_key: bool = False) -> str:
+                                        use_api_key: bool = False,
+                                        api_key_provider: str = "anthropic"):
     """v8.1.6: like build_wrapper_script_content() but for an arbitrary
     one-off PROMPT instead of the fixed queue-processing slash command —
     backs the "▶ NOW" button on each Common Business AI Analysis item, so
@@ -1891,8 +2386,37 @@ def build_single_prompt_wrapper_content(prompt: str, mcp_config_path: str,
     fewer place for a caller to forget it (this is exactly the class of
     bug run_queue_now() had, found the same session).
     """
+    escaped_prompt = _sanitize_prompt_for_batch(prompt).replace('"', '""')
     api_key_block = ""
-    if use_api_key:
+    _invoke_block = ""
+    # 2026-10-12: Grok has no Claude-Code-style CLI — its branch exports
+    # XAI_API_KEY and invokes the in-module Grok runner on the ad-hoc prompt
+    # (base64-encoded at generation time so batch quoting can't corrupt it).
+    _provider = _normalize_provider(api_key_provider)
+    if use_api_key and _provider == "grok":
+        _grok_path = api_key_path("grok")
+        api_key_block = f"""REM Use XAI_API_KEY (Grok) — see build_wrapper_script_content()'s
+REM docstring for why this reads from a file at runtime.
+if exist "{_grok_path}" (
+    set /p XAI_API_KEY=<"{_grok_path}"
+) else (
+    echo [ERROR] Grok API key auth is selected but {_grok_path} was not found.
+    exit /b 1
+)
+
+"""
+        import base64 as _b64mod
+        _b64 = _b64mod.b64encode(prompt.encode("utf-8")).decode("ascii")
+        _tqa_parent = str(LOCAL_MCP_SCRIPT_PATH.parent)
+        # _self_gate_python_invocation() — NOT a naively-quoted path (v8.1.13).
+        _invoke_block = (
+            f'{_self_gate_python_invocation()} -c "import sys,base64; '
+            f"sys.path.insert(0,r'{_tqa_parent}'); "
+            "import task_queue_automation as _tqa; "
+            f"_tqa.run_grok_prompt_headless(base64.b64decode('{_b64}').decode('utf-8'))\" "
+            '> "%USERPROFILE%\\.ai-prowler\\last_single_run.json" 2>&1'
+        )
+    elif use_api_key:
         api_key_block = f"""REM Use ANTHROPIC_API_KEY — see build_wrapper_script_content()'s
 REM docstring for why this reads from a file at runtime.
 if exist "{API_KEY_PATH}" (
@@ -1903,6 +2427,13 @@ if exist "{API_KEY_PATH}" (
 )
 
 """
+        _invoke_block = (
+            f'claude -p "{escaped_prompt}" ^\n'
+            f'  --mcp-config "{mcp_config_path}" ^\n'
+            f'  --allowedTools "{allowed_tools}" ^\n'
+            '  --output-format json ^\n'
+            '  --permission-mode bypassPermissions > "%USERPROFILE%\\.ai-prowler\\last_single_run.json" 2>&1'
+        )
     else:
         api_key_block = f"""REM Use the Claude Code OAuth token — see build_wrapper_script_content()'s
 REM docstring for why this reads from a file at runtime.
@@ -1914,8 +2445,13 @@ if exist "{OAUTH_TOKEN_PLAIN_PATH}" (
 )
 
 """
-
-    escaped_prompt = _sanitize_prompt_for_batch(prompt).replace('"', '""')
+        _invoke_block = (
+            f'claude -p "{escaped_prompt}" ^\n'
+            '  --mcp-config "{mcp_config_path}" ^\n'
+            '  --allowedTools "{allowed_tools}" ^\n'
+            '  --output-format json ^\n'
+            '  --permission-mode bypassPermissions > "%USERPROFILE%\\.ai-prowler\\last_single_run.json" 2>&1'
+        )
     return rf"""@echo off
 chcp 65001 >nul
 REM v8.1.16 fix: see build_wrapper_script_content()'s matching comment for
@@ -1942,11 +2478,7 @@ echo ================================================================ >> "%USERP
 echo [%date% %time%] SINGLE PROMPT RUN (NOW button) -- full script below: >> "%USERPROFILE%\.ai-prowler\command_debug.log"
 type "%~f0" >> "%USERPROFILE%\.ai-prowler\command_debug.log"
 
-{api_key_block}claude -p "{escaped_prompt}" ^
-  --mcp-config "{mcp_config_path}" ^
-  --allowedTools "{allowed_tools}" ^
-  --output-format json ^
-  --permission-mode bypassPermissions > "%USERPROFILE%\\.ai-prowler\\last_single_run.json" 2>&1
+{api_key_block}{_invoke_block}
 
 set RC=%ERRORLEVEL%
 exit /b %RC%
@@ -1955,7 +2487,8 @@ exit /b %RC%
 
 def build_ai_routing_wrapper_content(prompt: str, mcp_config_path: str,
                                       allowed_tools: str,
-                                      use_api_key: bool = False,
+                                       use_api_key: bool = False,
+                                       api_key_provider: str = "anthropic",
                                       oauth_token_path: "Path | None" = None) -> str:
     """Wrapper content for AI_ROUTING_TASK_NAME — the dedicated, trigger-
     less on-demand task backing the Jobs PWA's "Run AI Routing" button.
@@ -1997,6 +2530,18 @@ def build_ai_routing_wrapper_content(prompt: str, mcp_config_path: str,
     credential from a file at runtime rather than embedding it.
     """
     api_key_block = ""
+    _invoke_block = ""
+    # 2026-10-12: Grok has no Claude-Code-style CLI — its branch exports
+    # XAI_API_KEY and invokes the in-module Grok runner, reading the prompt
+    # back from the plain-text file (same file the claude branch pipes).
+    _provider = _normalize_provider(api_key_provider)
+    _claude_invoke = (
+        f'type "{AI_ROUTING_PROMPT_TXT_PATH}" | "{_get_claude_exe()}" -p ^\n'
+        f'  --mcp-config "{mcp_config_path}" ^\n'
+        f'  --allowedTools "{allowed_tools}" ^\n'
+        '  --output-format json ^\n'
+        f'  --permission-mode bypassPermissions > "{AI_ROUTING_LAST_RUN_PATH}" 2>&1'
+    )
     if oauth_token_path is not None:
         # Server mode (2026-09-19): the run is billed to the SPECIFIC user who
         # tapped the button, using the Claude token an admin saved for them in
@@ -2014,6 +2559,31 @@ if exist "{oauth_token_path}" (
 )
 
 """
+        _invoke_block = _claude_invoke
+    elif use_api_key and _provider == "grok":
+        _grok_path = api_key_path("grok")
+        api_key_block = f"""REM Use XAI_API_KEY (Grok) — see build_wrapper_script_content()'s
+REM docstring for why this reads from a file at runtime.
+if exist "{_grok_path}" (
+    set /p XAI_API_KEY=<"{_grok_path}"
+) else (
+    echo [ERROR] Grok API key auth is selected but {_grok_path} was not found.
+    exit /b 1
+)
+
+"""
+        _tqa_parent = str(LOCAL_MCP_SCRIPT_PATH.parent)
+        # _self_gate_python_invocation() — NOT a naively-quoted path (v8.1.13).
+        _invoke_block = (
+            f'{_self_gate_python_invocation()} -c "import sys,pathlib; '
+            f"sys.path.insert(0,r'{_tqa_parent}'); "
+            "import task_queue_automation as _tqa; "
+            f"_p=pathlib.Path(r'{AI_ROUTING_PROMPT_TXT_PATH}').read_text(encoding='utf-8'); "
+            "_tqa.run_grok_prompt_headless(_p); "
+            "_lr=_tqa.load_last_run() or {}; "
+            "print('GROK_AI_ROUTING status='+str(_lr.get('status'))+' detail='+str(_lr.get('detail'))[:300])\" "
+            f'> "{AI_ROUTING_LAST_RUN_PATH}" 2>&1'
+        )
     elif use_api_key:
         api_key_block = f"""REM Use ANTHROPIC_API_KEY — see build_wrapper_script_content()'s
 REM docstring for why this reads from a file at runtime.
@@ -2025,6 +2595,7 @@ if exist "{API_KEY_PATH}" (
 )
 
 """
+        _invoke_block = _claude_invoke
     else:
         api_key_block = f"""REM Use the Claude Code OAuth token — see build_wrapper_script_content()'s
 REM docstring for why this reads from a file at runtime.
@@ -2036,6 +2607,7 @@ if exist "{OAUTH_TOKEN_PLAIN_PATH}" (
 )
 
 """
+        _invoke_block = _claude_invoke
 
     # Write the prompt as its own plain file — no batch escaping needed at
     # all now (see docstring above): real newlines, real quotes, real %.
@@ -2054,11 +2626,7 @@ REM see this function's docstring for why it's not a command-line argument.
 
 cd /d "{AI_PROWLER_HOME}"
 
-{api_key_block}type "{AI_ROUTING_PROMPT_TXT_PATH}" | "{_get_claude_exe()}" -p ^
-  --mcp-config "{mcp_config_path}" ^
-  --allowedTools "{allowed_tools}" ^
-  --output-format json ^
-  --permission-mode bypassPermissions > "{AI_ROUTING_LAST_RUN_PATH}" 2>&1
+{api_key_block}{_invoke_block}
 
 set RC=%ERRORLEVEL%
 REM Completion marker written LAST, after the claude call has fully
@@ -2070,7 +2638,8 @@ exit /b %RC%
 
 
 def run_single_prompt_now(prompt: str, mcp_config_path: str, allowed_tools: str,
-                           use_api_key: bool = False,
+                             use_api_key: bool = False,
+                             api_key_provider: str = "anthropic",
                            timeout: int = 600) -> tuple[bool, str]:
     """v8.1.6: runs ONE ad-hoc prompt right now via a real headless Claude
     Code session — backs the "▶ NOW" button on each analysis item.
@@ -2084,9 +2653,10 @@ def run_single_prompt_now(prompt: str, mcp_config_path: str, allowed_tools: str,
     mcp_config_path is now ignored (kept for API compatibility only).
 
     Returns (success, detail)."""
-    if not claude_code_cli_installed():
+    _provider_1p = _normalize_provider(api_key_provider) if use_api_key else "oauth"
+    if _provider_1p != "grok" and not claude_code_cli_installed():
         return False, ("Claude Code CLI is not installed. Install it from "
-                        "the 🤖 Autonomous AI Task Queue panel above, then try again.")
+                        "the \U0001F916 Autonomous AI Task Queue panel above, then try again.")
 
     # v8.1.18: prefer localhost HTTP over stdio for the NOW button.
     ok_now, now_mcp_path = generate_mcp_config_for_now_button()
@@ -2097,7 +2667,8 @@ def run_single_prompt_now(prompt: str, mcp_config_path: str, allowed_tools: str,
     wrapper_dir.mkdir(parents=True, exist_ok=True)
     script_path = wrapper_dir / "run_single_now.bat"
     bat_content = build_single_prompt_wrapper_content(prompt, now_mcp_path, allowed_tools,
-                                                       use_api_key)
+                                                     use_api_key,
+                                                     api_key_provider=api_key_provider)
     script_path.write_text(bat_content, encoding="utf-8")
 
     # NOW-button debug log removed — run-now feature defeatured in v9.1.0

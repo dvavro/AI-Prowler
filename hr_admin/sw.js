@@ -3,10 +3,12 @@
 // covering this file, index.html, and manifest.json. Any change to any of
 // the three automatically produces a new cache key. Nothing to hand-bump.
 // HR PWA mirrors jobs/sw.js exactly — same network-first strategy, same
-// offline fallback shape, different mount point (/hr/) and cache prefix (hr-).
+// offline fallback shape, different mount point (/hr_admin/) and cache prefix (hr-).
+// 2026-10-11: moved from the retired /hr/ mount; /hr-api responses (employee
+// data) are never written to the device cache.
 const CACHE = 'hr-auto';
 const CACHE_NAME = CACHE;
-const OFFLINE_ASSETS = ['/hr/', '/hr/index.html', '/hr/manifest.json'];
+const OFFLINE_ASSETS = ['/hr_admin/', '/hr_admin/index.html', '/hr_admin/manifest.json'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(OFFLINE_ASSETS)));
@@ -29,8 +31,10 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   e.respondWith(
     fetch(e.request).then(function(res) {
-      var resClone = res.clone();
-      caches.open(CACHE_NAME).then(function(c) { c.put(e.request, resClone); }).catch(function(){});
+      if (e.request.url.indexOf('/hr-api') === -1) {   // never cache employee data
+        var resClone = res.clone();
+        caches.open(CACHE_NAME).then(function(c) { c.put(e.request, resClone); }).catch(function(){});
+      }
       return res;
     }).catch(function() {
       return caches.match(e.request).then(function(cached) {
@@ -56,11 +60,11 @@ self.addEventListener('fetch', e => {
 self.addEventListener('notificationclick', e => {
   e.notification.close();
   var taskId = e.notification.data && e.notification.data.task_id;
-  var url = taskId ? '/hr/?task=' + taskId : '/hr/';
+  var url = taskId ? '/hr_admin/?task=' + taskId : '/hr_admin/';
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clients) {
       for (var i = 0; i < clients.length; i++) {
-        if (clients[i].url.startsWith(self.location.origin + '/hr/') && 'focus' in clients[i]) {
+        if (clients[i].url.startsWith(self.location.origin + '/hr_admin/') && 'focus' in clients[i]) {
           clients[i].focus();
           clients[i].postMessage({ type: 'OPEN_TASK', task_id: taskId });
           return;

@@ -24,7 +24,14 @@ def test_DET_01_text_customer_works_for_a_name_with_an_apostrophe(clean_slate, a
     name filled in (SMS configured) — or, on an install where SMS isn't set
     up, the app's 'SMS is not configured yet' alert appears. Either proves the
     button works; before the fix neither happened."""
-    jid = data.job("O'Brien's Café", "city_hall")
+    # 2026-10-13: Text Customer uses the LINKED customer's name, so the
+    # apostrophe must be in the customer record (a ZTEST customer of its own —
+    # swept like every test customer), not just in the job's name.
+    out = data.api.call("create_customer", {"updates": {"Company Name": "ZTEST E2E O'Brien's Café",
+                                                        "City": "New Smyrna Beach", "State": "FL",
+                                                        "ZIP": "32168", "Status Active/Inactive": "Active"}})
+    cid = out.split("NEW_CUST_ID=")[1].splitlines()[0].strip()
+    jid = data.job("O'Brien's Café", "city_hall", CustomerID=cid)
     errors, alerts = [], []
     page.on("pageerror", lambda e: errors.append(str(e)))
 

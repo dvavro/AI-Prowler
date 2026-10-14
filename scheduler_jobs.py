@@ -306,7 +306,7 @@ def job_morning_briefing(config: dict):
             parts.append(f"<h3>🧠 Analysis Tasks Due ({len(tasks)})</h3><ul>")
             for t in tasks:
                 parts.append(f"<li>{t.get('label','?')}</li>")
-            parts.append("</ul><p><i>Open Claude and press Ctrl+V to run them.</i></p>")
+            parts.append("</ul><p><i>Open Claude, Muse, or Grok and press Ctrl+V to run them.</i></p>")
 
         parts.append(_footer())
         return f"☀️ Morning Briefing — {dow}", "\n".join(parts)
@@ -328,7 +328,7 @@ def job_overdue_invoice_alert(config: dict):
         for l in od:
             parts.append(f"<tr><td>{l}</td></tr>")
         parts += ["</table>",
-                  "<p><i>Consider sending payment reminders via Claude + Square.</i></p>",
+                  "<p><i>Consider sending payment reminders via Claude, Muse, or Grok + Square.</i></p>",
                   _footer()]
         return f"⚠️ Overdue Invoices — {_today()}", "\n".join(parts)
     except Exception:
@@ -349,7 +349,7 @@ def job_due_analysis_tasks(config: dict):
                          f"(due: {_due_date_prefix(t, fallback='?')}, "
                          f"schedule: {t.get('schedule','?')})</li>")
         parts += ["</ul>",
-                  "<p><b>Open Claude and press Ctrl+V to run all pending tasks.</b></p>",
+                  "<p><b>Open Claude, Muse, or Grok and press Ctrl+V to run all pending tasks.</b></p>",
                   _footer()]
         return f"🧠 {len(due)} Task(s) Due — {_today()}", "\n".join(parts)
     except Exception:

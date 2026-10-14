@@ -2244,7 +2244,7 @@ class JobsFlow(_SimpleFlow):
         ttk.Label(bb, text="(columns like Name, Company, Phone, Email, Address, City, State, ZIP)",
                   foreground="#888", font=("Arial", 8)).pack(side="left")
         ttk.Label(cust, text="💡 Have QuickBooks? Connect the QuickBooks Online connector in Claude.ai, "
-                  "then just ask Claude to import your customers, invoices, or payments.",
+                  "then just ask Claude, Muse, or Grok to import your customers, invoices, or payments.",
                   ).grid(row=7, column=0, columnspan=6, sticky="w", pady=(2, 0))
         self.cust_note = ttk.Label(cust, text="", foreground="#666", wraplength=460, justify="left")
         self.cust_note.grid(row=6, column=0, columnspan=6, sticky="w", pady=(2, 0))

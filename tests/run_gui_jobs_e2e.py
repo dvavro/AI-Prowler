@@ -39,6 +39,10 @@ Always watch them with --human (see tests\JOBS_APP_E2E_TEST_SPEC.md section 0 fo
                                                     variables) against the AI-Prowler Server's Jobs app
   run_tests_gui_jobs_e2e.bat --remote --human       REMOTE PWA (personal mode): sign-in, files, search,
                                                     permissions, learnings, tasks (REMOTE_PWA_E2E_TEST_SPEC.md)
+  run_tests_gui_jobs_e2e.bat --sandbox --human      PERSONAL suite in the time machine's THROWAWAY server:
+                                                    empty database, email/SMS caught, real data never touched
+                                                    (also: run_tests.bat jobs-sandbox --human)
+  ... --sandbox --date 2026-11-02 --human           ...with the server AND browser clocks on that date
 
 Results: tests\\gui_jobs_e2e\\artifacts\\latest\\SUMMARY.txt and report.html
 Token:   setx AIPROWLER_JOBS_TOKEN "<Bearer Token from Settings -> Remote Access>"
@@ -91,6 +95,45 @@ def _cleanup_only(run_dir: Path) -> int:
     return 0 if not left else 1
 
 
+def _start_sandbox(a, run_dir: Path, env: dict):
+    """--sandbox (David 2026-10-13): run the PERSONAL Jobs suite against the time
+    machine's throwaway server instead of the real install. The suite was built
+    for "test date = today on a database with no real jobs"; this gives it exactly
+    that, any day, with the real database never reachable. The sandbox runs the
+    WORK COPY's code (tm_server.py imports ai_prowler_mcp from the repo)."""
+    import importlib.util
+    os.environ["E2E_RUN_DIR"] = str(run_dir)               # the tm conftest reads it at import
+    for p in (TESTS / "gui_jobs_timemachine", TESTS / "gui_jobs_e2e"):
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+    spec = importlib.util.spec_from_file_location("tm_sandbox_conftest",
+                                                  TESTS / "gui_jobs_timemachine" / "conftest.py")
+    tmmod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tmmod)
+    day = dt.date.fromisoformat(a.date) if a.date else dt.date.today()
+    print(f"[sandbox] starting the time machine's throwaway server — test date {day} …")
+    tm = tmmod.TimeMachine(day, "personal").start()
+    tm.set_clock(day, dt.datetime.now().strftime("%H:%M"))      # the clock then runs from here
+    env.update(AIPROWLER_JOBS_URL=tm.app_url, AIPROWLER_LOCAL_API_ORIGIN=tm.origin,
+               AIPROWLER_JOBS_TOKEN=tm.token, E2E_SANDBOX_DATE=day.isoformat(), E2E_SANDBOX_SERVER="1",
+               E2E_APP_HOME=str(tm.home),          # the sandbox app's home (photos are saved under it)
+               E2E_BROWSER_CLOCK=tm.now().isoformat() if day != dt.date.today() else "")
+    print(f"[sandbox] up: {tm.app_url}  (sandbox {tm.home})")
+    return tm
+
+
+def _stop_sandbox(tm, run_dir: Path):
+    import json as _json
+    try:
+        ob = tm.outbox()
+        (run_dir / "outbox.json").write_text(_json.dumps(ob, indent=1, ensure_ascii=False), encoding="utf-8")
+        print(f"[sandbox] outbox (caught, never sent): {len(ob)} message(s) -> {run_dir / 'outbox.json'}")
+    except Exception as e:
+        print(f"[sandbox] outbox not saved: {e}")
+    tm.stop()
+    print("[sandbox] stopped — the throwaway copy is discarded with the run folder")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--help", "-h", action="store_true")
@@ -113,6 +156,11 @@ def main() -> int:
     ap.add_argument("--timemachine", action="store_true",
                     help="TIME MACHINE suite (tests\\gui_jobs_timemachine): a throwaway copy of the app "
                          "with a movable clock — walks weeks of work day by day, never touches real data")
+    ap.add_argument("--sandbox", action="store_true",
+                    help="PERSONAL suite inside the time machine's throwaway server: empty database, "
+                         "email/SMS caught, server + browser clocks on the test date — never touches real data")
+    ap.add_argument("--date", default="",
+                    help="--sandbox: the test date (YYYY-MM-DD, default today)")
     ap.add_argument("-k", dest="k", default="")
     a, extra = ap.parse_known_args()
     if a.help:
@@ -136,6 +184,10 @@ def main() -> int:
     if a.timemachine:
         SUITE = TESTS / "gui_jobs_timemachine"
         ART = SUITE / "artifacts" / tm_mode
+    if a.sandbox and (a.server or a.remote or a.timemachine or a.cleanup_only):
+        print("--sandbox runs the PERSONAL Jobs suite in a throwaway time-machine server — use it "
+              "without --server / --remote / --timemachine / --cleanup-only.")
+        return 2
     if a.remote:
         if a.server or a.timemachine or a.tier != "safe":
             print("--remote is its own suite (personal-mode Remote PWA) — use it without "
@@ -203,14 +255,19 @@ def main() -> int:
         elif a.k:
             cmd += ["-k", a.k]
         cmd += extra
-        with open(run_dir / "pytest_output.txt", "w", encoding="utf-8") as out:
-            out.write(" ".join(cmd) + "\n\n")
-            p = subprocess.Popen(cmd, cwd=str(TESTS.parent), env=env, stdout=subprocess.PIPE,
-                                 stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
-            for line in p.stdout:
-                sys.stdout.write(line)
-                out.write(line)
-            rc = p.wait()
+        tm = _start_sandbox(a, run_dir, env) if a.sandbox else None
+        try:
+            with open(run_dir / "pytest_output.txt", "w", encoding="utf-8") as out:
+                out.write(" ".join(cmd) + "\n\n")
+                p = subprocess.Popen(cmd, cwd=str(TESTS.parent), env=env, stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+                for line in p.stdout:
+                    sys.stdout.write(line)
+                    out.write(line)
+                rc = p.wait()
+        finally:
+            if tm is not None:
+                _stop_sandbox(tm, run_dir)
 
     summary = run_dir / "SUMMARY.txt"
     latest = ART / "latest"

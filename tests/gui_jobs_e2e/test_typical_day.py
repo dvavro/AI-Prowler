@@ -18,6 +18,7 @@ themselves to a future real job).
 Run: run_tests_gui_jobs_e2e.bat --human -k typical_day
 """
 import base64
+import os
 import re
 import shutil
 import time
@@ -33,7 +34,7 @@ from safety import SANDBOX_DATE
 # a real 1x1 PNG
 TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
-PHOTOS_ROOT = Path.home() / "Documents" / "AI-Prowler" / "JobPhotos"
+PHOTOS_ROOT = Path(os.environ.get("E2E_APP_HOME") or Path.home()) / "Documents" / "AI-Prowler" / "JobPhotos"
 # Typed through the UI, so the server has to geocode it: must be an address
 # OpenStreetMap knows. ("210 Sams Ave", city hall, is NOT in OSM — a job there
 # can never be placed on a route.)

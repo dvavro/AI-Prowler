@@ -6,22 +6,22 @@ Implementation Plan v2.1 Section 13.2.4.
 
 DEVIATION FROM THE PLAN — DELIBERATE
 -------------------------------------
-The plan assumes hr/sw.js and hr/index.html reuse the exact named-function
+The plan assumes hr_admin/sw.js and hr_admin/index.html reuse the exact named-function
 pattern from jobs/index.html and remote/index.html (_initUpdateBanner(),
 _showUpdateBanner(), _dismissUpdateBanner(), _maybeReshowUpdateBanner(),
 _refreshForUpdate()) and suggests simply parametrizing
-test_pwa_update_banner.py's existing fixture to add hr/sw.js as a third
-path. That assumption doesn't hold: the real, shipped hr/index.html
+test_pwa_update_banner.py's existing fixture to add hr_admin/sw.js as a third
+path. That assumption doesn't hold: the real, shipped hr_admin/index.html
 implements the update banner differently — a single inline 'updatefound'
 listener that shows #update-banner, plus a standalone applyUpdate()
 function that posts SKIP_WAITING and reloads. There is no
 _initUpdateBanner/_dismissUpdateBanner/_maybeReshowUpdateBanner to
-extract, so parametrizing the existing harness against hr/index.html
+extract, so parametrizing the existing harness against hr_admin/index.html
 would fail for a reason that has nothing to do with a real regression.
 
 Per the testing philosophy in Section 13.0 ("test against real shipped
 source, not mocks"), this file instead extracts and behaviorally tests the
-ACTUAL code that ships in hr/index.html and hr/sw.js as its own dedicated
+ACTUAL code that ships in hr_admin/index.html and hr_admin/sw.js as its own dedicated
 harness, rather than editing the Jobs/Remote-focused
 test_pwa_update_banner.py to expect a pattern HR doesn't use — this also
 avoids any risk of destabilizing that file's existing Jobs/Remote
@@ -29,15 +29,18 @@ coverage. Uses the same _real_Popen capture technique that file documents,
 for the same reason (this directory's conftest.py autouse-no-ops
 subprocess.run for widget tests).
 
-Follow-up suggestion (not done here): if hr/index.html is ever refactored
+Follow-up suggestion (not done here): if hr_admin/index.html is ever refactored
 to share the named-function pattern with jobs/index.html for consistency,
 this file should be replaced by parametrizing test_pwa_update_banner.py
 instead, per the plan's original intent.
 
-Safe: reads hr/index.html and hr/sw.js as plain text only, runs extracted
+Safe: reads hr_admin/index.html and hr_admin/sw.js as plain text only, runs extracted
 JS snippets in an isolated Node subprocess with mocked globals. Never
 imports ai_prowler_mcp.py, never touches hr_db.json or a live server.
 """
+# 2026-10-11 (David): the original /hr/ app is retired — HR Admin (hr_admin/) is
+# the same app, so this test now reads hr_admin/. HR is AI-Prowler server only.
+
 from __future__ import annotations
 
 import os
@@ -51,8 +54,8 @@ _real_Popen = subprocess.Popen
 
 _SRC = os.environ.get("AI_PROWLER_SRC")
 SRC_ROOT = Path(_SRC).resolve() if _SRC else Path(__file__).resolve().parent.parent.parent
-HR_INDEX = SRC_ROOT / "hr" / "index.html"
-HR_SW = SRC_ROOT / "hr" / "sw.js"
+HR_INDEX = SRC_ROOT / "hr_admin" / "index.html"
+HR_SW = SRC_ROOT / "hr_admin" / "sw.js"
 
 
 @pytest.fixture(scope="module")
@@ -107,7 +110,8 @@ class TestHrUpdateBannerStructure:
     """Cheap, no-Node structural checks against the real shipped source."""
 
     def test_index_registers_hr_service_worker(self, hr_index_text):
-        assert "register('/hr/sw.js')" in hr_index_text
+        # 2026-10-11: HR Admin's own mount (the old /hr/ app is retired)
+        assert "register('/hr_admin/sw.js')" in hr_index_text
 
     def test_index_shows_update_banner_on_installed_state(self, hr_index_text):
         assert "update-banner" in hr_index_text
@@ -181,7 +185,7 @@ function check(name, cond) { results.push([name, !!cond]); }
 
 class TestHrUpdateBannerBehavior:
     """Executes the real applyUpdate() function straight out of
-    hr/index.html against mocked browser APIs. Lighter than the
+    hr_admin/index.html against mocked browser APIs. Lighter than the
     Jobs/Remote harness because HR's real implementation is itself
     lighter (no _updatePending / re-prompt-on-navigation state machine
     exists to test yet) — this proves the two things that actually ship:

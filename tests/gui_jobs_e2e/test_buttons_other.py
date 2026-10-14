@@ -24,11 +24,15 @@ from test_buttons import INVENTORY_JS, _key, screen_selector
 from test_photos import TINY_PNG, disk  # noqa: F401  (disk is a fixture: deletes uploaded test files)
 
 KNOWN_OTHER = {
-    "board": {"refreshBoardBtn": "SAFE", "onBoardCardClick": "SAFE"},
+    # 2026-10-13: the inventory now names a button after the function it really
+    # calls (it used to stop at event.stopPropagation()).
+    "board": {"refreshBoardBtn": "SAFE", "onBoardCardClick": "SAFE",
+              "_toggleBoardPause": "WRITE"},      # ⏸️ on a board card (2026-10-05)
     "calendar": {"refreshCalBtn": "SAFE",
                  # found by the coverage check once the calendar had loaded (2026-09-26):
                  "calDayRowClicked": "SAFE",      # tap a day: its jobs, or Add Job on an empty day
-                 "stopPropagation": "SAFE"},      # a job chip inside a day (and the day's 📍 route link)
+                 "openModal": "SAFE",             # a job chip inside a day
+                 "📍": "SAFE"},                   # the day's route link (approved routes only)
     "clock": {"clockInBtn": "WRITE", "clockOutBtn": "WRITE"},
     "photos": {"getElementById": "SAFE",          # 📷 Add Photos / 📎 Add Files (open the picker)
                "uploadBtn": "WRITE"},

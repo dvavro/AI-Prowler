@@ -182,6 +182,13 @@ def test_routing_day_two_keeps_day_one_route(db, monkeypatch):
         def json(self):
             return {"code": "Ok", "routes": [{"legs": [{"duration": 600}], "distance": 1000, "duration": 600}]}
     monkeypatch.setattr(requests, "get", lambda *a, **k: _R())
+    # 2026-10-13: pin "today" to the span's first day — once MON (2026-10-05)
+    # was in the past, the overrun rule (unfinished past jobs roll forward)
+    # changed the outcome and this started failing on the calendar alone.
+    monkeypatch.setattr(w, "overrun_today", lambda: dt.date.fromisoformat(MON))
+    # ... and the 7-day stale-stop housekeeping sweep uses the real clock: a
+    # 2026-10-05 stop is "stale" from 2026-10-13 on. Not what this test checks.
+    monkeypatch.setattr(ro, "_cleanup_stale_route_stops", lambda *a, **k: 0)
     jid = _job(db, 3, "day")
     ro.db_suggest_route_schedule(db, _day(0), SAM, actor="t")
     ro.db_suggest_route_schedule(db, _day(1), SAM, actor="t")

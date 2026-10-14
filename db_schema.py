@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS jobs (
       payment_status          TEXT,
       no_sales_tax            INTEGER DEFAULT 0, -- 1 = tax-exempt job: invoices compute $0 tax (2026-10-08)
     schedule_type           TEXT DEFAULT 'soft',  -- 'hard'|'soft' (spec §14.2, added 2026-09-16). 'hard': start_time/end_time are a committed appointment the router must honor. 'soft' (default): start_time/end_time are the allowable placement window, defaulting to the workday if blank — today's behavior, made explicit.
-    original_start_time    TEXT,  -- mileage/routing follow-up (2026-09-20): the customer's actually-agreed schedule. Deliberately an ORDINARY, independently-editable field (same as any other column) — changed only by a genuine manual edit or an explicit Claude instruction to update it, NEVER by approve_route_schedule/unapprove_route_schedule, which read/write start_time/end_time only. Lets a route be approved and un-approved through any number of trial-and-error passes without ever losing track of what the customer was actually told.
+    original_start_time    TEXT,  -- mileage/routing follow-up (2026-09-20): the customer's actually-agreed schedule. Deliberately an ORDINARY, independently-editable field (same as any other column) — changed only by a genuine manual edit or an explicit Claude, Muse, or Grok instruction to update it, NEVER by approve_route_schedule/unapprove_route_schedule, which read/write start_time/end_time only. Lets a route be approved and un-approved through any number of trial-and-error passes without ever losing track of what the customer was actually told.
     original_end_time      TEXT,  -- see original_start_time above — same rule, paired field.
     created_by              TEXT,
     last_edited_by          TEXT,
@@ -679,7 +679,7 @@ def apply_schema(conn):
     # un-approved anything through the new mechanism yet) — copied over
     # ONLY where original_* is still NULL, so re-running this migration
     # (idempotent, like every other one here) never overwrites a value a
-    # user or Claude has already set deliberately after the column
+    # user or Claude, Muse, or Grok has already set deliberately after the column
     # existed.
     _ensure_column(conn, "jobs", "original_start_time", "TEXT")
     _ensure_column(conn, "jobs", "original_end_time", "TEXT")

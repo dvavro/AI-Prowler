@@ -373,11 +373,11 @@ html,body{height:100%;background:var(--bg);color:var(--text);
       </div>
       <div id="permList"><div class="spinner"></div></div>
 
-      <!-- Access-Only Folders (2026-10-09, David) — readable by Claude, never
+      <!-- Access-Only Folders (2026-10-09, David) — readable by Claude, Muse, or Grok, never
            indexed. The Remote app is personal-mode only, and so is this feature. -->
       <div class="card-title" id="aoTitle" style="margin:20px 2px 8px">&#128194; Access-Only Folders</div>
       <div class="info-banner" style="margin-bottom:10px">
-        Claude can <strong style="color:var(--text)">read</strong> these folders but they are
+        Claude, Muse, or Grok can <strong style="color:var(--text)">read</strong> these folders but they are
         <strong style="color:var(--text)">never indexed</strong>. Folders only — each always
         includes its sub-folders; a folder already covered by an access-only or indexed folder
         can't be added. Adding one requires your Bearer token; removing is instant. Write access
@@ -511,7 +511,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);
                 border-radius:8px;padding:10px 12px;color:var(--text);font-size:14px;outline:none;">
             </div>
             <div>
-              <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Prompt (what Claude should do)</div>
+              <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Prompt (what Claude, Muse, or Grok should do)</div>
               <textarea id="ntPrompt" placeholder="e.g. Summarize all learnings from this week and identify key trends."
                 style="width:100%;background:var(--surface);border:1px solid var(--border);
                 border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;
@@ -709,7 +709,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);
     <div class="modal-title" id="raTitle">&#128274; Confirm Write Access</div>
     <div class="modal-path" id="raPath"></div>
     <div class="modal-warn" id="raWarn">
-      <strong>Warning:</strong> This allows Claude to modify files in
+      <strong>Warning:</strong> This allows Claude, Muse, or Grok to modify files in
       this directory. Re-enter your Bearer token to confirm.
     </div>
     <div class="modal-inp-wrap">
@@ -1343,7 +1343,7 @@ async function loadFilesList() {
                              : '<div class="empty">No tracked directories</div>');
       if (secs.hasSection && !serverMode) {      // access-only folders: personal mode only
         filesHtml += '<div class="card-title" id="filesAoTitle" style="margin:20px 2px 8px">&#128194; Access-Only Folders</div>' +
-          '<div class="info-banner" style="margin-bottom:10px">Readable by Claude but <strong style="color:var(--text)">never indexed</strong> — ' +
+          '<div class="info-banner" style="margin-bottom:10px">Readable by Claude, Muse, or Grok but <strong style="color:var(--text)">never indexed</strong> — ' +
           'files you upload here are saved, not added to search. Manage this list on the Perms tab.</div>' +
           (secs.accessOnly.length ? _card(secs.accessOnly, 'a')
                                   : '<div class="empty" id="filesAoEmpty">No access-only folders</div>');
@@ -1737,7 +1737,7 @@ function _permToggleHtml(p, id, via) {
 }
 
 // ── Access-Only Folders (2026-10-09) ──────────────────────────────────────
-// Readable by Claude, never indexed. Each row: the same write switch as the
+// Readable by Claude, Muse, or Grok, never indexed. Each row: the same write switch as the
 // tracked folders (grant_write_access accepts access-only folders) plus a
 // Remove button (revoke_access). Add = grant_access, behind the token check.
 function renderAccessOnly(paths, wSet, hasSection) {
@@ -1806,7 +1806,7 @@ function aoStartAdd() {
   raDirPath = path; raId = null; raCb = null;
   document.getElementById('raTitle').innerHTML = '&#128194; Add Access-Only Folder';
   document.getElementById('raWarn').innerHTML =
-    '<strong>Note:</strong> Claude will be able to READ files in this folder ' +
+    '<strong>Note:</strong> Claude, Muse, or Grok will be able to READ files in this folder ' +
     '(never indexed, no write access). Re-enter your Bearer token to confirm.';
   document.getElementById('raConfirm').textContent = 'Add Folder';
   _openReAuth(path);
@@ -1847,7 +1847,7 @@ async function onPerm(cb, path, id) {
     raDirPath = path; raId = id; raCb = cb;
     document.getElementById('raTitle').innerHTML = '&#128274; Confirm Write Access';
     document.getElementById('raWarn').innerHTML =
-      '<strong>Warning:</strong> This allows Claude to modify files in ' +
+      '<strong>Warning:</strong> This allows Claude, Muse, or Grok to modify files in ' +
       'this directory. Re-enter your Bearer token to confirm.';
     document.getElementById('raConfirm').textContent = 'Grant Access';
     _openReAuth(path);

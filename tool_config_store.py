@@ -222,3 +222,155 @@ def reset_disabled_tools(mode):
     touched.
     """
     return save_disabled_tools([], mode)
+
+
+# ── Optional groups that start OFF (2026-10-12, David) ──────────────────────
+# "Job Tracker & Routing" and "SMS & WhatsApp" default to OFF in personal and
+# server mode — for NEW installs only. An install that already uses them keeps
+# them on (David's choice): with no saved choice, a group counts as on when
+# its data is already there (customers or jobs in the jobs database; an SMS
+# provider set up). A choice saved in Settings → MCP Tool Configuration always
+# wins. Stored as {"optional_groups": {"personal": {group: bool}, "server": …}}
+# in this same tool_config.json, through the same guarded write.
+DEFAULT_OFF_GROUPS = ("job_tracker", "sms_whatsapp")
+OPTIONAL_GROUPS_KEY = "optional_groups"
+
+
+_JOB_DATA_TABLES = ("customers", "jobs", "invoices", "quotes", "time_entries",
+                    "route_stops", "service_pricing")
+
+
+def _jobs_in_use():
+    """True when the Jobs feature has been used on this install: real rows in
+    any Jobs table, or (server) more than one user — a crew. The database FILE
+    alone proves nothing (status checks create it), and a test server's job
+    tables can be empty after E2E cleanup while the crew still use the Jobs
+    app (found on David's server 2026-10-12)."""
+    import sqlite3
+    for p in (_state_dir() / "jobs_database" / "ai_prowler_jobs.db",
+              _state_dir() / "ai_prowler_jobs.db"):
+        if not p.exists():
+            continue
+        try:
+            con = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=2.0)
+            try:
+                for table in _JOB_DATA_TABLES:
+                    try:
+                        if con.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+                            return True
+                    except sqlite3.Error:
+                        pass
+                try:
+                    if (con.execute("SELECT COUNT(*) FROM users").fetchone() or [0])[0] > 1:
+                        return True
+                except sqlite3.Error:
+                    pass
+            finally:
+                con.close()
+        except Exception:
+            continue
+    try:                                            # server users.json: a crew
+        import json as _j
+        u = _j.loads((_state_dir() / "users.json").read_text(encoding="utf-8-sig"))
+        if len((u or {}).get("users") or {}) > 1:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _sms_in_use():
+    """True when an SMS / WhatsApp provider is already set up."""
+    try:
+        from sms_backends import get_sms_backend, load_sms_config
+        ok, _ = get_sms_backend(load_sms_config()).validate_config()
+        return bool(ok)
+    except Exception:
+        return False
+
+
+_IN_USE = {"job_tracker": _jobs_in_use, "sms_whatsapp": _sms_in_use}
+
+
+def saved_group_choice(mode, group):
+    """The choice saved in Settings for this group (True/False), or None."""
+    section = (load_tool_config().get(OPTIONAL_GROUPS_KEY) or {}).get(mode) or {}
+    val = section.get(group)
+    return val if isinstance(val, bool) else None
+
+
+def group_enabled(mode, group):
+    """Is a default-OFF group on for this mode? Saved choice first; otherwise
+    on only if the install already uses it (existing installs keep working)."""
+    if mode not in ("personal", "server"):
+        raise ValueError(f"mode must be 'personal' or 'server', got {mode!r}")
+    if group not in DEFAULT_OFF_GROUPS:
+        return True
+    saved = saved_group_choice(mode, group)
+    if saved is not None:
+        return saved
+    try:
+        on = bool(_IN_USE[group]())
+    except Exception:
+        on = False
+    # Record the first decision so it can't flip later (e.g. a test server's
+    # job tables emptied by E2E cleanup). Settings can always change it.
+    try:
+        set_group_enabled(mode, group, on)
+    except Exception:
+        pass
+    return on
+
+
+def set_group_enabled(mode, group, enabled):
+    """Record the owner's choice for a default-OFF group. Only tool_config.json
+    is written; every other settings file is verified afterwards."""
+    if mode not in ("personal", "server"):
+        raise ValueError(f"mode must be 'personal' or 'server', got {mode!r}")
+    if group not in DEFAULT_OFF_GROUPS:
+        raise ValueError(f"{group!r} is not a default-off group")
+    snapshot = _protected_snapshot()
+    data = load_tool_config()
+    groups = data.get(OPTIONAL_GROUPS_KEY)
+    if not isinstance(groups, dict):
+        groups = {}
+    section = groups.get(mode) if isinstance(groups.get(mode), dict) else {}
+    section[group] = bool(enabled)
+    groups[mode] = section
+    data[OPTIONAL_GROUPS_KEY] = groups
+    data["schema_version"] = SCHEMA_VERSION
+    try:
+        _checked_write(tool_config_path(), data)
+    finally:
+        _restore_if_damaged(snapshot)
+    return data
+
+
+# ── HR apps switch (2026-10-11, David) ──────────────────────────────────────
+# The HR Admin and HR Portal apps (and Claude/Muse/Grok's hr_* tools) are AI-Prowler
+# SERVER only and OFF until the owner turns them on in Settings → MCP Tool
+# Configuration ("HR apps (HR Admin + HR Portal)"). A plain disabled-tools
+# list can't say "off unless turned on", so the choice is its own top-level
+# key in the same tool_config.json — written through the same guarded,
+# atomic, backed-up path as save_disabled_tools() (never config.json).
+HR_APPS_KEY = "hr_apps_enabled"
+
+
+def hr_apps_enabled():
+    """True only after the owner has switched the HR apps on. Missing or
+    corrupt file, missing key, or any non-True value → False (off)."""
+    return load_tool_config().get(HR_APPS_KEY) is True
+
+
+def set_hr_apps_enabled(enabled):
+    """Record the HR apps switch. Only tool_config.json is written; every other
+    settings file is verified (and put back if damaged) afterwards."""
+    snapshot = _protected_snapshot()
+    data = load_tool_config()
+    data[HR_APPS_KEY] = bool(enabled)
+    data["schema_version"] = SCHEMA_VERSION
+    try:
+        _checked_write(tool_config_path(), data)
+    finally:
+        _restore_if_damaged(snapshot)
+    return data

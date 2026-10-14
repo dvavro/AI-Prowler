@@ -7,7 +7,7 @@ tool-configuration panel), a short label/description (shown in that panel's
 info popups), which mode(s) it can ever be registered in, whether it is
 locked (cannot be disabled by the user under any configuration), and
 whether disabling it would break a live GUI or PWA feature
-(pwa_dependency) rather than just silently narrowing what Claude can do.
+(pwa_dependency) rather than just silently narrowing what Claude, Muse, or Grok can do.
 
 Imported by BOTH:
   - ai_prowler_mcp.py   (registration-time filtering via _counting_mcp_tool)
@@ -73,7 +73,7 @@ BOTH: FrozenSet[str] = frozenset({"personal", "server"})
 CATEGORY_ORDER: List[CategoryMeta] = [
     CategoryMeta(
         "status_system", "Status & System",
-        "Always-on health checks and Claude's own usage guide — not a real "
+        "Always-on health checks and Claude/Muse/Grok's own usage guide — not a real "
         "choice, shown for transparency only.",
         locked=True,
     ),
@@ -114,16 +114,21 @@ CATEGORY_ORDER: List[CategoryMeta] = [
     ),
     CategoryMeta(
         "file_code_tools", "File & Code Tools",
-        "Letting Claude create/edit files, run scripts, check code, and "
+        "Letting Claude, Muse, or Grok create/edit files, run scripts, check code, and "
         "use the Remote Control PWA's file transfer bridge (Personal "
         "installs only, where applicable). Always on.",
         locked=True,
     ),
+    # 2026-10-11 (David): the HR apps are AI-Prowler SERVER only and optional —
+    # this group's tick box in Settings → MCP Tool Configuration (server mode)
+    # is the one switch for BOTH HR Admin and HR Portal and all hr_* tools.
+    # Off until the owner turns it on (tool_config_store.hr_apps_enabled()).
     CategoryMeta(
-        "hr", "HR Admin",
-        "HR employee management, task tracking, backups, and compliance. "
-        "Always on.",
-        locked=True,
+        "hr", "HR apps (HR Admin + HR Portal)",
+        "Employee records, onboarding tasks, documents, time off, time clock "
+        "and HR compliance — the HR Admin app (owners and managers) and the "
+        "HR Portal app (employees), plus Claude/Muse/Grok's hr_* tools. AI-Prowler "
+        "server only. Off until you turn it on; one switch covers both apps.",
     ),
 ]
 
@@ -134,8 +139,8 @@ CATEGORY_ORDER: List[CategoryMeta] = [
 # -----------------------------------------------------------------------
 _RAW = [
     ('how_to_use_ai_prowler', 'status_system', 'Agentic RAG workflow guide',
-     "Claude's own bootstrap guide for how to use AI-Prowler.", BOTH,
-     True, 'Required for Claude to use AI-Prowler at all.', False, None),
+     "Claude/Muse/Grok's own bootstrap guide for how to use AI-Prowler.", BOTH,
+     True, 'Required for Claude, Muse, or Grok to use AI-Prowler at all.', False, None),
     ('check_ai_prowler_status', 'status_system', 'RAG health check',
      'ChromaDB connectivity, embedding model status, chunk count.', BOTH,
      True, 'The only way to explain why nothing else is working.', True, "Used by the Remote Control PWA's status screen."),
@@ -579,65 +584,65 @@ _RAW = [
      'Signed URL for the Remote PWA/artifact to upload a file.', PERSONAL,
      True, "Part of AI-Prowler's always-on File & Code Tools feature (Personal installs only, where applicable).", False, None),
     ('hr_backup_now', 'hr', 'HR backup now',
-     'Trigger an immediate HR data backup.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Trigger an immediate HR data backup.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_complete_task', 'hr', 'Complete HR task',
-     'Mark an HR task as complete.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Mark an HR task as complete.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_create_employee', 'hr', 'Create employee',
-     'Add a new employee record.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Add a new employee record.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_get_backup_settings', 'hr', 'Get HR backup settings',
-     'Retrieve HR backup configuration.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Retrieve HR backup configuration.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_get_employee', 'hr', 'Get employee',
-     'Retrieve an employee record.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Retrieve an employee record.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_get_form', 'hr', 'Get HR form',
-     'Retrieve an HR form template.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Retrieve an HR form template.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_get_report', 'hr', 'Get HR report',
-     'Generate an HR report.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Generate an HR report.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_get_setup_status', 'hr', 'Get HR setup status',
-     'Check HR system setup completion.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Check HR system setup completion.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_get_state_rules', 'hr', 'Get state rules',
-     'Retrieve state-specific HR compliance rules.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Retrieve state-specific HR compliance rules.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_get_task_digest', 'hr', 'Get task digest',
-     'Get a summary of HR tasks.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Get a summary of HR tasks.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_initiate_termination', 'hr', 'Initiate termination',
-     'Start the employee termination workflow.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Start the employee termination workflow.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_list_backups', 'hr', 'List HR backups',
-     'List available HR data backups.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'List available HR data backups.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_list_documents', 'hr', 'List HR documents',
-     'List HR documents.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'List HR documents.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_list_employees', 'hr', 'List employees',
-     'List all employee records.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'List all employee records.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_list_tasks', 'hr', 'List HR tasks',
-     'List HR tasks.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'List HR tasks.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_restore_employee', 'hr', 'Restore employee',
-     'Restore an archived employee record.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Restore an archived employee record.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_send_notification', 'hr', 'Send HR notification',
-     'Send an HR notification.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Send an HR notification.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_set_backup_settings', 'hr', 'Set backup settings',
-     'Configure HR backup settings.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Configure HR backup settings.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_update_employee', 'hr', 'Update employee',
-     'Update an employee record.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Update an employee record.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
     ('hr_verify_document', 'hr', 'Verify document',
-     'Verify an HR document.', PERSONAL,
-     True, "Part of AI-Prowler's always-on HR Admin feature.", False, None),
+     'Verify an HR document.', SERVER,
+     False, None, True, 'Used by the HR Admin / HR Portal apps (server).'),
 ]
 
 TOOL_CATALOG: Dict[str, ToolMeta] = {

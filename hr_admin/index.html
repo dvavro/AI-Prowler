@@ -1323,8 +1323,15 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
     <!-- Admin login -->
     <div id="auth-admin-form">
       <div class="auth-input-group">
-        <label>Bearer Token</label>
-        <input class="auth-input" type="password" id="auth-token" placeholder="Paste your bearer token" autocomplete="off">
+        <!-- 2026-10-11 (David): sign in with your AI-Prowler account (owners
+             and managers) — same name + token as the Jobs app. -->
+        <label>Your name</label>
+        <input class="auth-input" type="text" id="auth-name" placeholder="As set up on this AI-Prowler server" autocomplete="username">
+      </div>
+      <div class="auth-input-group">
+        <label>AI-Prowler token</label>
+        <input class="auth-input" type="password" id="auth-token" placeholder="Your AI-Prowler password / token" autocomplete="current-password"
+               onkeydown="if(event.key==='Enter')loginAdmin()">
       </div>
       <button class="auth-btn" onclick="loginAdmin()">Sign In as HR Admin</button>
     </div>
@@ -2200,6 +2207,10 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
         <div class="info-row" onclick="editEmpDOB()" style="cursor:pointer" title="Tap to edit">
           <span class="info-label">🎂 Date of Birth</span><span class="info-value" id="info-dob">—</span>
         </div>
+        <!-- 2026-10-11 (David): which AI-Prowler account signs in to the HR Portal as this employee -->
+        <div class="info-row" id="info-aiprowler-row" onclick="editEmpAiProwlerLogin()" style="cursor:pointer" title="Tap to link an AI-Prowler login">
+          <span class="info-label">🔗 AI-Prowler login</span><span class="info-value" id="info-aiprowler">Not linked</span>
+        </div>
         <div class="info-row"><span class="info-label">Emergency Contact</span><span class="info-value" id="info-emergency">—</span></div>
       </div>
       <div class="info-section">
@@ -2579,7 +2590,7 @@ let state = {
 
 // ── Service Worker Registration ────────────────────────────────────────
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/hr/sw.js').then(reg => {
+  navigator.serviceWorker.register('/hr_admin/sw.js').then(reg => {
     reg.addEventListener('updatefound', () => {
       const newWorker = reg.installing;
       newWorker.addEventListener('statechange', () => {
@@ -2646,21 +2657,31 @@ function showAuthScreen() {
 
 
 async function loginAdmin() {
+  // 2026-10-11 (David): AI-Prowler account sign-in (server only) — owners and
+  // managers. The server checks name + token and hands back a session token
+  // (same idle timeout and sign-out as the Jobs app).
+  const name  = (document.getElementById('auth-name') || {value: ''}).value.trim();
   const token = document.getElementById('auth-token').value.trim();
-  if (!token) { showAuthError('Please enter your bearer token.'); return; }
+  if (!name || !token) { showAuthError('Please enter your name and AI-Prowler token.'); return; }
   try {
-    const res = await apiFetch('/config', { token });
-    if (res.ok || res.status === 200) {
-      state.token = token;
+    const res = await fetch(`${API_BASE}/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, token })
+    });
+    let data = {};
+    try { data = await res.json(); } catch(e) {}
+    if (res.ok && data.access_token) {
+      state.token = data.access_token;
       state.role = 'admin';
-      localStorage.setItem(STORAGE_TOKEN_KEY, token);
+      localStorage.setItem(STORAGE_TOKEN_KEY, data.access_token);
+      document.getElementById('auth-token').value = '';
       document.getElementById('auth-screen').classList.add('hidden');
       initAdminApp();
-    } else if (res.status === 401) {
-      localStorage.removeItem(STORAGE_TOKEN_KEY);
-      showAuthError('Invalid token. Please try again.');
     } else {
-      showAuthError('Login failed. Check server connection.');
+      localStorage.removeItem(STORAGE_TOKEN_KEY);
+      showAuthError(data.message || (res.status === 401
+        ? 'Name or password not recognized.'
+        : 'Sign-in failed. Check the server connection.'));
     }
   } catch(e) {
     showAuthError('Cannot reach server. Check your connection.');
@@ -2676,6 +2697,11 @@ function showAuthError(msg) {
 }
 
 function logout() {
+  // End the session on the server too (2026-10-11) — not just in this browser.
+  try {
+    if (state.token) fetch('/pwa-logout', { method: 'POST',
+      headers: { 'Authorization': `Bearer ${state.token}` } }).catch(function(){});
+  } catch(e) {}
   localStorage.removeItem(STORAGE_TOKEN_KEY);
   localStorage.removeItem(STORAGE_EMP_KEY);
   state.token = null;
@@ -2908,7 +2934,7 @@ function loadPayroll() {
   }
 
   // Stats
-  const emps = (state.employees || []).filter(e => e.status !== 'Terminated');
+  const emps = (state.employees || []).filter(e => _hrUiStatus(e.status) !== 'terminated');
   document.getElementById('pr-stat-employees').textContent = emps.length || '—';
   document.getElementById('pr-stat-runs').textContent = '—';
   document.getElementById('pr-stat-next').textContent = '—';
@@ -7984,11 +8010,37 @@ async function apiFetch(path, { token, ...opts } = {}) {
   return fetch(`${API_BASE}${path}`, { headers, ...opts });
 }
 
+// 2026-10-12 (R-090/R-091): the server stores statuses capitalised ("Pre-Start",
+// "Onboarding", "Active", "Offboarding", "Terminated"); this app's screens compare
+// lower-case and list leavers as 'terminated'. Every employee that arrives through
+// apiGet gets the app's form here — one place, so no screen needs changing. The
+// server's own value stays on e.server_status (e.g. "Offboarding" while someone
+// works out their notice).
+function _hrUiStatus(s) {
+  const v = String(s || '').toLowerCase();
+  return v === 'offboarding' ? 'terminated' : v;
+}
+function _hrUiEmployee(e) {
+  if (e && typeof e === 'object' && 'first_name' in e && 'status' in e && !('server_status' in e)) {
+    e.server_status = e.status;
+    e.status = _hrUiStatus(e.status);
+  }
+  return e;
+}
 async function apiGet(path) {
   const res = await apiFetch(path);
   if (res.status === 401) { handle401(); throw new Error('401'); }
   if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
-  return res.json();
+  const data = await res.json();
+  try {
+    if (Array.isArray(data)) data.forEach(_hrUiEmployee);
+    else if (data && typeof data === 'object') {
+      if (Array.isArray(data.employees)) data.employees.forEach(_hrUiEmployee);
+      if (data.employee) _hrUiEmployee(data.employee);
+      _hrUiEmployee(data);
+    }
+  } catch (e) {}
+  return data;
 }
 
 async function apiPost(path, body) {
@@ -9444,6 +9496,54 @@ async function editEmpDOB() {
     </div>`);
 }
 
+// ── AI-Prowler login link (2026-10-11, David) ──────────────────────────
+// The HR Portal is signed in to with an AI-Prowler account; this links the
+// account to the employee record (one account per employee).
+async function editEmpAiProwlerLogin() {
+  const empId = state.currentEmpId;
+  if (!empId) return;
+  const emp = state.employees.find(e => e.id === empId);
+  if (!emp) return;
+  let users = [];
+  try { users = (await apiGet('/aiprowler-users')).users || []; }
+  catch(e) { showToast('Could not load the AI-Prowler users.', 'error'); return; }
+  const taken = {};
+  state.employees.forEach(o => { if (o.id !== empId && o.aiprowler_user_id) taken[o.aiprowler_user_id] = `${o.first_name} ${o.last_name}`; });
+  const opts = ['<option value="">— Not linked —</option>'].concat(users.map(u =>
+    `<option value="${escapeHtml(u.id)}" ${emp.aiprowler_user_id === u.id ? 'selected' : ''} ${taken[u.id] ? 'disabled' : ''}>` +
+    `${escapeHtml(u.name)} (${escapeHtml(u.role)})${taken[u.id] ? ' — linked to ' + escapeHtml(taken[u.id]) : ''}</option>`)).join('');
+  openModal(`<div class="modal-header"><h3>🔗 AI-Prowler login</h3></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">${escapeHtml(emp.first_name)} ${escapeHtml(emp.last_name)} signs in to the HR Portal as:</label>
+        <select id="aiprowler-user-select" class="form-input">${opts}</select></div>
+      <div style="font-size:12px;color:var(--text-muted)">They sign in to the HR Portal with this account's name and AI-Prowler token.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn-primary" id="aiprowler-link-save" onclick="saveEmpAiProwlerLogin('${empId}')">Save</button>
+    </div>`);
+}
+
+async function saveEmpAiProwlerLogin(empId) {
+  const sel = document.getElementById('aiprowler-user-select');
+  const val = sel ? sel.value : '';
+  const name = val && sel.selectedOptions[0] ? sel.selectedOptions[0].textContent.replace(/\s*\(.*$/, '') : '';
+  try {
+    const res = await apiFetch(`/employees/${empId}`, { method: 'PATCH',
+      body: JSON.stringify({ aiprowler_user_id: val, aiprowler_user_name: name }) });
+    let data = {};
+    try { data = await res.json(); } catch(e) {}
+    if (!res.ok) { showToast(data.message || 'Could not save the link.', 'error'); return; }
+    const emp = state.employees.find(e => e.id === empId);
+    if (emp) { emp.aiprowler_user_id = val; emp.aiprowler_user_name = name; }
+    closeModal();
+    showToast(val ? 'AI-Prowler login linked ✓' : 'AI-Prowler login removed', 'success');
+    populateEmpInfo(emp);
+  } catch(e) {
+    showToast('Could not save — check connection.', 'error');
+  }
+}
+
 async function saveEmpDOB(empId) {
   const val = document.getElementById('dob-input').value;
   try {
@@ -9466,6 +9566,8 @@ function populateEmpInfo(emp) {
   set('info-phone', emp.phone);
   set('info-address', emp.address);
   set('info-dob', emp.date_of_birth ? new Date(emp.date_of_birth + 'T12:00:00').toLocaleDateString('en-US', {month:'long', day:'numeric', year:'numeric'}) : '—');
+  { const _ap = document.getElementById('info-aiprowler');
+    if (_ap) _ap.textContent = emp.aiprowler_user_name || emp.aiprowler_user_id || 'Not linked'; }
   set('info-emergency', emp.emergency_contact ? `${emp.emergency_contact.name} (${emp.emergency_contact.relationship}) ${emp.emergency_contact.phone}` : '—');
   set('info-emp-id', emp.id);
   set('info-title', emp.title);
@@ -12458,7 +12560,7 @@ function switchSSTab(tab, btn) {
   else showToast(`${tab} coming in Week 7`);
 }
 
-function openClaudeHelp() { showToast('Claude help chat coming in Week 7'); }
+function openClaudeHelp() { showToast('Claude, Muse, or Grok help chat coming in Week 7'); }
 
 // ── Setup Wizard ───────────────────────────────────────────────────────
 const WIZARD_STEPS = [
@@ -12559,7 +12661,14 @@ async function wizardNext() {
   // step's fields were still in the DOM. wizardData persists across steps.
   WIZARD_STEPS[wizardStep].fields.forEach(f => {
     const el = document.getElementById(f.id);
-    if (el) wizardData[f.key] = el.value;
+    if (!el) return;
+    // 2026-10-11: Jamie's multiselect fix from the retired hr/index.html —
+    // never carried into HR Admin, so "Work States" was saved as nothing.
+    if (f.type === 'multiselect') {
+      wizardData[f.key] = Array.from(el.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
+    } else {
+      wizardData[f.key] = el.value;
+    }
   });
 
   if (wizardStep < WIZARD_STEPS.length - 1) {

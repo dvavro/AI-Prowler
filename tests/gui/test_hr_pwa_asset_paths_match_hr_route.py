@@ -1,24 +1,16 @@
 """
 tests/gui/test_hr_pwa_asset_paths_match_hr_route.py
 ====================================================
-Regression guard: the /hr/ PWA route must serve HR's own assets, not the
-Jobs PWA's. Mirrors test_pwa_asset_paths_match_jobs_route.py's intent —
-same failure mode (a copy-pasted mount pointing at the wrong asset
-directory), different mount point.
+Regression guard: the HR Admin app must serve HR's own assets, not the Jobs
+PWA's (a copy-pasted mount pointing at the wrong asset directory).
 
-ADAPTATION FROM IMPLEMENTATION PLAN v2.1 SECTION 13.2.1
---------------------------------------------------------
-The plan's code stub assumed the mount check would be a literal '"/hr/"'
-string match. The actual shipped ai_prowler_mcp.py checks
-`path.startswith("/hr")` (no trailing slash, so it also matches a bare
-/hr with nothing after it) in both the personal-mode and server-mode
-routers. This file asserts against that real pattern rather than the
-stub's assumed literal, per the test philosophy in Section 13.0:
-assertions run against real shipped text, not a hand-written stand-in.
+2026-10-11 (David): converted for the server-only HR apps. The original /hr/
+app (hr/index.html) is retired — HR Admin is the same app at /hr_admin/, and
+/hr or /hr/... redirects there. HR Admin + HR Portal exist only in the SERVER
+router (behind the HR apps switch); the personal router answers "server only".
 
-Safe: opens hr/index.html, hr/manifest.json, hr/sw.js, and
-ai_prowler_mcp.py as plain text/JSON only. Never imports ai_prowler_mcp.py
-as a module, never writes anywhere, never starts a server or touches
+Safe: reads hr_admin/index.html, hr_admin/manifest.json, hr_admin/sw.js and
+ai_prowler_mcp.py as plain text/JSON only — never starts a server or touches
 hr_db.json.
 """
 from __future__ import annotations
@@ -32,9 +24,9 @@ import pytest
 
 _SRC = os.environ.get("AI_PROWLER_SRC")
 SRC_ROOT = Path(_SRC).resolve() if _SRC else Path(__file__).resolve().parent.parent.parent
-HR_INDEX = SRC_ROOT / "hr" / "index.html"
-HR_MANIFEST = SRC_ROOT / "hr" / "manifest.json"
-HR_SW = SRC_ROOT / "hr" / "sw.js"
+HR_INDEX = SRC_ROOT / "hr_admin" / "index.html"
+HR_MANIFEST = SRC_ROOT / "hr_admin" / "manifest.json"
+HR_SW = SRC_ROOT / "hr_admin" / "sw.js"
 MCP_SERVER = SRC_ROOT / "ai_prowler_mcp.py"
 
 
@@ -54,76 +46,85 @@ def hr_sw_text():
 
 
 @pytest.fixture(scope="module")
-def mcp_server_text():
-    return MCP_SERVER.read_text(encoding="utf-8")
+def server_hr_block():
+    t = MCP_SERVER.read_text(encoding="utf-8")
+    s = t.index("# \u2500\u2500 HR apps \u2014 HR Admin + HR Portal, AI-Prowler SERVER only")
+    return t[s:t.index("# \u2500\u2500 end HR REST API", s)]
+
+
+@pytest.fixture(scope="module")
+def personal_hr_block():
+    t = MCP_SERVER.read_text(encoding="utf-8")
+    s = t.index("# \u2500\u2500 HR apps \u2014 AI-Prowler SERVER only (2026-10-11")
+    return t[s:t.index("# \u2500\u2500 end HR REST API", s)]
 
 
 class TestHrRouteIsMountedSeparatelyFromJobs:
-    """The MCP server must register /hr as its own static mount in BOTH the
-    personal-mode and server-mode ASGI routers, not an alias of /jobs."""
+    """The server router mounts hr_admin/ and hr_portal/ as their own static
+    folders (with a folder-boundary guard) — never an alias of jobs/."""
 
-    def test_hr_mount_point_is_registered(self, mcp_server_text):
-        matches = re.findall(r'path\.startswith\(["\']\/hr["\']\)', mcp_server_text)
-        assert len(matches) >= 2, (
-            "Expected the /hr static-file guard "
-            '(`path.startswith("/hr")`) in both the personal-mode and '
-            "server-mode routers — found "
-            f"{len(matches)} occurrence(s) in ai_prowler_mcp.py."
-        )
+    def test_hr_admin_and_portal_are_mounted_in_the_server_router(self, server_hr_block):
+        assert 'path.startswith(("/hr_admin", "/hr_portal"))' in server_hr_block
+        assert '_hrs_app = "hr_admin" if path.startswith("/hr_admin") else "hr_portal"' in server_hr_block
+        assert "if not _path_is_inside(_hrs_fp, _hrs_root):" in server_hr_block
 
-    def test_hr_api_route_is_registered(self, mcp_server_text):
-        matches = re.findall(r'path\.startswith\(["\']\/hr-api["\']\)', mcp_server_text)
-        assert len(matches) >= 2, (
-            '/hr-api REST route guard (`path.startswith("/hr-api")`) '
-            f"expected in both routers — found {len(matches)}."
-        )
+    def test_old_hr_mount_redirects_to_hr_admin(self, server_hr_block):
+        assert 'if path == "/hr" or path.startswith("/hr/"):' in server_hr_block
+        assert '[b"location", b"/hr_admin/"]' in server_hr_block
 
-    def test_hr_mount_does_not_alias_jobs_directory(self, mcp_server_text):
-        for m in re.finditer(r'path\.startswith\(["\']\/hr["\']\)', mcp_server_text):
-            block = mcp_server_text[m.start(): m.start() + 400]
-            assert '"jobs"' not in block and "'jobs'" not in block, (
-                "/hr route block appears to reference the jobs/ directory "
-                "— possible copy-paste aliasing bug."
-            )
+    def test_hr_api_route_is_registered(self, server_hr_block, personal_hr_block):
+        assert '"/hr-api"' in server_hr_block and '"/hr-api"' in personal_hr_block
+
+    def test_personal_router_answers_server_only(self, personal_hr_block):
+        assert "_HR_SERVER_ONLY_MESSAGE" in personal_hr_block
+        assert "open(" not in personal_hr_block, "the personal router must not serve HR files"
+
+    def test_hr_mount_does_not_alias_jobs_directory(self, server_hr_block):
+        assert '"jobs"' not in server_hr_block and "'jobs'" not in server_hr_block
 
 
 class TestHrManifestMatchesItsOwnRoute:
-    def test_start_url_is_hr_not_jobs(self, hr_manifest_json):
-        assert hr_manifest_json["start_url"].strip("/").startswith("hr")
+    def test_start_url_is_hr_admin_not_jobs(self, hr_manifest_json):
+        assert hr_manifest_json["start_url"] == "/hr_admin/"
 
-    def test_scope_is_hr_not_jobs(self, hr_manifest_json):
-        assert hr_manifest_json["scope"].strip("/").startswith("hr")
+    def test_scope_is_hr_admin_not_jobs(self, hr_manifest_json):
+        assert hr_manifest_json["scope"] == "/hr_admin/"
 
     def test_manifest_name_is_hr_branded(self, hr_manifest_json):
         name = (hr_manifest_json.get("name", "") + hr_manifest_json.get("short_name", "")).lower()
         assert "hr" in name or "onboarding" in name or "human resources" in name
 
-    def test_icon_paths_use_hr_prefix_not_jobs(self, hr_manifest_json):
+    def test_icon_paths_resolve_under_hr_admin(self, hr_manifest_json):
         icons = hr_manifest_json.get("icons", [])
         assert icons, "manifest.json has no icons array"
         for icon in icons:
-            assert icon["src"].startswith("/hr/"), (
-                f"Icon src {icon['src']!r} does not match the /hr/ mount."
-            )
-            assert not icon["src"].startswith("/jobs/")
+            src = icon["src"]
+            # relative ("icon-192.png") resolves against /hr_admin/manifest.json
+            assert src.startswith("/hr_admin/") or not src.startswith("/"), (
+                f"Icon src {src!r} does not resolve under the /hr_admin/ mount.")
+            assert not src.startswith(("/jobs/", "/hr/"))
 
 
 class TestHrServiceWorkerCachesItsOwnAssets:
     def test_cache_name_is_hr_specific(self, hr_sw_text):
-        assert re.search(r'CACHE_NAME\s*=\s*["\']hr-', hr_sw_text), (
-            "sw.js CACHE_NAME does not look HR-specific (expected a 'hr-' prefix)"
-        )
+        assert re.search(r"""(CACHE_NAME|CACHE)\s*=\s*["']hr-""", hr_sw_text), (
+            "sw.js cache name does not look HR-specific (expected a 'hr-' prefix)")
 
-    def test_precache_list_references_hr_paths_not_jobs(self, hr_sw_text):
-        assert "/jobs/" not in hr_sw_text
+    def test_precache_list_references_hr_admin_paths_not_jobs(self, hr_sw_text):
+        assert "/jobs/" not in hr_sw_text and "'/hr/" not in hr_sw_text
+        assert "'/hr_admin/'" in hr_sw_text
+
+    def test_employee_data_is_never_cached(self, hr_sw_text):
+        assert "if (e.request.url.indexOf('/hr-api') === -1) {" in hr_sw_text
 
 
 class TestHrIndexReferencesOwnManifestAndServiceWorker:
-    def test_index_links_hr_manifest(self, hr_index_text):
-        assert "/hr/manifest.json" in hr_index_text
+    def test_index_links_hr_admin_manifest(self, hr_index_text):
+        assert '<link rel="manifest" href="/hr_admin/manifest.json">' in hr_index_text
 
-    def test_index_registers_hr_service_worker(self, hr_index_text):
-        assert "register('/hr/sw.js')" in hr_index_text or 'register("/hr/sw.js")' in hr_index_text
+    def test_index_registers_hr_admin_service_worker(self, hr_index_text):
+        assert "register('/hr_admin/sw.js')" in hr_index_text
 
-    def test_index_does_not_reference_jobs_assets(self, hr_index_text):
+    def test_index_does_not_reference_jobs_or_old_hr_assets(self, hr_index_text):
         assert "/jobs/" not in hr_index_text
+        assert "'/hr/" not in hr_index_text and '"/hr/' not in hr_index_text

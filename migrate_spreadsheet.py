@@ -25,7 +25,7 @@ SAFETY CONTRACT
    .failed copy for diagnostics.
 4. The new template is always copied alongside the user's file as
    AI-Prowler_Job_Tracker_TEMPLATE_v{VERSION}.xlsx so they can inspect it and
-   Claude can help migrate manually if needed.
+   Claude, Muse, or Grok can help migrate manually if needed.
 5. On success, spreadsheet_schema_version is written to config.json.
 6. Every event is written to ~/.ai-prowler/spreadsheet_migration.log.
 
@@ -1001,7 +1001,7 @@ def check_and_migrate() -> MigrationResult:
             f"Your original spreadsheet has been restored from backup.\n"
             f"Backup location: {backup}\n"
             f"Template copy:   {template_dest}\n\n"
-            f"You can ask Claude to help migrate your data to the new template, "
+            f"You can ask Claude, Muse, or Grok to help migrate your data to the new template, "
             f"or copy your data manually. See the log for details:\n{_LOG_PATH}"
         )
 

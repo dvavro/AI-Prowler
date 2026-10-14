@@ -4,7 +4,7 @@ AI-Prowler MCP Server
 =====================
 Exposes AI-Prowler's RAG knowledge base as MCP tools so Claude Desktop
 (and any other MCP-compatible agent) can query, index, and manage your
-local document collection directly from a Claude conversation.
+local document collection directly from a Claude, Muse, or Grok conversation.
 
 Transport : stdio  (required by Claude Desktop)
 Protocol  : MCP 1.x via the official `mcp` Python SDK (FastMCP)
@@ -490,12 +490,12 @@ finally:
 # _capture_stdout() reads this flag at call-time to decide whether it is safe
 # to redirect sys.stdout.  In stdio mode sys.stdout IS the MCP JSON-RPC pipe —
 # replacing it (even briefly) corrupts the protocol and causes Claude Desktop
-# to show "Claude's response was interrupted".
+# to show "Claude/Muse/Grok's response was interrupted".
 _STDIO_MODE = False  # bool — set True in stdio entry point before mcp.run()
 
-# Claude model identifier — stamped as `source` on learnings that Claude
+# Claude, Muse, or Grok model identifier — stamped as `source` on learnings that Claude, Muse, or Grok
 # auto-detects (auto_detected=True). Matches the Anthropic model string so
-# the Learnings tab shows exactly which Claude version created the entry
+# the Learnings tab shows exactly which Claude, Muse, or Grok version created the entry
 # e.g. "claude-sonnet-4-6". Updated here when the bundled model changes.
 _MODEL_ID = "claude-sonnet-4-6"
 
@@ -646,7 +646,7 @@ _HR_DB_PATH             = _hros.path.join(_HR_STATE_DIR, "hr_db.json")
 _HR_STATE_RULES_PATH    = _hros.path.join(_HR_ROOT_DIR, "hr_state_rules.json")
 _HR_TASK_TEMPLATES_PATH = _hros.path.join(_HR_ROOT_DIR, "hr_task_templates.json")
 _HR_FORMS_LIBRARY_PATH  = _hros.path.join(_HR_ROOT_DIR, "hr_forms_library.json")
-_HR_PWA_DIR             = _hros.path.join(_HR_ROOT_DIR, "hr")
+_HR_PWA_DIR             = _hros.path.join(_HR_ROOT_DIR, "hr_admin")   # 2026-10-11: the old hr/ app is retired
 
 _hr_db_lock = _hrthreading.RLock()
 
@@ -685,7 +685,21 @@ def _hr_save_db(db: dict) -> None:
         _log.warning("_hr_save_db: per-employee record.json sync failed")
 
 
+_HR_MISSING_DATA_WARNED: set = set()
+
+
+def _hr_warn_if_missing(path: str) -> None:
+    """2026-10-12: a server deployed without the HR data files silently created
+    employees with NO onboarding tasks and terminations with NO offboarding
+    tasks (found by the live HR E2E). Say so in the log — once per file."""
+    if path not in _HR_MISSING_DATA_WARNED and not _hros.path.isfile(path):
+        _HR_MISSING_DATA_WARNED.add(path)
+        _log.warning("HR data file missing: %s — onboarding/offboarding tasks, state rules "
+                     "and forms will be empty until it's installed (update_install_server.bat).", path)
+
+
 def _hr_load_templates() -> dict:
+    _hr_warn_if_missing(_HR_TASK_TEMPLATES_PATH)
     return _hr_read_json(_HR_TASK_TEMPLATES_PATH, {"base": [], "offboarding": [], "annual": []})
 
 
@@ -852,6 +866,79 @@ def _hr_sweep_overdue(db: dict) -> bool:
             t["status"] = "Overdue"
             changed = True
     return changed
+
+
+# ── Employee status lifecycle (2026-10-12, David: R-090 / R-091) ─────────────
+# Stored statuses are capitalised; HR Admin sends lower-case. One canonical form.
+_HR_STATUS_CANON = {"pre-start": "Pre-Start", "onboarding": "Onboarding", "active": "Active",
+                    "on leave": "On Leave", "offboarding": "Offboarding", "terminated": "Terminated"}
+
+
+def _hr_canon_status(s) -> str:
+    v = str(s or "").strip()
+    return _HR_STATUS_CANON.get(v.lower(), v)
+
+
+def _hr_is_terminated(emp) -> bool:
+    return str((emp or {}).get("status") or "").strip().lower() == "terminated"
+
+
+def _hr_start_offboarding(emp: dict, db: dict, term_type: str, effective_date: str,
+                          reason: str = "", source: str = "") -> list:
+    """The ONE termination flow (R-091) — used by hr_initiate_termination (Claude,
+    Muse, or Grok) and by HR Admin's Terminations screen (PATCH status
+    'terminated'). Status: Offboarding until the last day (they keep HR Portal
+    access while working their notice), Terminated at once if the last day has
+    already passed; the daily lifecycle job moves Offboarding -> Terminated the
+    day after the last day. Offboarding tasks are generated once only."""
+    today = _hrdt.date.today().isoformat()
+    eff = str(effective_date or today)[:10]
+    emp["termination_type"] = term_type or emp.get("termination_type") or ""
+    emp["end_date"] = eff
+    if reason:
+        emp["termination_reason"] = reason
+    emp["status"] = "Terminated" if eff < today else "Offboarding"
+    have = any(t.get("employee_id") == emp["id"] and str(t.get("template_id") or "").startswith("TMPL-TERM")
+               for t in db.get("tasks", []))
+    new_tasks = [] if have else _hr_generate_offboarding_tasks(emp, db, eff)
+    db.setdefault("tasks", []).extend(new_tasks)
+    db.setdefault("audit_log", []).append({
+        "at": _hrdt.datetime.utcnow().isoformat() + "Z", "action": "termination_initiated",
+        "employee_id": emp["id"], "type": emp["termination_type"], "effective_date": eff,
+        "task_count": len(new_tasks), "source": source or "unknown"})
+    return new_tasks
+
+
+def _hr_advance_lifecycle(db: dict, today: str = None) -> list:
+    """R-090 — advance employee status with the calendar (run daily by
+    hr_scheduler.job_lifecycle_advance):
+      Pre-Start   -> Onboarding   on the start date
+      Onboarding  -> Active       once every onboarding task is Completed/Waived
+      Offboarding -> Terminated   the day after the last day (portal access ends)
+    Returns [(employee_id, old, new), ...]; the caller saves."""
+    today = today or _hrdt.date.today().isoformat()
+    changes = []
+    for e in db.get("employees", []):
+        st = str(e.get("status") or "").strip().lower()
+        new = None
+        if st == "pre-start" and e.get("start_date") and e["start_date"] <= today:
+            new = "Onboarding"
+        elif st == "onboarding" and (e.get("start_date") or "") <= today:
+            onb = [t for t in db.get("tasks", []) if t.get("employee_id") == e["id"]
+                   and str(t.get("template_id") or "").startswith("TMPL-")
+                   and not str(t.get("template_id")).startswith("TMPL-TERM")]
+            if onb and all(t.get("status") in ("Completed", "Waived") for t in onb):
+                new = "Active"
+        elif st == "offboarding" and e.get("end_date") and e["end_date"] < today:
+            new = "Terminated"
+        if new:
+            old = e.get("status")
+            e["status"] = new
+            db.setdefault("audit_log", []).append({
+                "at": _hrdt.datetime.utcnow().isoformat() + "Z", "action": "status_advanced",
+                "employee_id": e["id"], "from": old, "to": new})
+            changes.append((e["id"], old, new))
+    return changes
 
 
 def _hr_employee_task_stats(emp_id: str, tasks: list) -> dict:
@@ -1309,6 +1396,8 @@ def _hr_api_route(method: str, subpath: str, query: dict, body: dict, auth: dict
                     break
             if not match:
                 return _hr_json_response(401, {"error": "invalid_credentials"})
+            if _hr_is_terminated(match):                      # R-091: access ends
+                return _hr_json_response(403, {"error": "employment_ended"})
             # Check against THIS employee's own bearer token first, then
             # their short PIN as a fallback (either credential works).
             candidate_hash = _hr_pin_hash(token, match["id"])
@@ -1325,6 +1414,9 @@ def _hr_api_route(method: str, subpath: str, query: dict, body: dict, auth: dict
 
         # ── /ai-chat — smart HR Q&A ───────────────────────────────────────
         if subpath == "/ai-chat" and method == "POST":
+            # 2026-10-12: HR Admin / HR Portal users only (was answerable signed out).
+            if role not in ("admin", "employee"):
+                return _hr_json_response(401, {"error": "sign_in_required"})
             user_msg = (body.get("message") or "").strip()
             if not user_msg:
                 return _hr_json_response(400, {"error": "message required"})
@@ -1356,15 +1448,33 @@ def _hr_api_route(method: str, subpath: str, query: dict, body: dict, auth: dict
             return _hr_json_response(200, {"reply": reply})
 
 
-        # ── /incidents — submit (public) or list (admin only) ─────────────
+        # ── /incidents — submit (signed in) or list (admin only) ──────────
         if subpath == "/incidents" and method == "POST":
+            # SECURITY (2026-10-12, found by the signed-out probe of every HR
+            # route): this was public — anyone on the internet could file an
+            # incident report into HR, under any employee's name. Same fix as
+            # /messages (2026-09-28): must be signed in; an employee's report is
+            # always filed under THEIR OWN record (never one named in the body);
+            # oversized fields are trimmed.
+            if role not in ("admin", "employee"):
+                return _hr_json_response(401, {"error": "sign_in_required"})
             import uuid as _hr_uuid, datetime as _hr_dt
             report = {
                 "id": "INC-" + str(_hr_uuid.uuid4())[:8].upper(),
                 "submitted_at": _hr_dt.datetime.now().isoformat(timespec="seconds"),
                 "status": "new",
             }
-            report.update({k: v for k, v in body.items() if k not in ("id", "submitted_at", "status")})
+            _hr_inc_body = {k: (v[:20000] if isinstance(v, str) else v)
+                            for k, v in (body or {}).items()
+                            if k not in ("id", "submitted_at", "status")}
+            if len(json.dumps(_hr_inc_body, default=str)) > 200_000:
+                return _hr_json_response(413, {"error": "report_too_large"})
+            report.update(_hr_inc_body)
+            if role == "employee":
+                report["employee_id"] = auth.get("employee_id")
+                report["submitted_by"] = "employee"
+            else:
+                report["submitted_by"] = "admin"
             if "incidents" not in db:
                 db["incidents"] = []
             db["incidents"].append(report)
@@ -2870,7 +2980,7 @@ def _hr_api_route(method: str, subpath: str, query: dict, body: dict, auth: dict
             if subpath == "/test/leftovers" and method == "GET":
                 return _hr_json_response(200, {"test_employee_ids": sorted(tt_ids), "leftovers": counts})
             if subpath == "/test/cleanup" and method == "POST":
-                if not tt_ids:
+                if not tt_ids and not (body or {}).get("include_ztest_named"):
                     return _hr_json_response(200, {"ok": True, "deleted": {a: 0 for a in counts}})
                 for a in areas:
                     if a in db:
@@ -2878,6 +2988,52 @@ def _hr_api_route(method: str, subpath: str, query: dict, body: dict, auth: dict
                 if "shift_swaps" in db:
                     db["shift_swaps"] = [s for s in db["shift_swaps"]
                                          if s.get("from_employee_id") not in tt_ids and s.get("to_employee_id") not in tt_ids]
+                # 2026-10-12 (David: test every HR feature on the live server):
+                # OPT-IN extras so the full-feature E2E leaves nothing behind.
+                # Default behaviour (Jamie's flow) is unchanged.
+                #   all_linked       — every record in every collection linked to
+                #                      a +hrtest@ employee by ANY employee field
+                #                      (PTO, messages, tasks, documents, training,
+                #                      calendar notes/reminders, incidents, audit)
+                #   include_ztest_named — admin-made records named "ZTEST…" that
+                #                      aren't tied to an employee (calendar
+                #                      events, directory, recruiting, training,
+                #                      locations, reminders)
+                #   include_employees — the +hrtest@ employee records themselves
+                _opt = body or {}
+                _link_fields = ("employee_id", "from_employee_id", "to_employee_id",
+                                "assigned_employee_id", "recipient_id", "sender_id",
+                                "requested_by", "employee")
+                if _opt.get("all_linked") and tt_ids:
+                    for _coll, _rows in list(db.items()):
+                        if _coll == "employees" or not isinstance(_rows, list):
+                            continue
+                        _kept = []
+                        for _r in _rows:
+                            if not isinstance(_r, dict):
+                                _kept.append(_r)
+                                continue
+                            if any(_r.get(f) in tt_ids for f in _link_fields if isinstance(_r.get(f), str)):
+                                counts[_coll] = counts.get(_coll, 0) + 1
+                                continue
+                            if isinstance(_r.get("employee_ids"), list):     # shared (e.g. locations)
+                                _r["employee_ids"] = [x for x in _r["employee_ids"] if x not in tt_ids]
+                            _kept.append(_r)
+                        db[_coll] = _kept
+                if _opt.get("include_ztest_named"):
+                    for _coll, _rows in list(db.items()):
+                        if _coll == "employees" or not isinstance(_rows, list):
+                            continue
+                        _before = len(_rows)
+                        db[_coll] = [r for r in _rows if not (isinstance(r, dict) and any(
+                            str(r.get(f) or "").startswith("ZTEST")
+                            for f in ("name", "title", "label", "first_name", "subject", "company",
+                                      "candidate_name", "location_name", "text")))]
+                        if len(db[_coll]) != _before:
+                            counts[_coll] = counts.get(_coll, 0) + (_before - len(db[_coll]))
+                if _opt.get("include_employees") and tt_ids:
+                    db["employees"] = [e for e in db.get("employees", []) if e.get("id") not in tt_ids]
+                    counts["employees"] = len(tt_ids)
                 _hr_save_db(db)
                 print(f"[HR] E2E test cleanup removed {counts} for {sorted(tt_ids)}")
                 return _hr_json_response(200, {"ok": True, "deleted": counts})
@@ -3074,9 +3230,15 @@ def _hr_api_route(method: str, subpath: str, query: dict, body: dict, auth: dict
 
         # ── /documents/<id>/download ─────────────────────────────────────
         if subpath.startswith("/documents/") and subpath.endswith("/download") and method == "GET":
+            # SECURITY (2026-10-12, found by the live HR E2E): this had no check
+            # at all — anyone could download any employee's documents (I-9s,
+            # IDs, offer letters) by guessing the sequential DOC-nnnnn id, signed
+            # out. Now: HR admins any document, an employee only their own.
+            if role not in ("admin", "employee"):
+                return _hr_json_response(401, {"error": "sign_in_required"})
             doc_id = subpath.split("/")[2]
             doc = next((d for d in db.get("documents", []) if d.get("id") == doc_id), None)
-            if not doc:
+            if not doc or (role == "employee" and doc.get("employee_id") != auth.get("employee_id")):
                 return _hr_json_response(404, {"error": "not_found"})
             file_path = doc.get("file_path", "")
             if not file_path or not _hros.path.isfile(file_path):
@@ -3167,13 +3329,50 @@ def _hr_api_route(method: str, subpath: str, query: dict, body: dict, auth: dict
             # Sign-in credentials only change through /portal/set-pin, never a plain record edit
             BLOCKED = {"id", "pin_hash", "portal_token_hash", "created_at"}
             body = body or {}
+            # 2026-10-11 (David): the HR Portal's AI-Prowler login link — a
+            # plain user id (or empty to unlink), one account per employee.
+            if "aiprowler_user_id" in body:
+                _link = str(body.get("aiprowler_user_id") or "").strip()
+                if _link and not all(ch.isalnum() or ch in "-_." for ch in _link):
+                    return _hr_json_response(400, {"error": "bad_user_id",
+                                                   "message": "That isn't an AI-Prowler user id."})
+                _other = next((e for e in db["employees"]
+                               if e["id"] != emp_id and _link and e.get("aiprowler_user_id") == _link), None)
+                if _other:
+                    return _hr_json_response(409, {"error": "already_linked",
+                                                   "message": f"That AI-Prowler login is already linked to "
+                                                              f"{_other.get('first_name', '')} {_other.get('last_name', '')}."})
+                body["aiprowler_user_id"] = _link
+                body["aiprowler_user_name"] = str(body.get("aiprowler_user_name") or "").strip() if _link else ""
             # (2026-09-30, E2E bug #19) Bank "last 4" fields: keep only the last 4 digits, whatever is sent
             for _lk in ("account_last4", "routing_last4"):
                 if _lk in body:
                     body[_lk] = "".join(ch for ch in str(body[_lk] or "") if ch.isdigit())[-4:]
+            # R-091 (2026-10-12): HR Admin's Terminations screen sends
+            # {status:'terminated', termination_type, end_date, termination_notes}.
+            # That now starts the FULL offboarding flow (tasks + deadlines), the
+            # same one hr_initiate_termination uses; a stale 'terminated' for
+            # someone already offboarding is ignored (the daily job ends it).
+            _offb_tasks = None
+            if "status" in body:
+                _new_st = _hr_canon_status(body.get("status"))
+                _cur_st = _hr_canon_status(emp.get("status"))
+                if _new_st in ("Offboarding", "Terminated"):
+                    if _cur_st not in ("Offboarding", "Terminated"):
+                        _offb_tasks = _hr_start_offboarding(
+                            emp, db, body.get("termination_type") or "",
+                            body.get("end_date") or emp.get("end_date") or "",
+                            body.get("termination_notes") or body.get("termination_reason") or "",
+                            "hr_admin")
+                    body.pop("status", None)
+                    body.pop("end_date", None) if _offb_tasks is not None else None
+                else:
+                    body["status"] = _new_st
             changed = [k for k, v in body.items() if k not in BLOCKED and emp.get(k) != v]
             for k in changed:
                 emp[k] = body[k]
+            if _offb_tasks is not None:
+                changed = sorted(set(changed) | {"status", "end_date"})
             if changed:
                 db.setdefault("audit_log", []).append({
                     "at": _hrdt.datetime.utcnow().isoformat() + "Z",
@@ -3181,7 +3380,10 @@ def _hr_api_route(method: str, subpath: str, query: dict, body: dict, auth: dict
                     "employee_id": emp_id, "changed_fields": changed,
                 })
                 _hr_save_db(db)
-            return _hr_json_response(200, {"ok": True, "employee": emp, "changed": changed})
+            _resp = {"ok": True, "employee": emp, "changed": changed}
+            if _offb_tasks is not None:
+                _resp["offboarding_tasks_created"] = len(_offb_tasks)
+            return _hr_json_response(200, _resp)
 
         # ── DELETE /employees/:id — hard delete an employee record ──────────
         if subpath.startswith("/employees/") and subpath.count("/") == 2 and method == "DELETE":
@@ -3607,7 +3809,7 @@ def _capture_stdout():
 # server starts cleanly on older installs and upgrades automatically benefit.
 _INSTRUCTIONS = (
     "AI-Prowler is an Agentic RAG knowledge base WITH a self-learning memory layer. "
-    "Claude retrieves raw chunks AND stored learnings directly, then synthesizes "
+    "Claude, Muse, or Grok retrieves raw chunks AND stored learnings directly, then synthesizes "
     "answers — no local LLM required.\n\n"
 
     "═══════════════════════════════════════════════════════════════\n"
@@ -3743,7 +3945,7 @@ _fastmcp_params = list(_inspect.signature(FastMCP.__init__).parameters.keys())
 if "instructions" in _fastmcp_params:
     mcp = FastMCP("AI-Prowler", instructions=_INSTRUCTIONS)
     _log.info("FastMCP created with instructions= (mcp >= 1.2.0) — "
-              "guidance sent to Claude at every handshake")
+              "guidance sent to Claude, Muse, or Grok at every handshake")
 else:
     mcp = FastMCP("AI-Prowler")
     _log.warning(
@@ -3928,7 +4130,7 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     # "whose home address" to resolve for a shared company install.
     "get_home_address",
     # File transfer tools (v9.1.0) — personal-install-only.
-    # get_file_download_url / get_file_upload_url bridge Claude directly to
+    # get_file_download_url / get_file_upload_url bridge Claude, Muse, or Grok directly to
     # the /remote/download and /remote/upload HTTP endpoints already built
     # into the Remote Control PWA.  Both endpoints themselves already gate
     # on personal mode (server mode → 403), so Tier A suppression + the
@@ -3951,9 +4153,34 @@ _log.info(
 # reply, not Jake's), which is meaningless with a single personal-install
 # user; check_sms_inbox (the unscoped, richer-filtered view — provider,
 # unread_only, since_hours=0 for "everything") is the personal-mode tool.
+# The HR apps' tools (2026-10-11, David): HR Admin / HR Portal are AI-Prowler
+# SERVER only, so none of the hr_* tools exists on a personal install.
+_HR_TOOLS: frozenset = frozenset({
+    "hr_backup_now",
+    "hr_complete_task",
+    "hr_create_employee",
+    "hr_get_backup_settings",
+    "hr_get_employee",
+    "hr_get_form",
+    "hr_get_report",
+    "hr_get_setup_status",
+    "hr_get_state_rules",
+    "hr_get_task_digest",
+    "hr_initiate_termination",
+    "hr_list_backups",
+    "hr_list_documents",
+    "hr_list_employees",
+    "hr_list_tasks",
+    "hr_restore_employee",
+    "hr_send_notification",
+    "hr_set_backup_settings",
+    "hr_update_employee",
+    "hr_verify_document",
+})
+
 _PERSONAL_MODE_SUPPRESSED: frozenset = frozenset({
     "check_sms_replies",
-})
+}) | _HR_TOOLS
 
 _log.info(
     "Personal-mode suppression: server_mode=%s — %d tool(s) will be hidden "
@@ -4068,6 +4295,68 @@ _USER_TOOL_CONFIG = _load_user_tool_config()
 _USER_DISABLED_TOOLS: frozenset = _USER_TOOL_CONFIG[
     "server" if _IS_SERVER_MODE else "personal"
 ]
+
+
+# ── HR apps switch (2026-10-11, David) ──────────────────────────────────────
+# HR Admin + HR Portal (and the hr_* tools) are SERVER only and OFF until the
+# owner ticks "HR apps (HR Admin + HR Portal)" in Settings → MCP Tool
+# Configuration. Tools: decided at start-up like every other panel choice
+# (restart to apply). Web apps: _hr_apps_turned_off() re-reads the switch on
+# every request, so turning HR off closes both apps immediately.
+def _hr_apps_switch_on() -> bool:
+    try:
+        import tool_config_store as _tcs_hr
+        return bool(_tcs_hr.hr_apps_enabled())
+    except Exception as _e:
+        _log.warning("HR apps switch unreadable (%s) — treating HR as off.", _e)
+        return False
+
+
+def _hr_apps_turned_off() -> bool:
+    """True when the HR web apps / API must refuse: always on a personal
+    install, and on a server until the owner switches HR on."""
+    return (not _IS_SERVER_MODE) or (not _hr_apps_switch_on())
+
+
+_HR_APPS_OFF_MESSAGE = (
+    "The HR apps are turned off on this AI-Prowler server — the owner can turn "
+    "them on in Settings → MCP Tool Configuration (HR apps)."
+)
+_HR_SERVER_ONLY_MESSAGE = (
+    "The HR apps (HR Admin and HR Portal) are available on an AI-Prowler "
+    "server only."
+)
+
+if _IS_SERVER_MODE and not _hr_apps_switch_on():
+    _USER_DISABLED_TOOLS = _USER_DISABLED_TOOLS | _HR_TOOLS
+    _log.info("HR apps are switched off — %d hr_* tool(s) not registered.", len(_HR_TOOLS))
+
+
+# ── Groups that start OFF (2026-10-12, David) ───────────────────────────────
+# "Job Tracker & Routing" and "SMS & WhatsApp" are off on a NEW install (both
+# modes) until the owner ticks them in Settings → MCP Tool Configuration; an
+# install that already uses them keeps them on (tool_config_store.group_enabled).
+# With Job Tracker off the Jobs app refuses sign-in (_jobs_app_turned_off).
+def _default_off_groups_disabled() -> frozenset:
+    try:
+        import tool_config_store as _tcs_g
+        _mode_g = "server" if _IS_SERVER_MODE else "personal"
+        _off = set()
+        for _grp in _tcs_g.DEFAULT_OFF_GROUPS:
+            if not _tcs_g.group_enabled(_mode_g, _grp):
+                _off |= {n for n in _tool_catalog.tools_in_category(_grp)
+                         if not _tool_catalog.is_locked(n)}
+        return frozenset(_off)
+    except Exception as _e:
+        _log.warning("Default-off groups unreadable (%s) — leaving them as saved.", _e)
+        return frozenset()
+
+
+_DEFAULT_OFF_DISABLED = _default_off_groups_disabled()
+if _DEFAULT_OFF_DISABLED:
+    _USER_DISABLED_TOOLS = _USER_DISABLED_TOOLS | _DEFAULT_OFF_DISABLED
+    _log.info("Default-off groups: %d tool(s) not registered (Job Tracker / SMS not "
+              "switched on in Settings).", len(_DEFAULT_OFF_DISABLED))
 
 _log.info(
     "User tool configuration: mode=%s — %d tool(s) hidden by user "
@@ -4347,9 +4636,9 @@ def _db_write(fn, *args, timeout: float = 900.0, **kwargs):
 # GUIDANCE TOOL — how_to_use_ai_prowler
 # ══════════════════════════════════════════════════════════════════════════════
 # Bulletproof fallback that works on ALL FastMCP versions.
-# When instructions= is not supported by the installed mcp package, Claude
+# When instructions= is not supported by the installed mcp package, Claude, Muse, or Grok
 # reads this tool's docstring and calls it naturally at the start of sessions.
-# Even when instructions= IS supported, this tool gives Claude an on-demand
+# Even when instructions= IS supported, this tool gives Claude, Muse, or Grok an on-demand
 # reference it can re-read during any conversation.
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -4358,7 +4647,7 @@ def _db_write(fn, *args, timeout: float = 900.0, **kwargs):
 # ══════════════════════════════════════════════════════════════════════════════
 # All 15 tools from the Implementation Plan v2.1 §9 table. Every tool reads/
 # writes the same hr_db.json the /hr-api/* HTTP routes use (via the _hr_*
-# helpers defined above), so the PWA and Claude are always looking at the
+# helpers defined above), so the PWA and Claude, Muse, or Grok are always looking at the
 # same data — no separate code path, no drift.
 
 @mcp.tool()
@@ -4559,7 +4848,7 @@ def hr_list_tasks(employee_id: str = "", status: str = "", phase: str = "",
 @mcp.tool()
 def hr_complete_task(task_id: str, notes: str = "", ctx: "Context | None" = None) -> str:
     """
-    Mark an HR task complete. Records who completed it (Claude, on the HR
+    Mark an HR task complete. Records who completed it (Claude, Muse, or Grok, on the HR
     Admin's behalf) and when — visible in the employee's Timeline tab forever.
 
     Args:
@@ -4573,7 +4862,7 @@ def hr_complete_task(task_id: str, notes: str = "", ctx: "Context | None" = None
             return f"No task found with ID {task_id}."
         task["status"] = "Completed"
         task["completed_at"] = _hrdt.datetime.utcnow().isoformat() + "Z"
-        task["completed_by"] = "Claude (via HR Admin)"
+        task["completed_by"] = "Claude, Muse, or Grok (via HR Admin)"
         task["completion_notes"] = notes
         _hr_save_db(db)
     return f"✅ Marked {task_id} ({task['name']}) complete."
@@ -4657,7 +4946,7 @@ def hr_verify_document(doc_id: str, notes: str = "", ctx: "Context | None" = Non
             return f"No document found with ID {doc_id}."
         doc["status"] = "Verified"
         doc["verified_at"] = _hrdt.datetime.utcnow().isoformat() + "Z"
-        doc["verified_by"] = "Claude (via HR Admin)"
+        doc["verified_by"] = "Claude, Muse, or Grok (via HR Admin)"
         doc["verification_notes"] = notes
         _hr_save_db(db)
     return f"✅ Marked {doc.get('name', doc_id)} verified."
@@ -5029,17 +5318,7 @@ def hr_initiate_termination(employee_id: str, type: str, effective_date: str,
         emp = next((e for e in db["employees"] if e["id"] == employee_id), None)
         if not emp:
             return f"No employee found with ID {employee_id}."
-        emp["status"] = "Offboarding"
-        emp["termination_type"] = type
-        emp["end_date"] = effective_date
-        emp["termination_reason"] = reason
-        new_tasks = _hr_generate_offboarding_tasks(emp, db, effective_date)
-        db["tasks"].extend(new_tasks)
-        db.setdefault("audit_log", []).append({
-            "at": _hrdt.datetime.utcnow().isoformat() + "Z", "action": "termination_initiated",
-            "employee_id": employee_id, "type": type, "effective_date": effective_date,
-            "task_count": len(new_tasks),
-        })
+        new_tasks = _hr_start_offboarding(emp, db, type, effective_date, reason, "mcp_tool")
         _hr_save_db(db)
     critical = [t for t in new_tasks if t["priority"] == "CRITICAL"]
     return (f"✅ Termination initiated for {employee_id} ({emp.get('first_name')} {emp.get('last_name')}) — "
@@ -5090,7 +5369,7 @@ _ACCESS_ONLY_GUIDE = (
     "        so the team can use it. With BOTH a personal and a server connector\n"
     "        attached, an access-only request always goes to the personal one —\n"
     "        never report it unavailable just because the server lacks it.\n"
-    "      grant_access(directory) — lets Claude READ a folder WITHOUT indexing\n"
+    "      grant_access(directory) — lets Claude, Muse, or Grok READ a folder WITHOUT indexing\n"
     "        it: read_file_lines / grep_documents / list_directory / send_file\n"
     "        work on its files, but nothing goes into ChromaDB and it never shows\n"
     "        in search_documents. Read only — add write with grant_write_access.\n"
@@ -5102,7 +5381,7 @@ _ACCESS_ONLY_GUIDE = (
     "        (removed from the list, now covered). Relay a refusal as given.\n"
     "      revoke_access(directory) — takes a folder off that list.\n"
     "      They appear in list_tracked_directories under '📂 Access-only folders'.\n"
-    "      Use when the user says e.g. 'let Claude read C:\\Manuals but don't\n"
+    "      Use when the user says e.g. 'let Claude, Muse, or Grok read C:\\Manuals but don't\n"
     "      index it'. The user can also manage them in the GUI (Update Index tab)\n"
     "      and the Remote Control app (Perms tab).\n\n"
 )
@@ -5112,7 +5391,7 @@ _ACCESS_ONLY_GUIDE = (
 def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
     """
     Returns the recommended workflow for using AI-Prowler as an Agentic RAG
-    knowledge base with Claude.
+    knowledge base with Claude, Muse, or Grok.
 
     CALL THIS TOOL FIRST at the start of any new research or question-answering
     session to understand the correct tool sequence and capabilities.
@@ -5120,7 +5399,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
     The main guide is IDENTICAL regardless of mode or which connector it's
     called on — deliberately. In a conversation with two connectors attached
     (e.g. a personal install AND a company server), a guide whose CONTENT
-    varied per-connector risked Claude conflating "not available on THIS
+    varied per-connector risked Claude, Muse, or Grok conflating "not available on THIS
     connector" with "doesn't exist in AI-Prowler at all," and misapplying one
     connector's limitations to the other. Server-mode-specific caveats (dev
     tools, code-aware retrieval, and file-editing scoping are personal-mode
@@ -5162,7 +5441,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "connection; personal mode sees the full catalog, server mode sees\n"
         "a smaller Tier-A-suppressed subset)\n"
         + "-" * 30 + "\n"
-        "AI-Prowler exposes eleven tool families. Most question-answering\n"
+        "AI-Prowler exposes thirteen tool families. Most question-answering\\n"
         "tasks use the first two; the others cover indexing, code editing,\n"
         "dev tooling, communications, contractor/field-service workflows,\n"
         "job-tracker data portability, and agentic analysis.\n\n"
@@ -5309,7 +5588,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
 
         # The guide stays IDENTICAL on both connectors (see the docstring:
         # with a personal AND a server connector attached, a guide that varies
-        # per connector made Claude confuse "not on this connector" with "doesn't
+        # per connector made Claude, Muse, or Grok confuse "not on this connector" with "doesn't
         # exist"). The section itself says personal-only; a server offers no
         # access-only tool, and its THIS CONNECTION footer says so.
         + _ACCESS_ONLY_GUIDE +
@@ -5322,7 +5601,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "        tracked file FROM AI-Prowler.  Bridges to /remote/download;\n"
         "        enforces tracked-dir membership, extension allowlist, 50 MB limit,\n"
         "        and bearer-token auth.\n"
-        "        ⚠️  Claude itself CANNOT use web_fetch() on this URL — Claude.ai\n"
+        "        ⚠️  Claude, Muse, or Grok itself CANNOT use web_fetch() on this URL — Claude.ai\n"
         "        only allows web_fetch() on URLs that appeared in prior search\n"
         "        results.  This tool is for phone/PWA file retrieval only.\n"
         "      get_file_upload_url(filename, target_directory) — returns a signed\n"
@@ -5373,6 +5652,29 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "        entry's task_id (removes just that instance).\n"
         "      save_analysis_report(content, title, task_id, report_folder) —\n"
         "        saves the full analysis as a .docx Word document.\n\n"
+
+          # 2026-10-12 (David): the HR apps tools were missing from the guide
+          # body entirely - the footer counted them but nothing described them.
+          # Described on every connector by design; the THIS CONNECTION footer
+          # below reports whether they are actually enabled on this one.
+          "  \u2022 HR apps (server mode only - HR Admin + HR Portal):\n"
+          "      Employee records, onboarding tasks, documents, time off, time\n"
+          "      clock and HR compliance. Backs two web apps: HR Admin (owners /\n"
+          "      managers - approvals, employee management) and HR Portal\n"
+          "      (employees - clock in/out, time-off requests, own documents).\n"
+          "      hr_list_employees / hr_get_employee / hr_create_employee /\n"
+          "      hr_update_employee, hr_list_tasks / hr_complete_task /\n"
+          "      hr_get_task_digest, hr_list_documents / hr_verify_document /\n"
+          "      hr_get_form, hr_get_report, hr_get_setup_status,\n"
+          "      hr_get_state_rules, hr_initiate_termination /\n"
+          "      hr_restore_employee, hr_send_notification, hr_list_backups /\n"
+          "      hr_backup_now / hr_get_backup_settings / hr_set_backup_settings.\n"
+          "      Server only - these tools do not exist on a personal install.\n"
+          "      OFF by default: the owner turns on \"HR apps (HR Admin + HR\n"
+          "      Portal)\" in Settings \u2192 MCP Tool Configuration (one switch for\n"
+          "      both apps and all hr_* tools; server restart applies it). While\n"
+          "      off they appear as DISABLED in the THIS CONNECTION footer below\n"
+          "      - do not call them; tell the user the owner can switch them on.\n\n"
 
 
         "PREFERRED TOOL SEQUENCE — KNOWLEDGE RETRIEVAL\n"
@@ -5634,7 +5936,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         + "-" * 30 + "\n"
         "The Quick Links tab in the AI-Prowler GUI queues analysis tasks and\n"
         "copies a run command to the clipboard. When the user pastes that\n"
-        "command into Claude, follow this sequence:\n\n"
+        "command into Claude, Muse, or Grok, follow this sequence:\n\n"
 
         "  STEP A1  get_pending_analysis_tasks()\n"
         "    Returns a JSON object with pending_count and a tasks array.\n"
@@ -5675,12 +5977,12 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "  GUI feature.\n\n"
 
 
-        "PROACTIVE ALERTS (background scheduler — no Claude needed)\n"
+        "PROACTIVE ALERTS (background scheduler — no Claude, Muse, or Grok needed)\n"
         + "-" * 30 + "\n"
-        "The Proactive Alerts scheduler in the GUI runs independently of Claude.\n"
+        "The Proactive Alerts scheduler in the GUI runs independently of Claude, Muse, or Grok.\n"
         "It calls AI-Prowler Python functions directly on a schedule and emails\n"
-        "results to the configured address — zero API cost, no Claude session.\n"
-        "Claude does not need to interact with the scheduler directly. However,\n"
+        "results to the configured address — zero API cost, no Claude, Muse, or Grok session.\n"
+        "Claude, Muse, or Grok does not need to interact with the scheduler directly. However,\n"
         "if the user asks about it:\n"
         "  - Config: ~/.ai-prowler/scheduler_config.json\n"
         "  - Log:    ~/.ai-prowler/scheduler_log.txt\n"
@@ -5691,7 +5993,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "KEY FACTS\n"
         + "-" * 30 + "\n"
         "  - NO Ollama required — no local LLM involved at all.\n"
-        "  - Claude receives RAW CHUNKS and synthesizes answers directly.\n"
+        "  - Claude, Muse, or Grok receives RAW CHUNKS and synthesizes answers directly.\n"
         "  - For complex questions, always search multiple times before answering.\n"
         "  - Stored learnings outrank built-in knowledge — always search_learnings\n"
         "    before answering ANY user question (the only exceptions are pure\n"
@@ -5712,7 +6014,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
     # The main guide above is IDENTICAL regardless of mode or connector — this
     # is deliberate, not an oversight. In a conversation with two connectors
     # (a personal install AND a company server both attached), a guide that
-    # varied per-connector risked Claude conflating "not available on THIS
+    # varied per-connector risked Claude, Muse, or Grok conflating "not available on THIS
     # connector" with "doesn't exist in AI-Prowler at all," and misapplying
     # one connector's limitations to the other. Every tool is described here,
     # on every connector; the "THIS CONNECTION" footer below is the ONE place
@@ -5721,10 +6023,10 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
     # etc. are inline in their sections above instead of removing them.
 
     # ── THIS CONNECTION — computed live from the real role-gate tables ──────────
-    # Tells Claude exactly what's true for the connector this call was made on,
+    # Tells Claude, Muse, or Grok exactly what's true for the connector this call was made on,
     # so when both a personal install and a company server are connected in the
     # same conversation, each one's how_to_use_ai_prowler() call reports its own
-    # situation rather than a generic description Claude has to mentally apply.
+    # situation rather than a generic description Claude, Muse, or Grok has to mentally apply.
     # (_user already computed above, before base_text, so the main guide body
     # could also be dynamically trimmed.)
     footer_lines = ["", "─" * 50, "", "THIS CONNECTION", "─" * 30]
@@ -5908,11 +6210,11 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
     # ── ANALYSIS BRIEFING — due tasks only ──────────────────────────────────
     # v9.0.0 fix: only show tasks that are actually due right now.
     # Previously showed ALL pending tasks regardless of next_due, causing
-    # Claude to report "2 queued tasks" even after they had just run and
+    # Claude, Muse, or Grok to report "2 queued tasks" even after they had just run and
     # re-armed for tomorrow. Also removed the ACTION REQUIRED prompt
     # injection — injecting instructions into tool output that override
     # the user's actual request is a prompt-injection risk and was flagged
-    # by Claude itself as suspicious behavior in the scheduled run.
+    # by Claude, Muse, or Grok itself as suspicious behavior in the scheduled run.
     briefing_lines = []
     try:
         import datetime as _dt
@@ -6977,7 +7279,7 @@ def search_documents(
     """
     AGENTIC RAG - Primary search tool.
     Searches the knowledge base using semantic similarity and returns raw
-    document chunks. No LLM involved — Claude receives chunks directly and
+    document chunks. No LLM involved — Claude, Muse, or Grok receives chunks directly and
     does all reasoning itself. Call multiple times with different or refined
     queries to gather context before synthesising an answer.
     No Ollama required — works on any machine.
@@ -7918,9 +8220,9 @@ def get_home_address() -> str:
     v8.1.11. Before this tool existed, that address was only ever read by
     a private, non-tool internal helper used exclusively for weather
     lookups (Proactive Alerts' Morning Briefing fallback and Weekly
-    Weather Watch) — there was no way for Claude to retrieve it directly
+    Weather Watch) — there was no way for Claude, Muse, or Grok to retrieve it directly
     for anything else, including routing. Confirmed real-world gap: asked
-    to plan a route "from my address," Claude had no tool that could
+    to plan a route "from my address," Claude, Muse, or Grok had no tool that could
     resolve what that address actually was, despite it being fully
     configured in Settings.
 
@@ -8603,8 +8905,12 @@ def _email_route_results(db_path: str, route_date: str, crew: str, caller_email:
         from db_route_ops import db_is_route_approved as _db_is_route_approved
         if not _db_is_route_approved(db_path, route_date, crew):
             if force:
+                # 2026-10-13: name the date and crew — says whose route needs
+                # approving (and lets SRV-SCOPE-13 prove whose route was checked).
+                _who = (crew or "").strip()
                 return ("⚠️ Email is only allowed for approved routes — "
-                        "approve the route first.")
+                        f"approve the route first: {route_date}"
+                        + (f" ({_who})" if _who else "") + ".")
             return ""
         from db_write_ops import db_read_email_route_on_approve
         if not force and not db_read_email_route_on_approve(db_path):
@@ -11082,7 +11388,7 @@ def read_job_spreadsheet(
     Read job data from the AI-Prowler job tracking spreadsheet.
 
     Returns rows from the Jobs_Schedule sheet (or any named sheet) as
-    structured text so Claude can answer questions like:
+    structured text so Claude, Muse, or Grok can answer questions like:
       - "What jobs do I have scheduled for today?"
       - "Which jobs are still open?"
       - "Show me everything scheduled this week."
@@ -11267,13 +11573,13 @@ def get_board_updates(
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FILE TRANSFER TOOLS (v9.1.0) — personal mode only
-# get_file_download_url  — gives Claude a signed URL to fetch any tracked file
-# get_file_upload_url    — gives Claude a signed URL + instructions to PUT a file
+# get_file_download_url  — gives Claude, Muse, or Grok a signed URL to fetch any tracked file
+# get_file_upload_url    — gives Claude, Muse, or Grok a signed URL + instructions to PUT a file
 #
-# Both tools bridge Claude directly to the /remote/download and /remote/upload
+# Both tools bridge Claude, Muse, or Grok directly to the /remote/download and /remote/upload
 # HTTP endpoints that already exist in the Remote Control PWA.  The endpoints
 # handle auth, path-traversal protection, and tracked-dir enforcement — these
-# tools just assemble the URL and hand it back so Claude can web_fetch() it
+# tools just assemble the URL and hand it back so Claude, Muse, or Grok can web_fetch() it
 # (download) or instruct the user / an artifact to PUT to it (upload).
 #
 # Server-mode enforcement — THREE independent layers:
@@ -11297,11 +11603,11 @@ def get_file_download_url(file_path: str) -> str:
     PERSONAL MODE ONLY.  This tool is invisible in server mode (Tier A
     suppressed) and returns an error if somehow called on a server install.
 
-    ⚠️  Claude itself cannot use web_fetch() on the returned URL.  Claude.ai
+    ⚠️  Claude, Muse, or Grok itself cannot use web_fetch() on the returned URL.  Claude.ai
     only allows web_fetch() on URLs that appeared in prior search results —
     a URL generated by a tool call is rejected.  This tool is intended for
     the Remote PWA and Jobs PWA to pull files from AI-Prowler to a phone
-    or browser, not for Claude to read files inline.
+    or browser, not for Claude, Muse, or Grok to read files inline.
 
     How it works
     ------------
@@ -11317,7 +11623,7 @@ def get_file_download_url(file_path: str) -> str:
 
     Workflow (phone/PWA)
     --------------------
-    1. Claude calls get_file_download_url(file_path)
+    1. Claude, Muse, or Grok calls get_file_download_url(file_path)
     2. Tool returns a download_url
     3. The phone/PWA browser fetches that URL to download the file
 
@@ -11433,7 +11739,7 @@ def get_file_download_url(file_path: str) -> str:
         "note": (
             "Share this URL with the Remote PWA or Jobs PWA so the phone/browser "
             "can download the file from AI-Prowler. "
-            "⚠️ Claude cannot use web_fetch() on this URL — Claude.ai only allows "
+            "⚠️ Claude, Muse, or Grok cannot use web_fetch() on this URL — Claude.ai only allows "
             "web_fetch() on URLs from prior search results, not tool-generated URLs."
         ),
     }, indent=2)
@@ -11444,7 +11750,7 @@ def get_file_download_url(file_path: str) -> str:
 @mcp.tool()
 def get_file_upload_url(filename: str, target_directory: str) -> str:
     """
-    Return a signed upload URL and multipart POST instructions so Claude
+    Return a signed upload URL and multipart POST instructions so Claude, Muse, or Grok
     (or a browser artifact) can PUT a file directly into any writable
     tracked directory — without base64 encoding.
 
@@ -11462,17 +11768,17 @@ def get_file_upload_url(filename: str, target_directory: str) -> str:
       • File is saved to target_directory/filename and immediately indexed
         into the ChromaDB knowledge base
 
-    Workflow (for Claude uploading a generated file)
+    Workflow (for Claude, Muse, or Grok uploading a generated file)
     ------------------------------------------------
-    1. Claude calls get_file_upload_url(filename, target_directory)
+    1. Claude, Muse, or Grok calls get_file_upload_url(filename, target_directory)
     2. Tool returns upload instructions including the URL, required fields,
-       and a curl example Claude can run via run_script() if needed
-    3. Claude can use the returned curl command via run_script() to upload
+       and a curl example Claude, Muse, or Grok can run via run_script() if needed
+    3. Claude, Muse, or Grok can use the returned curl command via run_script() to upload
        any file it has access to on the local filesystem
 
     Workflow (for an artifact / browser upload)
     -------------------------------------------
-    1. Claude calls get_file_upload_url and displays the returned URL and
+    1. Claude, Muse, or Grok calls get_file_upload_url and displays the returned URL and
        field names to the user or passes them to a React/HTML artifact
     2. The artifact POSTs multipart/form-data with fields: file, dir, token
     3. AI-Prowler saves the file and re-indexes the target directory
@@ -13412,7 +13718,7 @@ def send_sms(
                 return (
                     f"❌ Found contact '{_contact.get('name', to)}' but no phone "
                     f"number is saved for them.\n"
-                    f"Tell Claude: \"{_contact.get('name', to)}'s number is <phone>\" to add it."
+                    f"Tell Claude, Muse, or Grok: \"{_contact.get('name', to)}'s number is <phone>\" to add it."
                 )
 
         if _resolved_phone:
@@ -14731,7 +15037,7 @@ def get_ar_aging_report(
     Reads all unpaid/partial invoices and buckets them by days overdue:
       Current (not yet due) | 1-30 | 31-60 | 61-90 | 90+ days
 
-    This is the fastest way to see cash flow on your phone — ask Claude
+    This is the fastest way to see cash flow on your phone — ask Claude, Muse, or Grok
     "What invoices are overdue?" and get a clean summary in seconds.
 
     Args:
@@ -14758,7 +15064,7 @@ def get_ar_aging_report(
 
     # R-068: owner and managers only (it had no role check at all before —
     # any signed-in server user, field crew included, could read every
-    # customer's balance through Claude).
+    # customer's balance through Claude, Muse, or Grok).
     _denied = _owner_or_manager_denied(ctx)
     if _denied:
         return _denied
@@ -17020,7 +17326,7 @@ def _email_user_cli_token(user: dict, token: str) -> str:
     body = (
         f"Hi {user.get('name') or ''},\n\n"
         "You connected your Claude account to AI-Prowler AI Routing. Here is your "
-        "Claude connection key, in case you need it again:\n\n"
+        "Claude, Muse, or Grok connection key, in case you need it again:\n\n"
         f"    {token}\n\n"
         "Keep it private — anyone with it can use your Claude subscription. It is "
         "good for about a year.\n\n"
@@ -17029,7 +17335,7 @@ def _email_user_cli_token(user: dict, token: str) -> str:
         "AI-Prowler Personal and paste this key in as its token."
     )
     try:
-        ok, msg = _send_smtp(to, "Your AI-Prowler Claude connection key", body)
+        ok, msg = _send_smtp(to, "Your AI-Prowler Claude, Muse, or Grok connection key", body)
     except Exception as exc:  # noqa: BLE001
         return f"the copy couldn't be emailed ({exc})"
     return "a copy was emailed to you" if ok else f"the copy couldn't be emailed ({msg})"
@@ -17039,7 +17345,7 @@ def _email_user_cli_token(user: dict, token: str) -> str:
 def start_cli_signin(ctx: "Context | None" = None) -> str:
     """
     Step 1 of the Jobs app's "Connect your Claude account" phone sign-in
-    (server mode). Starts a Claude sign-in for the CALLER on the server and
+    (server mode). Starts a Claude, Muse, or Grok sign-in for the CALLER on the server and
     returns the link to open on their phone.
 
     Returns:
@@ -17058,7 +17364,7 @@ def start_cli_signin(ctx: "Context | None" = None) -> str:
 @mcp.tool()
 def submit_cli_signin_code(code: str, ctx: "Context | None" = None) -> str:
     """
-    Step 2: the code Claude showed the user after they signed in on their
+    Step 2: the code Claude, Muse, or Grok showed the user after they signed in on their
     phone. On success the server saves the token for the caller, emails them a
     copy, and the Jobs app can carry on with AI Routing. The code is redacted
     from the audit log.
@@ -17212,6 +17518,7 @@ def _ai_routing_worker(job_id: str, prompt: str, route_date: str,
             mcp_path,
             _AI_ROUTING_ALLOWED_TOOLS,
             use_api_key=cfg.get("use_api_key", False),
+            api_key_provider=cfg.get("api_key_provider", "anthropic"),
             oauth_token_path=oauth_token_path,
         )
         _tqa.AI_ROUTING_WRAPPER_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -17303,8 +17610,8 @@ def _ai_routing_worker(job_id: str, prompt: str, route_date: str,
             except Exception:
                 pass
             _finish("error",
-                    "AUTH_EXPIRED — Claude no longer accepts your saved connection "
-                    "(it may have expired, or a newer key was made for your Claude "
+                    "AUTH_EXPIRED — Claude, Muse, or Grok no longer accepts your saved connection "
+                    "(it may have expired, or a newer key was made for your Claude, Muse, or Grok "
                     "account). Tap AI Route again to reconnect.")
             return
         # Email the finished route ONCE, here at the very end (not inside
@@ -17312,11 +17619,11 @@ def _ai_routing_worker(job_id: str, prompt: str, route_date: str,
         # when it revises its order — that would send two emails). Only when
         # THIS run actually saved a new route link (start_time is when it began),
         # so a run that failed never re-sends whatever route was already stored.
-        # R-065 (2026-09-29, found by E2E MILES-04): when Claude refused to run
+        # R-065 (2026-09-29, found by E2E MILES-04): when Claude, Muse, or Grok refused to run
         # at all ("You've hit your session limit · resets 8:50am") the worker
         # still reported "✅ DONE" — the Route tab showed success over an
         # unchanged (or empty) route. A usage-limit / error reply with no route
-        # saved by THIS run is now an error, with Claude's own words.
+        # saved by THIS run is now an error, with Claude/Muse/Grok's own words.
         _route_saved = _ROUTE_LINK_PUBLISHED_AT.get(route_date, 0) >= start_time
         if not _route_saved and (_run_is_error or _re_auth.search(
                 r"hit your (session|usage|weekly) limit|usage limit|rate limit|"
@@ -17372,7 +17679,7 @@ def start_ai_routing(
     free, instant, but much cruder nearest-neighbor heuristic with no real
     time-window reasoning.
 
-    Genuinely spends real Claude usage from whichever auth the Autonomous
+    Genuinely spends real Claude, Muse, or Grok usage from whichever auth the Autonomous
     AI Task Queue's Links & Analysis panel has configured (OAuth
     subscription allowance by default, or a metered API key if the owner
     switched to that) — the "(uses Credits)" label on the PWA button exists
@@ -17720,7 +18027,7 @@ def record_learning(
     Record a new learning into AI-Prowler's self-learning knowledge base.
 
     Use this when the operator says "remember this", "learn this", or when
-    Claude detects new information that supersedes previously known facts.
+    Claude, Muse, or Grok detects new information that supersedes previously known facts.
     Also use after project reviews, post-mortems, or when documenting
     what went right or wrong in business activities.
 
@@ -17729,12 +18036,12 @@ def record_learning(
     find and apply this knowledge automatically.
 
     ── CONFIRMATION PROTOCOL ──────────────────────────────────────────────
-    CRITICAL: After calling this tool, Claude MUST ALWAYS present the
+    CRITICAL: After calling this tool, Claude, Muse, or Grok MUST ALWAYS present the
     returned confirmation summary to the user. NEVER record silently.
 
-    If auto_detected=True (Claude initiated the recording without being
+    If auto_detected=True (Claude, Muse, or Grok initiated the recording without being
     asked), the confirmation is MORE PROMINENT — it tells the user WHY
-    Claude decided to record this and explicitly asks for approval.
+    Claude, Muse, or Grok decided to record this and explicitly asks for approval.
 
     If the user says the learning is wrong or needs adjustment:
       → Call update_learning() to fix specific fields, OR
@@ -17763,7 +18070,7 @@ def record_learning(
 
     SOURCES (how the learning originated):
       operator             — Explicitly told by the user (default)
-      claude_detected      — Claude identified superseding information
+      claude_detected      — Claude, Muse, or Grok identified superseding information
       project_review       — Post-project review or retrospective
       post_mortem          — After-incident analysis
       research             — From web search or document research
@@ -17791,7 +18098,7 @@ def record_learning(
                         automatically stamps the correct value:
                           • Server mode, user recorded it → user's display name
                             e.g. "David Vavro" or "Vicki Vavro"
-                          • Claude auto-detected it       → model id
+                          • Claude, Muse, or Grok auto-detected it       → model id
                             e.g. "claude-sonnet-4-6"
                           • Personal mode, owner recorded → owner name from
                             Settings, or "operator" if not configured.
@@ -17807,10 +18114,10 @@ def record_learning(
                         automatically marked as deprecated.
         outcome:        For business lessons — was the result positive, negative,
                         neutral, or unknown? (default: unknown)
-        auto_detected:  Set to True when Claude is auto-recording a learning
+        auto_detected:  Set to True when Claude, Muse, or Grok is auto-recording a learning
                         it detected (not explicitly asked by the operator).
                         This changes the confirmation message to clearly flag
-                        that Claude initiated this and to ask for approval.
+                        that Claude, Muse, or Grok initiated this and to ask for approval.
                         Default: False (operator explicitly asked).
         ctx:            MCP context (injected automatically). In server mode
                         this identifies the employee recording the learning;
@@ -17858,15 +18165,15 @@ def record_learning(
                     f"{supersedes_id.strip()} — {_reason}. Nothing was recorded.")
 
     # Resolve the source label:
-    #   - Claude auto-detected it          → model name e.g. "claude-sonnet-4-6"
+    #   - Claude, Muse, or Grok auto-detected it          → model name e.g. "claude-sonnet-4-6"
     #   - Server mode, user recorded it    → user's display name e.g. "David Vavro"
     #   - Personal mode, owner recorded it → owner_name from config, or "operator"
     #   - Caller supplied a meaningful source → use it as-is
     #
-    # NOTE: Claude historically passed source="operator" explicitly because the
+    # NOTE: Claude, Muse, or Grok historically passed source="operator" explicitly because the
     # old docstring said "(default: operator)". We treat "operator" the same as
     # blank — auto-resolve it — so the user identity is always stamped correctly
-    # regardless of what Claude passes. Only a genuinely custom source (not
+    # regardless of what Claude, Muse, or Grok passes. Only a genuinely custom source (not
     # "operator" and not empty) is preserved as-is.
     _source_is_auto = not source or source.strip() == "operator"
     if _source_is_auto:
@@ -17903,7 +18210,7 @@ def record_learning(
     # ── Build confirmation message ───────────────────────────────────────
     # Two styles depending on who initiated the recording.
     #
-    # AUTO-DETECTED  → prominent banner, explains WHY Claude recorded it,
+    # AUTO-DETECTED  → prominent banner, explains WHY Claude, Muse, or Grok recorded it,
     #                   explicit "Is this correct?" approval prompt.
     #                   The user must see and acknowledge this.
     #
@@ -17927,7 +18234,7 @@ def record_learning(
         return text[:cut].rstrip() + " ..."
 
     if auto_detected:
-        # ── AUTO-DETECTED: Claude initiated — needs explicit approval ────
+        # ── AUTO-DETECTED: Claude, Muse, or Grok initiated — needs explicit approval ────
         lines = [
             "🧠 AUTO-LEARNING — I detected something worth remembering "
             "and recorded it:",
@@ -19242,7 +19549,7 @@ DESIGN REFERENCE: Self-learning entries
 # ══════════════════════════════════════════════════════════════════════════════
 # CODE TOOLS — WRITE-SIDE
 #
-# 13 tools that complement grep_documents and read_file_lines to give Claude
+# 13 tools that complement grep_documents and read_file_lines to give Claude, Muse, or Grok
 # in-place editing capability over the tracked-paths allowlist. All writes
 # require BOTH read-allowlist membership AND writable-allowlist approval.
 # Backups land alongside the file as <name>.bak<N>. Writes do NOT auto-index
@@ -20211,13 +20518,13 @@ def str_replace_in_file(filepath: str,
     # BACKSLASH FIX (v7.0.1): When old_str contains backslash sequences (e.g.
     # Pascal string literals like '".Replace(\"\\", \"/\")', Windows paths like
     # 'C:\\Users\\...', or escape sequences like '\r\n'), the MCP JSON transport
-    # and Claude's own string handling can double-interpret the backslashes so
+    # and Claude/Muse/Grok's own string handling can double-interpret the backslashes so
     # what arrives here differs from what is actually in the file.
     #
     # Strategy: after CRLF normalisation, if old_str is NOT found in the
     # normalised file text, try common backslash escape variants automatically
     # before giving up. This makes the tool robust against the most frequent
-    # escaping mismatches without requiring Claude to manually debug encoding.
+    # escaping mismatches without requiring Claude, Muse, or Grok to manually debug encoding.
     old_str = old_str.replace("\r\n", "\n").replace("\r", "\n")
     # If dedent=True: strip common leading whitespace from new_str,
     # then re-indent to match the first line of old_str.
@@ -20278,9 +20585,9 @@ def str_replace_in_file(filepath: str,
     # Count occurrences — with automatic backslash-variant fallback.
     #
     # When old_str contains backslashes (Windows paths, Pascal string literals,
-    # escape sequences), the MCP JSON transport or Claude's string formatting
+    # escape sequences), the MCP JSON transport or Claude/Muse/Grok's string formatting
     # can double-escape them so '\\' in the file arrives as '\\\\' in old_str,
-    # or vice-versa.  Rather than forcing Claude to debug the escaping manually,
+    # or vice-versa.  Rather than forcing Claude, Muse, or Grok to debug the escaping manually,
     # we silently try a small set of common backslash variants and use the first
     # one that produces exactly one match.  The variant used is logged in the
     # success message so the behaviour is transparent.
@@ -21331,7 +21638,7 @@ def reset_write_counter() -> str:
     The circuit breaker limits AI-Prowler to 50 write operations per process
     lifetime to protect against runaway loops. This tool resets the count so
     legitimate large editing sessions can continue without restarting the
-    server. Claude can call this directly the moment the breaker trips —
+    server. Claude, Muse, or Grok can call this directly the moment the breaker trips —
     it's a self-serve safety net for the calling agent, not a gate that
     requires the user's permission or a GUI click first.
 
@@ -21360,7 +21667,7 @@ def diff_files(
     ctx: "Context | None" = None,
 ) -> str:
     """
-    Compare two text files and return a unified diff that Claude can read and
+    Compare two text files and return a unified diff that Claude, Muse, or Grok can read and
     reason about directly — no external diff tool required.
 
     Especially useful for:
@@ -22084,10 +22391,6 @@ def run_script(script_path: str, args: str = "",
             candidates = [
                 os.path.join(os.environ.get("LocalAppData", ""),
                              "Programs", "Python", "Python311", "python.exe"),
-                os.path.join(os.environ.get("LocalAppData", ""),
-                             "Programs", "Python", "Python312", "python.exe"),
-                os.path.join(os.environ.get("LocalAppData", ""),
-                             "Programs", "Python", "Python310", "python.exe"),
                 sys.executable,
             ]
             for c in candidates:
@@ -22152,8 +22455,8 @@ def run_script(script_path: str, args: str = "",
                 f"Supported: .bat .cmd .py .js .mjs .sh .bash .rb .pl "
                 f".go .c .cpp .cc .cxx .java")
 
-    # ── Content preview — forces script into Claude's context before execution ─
-    # This is the primary security gate: Claude's built-in values mean it will
+    # ── Content preview — forces script into Claude/Muse/Grok's context before execution ─
+    # This is the primary security gate: Claude/Muse/Grok's built-in values mean it will
     # never have called run_script on something destructive it can see.
     # For binary formats (compiled C/C++) we skip the preview since the source
     # was already read; for all text scripts we show the first 50 lines.
@@ -22271,10 +22574,6 @@ def _resolve_run_argv(script_path: str, extra_args: list) -> tuple:
         candidates = [
             os.path.join(os.environ.get("LocalAppData", ""),
                          "Programs", "Python", "Python311", "python.exe"),
-            os.path.join(os.environ.get("LocalAppData", ""),
-                         "Programs", "Python", "Python312", "python.exe"),
-            os.path.join(os.environ.get("LocalAppData", ""),
-                         "Programs", "Python", "Python310", "python.exe"),
             sys.executable,
         ]
         py = next((c for c in candidates if c and os.path.isfile(c)), sys.executable)
@@ -22382,8 +22681,8 @@ def run_script_start(script_path: str, args: str = "",
     if compile_err:
         return compile_err
 
-    # ── Content preview — forces script into Claude's context before launch ───
-    # Same security gate as run_script: Claude sees the content before it runs.
+    # ── Content preview — forces script into Claude/Muse/Grok's context before launch ───
+    # Same security gate as run_script: Claude, Muse, or Grok sees the content before it runs.
     # Skipped for compiled source files (already reviewed during compile step).
     _ext = os.path.splitext(resolved)[1].lower()
     _preview_note = ""
@@ -23994,7 +24293,7 @@ def get_learnings_report(category: str = "",
         ctx:      MCP context (injected automatically)
 
     Returns:
-        Formatted text of the matching learnings, suitable for Claude to
+        Formatted text of the matching learnings, suitable for Claude, Muse, or Grok to
         read aloud or display in the conversation.
 
     Voice examples:
@@ -24418,12 +24717,12 @@ def rebuild_learnings_index(ctx: Context = None) -> str:
 # WORKFLOW:
 #   1. User clicks an analysis button in the Quick Links tab (e.g. "Analyze My
 #      Business"). AI-Prowler writes a task record to pending_tasks.json and
-#      copies a matching Claude command to the clipboard.
-#   2. User pastes the command into Claude. Claude calls
+#      copies a matching Claude, Muse, or Grok command to the clipboard.
+#   2. User pastes the command into Claude, Muse, or Grok. Claude, Muse, or Grok calls
 #      get_pending_analysis_tasks() which returns all queued tasks.
-#   3. Claude executes the analysis — searching documents, reading job data,
+#   3. Claude, Muse, or Grok executes the analysis — searching documents, reading job data,
 #      reviewing learnings — and records insights via record_learning().
-#   4. Claude calls complete_analysis_task(task_id) to mark each task done.
+#   4. Claude, Muse, or Grok calls complete_analysis_task(task_id) to mark each task done.
 #
 # pending_tasks.json schema (list of task objects):
 #   {
@@ -24507,7 +24806,7 @@ def create_analysis_task(
         make AI-Prowler wake up and run it unattended — that requires the
         Autonomous AI Task Queue toggle to be ON (see Links & Analysis
         tab). A task becoming due just means it's waiting for the next
-        check, whether that's a human asking in a Claude conversation or
+        check, whether that's a human asking in a Claude, Muse, or Grok conversation or
         the automated checker's own schedule (which is independently
         configurable and may be daily or hourly-interval — see
         task_queue_automation.py's check_mode).
@@ -24535,7 +24834,7 @@ def create_analysis_task(
 
     Args:
         label:            Short name for the task, max 60 characters.
-        prompt:           The full analysis instructions Claude should run
+        prompt:           The full analysis instructions Claude, Muse, or Grok should run
                           when this task comes due — be as specific as the
                           user was, don't compress it.
         schedule:         "none" (one-off), "daily", "weekly", "biweekly",
@@ -24645,7 +24944,7 @@ def save_analysis_report(task_id: str,
                        Example: "Q2 Window Review — June 30 2026"
         content:       Full report content in Markdown format.
                        Use ## for sections, **bold** for emphasis, - for lists.
-                       Claude should write this as a comprehensive document.
+                       Claude, Muse, or Grok should write this as a comprehensive document.
         report_folder: Override the output folder. Leave empty to use the
                        task's configured folder or the default reports folder.
 
@@ -24799,7 +25098,7 @@ def get_pending_analysis_tasks(ctx: Context = None) -> str:
     Call this tool at the start of any session where the user says they have
     analysis to run, or whenever instructed to check for pending/due tasks.
 
-    For each pending task returned, Claude should:
+    For each pending task returned, Claude, Muse, or Grok should:
       1. Execute the analysis described in the task's 'prompt' field using
          all available AI-Prowler tools (search_documents, search_learnings,
          read_job_spreadsheet, get_weather, etc.)
@@ -24811,7 +25110,7 @@ def get_pending_analysis_tasks(ctx: Context = None) -> str:
           task_id    — unique identifier (pass to complete_analysis_task)
           type       — task type (analyze_business, weekly_advisor, etc.)
           label      — human-readable name
-          prompt     — the full analysis prompt Claude should execute
+          prompt     — the full analysis prompt Claude, Muse, or Grok should execute
           created_at — when the user queued this task (ISO 8601)
 
     Returns a plain message if no tasks are pending.
@@ -25578,7 +25877,7 @@ def list_writable_directories(ctx: Context = None) -> str:
         unrelated to their own work.
 
     Voice examples:
-        "What directories can Claude write to?"
+        "What directories can Claude, Muse, or Grok write to?"
         "Show me my write permissions"
         "Can I write to my personal folder?"
     """
@@ -25649,7 +25948,7 @@ def list_writable_directories(ctx: Context = None) -> str:
             lines.append(f"  ✅ [W]  {r}")
             lines.append(f"         ↳ writable because it is inside {parent}")
     else:
-        lines.append("  (none configured — Claude can read but not write files)")
+        lines.append("  (none configured — Claude, Muse, or Grok can read but not write files)")
 
     lines.append("")
     read_only = [r for r in read_dirs if r not in writable and r not in inherited_paths]
@@ -25671,7 +25970,7 @@ def list_writable_directories(ctx: Context = None) -> str:
 @mcp.tool()
 def grant_write_access(directory: str, ctx: Context = None) -> str:
     """
-    Add a directory to the write-zone allowlist, giving Claude permission to
+    Add a directory to the write-zone allowlist, giving Claude, Muse, or Grok permission to
     create and edit files there. The directory must already be in the read
     allowlist — either tracked (index_path) or access-only (grant_access).
 
@@ -25690,7 +25989,7 @@ def grant_write_access(directory: str, ctx: Context = None) -> str:
     Voice examples:
         "Grant write access to my AI-Prowler work folder"
         "Make the documents folder writable"
-        "Allow Claude to edit files in C:/Projects/MyProject"
+        "Allow Claude, Muse, or Grok to edit files in C:/Projects/MyProject"
     """
     _telemetry_increment_tool_count("grant_write_access")
 
@@ -25742,14 +26041,14 @@ def grant_write_access(directory: str, ctx: Context = None) -> str:
     who = f" (granted by {user.get('name','?')})" if user else ""
     _log.info("grant_write_access: %s%s", resolved, who)
     return (f"✅ Write zone granted: '{resolved}'\n"
-            f"Claude can now create and edit files in this directory.\n"
+            f"Claude, Muse, or Grok can now create and edit files in this directory.\n"
             f"Use revoke_write_access() to remove this permission.")
 
 
 @mcp.tool()
 def revoke_write_access(directory: str, ctx: Context = None) -> str:
     """
-    Remove a directory from the write-zone allowlist. Claude will no longer
+    Remove a directory from the write-zone allowlist. Claude, Muse, or Grok will no longer
     be able to create or edit files there (read access is unaffected).
 
     In server mode, the same scope restrictions as grant_write_access apply.
@@ -25812,7 +26111,7 @@ def revoke_write_access(directory: str, ctx: Context = None) -> str:
     removed = ", ".join(to_remove)
     _log.info("revoke_write_access: removed %s%s", removed, who)
     return (f"✅ Write zone revoked: '{resolved}'\n"
-            f"Claude can still READ files there but can no longer write or edit them.")
+            f"Claude, Muse, or Grok can still READ files there but can no longer write or edit them.")
 
 
 @mcp.tool()
@@ -25853,8 +26152,8 @@ def grant_access(directory: str, ctx: Context = None) -> str:
         Confirmation string or error.
 
     Voice examples:
-        "Let Claude read my reference folder without indexing it"
-        "Give Claude access to C:/Manuals but don't index it"
+        "Let Claude, Muse, or Grok read my reference folder without indexing it"
+        "Give Claude, Muse, or Grok access to C:/Manuals but don't index it"
     """
     _telemetry_increment_tool_count("grant_access")
     if _IS_SERVER_MODE:
@@ -25892,7 +26191,7 @@ def grant_access(directory: str, ctx: Context = None) -> str:
     _log.info("grant_access: %s%s (folded in: %s)", resolved, who, folded)
     lines = [
         f"✅ Access granted: '{resolved}'",
-        "Claude can now READ files in this folder and all its sub-folders "
+        "Claude, Muse, or Grok can now READ files in this folder and all its sub-folders "
         "(read_file_lines, grep_documents, list_directory, ...).",
         "It will NOT be indexed, and the auto-update sweep will never touch it.",
         "Use revoke_access() to remove this permission.",
@@ -25913,7 +26212,7 @@ def grant_access(directory: str, ctx: Context = None) -> str:
 def revoke_access(directory: str, ctx: Context = None) -> str:
     """
     Remove a directory from the access-only folder list
-    (~/.rag_access_only_dirs.json). Claude will no longer be able to read
+    (~/.rag_access_only_dirs.json). Claude, Muse, or Grok will no longer be able to read
     files there via the access-only list (read access through the tracked
     allowlist, if the path is also tracked, is unaffected).
 
@@ -25928,8 +26227,8 @@ def revoke_access(directory: str, ctx: Context = None) -> str:
         Confirmation string or error.
 
     Voice examples:
-        "Remove Claude's access to the manuals folder"
-        "Stop letting Claude read C:/OldReference without indexing"
+        "Remove Claude/Muse/Grok's access to the manuals folder"
+        "Stop letting Claude, Muse, or Grok read C:/OldReference without indexing"
     """
     _telemetry_increment_tool_count("revoke_access")
     if _IS_SERVER_MODE:
@@ -25965,7 +26264,7 @@ def revoke_access(directory: str, ctx: Context = None) -> str:
     who = f" (revoked by {user.get('name','?')})" if user else ""
     _log.info("revoke_access: removed %s%s", ", ".join(to_remove), who)
     return (f"✅ Access revoked: '{resolved}'\n"
-            f"Claude can no longer read files there via the access-only list.")
+            f"Claude, Muse, or Grok can no longer read files there via the access-only list.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -28476,133 +28775,134 @@ def _run_server_mode(port: int, token: str,
                 await send({"type": "http.response.body", "body": _srv_body})
                 return
 
-            # ── HR Admin PWA — static file server, no auth required ──────────────
-            if path.startswith("/hr") and not path.startswith("/hr-api") and not path.startswith("/hr_admin") and not path.startswith("/hr_portal"):
-                import mimetypes as _hr_mt, os as _hr_os
-                _hr_root = _hr_os.path.join(_hr_os.path.dirname(_hr_os.path.abspath(__file__)), "hr")
-                _hr_rel = path[len("/hr"):].lstrip("/") or "index.html"
-                _hr_fp = _hr_os.path.join(_hr_root, _hr_rel)
-                if not _hr_os.path.isfile(_hr_fp):
-                    _hr_fp = _hr_os.path.join(_hr_root, "index.html")
-                _hr_body = open(_hr_fp, "rb").read()
-                _hr_ct = (_hr_mt.guess_type(_hr_fp)[0] or "application/octet-stream").encode()
-                await send({"type": "http.response.start", "status": 200, "headers": [[b"content-type", _hr_ct], [b"cache-control", b"no-cache"]]})
-                await send({"type": "http.response.body", "body": _hr_body})
-                return
-            if path.startswith("/hr") and not path.startswith("/hr-api") and not path.startswith("/hr_admin") and not path.startswith("/hr_portal"):
-                import mimetypes as _hr_mt, os as _hr_os
-                _hr_root = _hr_os.path.join(_hr_os.path.dirname(_hr_os.path.abspath(__file__)), "hr")
-                _hr_rel = path[len("/hr"):].lstrip("/") or "index.html"
-                _hr_fp = _hr_os.path.join(_hr_root, _hr_rel)
-                if not _hr_os.path.isfile(_hr_fp):
-                    _hr_fp = _hr_os.path.join(_hr_root, "index.html")
-                _hr_body = open(_hr_fp, "rb").read()
-                _hr_ct = (_hr_mt.guess_type(_hr_fp)[0] or "application/octet-stream").encode()
-                await send({"type": "http.response.start", "status": 200, "headers": [[b"content-type", _hr_ct], [b"cache-control", b"no-cache"]]})
-                await send({"type": "http.response.body", "body": _hr_body})
-                return
-            if path.startswith("/hr_admin") and not path.startswith("/hr-api"):
-                import mimetypes as _hrsrv_mt, os as _hrsrv_os
-                _hrsrv_pwa_root = _hrsrv_os.path.join(
-                    _hrsrv_os.path.dirname(_hrsrv_os.path.abspath(__file__)), "hr_admin")
-                _hrsrv_rel = path[len("/hr_admin"):].lstrip("/") or "index.html"
-                _hrsrv_file_path = _hrsrv_os.path.join(_hrsrv_pwa_root, _hrsrv_rel)
-                if not _hrsrv_os.path.abspath(_hrsrv_file_path).startswith(
-                        _hrsrv_os.path.abspath(_hrsrv_pwa_root)):
-                    await _send_text(send, 403, "Forbidden")
+            # ── HR apps — HR Admin + HR Portal, AI-Prowler SERVER only ─────────
+            # (2026-10-11, David) One switch (Settings → MCP Tool Configuration
+            # → "HR apps (HR Admin + HR Portal)", default OFF) opens or closes
+            # both apps and the HR API. The old /hr/ app is retired: /hr and
+            # /hr/... redirect to /hr_admin/. Static files are served with a
+            # folder-boundary check (the old /hr route had none).
+            #   HR Admin  — owners/managers (can_manage_hr): POST /hr-api/auth/login
+            #               {name, token} -> an access token (same idle timeout and
+            #               /pwa-logout as the Jobs app, but works with Jobs off)
+            #   HR Portal — any AI-Prowler user LINKED to an employee record
+            #               (employee.aiprowler_user_id, set in HR Admin):
+            #               POST /hr-api/auth/aiprowler {name, token} -> employee
+            #               session; the link is re-checked on every request
+            if path == "/hr" or path.startswith(("/hr/", "/hr_admin", "/hr_portal", "/hr-api")):
+                if _hr_apps_turned_off():
+                    if path.startswith("/hr-api"):
+                        await _send_json(send, 403, {"ok": False, "error": "hr_apps_off",
+                                                     "message": _HR_APPS_OFF_MESSAGE})
+                    else:
+                        await _send_text(send, 404, _HR_APPS_OFF_MESSAGE)
                     return
-                if not _hrsrv_os.path.isfile(_hrsrv_file_path):
-                    _hrsrv_file_path = _hrsrv_os.path.join(_hrsrv_pwa_root, "index.html")
-                    if not _hrsrv_os.path.isfile(_hrsrv_file_path):
-                        await _send_text(send, 404, "Not Found")
+
+                if path == "/hr" or path.startswith("/hr/"):
+                    await send({"type": "http.response.start", "status": 302,
+                                "headers": [[b"location", b"/hr_admin/"],
+                                            [b"cache-control", b"no-store"]]})
+                    await send({"type": "http.response.body", "body": b""})
+                    return
+
+                if path.startswith(("/hr_admin", "/hr_portal")):
+                    import mimetypes as _hrs_mt, os as _hrs_os
+                    _hrs_app = "hr_admin" if path.startswith("/hr_admin") else "hr_portal"
+                    _hrs_root = _hrs_os.path.join(
+                        _hrs_os.path.dirname(_hrs_os.path.abspath(__file__)), _hrs_app)
+                    _hrs_rel = path[len("/" + _hrs_app):].lstrip("/") or "index.html"
+                    _hrs_fp = _hrs_os.path.join(_hrs_root, _hrs_rel)
+                    if not _path_is_inside(_hrs_fp, _hrs_root):
+                        await _send_text(send, 403, "Forbidden")
                         return
-                try:
-                    with open(_hrsrv_file_path, "rb") as _hrsrv_f:
-                        _hrsrv_body = _hrsrv_f.read()
-                except Exception as _hrsrv_fe:
-                    _log.error("HR Admin PWA (server): file read error for %s — %s",
-                               _hrsrv_file_path, _hrsrv_fe)
-                    await _send_text(send, 500, "Internal Server Error")
-                    return
-                _hrsrv_ctype = (_hrsrv_mt.guess_type(_hrsrv_file_path)[0]
-                                or "application/octet-stream").encode()
-                _hrsrv_body = _patch_sw_cache_version(_hrsrv_rel, _hrsrv_pwa_root, _hrsrv_body)
-                await send({"type": "http.response.start", "status": 200,
-                            "headers": [[b"content-type", _hrsrv_ctype],
-                                        [b"content-length", str(len(_hrsrv_body)).encode()],
-                                        [b"cache-control", b"no-cache"]]})
-                await send({"type": "http.response.body", "body": _hrsrv_body})
-                return
-            # ── end HR Admin PWA static server ───────────────────────────────────
-
-            # ── HR Portal PWA — static file server, no auth required ─────────────
-            if path.startswith("/hr_portal") and not path.startswith("/hr-api"):
-                import mimetypes as _hrpsrv_mt, os as _hrpsrv_os
-                _hrpsrv_pwa_root = _hrpsrv_os.path.join(
-                    _hrpsrv_os.path.dirname(_hrpsrv_os.path.abspath(__file__)), "hr_portal")
-                _hrpsrv_rel = path[len("/hr_portal"):].lstrip("/") or "index.html"
-                _hrpsrv_file_path = _hrpsrv_os.path.join(_hrpsrv_pwa_root, _hrpsrv_rel)
-                if not _hrpsrv_os.path.abspath(_hrpsrv_file_path).startswith(
-                        _hrpsrv_os.path.abspath(_hrpsrv_pwa_root)):
-                    await _send_text(send, 403, "Forbidden")
-                    return
-                if not _hrpsrv_os.path.isfile(_hrpsrv_file_path):
-                    _hrpsrv_file_path = _hrpsrv_os.path.join(_hrpsrv_pwa_root, "index.html")
-                    if not _hrpsrv_os.path.isfile(_hrpsrv_file_path):
-                        await _send_text(send, 404, "Not Found")
+                    if not _hrs_os.path.isfile(_hrs_fp):
+                        _hrs_fp = _hrs_os.path.join(_hrs_root, "index.html")
+                        _hrs_rel = "index.html"
+                        if not _hrs_os.path.isfile(_hrs_fp):
+                            await _send_text(send, 404, "Not Found")
+                            return
+                    try:
+                        with open(_hrs_fp, "rb") as _hrs_f:
+                            _hrs_body = _hrs_f.read()
+                    except Exception as _hrs_e:
+                        _log.error("HR app (%s): file read error for %s — %s", _hrs_app, _hrs_fp, _hrs_e)
+                        await _send_text(send, 500, "Internal Server Error")
                         return
-                try:
-                    with open(_hrpsrv_file_path, "rb") as _hrpsrv_f:
-                        _hrpsrv_body = _hrpsrv_f.read()
-                except Exception as _hrpsrv_fe:
-                    _log.error("HR Portal PWA (server): file read error for %s — %s",
-                               _hrpsrv_file_path, _hrpsrv_fe)
-                    await _send_text(send, 500, "Internal Server Error")
+                    _hrs_body = _patch_sw_cache_version(_hrs_rel, _hrs_root, _hrs_body)
+                    _hrs_ct = (_hrs_mt.guess_type(_hrs_fp)[0] or "application/octet-stream").encode()
+                    await send({"type": "http.response.start", "status": 200,
+                                "headers": [[b"content-type", _hrs_ct],
+                                            [b"content-length", str(len(_hrs_body)).encode()],
+                                            [b"cache-control", b"no-cache"]]})
+                    await send({"type": "http.response.body", "body": _hrs_body})
                     return
-                _hrpsrv_ctype = (_hrpsrv_mt.guess_type(_hrpsrv_file_path)[0]
-                                 or "application/octet-stream").encode()
-                _hrpsrv_body = _patch_sw_cache_version(_hrpsrv_rel, _hrpsrv_pwa_root, _hrpsrv_body)
-                await send({"type": "http.response.start", "status": 200,
-                            "headers": [[b"content-type", _hrpsrv_ctype],
-                                        [b"content-length", str(len(_hrpsrv_body)).encode()],
-                                        [b"cache-control", b"no-store, must-revalidate"],
-                                        [b"pragma", b"no-cache"],
-                                        [b"expires", b"0"]]})
-                await send({"type": "http.response.body", "body": _hrpsrv_body})
-                return
 
-            # ── end HR Portal PWA static server ──────────────────────────────────
-
-            # ── HR REST API — /hr-api/* (see _hr_api_route in the HR Backend
-            #    Engine section near the top of this file for all business
-            #    logic; this block only resolves auth and marshals bytes) ────
-            if path.startswith("/hr-api"):
+                # ── /hr-api/* ────────────────────────────────────────────────
                 import urllib.parse as _hrsrv_up
+                import json as _hrsrv_json
                 _hrsrv_subpath = path[len("/hr-api"):] or "/"
                 _hrsrv_qs = dict(_hrsrv_up.parse_qsl(scope.get("query_string", b"").decode()))
                 _hrsrv_body_bytes = await _read_body(receive)
                 try:
-                    import json as _hrsrv_json
                     _hrsrv_body_json = _hrsrv_json.loads(_hrsrv_body_bytes) if _hrsrv_body_bytes else {}
                 except Exception:
                     _hrsrv_body_json = {}
-                _hrsrv_tok = _bearer_from_scope(scope)
+
+                # AI-Prowler sign-in (HR Admin and HR Portal) — same name + token
+                # check as the Jobs app's /pwa-login.
+                if _hrsrv_subpath in ("/auth/login", "/auth/aiprowler") and method == "POST":
+                    _hrl_name = str((_hrsrv_body_json or {}).get("name", "")).strip()
+                    _hrl_tok = str((_hrsrv_body_json or {}).get("token", "")).strip()
+                    _hrl_err = "Name or password not recognized."
+                    _hrl_user = (_resolve_user(_hot_reload_users(users_data), _hrl_tok)
+                                 if _hrl_name and _hrl_tok else None)
+                    if (_hrl_user is None or
+                            (_hrl_user.get("name", "") or "").strip().lower() != _hrl_name.lower()):
+                        await _send_json(send, 401, {"ok": False, "error": "invalid_credentials",
+                                                     "message": _hrl_err})
+                        return
+                    if _hrsrv_subpath == "/auth/login":
+                        if not _role_caps(_hrl_user.get("role")).get("can_manage_hr"):
+                            await _send_json(send, 403, {"ok": False, "error": "not_hr_admin",
+                                                         "message": "HR Admin is for owners and managers. "
+                                                                    "Employees use the HR Portal."})
+                            return
+                        _hrl_access = _srv_secrets.token_urlsafe(48)
+                        _srv_access_tokens[_hrl_access] = _hrl_tok
+                        _srv_pwa_last_used[_hrl_access] = _srv_time.time()   # R-043 idle timeout
+                        _log.info("HR Admin sign-in: user=%s role=%s", _hrl_user.get("id"), _hrl_user.get("role"))
+                        await _send_json(send, 200, {"ok": True, "access_token": _hrl_access,
+                                                     "name": _hrl_user.get("name", ""),
+                                                     "role": _hrl_user.get("role", "")})
+                        return
+                    _hrl_db = _hr_load_db()
+                    _hrl_emp = next((e for e in _hrl_db.get("employees", [])
+                                     if e.get("aiprowler_user_id") == _hrl_user.get("id")
+                                     and not _hr_is_terminated(e)), None)
+                    if _hrl_emp is None:
+                        await _send_json(send, 403, {"ok": False, "error": "not_linked",
+                                                     "message": "Your AI-Prowler account isn't linked to an "
+                                                                "employee record yet — ask HR to link it in HR Admin."})
+                        return
+                    _hrl_email = "aiprowler:" + str(_hrl_user.get("id"))
+                    _hrl_sig = _hr_sign_session(_hrl_emp["id"], _hrl_email, _hr_session_secret(_hrl_db))
+                    _log.info("HR Portal sign-in: user=%s employee=%s", _hrl_user.get("id"), _hrl_emp["id"])
+                    await _send_json(send, 200, {"ok": True, "session": {
+                        "employee_id": _hrl_emp["id"],
+                        "name": f"{_hrl_emp.get('first_name', '')} {_hrl_emp.get('last_name', '')}".strip(),
+                        "email": _hrl_email, "sig": _hrl_sig}})
+                    return
+
+                # Who is calling: an HR admin (owner/manager access token) or a
+                # signed-in employee (HR Portal session).
                 _hrsrv_auth = {"role": None}
+                _hrsrv_tok = _bearer_from_scope(scope)
                 _hrsrv_resolved_user = None
                 if _hrsrv_tok and _hrsrv_tok in _srv_access_tokens:
-                    # Real role-based HR admin gate (replaces the earlier MVP
-                    # simplification that granted HR admin to ANY recognized
-                    # server-mode token regardless of role). Resolves the
-                    # actual user the same way the rest of server mode does
-                    # (_srv_access_tokens maps the issued access token back to
-                    # the raw users.json token; _resolve_user looks up that
-                    # user's real role) and gates via the can_manage_hr
-                    # capability in _ROLE_CAPS — owner/manager only, matching
-                    # their "full" manage_db tier elsewhere in server mode.
                     _hrsrv_raw_tok = _srv_raw_token_for(_hrsrv_tok)  # R-043 idle timeout
-                    _hrsrv_resolved_user = _resolve_user(_load_users(), _hrsrv_raw_tok)
+                    _hrsrv_resolved_user = (_resolve_user(_hot_reload_users(users_data), _hrsrv_raw_tok)
+                                            if _hrsrv_raw_tok else None)
                 if _hrsrv_resolved_user and _role_caps(_hrsrv_resolved_user.get("role")).get("can_manage_hr"):
-                    _hrsrv_auth = {"role": "admin"}
+                    _hrsrv_auth = {"role": "admin", "user_id": _hrsrv_resolved_user.get("id")}
                 else:
                     _hrsrv_emp_sess_hdr = ""
                     for _hrsrv_hk, _hrsrv_hv in scope.get("headers", []):
@@ -28612,8 +28912,43 @@ def _run_server_mode(port: int, token: str,
                     if _hrsrv_emp_sess_hdr:
                         _hrsrv_db_peek = _hr_load_db()
                         _hrsrv_emp_id = _hr_verify_employee_session(_hrsrv_emp_sess_hdr, _hrsrv_db_peek)
+                        if _hrsrv_emp_id and _hr_is_terminated(next(
+                                (e for e in _hrsrv_db_peek.get("employees", [])
+                                 if e.get("id") == _hrsrv_emp_id), {})):
+                            _hrsrv_emp_id = None          # R-091: employment ended
+                        if _hrsrv_emp_id:
+                            # An AI-Prowler sign-in session is only good while the
+                            # employee is still linked to that same user.
+                            try:
+                                _hrsrv_sess_email = str(_hrsrv_json.loads(_hrsrv_emp_sess_hdr).get("email", ""))
+                            except Exception:
+                                _hrsrv_sess_email = ""
+                            if _hrsrv_sess_email.startswith("aiprowler:"):
+                                _hrsrv_emp_rec = next((e for e in _hrsrv_db_peek.get("employees", [])
+                                                       if e.get("id") == _hrsrv_emp_id), {}) or {}
+                                if (_hrsrv_emp_rec.get("aiprowler_user_id") != _hrsrv_sess_email[len("aiprowler:"):]
+                                        or _hrsrv_emp_rec.get("status") == "Terminated"):
+                                    _hrsrv_emp_id = None
                         if _hrsrv_emp_id:
                             _hrsrv_auth = {"role": "employee", "employee_id": _hrsrv_emp_id}
+
+                # HR Admin's "AI-Prowler login" picker: the server's users
+                # (id, name, role only — never a token). HR admins only.
+                if _hrsrv_subpath == "/aiprowler-users" and method == "GET":
+                    if _hrsrv_auth.get("role") != "admin":
+                        await _send_json(send, 403, {"error": "admin_only"})
+                        return
+                    _hru_data = _hot_reload_users(users_data) or {}
+                    _hru_list = []
+                    for _hru_tok in (_hru_data.get("users") or {}):
+                        _hru_u = _resolve_user(_hru_data, _hru_tok)
+                        if _hru_u:
+                            _hru_list.append({"id": _hru_u.get("id"), "name": _hru_u.get("name", ""),
+                                              "role": _hru_u.get("role", "")})
+                    _hru_list.sort(key=lambda u: (u["name"] or "").lower())
+                    await _send_json(send, 200, {"users": _hru_list})
+                    return
+
                 # documents/upload -- multipart, bypasses the JSON dispatcher
                 if _hrsrv_subpath == "/documents/upload" and method == "POST":
                     _hrsrv_ctype_hdr = ""
@@ -28963,7 +29298,7 @@ def _run_server_mode(port: int, token: str,
                         return
                     # R-049: a tool the owner turned off in the Settings panel is
                     # off for the Jobs app too (and the whole app when Job Tracker
-                    # is off) — not just hidden from Claude's tool list.
+                    # is off) — not just hidden from Claude/Muse/Grok's tool list.
                     _srv_pa_off = (_JOBS_APP_OFF_MESSAGE if _jobs_app_turned_off()
                                    else _pwa_tool_disabled_message(_srv_pa_tool))
                     if _srv_pa_off:
@@ -29879,7 +30214,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         """Derive the public base URL dynamically from the request.
 
         If a Request or ASGI scope is provided, use the Host header so that
-        OAuth endpoints always point back to the URL Claude is actually
+        OAuth endpoints always point back to the URL Claude, Muse, or Grok is actually
         connecting through — whether that's a Named Tunnel, Quick Tunnel,
         or localhost.  Falls back to the configured PUBLIC_BASE if the
         Host header isn't available.
@@ -29901,7 +30236,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     async def oauth_protected_resource(request: Request):
         """RFC 9728 — OAuth 2.0 Protected Resource Metadata.
         Claude.ai fetches THIS endpoint first when it receives a 401.
-        It tells Claude where the authorization server lives.
+        It tells Claude, Muse, or Grok where the authorization server lives.
         """
         base = _get_public_base(request)
         return JSONResponse({
@@ -30138,7 +30473,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
 
             if tok not in _access_tokens:
                 # Return 401 — derive public base from the Host header
-                # so Claude discovers OAuth endpoints at the correct URL
+                # so Claude, Muse, or Grok discovers OAuth endpoints at the correct URL
                 _dyn_base = _get_public_base(scope=scope)
                 body = b'{"error":"unauthorized","error_description":"Invalid or missing Bearer token"}'
                 www_auth = (
@@ -31018,159 +31353,26 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             # ── end PWA static server ─────────────────────────────────────
 
 
-            # ── HR Admin PWA — static file server, no auth required ──────────
-            if path.startswith("/hr") and not path.startswith("/hr-api") and not path.startswith("/hr_admin") and not path.startswith("/hr_portal"):
-                import mimetypes as _hr_mt, os as _hr_os
-                _hr_root = _hr_os.path.join(_hr_os.path.dirname(_hr_os.path.abspath(__file__)), "hr")
-                _hr_rel = path[len("/hr"):].lstrip("/") or "index.html"
-                _hr_fp = _hr_os.path.join(_hr_root, _hr_rel)
-                if not _hr_os.path.isfile(_hr_fp):
-                    _hr_fp = _hr_os.path.join(_hr_root, "index.html")
-                _hr_body = open(_hr_fp, "rb").read()
-                _hr_ct = (_hr_mt.guess_type(_hr_fp)[0] or "application/octet-stream").encode()
-                await send({"type": "http.response.start", "status": 200, "headers": [[b"content-type", _hr_ct], [b"cache-control", b"no-cache"]]})
-                await send({"type": "http.response.body", "body": _hr_body})
-                return
-            if path.startswith("/hr") and not path.startswith("/hr-api") and not path.startswith("/hr_admin") and not path.startswith("/hr_portal"):
-                import mimetypes as _hr_mt, os as _hr_os
-                _hr_root = _hr_os.path.join(_hr_os.path.dirname(_hr_os.path.abspath(__file__)), "hr")
-                _hr_rel = path[len("/hr"):].lstrip("/") or "index.html"
-                _hr_fp = _hr_os.path.join(_hr_root, _hr_rel)
-                if not _hr_os.path.isfile(_hr_fp):
-                    _hr_fp = _hr_os.path.join(_hr_root, "index.html")
-                _hr_body = open(_hr_fp, "rb").read()
-                _hr_ct = (_hr_mt.guess_type(_hr_fp)[0] or "application/octet-stream").encode()
-                await send({"type": "http.response.start", "status": 200, "headers": [[b"content-type", _hr_ct], [b"cache-control", b"no-cache"]]})
-                await send({"type": "http.response.body", "body": _hr_body})
-                return
-            if path.startswith("/hr_admin") and not path.startswith("/hr-api"):
-                import mimetypes as _hrp_mt, os as _hrp_os
-                _hrp_pwa_root = _hrp_os.path.join(
-                    _hrp_os.path.dirname(_hrp_os.path.abspath(__file__)), "hr_admin")
-                _hrp_rel = path[len("/hr_admin"):].lstrip("/") or "index.html"
-                _hrp_file_path = _hrp_os.path.join(_hrp_pwa_root, _hrp_rel)
-                if not _hrp_os.path.abspath(_hrp_file_path).startswith(
-                        _hrp_os.path.abspath(_hrp_pwa_root)):
-                    await send({"type": "http.response.start", "status": 403,
-                                "headers": [[b"content-type", b"text/plain"]]})
-                    await send({"type": "http.response.body",
-                                "body": b"Forbidden", "more_body": False})
-                    return
-                if _hrp_os.path.isfile(_hrp_file_path):
-                    _hrp_mime, _ = _hrp_mt.guess_type(_hrp_file_path)
-                    _hrp_mime_b = (_hrp_mime or "application/octet-stream").encode()
-                    with open(_hrp_file_path, "rb") as _hrp_f:
-                        _hrp_body = _hrp_f.read()
-                    _hrp_body = _patch_sw_cache_version(_hrp_rel, _hrp_pwa_root, _hrp_body)
-                    await send({"type": "http.response.start", "status": 200,
-                                "headers": [
-                                    [b"content-type",   _hrp_mime_b],
-                                    [b"content-length", str(len(_hrp_body)).encode()],
-                                    [b"cache-control",  b"no-cache"],
-                                ]})
-                    await send({"type": "http.response.body", "body": _hrp_body,
-                                "more_body": False})
+            # ── HR apps — AI-Prowler SERVER only (2026-10-11, David) ───────────
+            # HR Admin / HR Portal / the HR API do not exist on a personal
+            # install (the old /hr/ app is retired everywhere). Previously any
+            # personal token counted as HR admin here.
+            if path == "/hr" or path.startswith(("/hr/", "/hr_admin", "/hr_portal", "/hr-api")):
+                if path.startswith("/hr-api"):
+                    await send({"type": "http.response.start", "status": 404,
+                                "headers": [[b"content-type", b"application/json"],
+                                            [b"cache-control", b"no-store"]]})
+                    await send({"type": "http.response.body", "more_body": False,
+                                "body": json.dumps({"ok": False, "error": "hr_server_only",
+                                                    "message": _HR_SERVER_ONLY_MESSAGE}).encode()})
                 else:
                     await send({"type": "http.response.start", "status": 404,
-                                "headers": [[b"content-type", b"text/plain"]]})
-                    await send({"type": "http.response.body",
-                                "body": b"HR Admin PWA file not found",
-                                "more_body": False})
+                                "headers": [[b"content-type", b"text/plain; charset=utf-8"],
+                                            [b"cache-control", b"no-store"]]})
+                    await send({"type": "http.response.body", "more_body": False,
+                                "body": _HR_SERVER_ONLY_MESSAGE.encode("utf-8")})
                 return
-            # ── end HR Admin PWA static server ────────────────────────────────
-
-            # ── HR Portal PWA — static file server, no auth required ──────────
-            if path.startswith("/hr_portal") and not path.startswith("/hr-api"):
-                import mimetypes as _hrpp_mt, os as _hrpp_os
-                _hrpp_pwa_root = _hrpp_os.path.join(
-                    _hrpp_os.path.dirname(_hrpp_os.path.abspath(__file__)), "hr_portal")
-                _hrpp_rel = path[len("/hr_portal"):].lstrip("/") or "index.html"
-                _hrpp_file_path = _hrpp_os.path.join(_hrpp_pwa_root, _hrpp_rel)
-                if not _hrpp_os.path.abspath(_hrpp_file_path).startswith(
-                        _hrpp_os.path.abspath(_hrpp_pwa_root)):
-                    await send({"type": "http.response.start", "status": 403,
-                                "headers": [[b"content-type", b"text/plain"]]})
-                    await send({"type": "http.response.body",
-                                "body": b"Forbidden", "more_body": False})
-                    return
-                if _hrpp_os.path.isfile(_hrpp_file_path):
-                    _hrpp_mime, _ = _hrpp_mt.guess_type(_hrpp_file_path)
-                    _hrpp_mime_b = (_hrpp_mime or "application/octet-stream").encode()
-                    with open(_hrpp_file_path, "rb") as _hrpp_f:
-                        _hrpp_body = _hrpp_f.read()
-                    _hrpp_body = _patch_sw_cache_version(_hrpp_rel, _hrpp_pwa_root, _hrpp_body)
-                    await send({"type": "http.response.start", "status": 200,
-                                "headers": [
-                                    [b"content-type",   _hrpp_mime_b],
-                                    [b"content-length", str(len(_hrpp_body)).encode()],
-                                    [b"cache-control",  b"no-cache"],
-                                ]})
-                    await send({"type": "http.response.body", "body": _hrpp_body,
-                                "more_body": False})
-                else:
-                    await send({"type": "http.response.start", "status": 404,
-                                "headers": [[b"content-type", b"text/plain"]]})
-                    await send({"type": "http.response.body",
-                                "body": b"HR Portal PWA file not found",
-                                "more_body": False})
-                return
-            # ── end HR Portal PWA static server ───────────────────────────────
-
-            # ── HR REST API — /hr-api/* (business logic lives in _hr_api_route,
-            #    HR Backend Engine section near the top of this file; this block
-            #    only resolves auth and marshals bytes over ASGI) ───────────────
-            if path.startswith("/hr-api"):
-                import urllib.parse as _hrp_up, json as _hrp_json
-                _hrp_subpath = path[len("/hr-api"):] or "/"
-                _hrp_qs = dict(_hrp_up.parse_qsl(scope.get("query_string", b"").decode()))
-                _hrp_chunks = []
-                while True:
-                    _hrp_msg = await receive()
-                    _hrp_chunks.append(_hrp_msg.get("body", b""))
-                    if not _hrp_msg.get("more_body"):
-                        break
-                _hrp_body_bytes = b"".join(_hrp_chunks)
-                try:
-                    _hrp_body_json = _hrp_json.loads(_hrp_body_bytes) if _hrp_body_bytes else {}
-                except Exception:
-                    _hrp_body_json = {}
-                _hrp_tok = ""
-                _hrp_emp_sess_hdr = ""
-                for _hrp_hk, _hrp_hv in scope.get("headers", []):
-                    if _hrp_hk.lower() == b"authorization":
-                        _hrp_v = _hrp_hv.decode("utf-8", "replace")
-                        if _hrp_v.lower().startswith("bearer "):
-                            _hrp_tok = _hrp_v[7:].strip()
-                    elif _hrp_hk.lower() == b"x-employee-session":
-                        _hrp_emp_sess_hdr = _hrp_hv.decode("utf-8", "replace")
-                _hrp_auth = {"role": None}
-                if _hrp_tok and _hrp_tok in _access_tokens:
-                    _hrp_auth = {"role": "admin"}
-                elif _hrp_emp_sess_hdr:
-                    _hrp_db_peek = _hr_load_db()
-                    _hrp_emp_id = _hr_verify_employee_session(_hrp_emp_sess_hdr, _hrp_db_peek)
-                    if _hrp_emp_id:
-                        _hrp_auth = {"role": "employee", "employee_id": _hrp_emp_id}
-                # documents/upload -- multipart, bypasses the JSON dispatcher
-                if _hrp_subpath == "/documents/upload" and method == "POST":
-                    _hrp_ctype_hdr = ""
-                    for _hrp_hk2, _hrp_hv2 in scope.get("headers", []):
-                        if _hrp_hk2.lower() == b"content-type":
-                            _hrp_ctype_hdr = _hrp_hv2.decode(errors="replace")
-                            break
-                    _hrp_status, _hrp_ctype, _hrp_resp_body = _hr_handle_document_upload(
-                        _hrp_body_bytes, _hrp_ctype_hdr, _hrp_auth)
-                else:
-                    _hrp_status, _hrp_ctype, _hrp_resp_body = _hr_api_route(
-                        method, _hrp_subpath, _hrp_qs, _hrp_body_json, _hrp_auth)
-                await send({"type": "http.response.start", "status": _hrp_status,
-                            "headers": [[b"content-type", _hrp_ctype],
-                                        [b"content-length", str(len(_hrp_resp_body)).encode()],
-                                        [b"cache-control", b"no-store"]]})
-                await send({"type": "http.response.body", "body": _hrp_resp_body,
-                            "more_body": False})
-                return
-            # ── end HR REST API ────────────────────────────────────────────────
+            # ── end HR REST API (personal: server-only notice) ─────────────────
 
 
             # ── /remote/ static file server ─────────────────────────────────
@@ -31989,13 +32191,22 @@ if __name__ == "__main__":
     # compliance deadlines apply the same way in every mode. Import is local
     # (not at module top) so a missing/broken hr_scheduler.py can never
     # prevent ai_prowler_mcp.py itself from starting.
-    try:
-        import hr_scheduler as _hr_sched
-        _hr_sched.start()
-        _log.info("HR background scheduler started (10 compliance jobs, see "
-                   "Implementation Plan v2.1 Section 11)")
-    except Exception as _hr_sched_exc:
-        _log.warning("HR background scheduler failed to start: %s", _hr_sched_exc)
+    #
+    # 2026-10-11 (David): the HR apps are AI-Prowler SERVER only and OFF until
+    # the owner switches them on — so the scheduler (reminder emails,
+    # compliance jobs, employee backups) only starts on a server with HR
+    # switched on. Decided at start-up, like the hr_* tools: restart to apply.
+    if _IS_SERVER_MODE and _hr_apps_switch_on():
+        try:
+            import hr_scheduler as _hr_sched
+            _hr_sched.start()
+            _log.info("HR background scheduler started (10 compliance jobs, see "
+                       "Implementation Plan v2.1 Section 11)")
+        except Exception as _hr_sched_exc:
+            _log.warning("HR background scheduler failed to start: %s", _hr_sched_exc)
+    else:
+        _log.info("HR background scheduler not started (%s).",
+                  "HR apps switched off" if _IS_SERVER_MODE else "personal mode — HR is server only")
 
     if args.transport == 'http':
         # ── Server mode dispatch (v7.0.0 Phase B) ─────────────────────────────

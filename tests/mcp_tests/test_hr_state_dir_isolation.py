@@ -218,7 +218,8 @@ class TestHrStateDirSourceWiring:
             in hr_engine_block
         assert '_HR_FORMS_LIBRARY_PATH  = _hros.path.join(_HR_ROOT_DIR, "hr_forms_library.json")' \
             in hr_engine_block
-        assert '_HR_PWA_DIR             = _hros.path.join(_HR_ROOT_DIR, "hr")' \
+        # 2026-10-11: the old hr/ app is retired — HR Admin's folder
+        assert '_HR_PWA_DIR             = _hros.path.join(_HR_ROOT_DIR, "hr_admin")' \
             in hr_engine_block
 
     def test_create_document_folders_uses_state_dir(self, ai_prowler_source):
@@ -244,9 +245,12 @@ class TestHrStateDirSourceWiring:
         assert ai_prowler_source.count(
             '_HR_STATE_DIR           = (_hros.environ.get("AIPROWLER_TEST_STATE_DIR"'
         ) == 1
-        assert ai_prowler_source.count(
-            '_hros.path.join(_HR_STATE_DIR, doc_root)'
-        ) == 2  # _hr_create_document_folders + _hr_handle_document_upload
+        # 2026-10-11: was "== 2" — Jamie's later code (merged from GitHub) added
+        # two more CORRECT state-dir resolutions, so the count went stale (it
+        # already failed on origin/main). The real rule: every doc-root base
+        # resolution uses _HR_STATE_DIR, and none uses the install folder.
+        assert ai_prowler_source.count('_hros.path.join(_HR_STATE_DIR, doc_root)') >= 2
+        assert ai_prowler_source.count('_hros.path.join(_HR_ROOT_DIR, doc_root)') == 0
 
 
 class TestHrSchedulerStateDirSourceWiring:

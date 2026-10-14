@@ -9,7 +9,7 @@
 2. Installation
 3. Connecting Claude Desktop via MCP
 4. Indexing Your Documents
-5. Agentic RAG — How Claude Uses Your Knowledge Base
+5. Agentic RAG — How Claude, Muse, or Grok Uses Your Knowledge Base
 6. MCP Tools Reference
 7. Remote Access — Claude.ai on Mobile and Web
 8. Mobile Subscription Management
@@ -37,31 +37,31 @@
 
 ## 1. What is AI-Prowler?
 
-AI-Prowler is an Agentic RAG (Retrieval-Augmented Generation) knowledge base for Windows. It indexes your local documents into a private ChromaDB vector database and exposes them to Claude as a suite of intelligent search and retrieval tools.
+AI-Prowler is an Agentic RAG (Retrieval-Augmented Generation) knowledge base for Windows. It indexes your local documents into a private ChromaDB vector database and exposes them to Claude, Muse, or Grok as a suite of intelligent search and retrieval tools.
 
 **The key difference from traditional RAG:**
 
-Traditional RAG retrieves a chunk, hands it to a small local model, and gets a mediocre answer. AI-Prowler's Agentic RAG lets Claude actively drive the research process:
+Traditional RAG retrieves a chunk, hands it to a small local model, and gets a mediocre answer. AI-Prowler's Agentic RAG lets Claude, Muse, or Grok actively drive the research process:
 
-- Claude decides what to search for based on your question
+- Claude, Muse, or Grok decides what to search for based on your question
 - It evaluates what it finds and identifies gaps
 - It reformulates queries and searches again
 - It reads surrounding context when a result is incomplete
 - It synthesizes a comprehensive answer from everything it gathered
 
-This produces dramatically better results — equivalent to having a skilled research assistant who knows your entire document library. Hardware requirements are minimal. Because Claude does the reasoning, AI-Prowler only needs to run the embedding model (~400 MB RAM) and ChromaDB. No GPU is required. No large local AI model is needed.
+This produces dramatically better results — equivalent to having a skilled research assistant who knows your entire document library. Hardware requirements are minimal. Because Claude, Muse, or Grok does the reasoning, AI-Prowler only needs to run the embedding model (~400 MB RAM) and ChromaDB. No GPU is required. No large local AI model is needed.
 
 ### Key Capabilities
 
 Beyond core document search, AI-Prowler includes:
 
-- **Self-Learning knowledge base** — Claude can record business lessons, fact corrections, project insights, and process improvements into a structured knowledge base, and checks that knowledge before answering future questions. Instant — no GPU training required. Managed through a dedicated 🧠 Learnings tab in the GUI. See **Section 22**.
-- **Business Server Mode** — multi-user team deployments with roles, scopes, and role-based tool access, so a whole company reaches one shared knowledge base from Claude on their own phones and laptops. See **Section 9**.
-- **Small Business / Job Tracker tools** — a full contractor workflow (customers, scheduling, quoting, invoicing, route planning, time tracking, AR aging) that Claude reads and writes in plain English, backed by a SQLite database (`ai_prowler_jobs.db`). Excel is available as a generated export. See **Section 10**.
+- **Self-Learning knowledge base** — Claude, Muse, or Grok can record business lessons, fact corrections, project insights, and process improvements into a structured knowledge base, and checks that knowledge before answering future questions. Instant — no GPU training required. Managed through a dedicated 🧠 Learnings tab in the GUI. See **Section 22**.
+- **Business Server Mode** — multi-user team deployments with roles, scopes, and role-based tool access, so a whole company reaches one shared knowledge base from Claude, Muse, or Grok on their own phones and laptops. See **Section 9**.
+- **Small Business / Job Tracker tools** — a full contractor workflow (customers, scheduling, quoting, invoicing, route planning, time tracking, AR aging) that Claude, Muse, or Grok reads and writes in plain English, backed by a SQLite database (`ai_prowler_jobs.db`). Excel is available as a generated export. See **Section 10**.
 - **Job Board** — a live admin kanban/grid of the day's jobs, updating on a 1-minute poll as crew clock in, upload photos, and complete work, with safe concurrent editing all day long. See **Section 10 → Job Board**.
 - **Data Portability** — export to Excel/CSV/QuickBooks-ready CSV for accountants and bookkeeping, plus lossless backup/restore for safekeeping or moving to a new PC. See **Section 10 → Data Portability**.
-- **Two-way SMS & WhatsApp messaging** — field crew can send and receive SMS and WhatsApp messages to customers directly from Claude, with real-time inbound capture via webhook (no polling lag). Provider abstraction supports Twilio, SignalWire, Vonage, and WhatsApp Business API. See **Section 11**.
-- **File editing & code tools** — Claude can create, edit, and manage files directly (exact-match replace, line-number replace, directory tools, backups), plus run and debug scripts. See **Section 6**.
+- **Two-way SMS & WhatsApp messaging** — field crew can send and receive SMS and WhatsApp messages to customers directly from Claude, Muse, or Grok, with real-time inbound capture via webhook (no polling lag). Provider abstraction supports Twilio, SignalWire, Vonage, and WhatsApp Business API. See **Section 11**.
+- **File editing & code tools** — Claude, Muse, or Grok can create, edit, and manage files directly (exact-match replace, line-number replace, directory tools, backups), plus run and debug scripts. See **Section 6**.
 - **Remote Access & mobile apps** — reach AI-Prowler from Claude.ai on any phone or browser, plus two dedicated PWAs: the **Jobs App** for field crew (Section 25) and the **Remote PWA** for managing AI-Prowler itself remotely (Section 26).
 - **Agentic analysis task queue** — schedule recurring or one-off AI analysis tasks (e.g. "check overdue invoices every Monday") that run autonomously and record their findings as learnings. See **Section 10** and **Section 26**.
 - **Proactive email alerts** — background jobs (morning briefing, overdue invoices, weather watch, etc.) with independent per-job scheduling. See **Section 17**.
@@ -84,11 +84,11 @@ Beyond core document search, AI-Prowler includes:
 5. Click the AI-Prowler shortcut on your Desktop. For mobile/web access, click **Start HTTP Server** in the Settings tab — but you first need a license key from the AI-Prowler subscription service.
 6. Open Claude Desktop — it will communicate directly with AI-Prowler via the MCP interface. If mobile is activated you will receive an email with a license key and instructions to enable it.
 
-> **Note:** When running in mobile mode it is recommended to open Claude via https://claude.ai for all remote access (cell, tablet, web). This prevents having multiple AI-Prowler MCP connectors active simultaneously.
+> **Note:** When running in mobile mode it is recommended to open Claude, Muse, or Grok via https://claude.ai for all remote access (cell, tablet, web). This prevents having multiple AI-Prowler MCP connectors active simultaneously.
 
 ### What the Installer Does NOT Do
 
-No large local AI model is installed or downloaded. The AI interface is Claude Desktop (or Claude.ai for mobile/web) via MCP, which requires no local model. AI-Prowler only runs the small embedding model (~400 MB) and ChromaDB locally; Claude does all the reasoning. Installation typically takes under 10 minutes.
+No large local AI model is installed or downloaded. The AI interface is Claude Desktop (or Claude.ai for mobile/web) via MCP, which requires no local model. AI-Prowler only runs the small embedding model (~400 MB) and ChromaDB locally; Claude, Muse, or Grok does all the reasoning. Installation typically takes under 10 minutes.
 
 ### Install Log
 
@@ -116,17 +116,17 @@ These are set automatically; no user action is required.
 
 ## 3. Connecting Claude Desktop via MCP
 
-Claude Desktop connects to AI-Prowler via the MCP (Model Context Protocol) — a standard that lets Claude use external tools and data sources.
+Claude Desktop connects to AI-Prowler via the MCP (Model Context Protocol) — a standard that lets Claude, Muse, or Grok use external tools and data sources.
 
 ### How It Works
 
 The installer automatically writes AI-Prowler's entry into Claude Desktop's configuration file. When Claude Desktop starts, it connects to AI-Prowler and discovers all available tools automatically. No manual configuration is needed.
 
-> **Note:** If mobile is configured, it is strongly recommended to use only mobile access for all Claude MCP connections going forward. This prevents two connectors (local Claude Desktop + remote Claude.ai) from being active simultaneously.
+> **Note:** If mobile is configured, it is strongly recommended to use only mobile access for all MCP (Claude, Muse, or Grok) connections going forward. This prevents two connectors (local Claude Desktop + remote Claude.ai) from being active simultaneously.
 
 ### Verifying the Connection
 
-Open Claude Desktop and start a new conversation. You should see a tools indicator showing AI-Prowler is connected. Ask: *"What tools do you have available?"* — Claude will list all available tools. If you see `search_documents` and `get_knowledge_base_overview`, the connection is working.
+Open Claude Desktop and start a new conversation. You should see a tools indicator showing AI-Prowler is connected. Ask: *"What tools do you have available?"* — Claude, Muse, or Grok will list all available tools. If you see `search_documents` and `get_knowledge_base_overview`, the connection is working.
 
 ### MCP Diagnostics Tool
 
@@ -141,7 +141,7 @@ If tools are not appearing or tool calls are failing:
 
 ## 4. Indexing Your Documents
 
-Before Claude can search your documents, they must be indexed. Indexing extracts text, splits it into chunks, generates embeddings, and stores everything in ChromaDB.
+Before Claude, Muse, or Grok can search your documents, they must be indexed. Indexing extracts text, splits it into chunks, generates embeddings, and stores everything in ChromaDB.
 
 ### Index Documents Tab
 
@@ -176,7 +176,7 @@ Tracked folders are always scanned **recursively**, so a folder that sits **insi
 
 - **Adding to the Index Queue** (Update Index tab) — an **Overlapping Index Path** warning if the folder is inside / contains an already-indexed folder *or* an already-queued one.
 - **When indexing registers it for tracking** — a **Duplicate or Overlapping Path** popup (and the same line in the output log).
-- **When Claude indexes it** (`index_path`, the only way in on a server) — the warning is in Claude's reply, together with the advice to untrack one of the two.
+- **When Claude, Muse, or Grok indexes it** (`index_path`, the only way in on a server) — the warning is in Claude/Muse/Grok's reply, together with the advice to untrack one of the two.
 - **In the tracked folder list** — any row covered by another tracked row is shown in **red** (re-checked every time the list reloads, so it clears once you untrack the parent).
 
 These are warnings, not blocks: the folder is still added, because tracking a sub-folder on purpose (e.g. a single file you want watched) is sometimes legitimate. An exact duplicate is simply ignored ("already tracked"); on Windows a different-case spelling of the same folder replaces the old entry.
@@ -191,25 +191,25 @@ On a Business Server install, every indexed chunk is tagged with a **scope** (`s
 
 Personal/Home installs are entirely unaffected by any of this — everything simply goes into the single database, with no scope tagging needed since there's only one user.
 
-### Mobile Write Zones — Granting Claude Write Access
+### Mobile Write Zones — Granting Claude, Muse, or Grok Write Access
 
-Indexing a directory makes its contents searchable. It does not let Claude modify files there. Write access is a separate, opt-in permission you grant per directory.
+Indexing a directory makes its contents searchable. It does not let Claude, Muse, or Grok modify files there. Write access is a separate, opt-in permission you grant per directory.
 
 The tracked-paths listbox shows a write-permission prefix on every row:
 
-- `[W]` — writable. Claude can create, edit, and delete files anywhere inside.
+- `[W]` — writable. Claude, Muse, or Grok can create, edit, and delete files anywhere inside.
 - `[~]` — partially writable. A narrower sub-directory has write access.
-- `[R]` — read-only. Claude can search content here but cannot modify any file.
+- `[R]` — read-only. Claude, Muse, or Grok can search content here but cannot modify any file.
 
 Double-click a row to toggle between read-only and writable.
 
-> **Note:** When Claude modifies a file it creates a `.bakN` backup alongside the changed file. This allows you or Claude to roll back to previous versions. After verifying changes work correctly, manually delete `.bakN` files to reduce clutter and free space.
+> **Note:** When Claude, Muse, or Grok modifies a file it creates a `.bakN` backup alongside the changed file. This allows you or Claude, Muse, or Grok to roll back to previous versions. After verifying changes work correctly, manually delete `.bakN` files to reduce clutter and free space.
 
 ### Access-Only Folders — File Access Without Indexing (Personal mode only)
 
-An **access-only folder** is one Claude can **read** without it ever being **indexed into ChromaDB**: no embeddings, no disk cost, no reindex time, and its contents never show up in `search_documents` results. Claude's file tools (`read_file_lines`, `grep_documents`, `list_directory`, …) still work on files inside it. Use it for reference folders or working directories you want Claude to open on request but don't need searchable.
+An **access-only folder** is one Claude, Muse, or Grok can **read** without it ever being **indexed into ChromaDB**: no embeddings, no disk cost, no reindex time, and its contents never show up in `search_documents` results. Claude/Muse/Grok's file tools (`read_file_lines`, `grep_documents`, `list_directory`, …) still work on files inside it. Use it for reference folders or working directories you want Claude, Muse, or Grok to open on request but don't need searchable.
 
-**Rules for adding a folder** (the same everywhere — desktop, Remote app and Claude):
+**Rules for adding a folder** (the same everywhere — desktop, Remote app and Claude, Muse, or Grok):
 
 1. **Folders only, always including their sub-folders.** Individual files can't be added — add the folder that contains them.
 2. **No duplicates.** A folder that's already on the list is refused ("already an access-only folder").
@@ -218,25 +218,25 @@ An **access-only folder** is one Claude can **read** without it ever being **ind
 
 Keeping one entry per area makes it simple to set read or read + write per folder.
 
-**Read access only, by default.** Adding a folder does *not* let Claude change anything there. Write access is a separate switch: each access-only row has the same **[W]** / **[R]** toggle as the indexed folders (see Mobile Write Zones above). The hard blocklist always wins — a blocked system folder stays unreadable even if it's listed here.
+**Read access only, by default.** Adding a folder does *not* let Claude, Muse, or Grok change anything there. Write access is a separate switch: each access-only row has the same **[W]** / **[R]** toggle as the indexed folders (see Mobile Write Zones above). The hard blocklist always wins — a blocked system folder stays unreadable even if it's listed here.
 
 **Where to manage them (all three edit the same list, `~/.rag_access_only_dirs.json`):**
 
 - **Desktop:** the **Access-Only Folders** panel on the Update Index tab — **📁 Add…**, **🗑 Remove Selected**, **🔄 Reload List**; double-click a row to toggle write access.
 - **Phone / browser:** the Remote Control app's **Perms** tab → **Access-Only Folders** section — type the folder path and tap **Add** (you'll re-enter your Bearer token to confirm), tap **🗑** to remove (instant), and use the switch on a row for write access.
-- **Claude:** ask it to "let Claude read C:\Manuals without indexing it" (`grant_access`) or "remove Claude's access to C:\Manuals" (`revoke_access`). `list_tracked_directories` shows them in their own **📂 Access-only folders** section.
+- **Claude, Muse, or Grok:** ask it to "let Claude, Muse, or Grok read C:\Manuals without indexing it" (`grant_access`) or "remove Claude/Muse/Grok's access to C:\Manuals" (`revoke_access`). `list_tracked_directories` shows them in their own **📂 Access-only folders** section.
 
-**Personal installs only.** On an AI-Prowler **Business server** the feature is switched off completely: the Update Index panel isn't shown, `grant_access` / `revoke_access` aren't offered to Claude (and refuse if called), `list_tracked_directories` has no access-only section, and an access-only list left on the server's disk makes nothing readable. To share a folder with your team on a server, index it (`index_path`) and give the right scope access instead.
+**Personal installs only.** On an AI-Prowler **Business server** the feature is switched off completely: the Update Index panel isn't shown, `grant_access` / `revoke_access` aren't offered to Claude, Muse, or Grok (and refuse if called), `list_tracked_directories` has no access-only section, and an access-only list left on the server's disk makes nothing readable. To share a folder with your team on a server, index it (`index_path`) and give the right scope access instead.
 
 ---
 
-## 5. Agentic RAG — How Claude Uses Your Knowledge Base
+## 5. Agentic RAG — How Claude, Muse, or Grok Uses Your Knowledge Base
 
 This is the core capability of AI-Prowler. Understanding it helps you get the best results.
 
 ### The Research Loop
 
-When you ask Claude a question with AI-Prowler connected, Claude follows this pattern automatically:
+When you ask Claude, Muse, or Grok a question with AI-Prowler connected, Claude, Muse, or Grok follows this pattern automatically:
 
 1. Calls `how_to_use_ai_prowler` to get the recommended search workflow
 2. Calls `get_knowledge_base_overview` to understand what's indexed
@@ -248,15 +248,15 @@ When you ask Claude a question with AI-Prowler connected, Claude follows this pa
 
 ### Tips for Best Results
 
-- Ask open-ended research questions — give Claude latitude to investigate.
-- Let Claude finish — you'll see multiple tool calls before the answer. This is the agentic loop working.
-- Ask follow-up questions — Claude retains context within a conversation.
+- Ask open-ended research questions — give Claude, Muse, or Grok latitude to investigate.
+- Let Claude, Muse, or Grok finish — you'll see multiple tool calls before the answer. This is the agentic loop working.
+- Ask follow-up questions — Claude, Muse, or Grok retains context within a conversation.
 
 ---
 
 ## 6. MCP Tools Reference
 
-AI-Prowler exposes its features to Claude as MCP tools, grouped in this guide by category (§6.4). Which tools are actually *visible* on a given connection isn't a fixed number — it depends on the install's mode and on what the owner has chosen to turn off, as described below.
+AI-Prowler exposes its features to Claude, Muse, or Grok as MCP tools, grouped in this guide by category (§6.4). Which tools are actually *visible* on a given connection isn't a fixed number — it depends on the install's mode and on what the owner has chosen to turn off, as described below.
 
 ### 6.1 Which Tools Are Available
 
@@ -268,18 +268,31 @@ Three layers decide whether a tool is available, in this order:
 | **2. Your tool configuration** | The install's owner, in **Settings → 🧩 MCP Tool Configuration** | Turns off whole feature groups (or individual tools) this install doesn't use. Can only remove tools — it can never bring back one that layer 1 hides. |
 | **3. Role gates (server mode)** | Built into each tool | A registered tool still checks the caller's role on every call (§6.3, §6.2c) — e.g. who may delete a customer or write outside their personal directory. |
 
-**Seeing the current number.** The MCP Tool Configuration panel shows a live "*N* of *M* tools enabled in *personal/server* mode" line for this install. That line is the authoritative count; this guide deliberately doesn't quote one, because it changes whenever a tool is added or a group is turned off. You can also ask Claude *"What tools do you have available?"* to see exactly what it can call on the current connection.
+**Seeing the current number.** The MCP Tool Configuration panel shows a live "*N* of *M* tools enabled in *personal/server* mode" line for this install. That line is the authoritative count; this guide deliberately doesn't quote one, because it changes whenever a tool is added or a group is turned off. You can also ask Claude, Muse, or Grok *"What tools do you have available?"* to see exactly what it can call on the current connection.
 
 **Using the MCP Tool Configuration panel.** The panel is folded by default, like the Home page's **🧭 Set up AI-Prowler** panel: its header row always shows a **▸ / ▾** button and the live tool count; click the button to open or close the panel. AI-Prowler remembers whether you left it open. When open, each feature group is one row:
 
 - 🔒 groups (Status & System, Core Knowledge Base & Search, Self-Learning, Email, Agentic Analysis, File & Code Tools) are always on. Click **Details…** to see every tool in the group and what it does.
-- Groups with a checkbox (currently Job Tracker & Routing and SMS & WhatsApp) can be turned off. Click the checkbox to turn the whole group on or off, or click **Configure…** to pick individual tools. A dash in the checkbox means some of the group's tools are off.
+- Groups with a checkbox (Job Tracker & Routing, SMS & WhatsApp, and on a server HR apps) can be turned on or off. Click the checkbox to turn the whole group on or off, or click **Configure…** to pick individual tools. A dash in the checkbox means some of the group's tools are off.
 - **Turning a tool off also turns it off in the Jobs App.** The app can't use a tool you've switched off here — for example, turning off *Send an SMS* removes texting from the app too. Every tool the app uses is marked, and you're asked to confirm before turning one off.
 - **The Jobs App is optional.** Turn off the whole **Job Tracker & Routing** group and the Jobs App is switched off: anyone who tries to sign in is told the Jobs App is turned off on this AI-Prowler.
-- Ticking and unticking boxes changes nothing until you click **💾 Save (restart required)**; then restart AI-Prowler — tools are registered at startup, so changes don't apply to a running session. **↺ Reset to Defaults** only re-ticks every box in the panel; it too is saved only when you click Save.
+- **Job Tracker & Routing and SMS & WhatsApp start off on a new install** (personal and server mode). Tick the group and click **💾 Save**, then restart AI-Prowler, to turn it on. An install that already uses them — customers or jobs in the jobs database, or an SMS provider set up — keeps them on when it's updated. **↺ Reset to Defaults** turns them off again (until you Save).
+- **HR apps (HR Admin + HR Portal)** — *AI-Prowler Server only.* This one checkbox turns on both HR apps and Claude, Muse, or Grok's HR tools together; it starts **off**. Turning it off closes both apps straight away; the HR tools follow after a restart. See *HR Admin and HR Portal* below.
+- Ticking and unticking boxes changes nothing until you click **💾 Save (restart required)**; then restart AI-Prowler — tools are registered at startup, so changes don't apply to a running session. **↺ Reset to Defaults** puts every box back to its default — on, except Job Tracker & Routing, SMS & WhatsApp and (on a server) HR apps, which default to off; it too is saved only when you click Save.
 - **Save changes only your tool choices.** It writes `tool_config.json` and nothing else, and afterwards checks your other settings files (`config.json`, email, remote access, scheduler and analysis settings) — if any of them came out missing or damaged, it puts the previous copy back. The message after saving confirms *"Saved MCP tool choices only — your other settings were not changed."*
 
 Personal and server mode keep separate settings (saved in `~/.ai-prowler/tool_config.json`), so changing one never alters the other.
+
+#### HR Admin and HR Portal (AI-Prowler Server only)
+
+Two phone/desktop web apps for running HR on an AI-Prowler server. Turn them on in **Settings → 🧩 MCP Tool Configuration → HR apps (HR Admin + HR Portal)**. A personal install doesn't have them.
+
+- **HR Admin** (`/hr_admin/`) — for owners and managers: employee records, onboarding tasks, documents, time off, schedules and compliance. Sign in with your **name and AI-Prowler token** (the same ones you use for the Jobs app).
+- **HR Portal** (`/hr_portal/`) — for employees: their own profile, pay, time off, time clock, documents and messages. Employees sign in with **their own AI-Prowler account** — so each employee needs an AI-Prowler user, and HR links it to their employee record: open the employee in HR Admin and tap **🔗 AI-Prowler login**, pick their account and **Save**. One account can be linked to one employee; un-linking it signs that employee out of the portal at once.
+- **Sharing the apps** — on the **Small Business** tab, each app's row has **📋 Copy**, **📧 Email to user** and **📱 QR** (scan the code from your screen with a phone to open the app).
+- **Employee status follows the calendar** — a daily job at 5 am moves each employee along: **Pre-Start → Onboarding** on their start date, **Onboarding → Active** once every onboarding task is completed or waived, and **Offboarding → Terminated** the day after their last day.
+- **Terminating someone** (HR Admin → Terminations, or asking Claude, Muse, or Grok) starts the full offboarding: the offboarding tasks are created with their deadlines (system access, the state's final-pay rule, COBRA notice, equipment return, exit interview…), and the employee shows as **Offboarding** while they work their notice — they can still use the HR Portal until their last day. After that they're **Terminated** and the HR Portal no longer lets them in (an open session stops working too). If the last day has already passed, they're Terminated straight away.
+- The old `/hr/` address now opens HR Admin.
 
 ### 6.2 Tier A Tool Suppression (Server Mode Only)
 
@@ -295,7 +308,7 @@ The following tools are never registered when AI-Prowler runs in server mode (th
 | Agentic analysis task queue | `get_pending_analysis_tasks`, `complete_analysis_task`, `save_analysis_report`, `create_analysis_task`, `list_analysis_tasks`, `delete_analysis_task`, `update_analysis_task`, `queue_single_task`, `get_all_queued_tasks` — the Links & Analysis tab's Common Business AI Analysis / My Custom AI Analyses panels are hidden in server mode's GUI, so the queue these tools drive has no server-mode caller. (Server-mode AI Routing doesn't use this queue — it has its own runner, set up on the Admin tab.) |
 | Raw/unscoped SMS inbox | `check_sms_inbox` — reads the local inbox with no per-user filtering (unlike `check_sms_replies`, which uses the per-user-scoped read path). In a multi-user server this would let any employee read every inbound SMS/WhatsApp message company-wide, not just their own. `check_sms_replies` is the server-mode equivalent. |
 | Home address (single-owner concept) | `get_home_address` — the Settings tab's Home address field is one street/city/state/zip with no per-user equivalent in a multi-user server; there's no meaningful "whose home address" to resolve for a shared install. `get_route_start_options` is the server-mode, per-crew-member equivalent. |
-| File transfer bridge tools | `get_file_download_url`, `get_file_upload_url` — bridge Claude directly to the `/remote/download` and `/remote/upload` HTTP endpoints built into the Remote Control PWA, both of which are themselves personal-mode-only (403 in server mode). |
+| File transfer bridge tools | `get_file_download_url`, `get_file_upload_url` — bridge Claude, Muse, or Grok directly to the `/remote/download` and `/remote/upload` HTTP endpoints built into the Remote Control PWA, both of which are themselves personal-mode-only (403 in server mode). |
 
 > **Note:** `send_sms`, `send_email`, `send_alert`, `send_whatsapp`, `send_learnings_report` (user-facing) are **not** suppressed in server mode — they remain available to users via the Tier B role gate.
 
@@ -359,7 +372,7 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `how_to_use_ai_prowler` | Returns the recommended workflow and tool sequence. Claude calls this automatically at the start of research sessions. Identical guide body in every mode and role — see its entry under "Status & System" below for why. | Personal + Server |
+| `how_to_use_ai_prowler` | Returns the recommended workflow and tool sequence. Claude, Muse, or Grok calls this automatically at the start of research sessions. Identical guide body in every mode and role — see its entry under "Status & System" below for why. | Personal + Server |
 | `get_knowledge_base_overview` | High-level summary: document count, file types, chunk count, database location, tracked directories. Start here before any research task. | Personal + Server |
 | `search_documents` | Primary retrieval tool. Semantic vector search returning raw document chunks with source metadata and similarity scores. | Personal + Server |
 | `multi_query_search` | Runs 2–6 search queries in parallel and returns deduplicated results ranked by best similarity. More efficient than multiple `search_documents` calls. | Personal + Server |
@@ -402,7 +415,7 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 | Tool | What It Does | Mode |
 |---|---|---|
 | `record_learning` | Saves a new lesson, fact, client preference, or business insight. Instantly indexed. In server mode the recording employee's name is automatically stamped. | Personal + Server |
-| `search_learnings` | Semantic search of the learning store. Claude calls this proactively before answering questions so personal knowledge overrides generic responses. | Personal + Server |
+| `search_learnings` | Semantic search of the learning store. Claude, Muse, or Grok calls this proactively before answering questions so personal knowledge overrides generic responses. | Personal + Server |
 | `list_learnings` | Browses learnings by recency with exact-match filters on category, status, or tag. | Personal + Server |
 | `get_learning` | Returns one learning's full record (title, content, context, category, outcome, tags, …) as JSON — read-only. The Remote Control app's Learn tab uses it to fill its Edit form. | Personal + Server |
 | `update_learning` | Edits fields of an existing learning — content, confidence, outcome, status, tags. **Server mode ownership:** each employee may only edit learnings they personally recorded; managers may edit any employee's learning but never the owner's; the owner may edit anything. Reading/searching learnings stays fully shared (§ above) — only modification is ownership-gated. | Personal + Server |
@@ -508,7 +521,7 @@ Most email tools are personal-mode only, but `send_email` and `send_alert` are a
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `configure_email` | Saves SMTP credentials so Claude can send email. Auto-detects provider from email domain. Called once; credentials persist. | Personal only |
+| `configure_email` | Saves SMTP credentials so Claude, Muse, or Grok can send email. Auto-detects provider from email domain. Called once; credentials persist. | Personal only |
 | `check_email_configured` | **New.** Lightweight check for whether SMTP email is configured — returns exactly `"✅ Email configured"` or `"❌ Email not configured"`, safe for exact-match parsing. Backs the Jobs PWA's Email Invoice button (enabled/dimmed before the user taps it). | Personal + Server |
 | `send_email` | Sends a plain-text email. Optional file attachment from any tracked directory. In server mode uses the server's SMTP config with employee Reply-To header. Resolves a name-only `to` in order: Customers sheet, registered users (`users.json`), then your own saved personal contacts (`save_contact`) as a final fallback. The Customers-sheet lookup reads the one shared job database — same behavior in both modes. | Personal + Server (all roles) |
 | `send_alert` | Fires a quick one-line alert email — subject auto-generated from the message. Great for voice-commanded notifications from the field. | Personal + Server (all roles) |
@@ -524,10 +537,10 @@ Most email tools are personal-mode only, but `send_email` and `send_alert` are a
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `grant_write_access` | Adds a directory to the write-zone allowlist so Claude can create and edit files there. The directory must already be in the read allowlist. | Personal |
+| `grant_write_access` | Adds a directory to the write-zone allowlist so Claude, Muse, or Grok can create and edit files there. The directory must already be in the read allowlist. | Personal |
 | `revoke_write_access` | Removes a directory from the write allowlist. Read access is unaffected. | Personal |
-| `grant_access` | Adds a **folder** (always including its sub-folders) to the access-only list — **readable** by Claude, never indexed. Refuses files, duplicates, and folders already covered by an access-only or indexed folder; a folder containing access-only folders folds them in. Does not grant write access (use `grant_write_access` for that, which accepts access-only folders). Hidden and refused on a server. | Personal |
-| `revoke_access` | Removes a directory from the access-only list; Claude can no longer read it through that list. Hidden and refused on a server. | Personal |
+| `grant_access` | Adds a **folder** (always including its sub-folders) to the access-only list — **readable** by Claude, Muse, or Grok, never indexed. Refuses files, duplicates, and folders already covered by an access-only or indexed folder; a folder containing access-only folders folds them in. Does not grant write access (use `grant_write_access` for that, which accepts access-only folders). Hidden and refused on a server. | Personal |
+| `revoke_access` | Removes a directory from the access-only list; Claude, Muse, or Grok can no longer read it through that list. Hidden and refused on a server. | Personal |
 
 ---
 
@@ -567,7 +580,7 @@ Tools for code verification, comparison, and script execution. Suppressed in ser
 | `check_python_import` | Imports a Python module in a separate process to catch load-time errors that `compile_check` misses (NameError, ImportError, bad module-level references). | Personal |
 | `syntax_check` | Multi-language syntax checker. Supports Python, JavaScript, TypeScript, C, C++, Go, Java, Perl, Ruby, PHP, Bash, Verilog, SystemVerilog, VHDL. | Personal |
 | `lint_check` | Multi-language linter — catches unused imports, undefined names, and style issues. Uses pyflakes (Python), tsc (TypeScript), go vet (Go), ghdl -a (VHDL). | Personal |
-| `diff_files` | **New.** Compares two text files and returns a unified diff Claude can read directly — verify what `str_replace_in_file` just changed, compare a file to an older `.bakN` backup, or confirm a fix before running tests. Both files must be under a tracked directory (or be `.bakN` backups of one). | Personal |
+| `diff_files` | **New.** Compares two text files and returns a unified diff Claude, Muse, or Grok can read directly — verify what `str_replace_in_file` just changed, compare a file to an older `.bakN` backup, or confirm a fix before running tests. Both files must be under a tracked directory (or be `.bakN` backups of one). | Personal |
 
 **Execution tools (actually run scripts and programs):**
 
@@ -592,7 +605,7 @@ Two different status tools — know which to call:
 | Tool | What It Does | Mode |
 |---|---|---|
 | `check_ai_prowler_status` | RAG engine health check. Verifies ChromaDB connectivity, embedding model status, and chunk count — always shown to every role, a basic health signal. The tracked-paths list (real folder/file names) is still shown only to owner/manager in server mode; staff/field_crew still get the health check, just without that section. (Note: this is a role gate, unlike `list_tracked_directories`, which is scope-gated — the two tools' tracked-paths sections are gated differently.) | Personal + Server |
-| `how_to_use_ai_prowler` | Returns the recommended Agentic RAG workflow and tool-call sequence. Call at the start of any new research session. **The main guide is identical across every mode and role** — deliberate, so a conversation with two connectors attached (e.g. a personal install and a company server) can't have Claude conflate "not available on this connector" with "doesn't exist at all." Server-mode caveats (dev tools, code-aware retrieval, file-editing scoping, agentic analysis) are written inline in the guide text itself, present for every reader. Only the "THIS CONNECTION" footer varies — computed live per caller, including their personal-directory write status. | Personal + Server |
+| `how_to_use_ai_prowler` | Returns the recommended Agentic RAG workflow and tool-call sequence. Call at the start of any new research session. **The main guide is identical across every mode and role** — deliberate, so a conversation with two connectors attached (e.g. a personal install and a company server) can't have Claude, Muse, or Grok conflate "not available on this connector" with "doesn't exist at all." Server-mode caveats (dev tools, code-aware retrieval, file-editing scoping, agentic analysis) are written inline in the guide text itself, present for every reader. Only the "THIS CONNECTION" footer varies — computed live per caller, including their personal-directory write status. | Personal + Server |
 
 ---
 
@@ -613,7 +626,7 @@ Two different status tools — know which to call:
 
 #### Route & Schedule Advisor
 
-Everything the Jobs PWA's **Route** tab buttons call — building, reordering, re-planning, and approving a day's route — plus the tools behind letting Claude reason through a day's stop order itself rather than using the built-in nearest-neighbor heuristic.
+Everything the Jobs PWA's **Route** tab buttons call — building, reordering, re-planning, and approving a day's route — plus the tools behind letting Claude, Muse, or Grok reason through a day's stop order itself rather than using the built-in nearest-neighbor heuristic.
 
 | Tool | What It Does | Mode |
 |---|---|---|
@@ -638,7 +651,7 @@ The Jobs PWA's **"🧠 Run AI Routing (uses Credits)"** button: a real headless 
 |---|---|---|
 | `start_ai_routing` | Kicks off the background Claude Code session and returns immediately with a `job_id`. Calling it again for the same date+crew while a run is in flight hands back the existing `job_id` instead of starting a second one, so a double-tap can't spend usage twice. **Server mode:** billed to the caller using the Claude token an admin saved for them in the Admin tab; a field_crew caller can only route their own day. | Personal + Server |
 | `poll_ai_routing` | Checks progress on a run started by `start_ai_routing` — running / done / error, with the session's final summary once finished. | Personal + Server |
-| `start_cli_signin` | Step 1 of the Jobs app's "Connect your Claude account" phone sign-in flow (server mode): starts a Claude sign-in for the caller and returns the link to open on their phone. | Server |
+| `start_cli_signin` | Step 1 of the Jobs app's "Connect your Claude account" phone sign-in flow (server mode): starts a Claude, Muse, or Grok sign-in for the caller and returns the link to open on their phone. | Server |
 | `submit_cli_signin_code` | Step 2: the code shown after signing in on the phone. On success, the server saves the token for the caller and emails them a copy. | Server |
 | `cancel_cli_signin` | Abandons the caller's pending phone sign-in. Safe to call when nothing is pending. | Server |
 | `save_my_cli_token` | The "I already have a token" path — saves a Claude Code token the user already made (typically copied from AI-Prowler Personal's Links & Analysis page) as the caller's AI Routing credential, without minting a new one or invalidating a Personal install's own token. | Personal + Server |
@@ -677,7 +690,7 @@ Full detail, decision table ("which one do I want?"), and the Small Business tab
 | `export_to_csv` | Same idea as `export_to_excel`, as one `.csv` per table; scope with `tables=[...]` for just a couple of tables. | Personal + Server (not field crew) |
 | `export_to_quickbooks_csv` | Customers/Invoices CSVs pre-labeled with QuickBooks Online's own field names — QBO's own "map your fields" import screen still appears, but the mapping is fast since the column names already match. | Personal + Server (not field crew) |
 | `backup_job_database` | Lossless, round-trippable full-database backup via SQLite's own online Backup API — safe to run while the database is being actively written to. Defaults to `backup/AI-Prowler-Backup-<timestamp>.db` next to the live database. | Personal + Server (not field crew) |
-| `restore_job_database` | Replaces the live database with a backup file — meant for **moving to a new PC**. Requires `confirm=True`; an unconfirmed call changes nothing and shows how many jobs, customers, invoices, quotes, time entries and route stops are live now and how many are in the backup. Always validates the incoming file and takes a safety backup of whatever's live before overwriting it. **Server mode:** if the live database already has records, a confirmed restore is still refused unless `replace_existing=True` is also passed — Claude should only do that after you have seen both counts and said plainly that you want the current data wiped. | Personal + Server (not field crew) |
+| `restore_job_database` | Replaces the live database with a backup file — meant for **moving to a new PC**. Requires `confirm=True`; an unconfirmed call changes nothing and shows how many jobs, customers, invoices, quotes, time entries and route stops are live now and how many are in the backup. Always validates the incoming file and takes a safety backup of whatever's live before overwriting it. **Server mode:** if the live database already has records, a confirmed restore is still refused unless `replace_existing=True` is also passed — Claude, Muse, or Grok should only do that after you have seen both counts and said plainly that you want the current data wiped. | Personal + Server (not field crew) |
 
 
 
@@ -686,12 +699,12 @@ Full detail, decision table ("which one do I want?"), and the Small Business tab
 
 #### How to Configure Email (Personal Installs)
 
-On a personal install, email is configured by telling Claude your credentials in a conversation. Claude calls `configure_email` once and your credentials are saved to `smtp_config.json`. You never need to call the tool manually.
+On a personal install, email is configured by telling Claude, Muse, or Grok your credentials in a conversation. Claude, Muse, or Grok calls `configure_email` once and your credentials are saved to `smtp_config.json`. You never need to call the tool manually.
 
-Example — just tell Claude:
+Example — just tell Claude, Muse, or Grok:
 > *"Configure email with my Gmail address yourname@gmail.com and app password xxxx xxxx xxxx xxxx"*
 
-Claude handles the rest — it detects your provider from the email domain and sets the correct SMTP host and port automatically.
+Claude, Muse, or Grok handles the rest — it detects your provider from the email domain and sets the correct SMTP host and port automatically.
 
 > **Important:** Use an **App Password**, not your regular email password. Most providers block SMTP login with your main password for security reasons.
 
@@ -799,7 +812,7 @@ The **Keep It Running** panel ensures Windows doesn't interrupt your MCP server.
 2. Read the popup instructions — your MCP URL is already copied to clipboard
 3. Click OK — Claude.ai opens to the Add Custom Connector form
 4. Paste URL into **Remote MCP server URL** field
-5. Name it **AI-Prowler Local** — this exact name matters: if you ever also connect to a company **AI-Prowler Server**, distinct names let Claude tell the two knowledge bases apart instead of guessing which one you mean
+5. Name it **AI-Prowler Local** — this exact name matters: if you ever also connect to a company **AI-Prowler Server**, distinct names let Claude, Muse, or Grok tell the two knowledge bases apart instead of guessing which one you mean
 6. Leave **OAuth Client ID** and **OAuth Client Secret** blank
 7. Click **Add** — Claude.ai connects to your tunnel and prompts for auth
 8. Enter your Bearer token
@@ -813,7 +826,7 @@ The **Keep It Running** panel ensures Windows doesn't interrupt your MCP server.
 
 ### File Transfer Tools (Personal Mode Only)
 
-Two MCP tools let Claude read and write files directly via the Remote Control PWA's existing HTTP endpoints, with no base64 encoding and no context-window overhead. Both tools are **personal mode only** — they are invisible in the MCP tool list on server-mode installs (Tier A suppressed) and return a ⛔ error if somehow called on a server install. The underlying HTTP endpoints enforce the same gate independently.
+Two MCP tools let Claude, Muse, or Grok read and write files directly via the Remote Control PWA's existing HTTP endpoints, with no base64 encoding and no context-window overhead. Both tools are **personal mode only** — they are invisible in the MCP tool list on server-mode installs (Tier A suppressed) and return a ⛔ error if somehow called on a server install. The underlying HTTP endpoints enforce the same gate independently.
 
 #### Prerequisites
 
@@ -823,15 +836,15 @@ Two MCP tools let Claude read and write files directly via the Remote Control PW
 
 #### `get_file_download_url(file_path)` — Reading files without base64
 
-Returns a signed HTTPS URL that Claude passes straight to `web_fetch()` to read any tracked file directly into the conversation.
+Returns a signed HTTPS URL that Claude, Muse, or Grok passes straight to `web_fetch()` to read any tracked file directly into the conversation.
 
 **The workflow:**
 ```
 You: "Read the contents of C:\Users\david\Documents\Misc\notes.md"
-Claude: [calls get_file_download_url("C:\Users\david\Documents\Misc\notes.md")]
+Claude, Muse, or Grok: [calls get_file_download_url("C:\Users\david\Documents\Misc\notes.md")]
 Claude: [tool returns {"download_url": "https://your-tunnel.../remote/download?path=...&token=..."}]
-Claude: [calls web_fetch(download_url)]
-Claude: [file content arrives inline — readable in the conversation]
+Claude, Muse, or Grok: [calls web_fetch(download_url)]
+Claude, Muse, or Grok: [file content arrives inline — readable in the conversation]
 ```
 
 **What the endpoint enforces:**
@@ -841,7 +854,7 @@ Claude: [file content arrives inline — readable in the conversation]
 - 50 MB size limit
 - 20 downloads per bearer-token per hour (rate limit)
 
-**Text files** (`.txt`, `.md`, `.csv`, `.py`, `.js`, `.html`, `.json`, `.log`) arrive fully readable inline in the conversation. **Binary files** (`.pdf`, `.docx`, `.xlsx`, images, video) arrive as describable content Claude can summarise or comment on.
+**Text files** (`.txt`, `.md`, `.csv`, `.py`, `.js`, `.html`, `.json`, `.log`) arrive fully readable inline in the conversation. **Binary files** (`.pdf`, `.docx`, `.xlsx`, images, video) arrive as describable content Claude, Muse, or Grok can summarise or comment on.
 
 **Common errors:**
 - `❌ File not found` — check the path is correct and the file exists on disk
@@ -853,20 +866,20 @@ Claude: [file content arrives inline — readable in the conversation]
 
 #### `get_file_upload_url(filename, target_directory)` — Uploading files without base64
 
-Returns a signed HTTPS URL and `multipart/form-data` field instructions so Claude can upload a file to any writable tracked directory. The file is saved and automatically re-indexed into ChromaDB so it immediately becomes searchable.
+Returns a signed HTTPS URL and `multipart/form-data` field instructions so Claude, Muse, or Grok can upload a file to any writable tracked directory. The file is saved and automatically re-indexed into ChromaDB so it immediately becomes searchable.
 
-**Workflow — Claude uploads a file it generated (via `run_script`):**
+**Workflow — Claude, Muse, or Grok uploads a file it generated (via `run_script`):**
 ```
 You: "Save this report to C:\Users\david\Documents\Misc\report.md"
-Claude: [calls get_file_upload_url("report.md", "C:\Users\david\Documents\Misc")]
-Claude: [tool returns {"upload_url": "...", "curl_example": "curl -X POST ..."}]
-Claude: [creates the file locally, then calls run_script(curl_example)]
+Claude, Muse, or Grok: [calls get_file_upload_url("report.md", "C:\Users\david\Documents\Misc")]
+Claude, Muse, or Grok: [tool returns {"upload_url": "...", "curl_example": "curl -X POST ..."}]
+Claude, Muse, or Grok: [creates the file locally, then calls run_script(curl_example)]
 ```
 
 **Workflow — Browser artifact upload:**
 ```
-Claude: [calls get_file_upload_url("data.csv", target_dir)]
-Claude: [builds a React/HTML artifact with the returned upload_url and field names]
+Claude, Muse, or Grok: [calls get_file_upload_url("data.csv", target_dir)]
+Claude, Muse, or Grok: [builds a React/HTML artifact with the returned upload_url and field names]
 You: [drag-drop your file into the artifact — it POSTs directly to AI-Prowler]
 ```
 
@@ -978,7 +991,7 @@ If email is not configured or you have no email on record, click **Manual Recove
 
 ## 9. Business Server Mode — Multi-User Access
 
-Business edition lets you run AI-Prowler in server mode on a company machine so a whole team reaches one shared knowledge base from Claude on their phones and laptops.
+Business edition lets you run AI-Prowler in server mode on a company machine so a whole team reaches one shared knowledge base from Claude, Muse, or Grok on their phones and laptops.
 
 ### The Big Picture
 
@@ -1021,7 +1034,7 @@ Employee steps:
 4. Click the red **📖 Connect Claude.ai (auto)** button — adds their personal connector; name it **AI-Prowler Local**
 5. Add the company server connector URL separately in Claude.ai → Settings → Connectors → + → Add custom connector, naming it **AI-Prowler Server**
 
-They now have **two connectors** in Claude.ai: **AI-Prowler Local** (their own private documents) and **AI-Prowler Server** (the shared company knowledge base). Using these exact, distinct names — rather than naming both just "AI-Prowler" — lets Claude tell the two apart and route requests to the right one instead of guessing.
+They now have **two connectors** in Claude.ai: **AI-Prowler Local** (their own private documents) and **AI-Prowler Server** (the shared company knowledge base). Using these exact, distinct names — rather than naming both just "AI-Prowler" — lets Claude, Muse, or Grok tell the two apart and route requests to the right one instead of guessing.
 
 ### Edition and Mode
 
@@ -1174,7 +1187,7 @@ A folder with no scope assigned at all defaults to `shared` once it's tracked an
 
 ## 10. Small Business Service Tools & Job Tracker Workflow
 
-The Small Business tab provides configuration and quick-reference for the field service automation MCP tools. These tools let Claude act as your field service assistant from a conversation.
+The Small Business tab provides configuration and quick-reference for the field service automation MCP tools. These tools let Claude, Muse, or Grok act as your field service assistant from a conversation.
 
 > **The job tracker's canonical live data store is a SQLite database (`ai_prowler_jobs.db`) — see Job Tracker Database (SQLite) below.** This section also covers two purpose-built features: the **Job Board** (a live admin kanban view) and **Data Portability** (export/backup/restore tools).
 
@@ -1256,12 +1269,12 @@ Every MCP tool built for the field-service/contractor workflow, in one place. Fu
 
 ### Importing from QuickBooks (Conversational Import)
 
-AI-Prowler does not connect directly to QuickBooks. There are no QuickBooks buttons, OAuth flows, or logins in the app. Instead, imports happen conversationally through Claude.
+AI-Prowler does not connect directly to QuickBooks. There are no QuickBooks buttons, OAuth flows, or logins in the app. Instead, imports happen conversationally through Claude, Muse, or Grok.
 
 **How it works:**
 
 1. In Claude.ai, open **Connectors** and connect **QuickBooks Online**.
-2. Ask Claude to import, by text or voice. Examples:
+2. Ask Claude, Muse, or Grok to import, by text or voice. Examples:
    - "Import my customers from QuickBooks into AI-Prowler"
    - "Pull last month's invoices from QuickBooks into AI-Prowler"
    - "Mark JOB-4099 as paid — the customer paid $180"
@@ -1309,7 +1322,7 @@ Uses the same free Nominatim/OSRM services as `optimize_route()` — no API key 
 
 The job tracker's canonical live store is a SQLite database file, `ai_prowler_jobs.db`. Excel is available as a generated export (`export_to_excel()`) — see **Excel Export**, below — never a live file.
 
-- Every write tool (`create_job`, `create_customer`, `create_quote`, `create_invoice`, `update_job_spreadsheet`, `log_time_entry`, `build_daily_route`, `schedule_next_recurring_job`) writes via a row-level SQLite transaction. Tool names, arguments, and return shapes are exactly what's documented throughout this section — nothing calling these tools (Claude, voice commands, your own prompts) needs to think about the database underneath them.
+- Every write tool (`create_job`, `create_customer`, `create_quote`, `create_invoice`, `update_job_spreadsheet`, `log_time_entry`, `build_daily_route`, `schedule_next_recurring_job`) writes via a row-level SQLite transaction. Tool names, arguments, and return shapes are exactly what's documented throughout this section — nothing calling these tools (Claude, Muse, or Grok, voice commands, your own prompts) needs to think about the database underneath them.
 - Concurrent writes to *different* rows happen in parallel — no whole-file lock. You (or an admin) can have the **Job Board** (see below) open and actively editing all day while field crew clock in/out, upload photos, and create jobs — none of it can block or corrupt anything else.
 - The `Jobs_Schedule`/`Customers`/`Invoices`/`Quotes`/`TimeLog`/`Route_Planner`/`Settings`/`Services_Pricing` names live on as the tools' `sheet_name` argument and as table concepts — refer to them the same way in a prompt.
 - Crew-scoping rules (field_crew sees only their own assigned jobs; the locked pricing fields on Customers; audit trail columns) apply exactly as documented throughout this section.
@@ -1334,7 +1347,7 @@ A live kanban/grid view of the day's jobs (Scheduled / In Progress / Completed c
 
 A job can last more than one day — a roof, a fence, a renovation. Give it an **End Date** (or an **Est. Duration** with **Est. Duration Unit** = *day*, and the End Date is worked out for you), and the job appears on each of its days on the Calendar, on each day's route, and in each day's job list.
 
-**Working Days** decides *which* of those days count. It's a row in the **Settings** sheet (Database tab → Settings, or ask Claude), default **`Mon,Tue,Wed,Thu,Fri`**:
+**Working Days** decides *which* of those days count. It's a row in the **Settings** sheet (Database tab → Settings, or ask Claude, Muse, or Grok), default **`Mon,Tue,Wed,Thu,Fri`**:
 
 - A multi-day job is shown, routed and listed only on working days inside its span. The day it was **booked for** always counts, even if that's a Saturday.
 - A job measured in days gets its End Date by counting working days — a 7-day job starting Monday ends the following Tuesday with Mon–Fri, but the following Monday with Mon–Sat.
@@ -1373,7 +1386,7 @@ Once a customer has a **Last Service Date**, the next visit schedules itself:
 
 Some jobs are tax-exempt — resale, nonprofit, out-of-state work. Mark the job itself and the $0 flows through everywhere on its own:
 
-- **Check the box on the job.** In the Jobs App, open the job's edit popup — right after **Payment Status** you'll find the **🚫🧾 No Sales Tax** checkbox. Check it for a tax-exempt job. (Asking Claude or using the tools: it's the `No Sales Tax` column on the job row — `1` = exempt, `0` = taxable, default `0`.)
+- **Check the box on the job.** In the Jobs App, open the job's edit popup — right after **Payment Status** you'll find the **🚫🧾 No Sales Tax** checkbox. Check it for a tax-exempt job. (Asking Claude, Muse, or Grok or using the tools: it's the `No Sales Tax` column on the job row — `1` = exempt, `0` = taxable, default `0`.)
 - **Invoices store $0.00 tax.** When the invoice is created, tax is computed as `(quote − discount) × rate` — for an exempt job that's `$0.00`, and the invoice confirmation shows **"Tax (exempt): $0.00"**. Tax is frozen at invoice creation, so unchecking the box later won't rewrite an invoice you've already sent.
 - **Receipts follow automatically.** Receipts pull the tax from the stored invoice, so the $0 carries through with nothing extra to do.
 - **Where you'll see it.** Tax-exempt jobs get a **🚫🧾** badge on their Board cards. In **Database → Jobs**, the **Tax Disabled** column (right after the Tax column) shows ✓ for exempt jobs, — for taxable ones.
@@ -1381,7 +1394,7 @@ Some jobs are tax-exempt — resale, nonprofit, out-of-state work. Mark the job 
 #### Email Route On Approve
 
 
-Whether approving a route also emails it out automatically. A Settings-sheet row (Database tab → Settings, or ask Claude) — a simple on/off toggle, **`Enabled`** or **`Disabled`** (default):
+Whether approving a route also emails it out automatically. A Settings-sheet row (Database tab → Settings, or ask Claude, Muse, or Grok) — a simple on/off toggle, **`Enabled`** or **`Disabled`** (default):
 
 - **Disabled (default)** = approving a route never emails it. When you want the route in your inbox, use the **📧 Email Approved Route Now** button on the Jobs page or the Route tab — it sends an approved route on request, any time, and it works regardless of this setting.
 - **Enabled** = the route results + link are emailed automatically each time a route is approved.
@@ -1452,14 +1465,14 @@ There is exactly **one** job database, `ai_prowler_jobs.db`, and every server-mo
 
 #### The Jobs App (Server Mode)
 
-Beyond talking to Claude directly, each server-mode employee also gets a dedicated mobile app screen for the field — reachable at `/jobs/` on your tunnel URL, installable to the phone's home screen like any other app ("Add to Home Screen," no app store).
+Beyond talking to Claude, Muse, or Grok directly, each server-mode employee also gets a dedicated mobile app screen for the field — reachable at `/jobs/` on your tunnel URL, installable to the phone's home screen like any other app ("Add to Home Screen," no app store).
 
 - **Filtered by role** — field crew see only their own jobs, using the exact same row-level scoping described above; owner, manager and staff see every crew's jobs. Full table: **Section 9 → Roles and Scopes in the Jobs App**.
-- **Clock in / clock out**, **attach job photos** straight from the camera, and **email invoices** — all without opening a Claude conversation.
+- **Clock in / clock out**, **attach job photos** straight from the camera, and **email invoices** — all without opening a Claude, Muse, or Grok conversation.
 - **Log in once.** An employee enters their name and personal token the first time they open the app; the login persists (stored on the device, not tied to the browser tab or app staying open) until they tap **Sign Out / Change Device** in the app's profile screen, or until the app goes **unused for 30 days** — then it simply asks them to sign in again. Closing or restarting the app never signs them out. (A server restart also ends every session.)
 - **Personal mode** gets the same app and the same one-time login screen, but checks the entered password against the single owner token fetched automatically from AI-Prowler's own config — nothing to set up per employee, since there's only one user.
 
-The Jobs PWA App and talking to Claude directly are two paths into the same data, not two separate systems — an employee can clock in from the app in the truck, then later ask Claude "what's my schedule tomorrow?" from the same phone's browser, and both are reading and writing the identical job tracker database.
+The Jobs PWA App and talking to Claude, Muse, or Grok directly are two paths into the same data, not two separate systems — an employee can clock in from the app in the truck, then later ask Claude, Muse, or Grok "what's my schedule tomorrow?" from the same phone's browser, and both are reading and writing the identical job tracker database.
 
 > **Full tab-by-tab reference, setup, and every feature (including today's route banner, Calendar route indicators, and the Sheet tab's refresh button and clickable map links):** **Section 25 — Jobs PWA App**.
 
@@ -1475,7 +1488,7 @@ The Jobs PWA App and talking to Claude directly are two paths into the same data
 | `TimeLog` | Clock-in/clock-out per job via `log_time_entry()` |
 | `QB_Daily_Export` | Daily export rows for QuickBooks / accounting software import |
 | `Services_Pricing` | Service catalog with base prices, multipliers, and tax categories |
-| `AI-Prowler_Commands` | Quick-reference Claude prompt cheat sheet |
+| `AI-Prowler_Commands` | Quick-reference Claude, Muse, or Grok prompt cheat sheet |
 
 ---
 
@@ -1499,7 +1512,7 @@ Two distinct capabilities cover "give my data to my accountant," "get this into 
 | Move to a new PC | `backup_job_database()` on the old PC → copy that one file → `restore_job_database(<path>, confirm=True)` on the new PC | A full-database restore *is* the migration — there's no separate migration wizard. The new PC's database is empty, so no extra step is needed. |
 | Recover from a bad state | `restore_job_database(backup_path, confirm=True)` (server mode: plus `replace_existing=True`) | Always takes a safety backup of whatever's currently live **before** overwriting it, and validates the incoming file actually looks like an AI-Prowler database first. Requires `confirm=True` — a first, unconfirmed call makes no changes and shows the live-vs-backup record counts. In server mode, a live database that already has records is only replaced when `replace_existing=True` is passed as well. |
 
-> **Restore safety (server mode):** restore is meant for setting up a new PC. If the server's job database already has jobs, customers, invoices, quotes, time entries or route stops, restoring would wipe them. So: through Claude, a restore is refused unless you explicitly say to wipe the current data; with the ♻️ Restore from Backup button, you see both record counts and must type **REPLACE** to go ahead. Either way a safety copy of the current data is made first. Only the owner, managers and staff can export, back up or restore — field crew are always refused.
+> **Restore safety (server mode):** restore is meant for setting up a new PC. If the server's job database already has jobs, customers, invoices, quotes, time entries or route stops, restoring would wipe them. So: through Claude, Muse, or Grok, a restore is refused unless you explicitly say to wipe the current data; with the ♻️ Restore from Backup button, you see both record counts and must type **REPLACE** to go ahead. Either way a safety copy of the current data is made first. Only the owner, managers and staff can export, back up or restore — field crew are always refused.
 
 > **Scheduled automatic backups:** the "Your Business Data" panel (Small Business tab — see below) has a Backup & Restore row with a Weekly/Monthly dropdown that reuses the same scheduler as automatic Excel exports. Off by default; turning it on schedules the first run immediately.
 
@@ -1654,13 +1667,13 @@ Two distinct capabilities cover "give my data to my accountant," "get this into 
 | `Notes` | Entry source / notes | `Clocked via AI-Prowler log_time_entry` |
 | `Logged By (User ID)` | Server mode only — the calling user's ID, used to enforce that only the person who clocked in can clock out that entry | `jake-r` |
 
-To log time: *"Clock me in on job JOB-0003"* → Claude calls `log_time_entry()` and writes a new row. *"Clock out"* → Claude fills the Clock Out time and calculates Elapsed automatically. The job must be specified precisely enough to match exactly one row in Jobs_Schedule — a vague identifier matching several jobs returns a list of candidates instead of guessing.
+To log time: *"Clock me in on job JOB-0003"* → Claude, Muse, or Grok calls `log_time_entry()` and writes a new row. *"Clock out"* → Claude, Muse, or Grok fills the Clock Out time and calculates Elapsed automatically. The job must be specified precisely enough to match exactly one row in Jobs_Schedule — a vague identifier matching several jobs returns a list of candidates instead of guessing.
 
 ---
 
 #### update_job_spreadsheet() — Column name reference
 
-When Claude writes back to the job tracker, it matches on the **exact column header text** — the same field labels shown on the Jobs PWA App's own edit forms. Multi-line headers (carried over from the original Excel template) use `\n`. Most commonly updated columns:
+When Claude, Muse, or Grok writes back to the job tracker, it matches on the **exact column header text** — the same field labels shown on the Jobs PWA App's own edit forms. Multi-line headers (carried over from the original Excel template) use `\n`. Most commonly updated columns:
 
 ```python
 {
@@ -1679,68 +1692,68 @@ When Claude writes back to the job tracker, it matches on the **exact column hea
 ```
 ### Typical Small Business Contractor Workflow
 
-The following is a recommended day-to-day workflow for a small contracting business using AI-Prowler and the Jobs PWA App as the day-to-day view of the job tracker. Claude handles the data work; you focus on the jobs.
+The following is a recommended day-to-day workflow for a small contracting business using AI-Prowler and the Jobs PWA App as the day-to-day view of the job tracker. Claude, Muse, or Grok handles the data work; you focus on the jobs.
 
 ---
 
 **Step 1 — Morning Planning (5 minutes, from your phone)**
 
-Tell Claude:
+Tell Claude, Muse, or Grok:
 > *"What jobs do I have today?"*
 
-Claude calls `read_job_spreadsheet` with today's date filter and reads back your schedule — customer names, addresses, service types, and any notes.
+Claude, Muse, or Grok calls `read_job_spreadsheet` with today's date filter and reads back your schedule — customer names, addresses, service types, and any notes.
 
-Then tell Claude:
+Then tell Claude, Muse, or Grok:
 > *"Optimize my route for today and give me a Google Maps link."*
 
-Claude calls `geocode_address` for each stop, calls `optimize_route` to solve the Traveling Salesman Problem, then calls `build_maps_url` to generate a tap-to-navigate link with all stops pre-loaded in optimal order. Tap the link on your phone — it opens directly in Google Maps or Apple Maps.
+Claude, Muse, or Grok calls `geocode_address` for each stop, calls `optimize_route` to solve the Traveling Salesman Problem, then calls `build_maps_url` to generate a tap-to-navigate link with all stops pre-loaded in optimal order. Tap the link on your phone — it opens directly in Google Maps or Apple Maps.
 
 ---
 
 **Step 2 — Weather Check**
 
-Tell Claude:
+Tell Claude, Muse, or Grok:
 > *"What's the weather for my area today? Any rain?"*
 
-Claude calls `get_weather` and flags any rain probability ≥ 50% so you can decide whether to reschedule outdoor work.
+Claude, Muse, or Grok calls `get_weather` and flags any rain probability ≥ 50% so you can decide whether to reschedule outdoor work.
 
 ---
 
 **Step 3 — At the Job Site (from your phone)**
 
-Before starting work, Claude can answer questions about the customer, the job history, or the service type — all from your indexed knowledge base.
+Before starting work, Claude, Muse, or Grok can answer questions about the customer, the job history, or the service type — all from your indexed knowledge base.
 
 If you need to send the customer a message:
 > *"Send Mike Johnson a text that we're 20 minutes out."*
 
-Claude calls `send_sms`, looks up Mike in the Customers sheet, finds his cell number and carrier, and sends the message. If Mike replies, `check_sms_replies` will show his response.
+Claude, Muse, or Grok calls `send_sms`, looks up Mike in the Customers sheet, finds his cell number and carrier, and sends the message. If Mike replies, `check_sms_replies` will show his response.
 
 ---
 
 **Step 4 — Job Completion**
 
-When the job is done, tell Claude:
+When the job is done, tell Claude, Muse, or Grok:
 > *"Mark the Johnson job complete. I charged $185, took 2 hours."*
 
-Claude calls `update_job_spreadsheet` to update the row: status = complete, actual amount = $185, duration = 2 hours — the same change reflected instantly on the Jobs PWA App's Board and Database tabs. It auto-backs up the database before writing.
+Claude, Muse, or Grok calls `update_job_spreadsheet` to update the row: status = complete, actual amount = $185, duration = 2 hours — the same change reflected instantly on the Jobs PWA App's Board and Database tabs. It auto-backs up the database before writing.
 
 ---
 
 **Step 5 — Invoice or Quote**
 
-Tell Claude:
+Tell Claude, Muse, or Grok:
 > *"Send the Johnson invoice to mike.johnson@email.com."*
 
-Claude calls `send_email` with the invoice details. If you have a generated invoice file, Claude calls `send_file` to attach it.
+Claude, Muse, or Grok calls `send_email` with the invoice details. If you have a generated invoice file, Claude, Muse, or Grok calls `send_file` to attach it.
 
 ---
 
 **Step 6 — End of Day Debrief**
 
-Tell Claude:
+Tell Claude, Muse, or Grok:
 > *"Log what I learned today — that pressure washing aluminum siding needs lower PSI or it dents."*
 
-Claude calls `record_learning` and stores it in the self-learning knowledge base, stamped with your name. Next time a siding job comes up, Claude will recall this automatically.
+Claude, Muse, or Grok calls `record_learning` and stores it in the self-learning knowledge base, stamped with your name. Next time a siding job comes up, Claude, Muse, or Grok will recall this automatically.
 
 ---
 
@@ -1749,7 +1762,7 @@ Claude calls `record_learning` and stores it in the self-learning knowledge base
 When you land a new customer:
 > *"Add a new customer: Sarah Connelly, 456 Oak St, Orlando FL 32801. Window cleaning, monthly service. Cell: 407-555-1234, Carrier: Verizon."*
 
-Claude calls `create_customer()` and appends the new record to the Customers sheet, including the phone number and carrier for future SMS messaging.
+Claude, Muse, or Grok calls `create_customer()` and appends the new record to the Customers sheet, including the phone number and carrier for future SMS messaging.
 
 ---
 
@@ -1758,19 +1771,19 @@ Claude calls `create_customer()` and appends the new record to the Customers she
 Before booking a job, send a quote:
 > *"Create a quote for Sarah Connelly — window cleaning, $185, valid for 30 days."*
 
-Claude calls `create_quote()`. Once she accepts:
+Claude, Muse, or Grok calls `create_quote()`. Once she accepts:
 > *"Sarah accepted — mark the quote approved and schedule the job for next Tuesday."*
 
 When the day arrives, instead of manually chaining `geocode_address` → `optimize_route` → `build_maps_url` for each job (Step 1 above), one call handles the whole day:
 > *"Build today's route."*
 
-Claude calls `build_daily_route()` — it geocodes anything missing automatically, computes the optimal order and real drive times, flags any job that's now running late or overlapping another, writes the route to Route_Planner with a tap-to-navigate link on every stop, and emails you the link. See §10 above for the full behavior, including the pre-flight savings check if your jobs' scheduled times aren't already in the fastest order.
+Claude, Muse, or Grok calls `build_daily_route()` — it geocodes anything missing automatically, computes the optimal order and real drive times, flags any job that's now running late or overlapping another, writes the route to Route_Planner with a tap-to-navigate link on every stop, and emails you the link. See §10 above for the full behavior, including the pre-flight savings check if your jobs' scheduled times aren't already in the fastest order.
 
 ---
 
-**Example Claude Prompts Quick Reference**
+**Example Claude, Muse, or Grok Prompts Quick Reference**
 
-| What you want | What to say to Claude |
+| What you want | What to say to Claude, Muse, or Grok |
 |---|---|
 | Today's schedule | "What jobs do I have today?" |
 | Optimized route | "Optimize my route for today and give me a navigation link" |
@@ -1815,7 +1828,7 @@ This walks through connecting a real Twilio account to AI-Prowler from scratch, 
 6. **Save Config.**
 7. **Copy the Inbound Webhook URL.** The same settings panel shows a unique webhook URL for your install (e.g. `https://your-tunnel-domain.ai-prowler.com/sms-webhook`). Click Copy.
 8. **Paste it into Twilio.** In the Twilio Console, open your phone number → Messaging Configuration → "A message comes in" → paste the copied URL, set the method to **HTTP POST**, and save.
-9. **Test inbound.** Text your Twilio number from your own phone, then ask Claude "check my SMS inbox" (`check_sms_inbox` in personal mode, `check_sms_replies` in server mode). The message should appear within seconds — no polling delay.
+9. **Test inbound.** Text your Twilio number from your own phone, then ask Claude, Muse, or Grok "check my SMS inbox" (`check_sms_inbox` in personal mode, `check_sms_replies` in server mode). The message should appear within seconds — no polling delay.
 
 ### Inbound Messages — Webhook Architecture
 
@@ -1836,7 +1849,7 @@ Every message sent via `send_sms` can automatically carry two short lines append
 
 ### HELP Auto-Reply
 
-Optionally configure a message Claude sends automatically when a customer texts **HELP** — typically your support contact info plus a STOP reminder. Configured in the same SMS settings panel. Leave blank to send no reply, which is the safe default: a blank field means no message goes out pointing customers at the wrong business.
+Optionally configure a message Claude, Muse, or Grok sends automatically when a customer texts **HELP** — typically your support contact info plus a STOP reminder. Configured in the same SMS settings panel. Leave blank to send no reply, which is the safe default: a blank field means no message goes out pointing customers at the wrong business.
 
 > **Platform limitation:** on Toll-Free US numbers that aren't part of a Twilio Messaging Service, Twilio intercepts HELP at the carrier level and replies with its own canned message before it ever reaches AI-Prowler — this setting has no effect for those numbers, and the message never appears in `check_sms_inbox`. STOP and START are unaffected and always reach AI-Prowler normally regardless of number type. To customize HELP's reply on a Toll-Free number, the number needs to be placed in a Twilio Messaging Service with Advanced Opt-Out enabled — that's a Twilio Console configuration, not an AI-Prowler one.
 
@@ -1848,7 +1861,7 @@ Every AI-Prowler install can collect SMS opt-in signups directly from the busine
 
 1. AI-Prowler exposes a public `/consent-signup` endpoint alongside the existing SMS webhooks. Find your install's unique URL in Settings → SMS / Text Messaging → **SMS Consent Form Endpoint URL**.
 2. Embed a small widget script on your website, pointed at that URL.
-3. When a visitor submits the form, their name, phone number, and consent choice are recorded locally in `sms_consent.json` — instantly available to ask Claude about.
+3. When a visitor submits the form, their name, phone number, and consent choice are recorded locally in `sms_consent.json` — instantly available to ask Claude, Muse, or Grok about.
 
 **Embedding the form**
 
@@ -1865,7 +1878,7 @@ data-endpoint="YOUR_CONSENT_FORM_ENDPOINT_URL"></script>
 
 **Reading the list**
 
-Ask Claude *"who's opted in for SMS?"* or *"show me my consent list"* — calls `list_sms_consents`. Filter to only currently opted-in contacts, or see everyone including people who submitted the form without checking the consent box, useful for a full audit trail.
+Ask Claude, Muse, or Grok *"who's opted in for SMS?"* or *"show me my consent list"* — calls `list_sms_consents`. Filter to only currently opted-in contacts, or see everyone including people who submitted the form without checking the consent box, useful for a full audit trail.
 
 **Staying in sync with SMS replies**
 
@@ -1873,16 +1886,16 @@ If someone who signed up on the website later replies **STOP** to a text, AI-Pro
 
 **Deleting a record**
 
-For a CCPA/GDPR-style removal request, ask Claude *"delete the consent record for [phone number]"* — calls `delete_sms_consent`. This permanently erases the record, unlike an opt-out (via STOP) which just marks it inactive while keeping the history.
+For a CCPA/GDPR-style removal request, ask Claude, Muse, or Grok *"delete the consent record for [phone number]"* — calls `delete_sms_consent`. This permanently erases the record, unlike an opt-out (via STOP) which just marks it inactive while keeping the history.
 
-### Using Claude as Your Twilio Setup Assistant — What to Expect
+### Using Claude, Muse, or Grok as Your Twilio Setup Assistant — What to Expect
 
-Claude can walk through the entire Twilio setup and troubleshooting process conversationally, but it's worth knowing the actual division of labor:
+Claude, Muse, or Grok can walk through the entire Twilio setup and troubleshooting process conversationally, but it's worth knowing the actual division of labor:
 
-- **Claude cannot log into your Twilio Console directly** — there's no browser automation into Twilio's dashboard. You click through the Twilio Console yourself; Claude tells you exactly where to go and what to enter.
-- **Claude can fully inspect the AI-Prowler side** — current SMS settings, the server log, whether a webhook request actually arrived, and the contents of the local SMS inbox and consent list — to pinpoint exactly which step is failing rather than guessing.
-- **Screenshots close the loop.** If something looks wrong, a screenshot of the relevant Twilio Console page (phone number configuration, messaging logs, etc.) lets Claude review it directly and spot common mistakes — wrong webhook URL, wrong HTTP method, a setting that didn't actually save.
-- **Real test texts are the fastest way to verify.** Sending a real text and then asking Claude to check the inbox is more reliable than reasoning about configuration in the abstract — it either shows up or it doesn't.
+- **Claude, Muse, or Grok cannot log into your Twilio Console directly** — there's no browser automation into Twilio's dashboard. You click through the Twilio Console yourself; Claude, Muse, or Grok tells you exactly where to go and what to enter.
+- **Claude, Muse, or Grok can fully inspect the AI-Prowler side** — current SMS settings, the server log, whether a webhook request actually arrived, and the contents of the local SMS inbox and consent list — to pinpoint exactly which step is failing rather than guessing.
+- **Screenshots close the loop.** If something looks wrong, a screenshot of the relevant Twilio Console page (phone number configuration, messaging logs, etc.) lets Claude, Muse, or Grok review it directly and spot common mistakes — wrong webhook URL, wrong HTTP method, a setting that didn't actually save.
+- **Real test texts are the fastest way to verify.** Sending a real text and then asking Claude, Muse, or Grok to check the inbox is more reliable than reasoning about configuration in the abstract — it either shows up or it doesn't.
 
 **The most common setup problems, in order of likelihood:**
 1. The webhook URL wasn't actually saved in the Twilio Console (always double-check by re-opening the page after saving).
@@ -1892,12 +1905,12 @@ Claude can walk through the entire Twilio setup and troubleshooting process conv
 
 ### Recipient Lookup
 
-When you say *"text Mike"*, Claude resolves the recipient by searching:
+When you say *"text Mike"*, Claude, Muse, or Grok resolves the recipient by searching:
 
 1. **Registered server users** — names and phone numbers from `users.json` (set in Admin tab)
 2. **Job tracker customers** — names and phone numbers from the Customers table (the same list shown in the Jobs PWA App's Sheet tab), columns: Phone, Cell Carrier, SMS Gateway
 
-Partial name matches work. If multiple matches are found, Claude asks for clarification.
+Partial name matches work. If multiple matches are found, Claude, Muse, or Grok asks for clarification.
 
 ### SMS vs WhatsApp — When to Use Which
 
@@ -1908,27 +1921,27 @@ Partial name matches work. If multiple matches are found, Claude asks for clarif
 
 ## 12. Quick Links Tab
 
-The Quick Links tab is a one-click launcher for the recommended Claude Desktop / Claude.ai workflow.
+The Quick Links tab is a one-click launcher for the AI apps that connect to AI-Prowler. A mobile subscription enables MCP HTTPS connections to the Claude.ai, Muse.ai and Grok.com web apps — on phone, tablet, or desktop browser.
 
-- 🚀 **Launch Claude Desktop** — opens Claude Desktop directly
-- ⬇ **Download Claude Desktop** — opens claude.ai/download in your browser
-- 🌐 **Open Claude.ai** — opens claude.ai in your browser for mobile/web access
+- 🌐 **Open Claude.ai** — opens claude.ai in your browser
+- 🌐 **Open Muse.ai** — opens muse.ai in your browser
+- 🌐 **Open Grok.com** — opens grok.com in your browser
+- 🚀 **Launch Claude Desktop** — opens Claude Desktop directly (desktop alternative)
+- ⬇ **Install Claude Desktop** — opens claude.ai/download in your browser
 
 ### Initial Connection Test
 
-The **Initial Connection Test** banner provides a copy-to-clipboard command recommended at the start of every new Claude chat:
-
-> *Check the status of AI-Prowler and list all the tools.*
-
-Click **📋 Copy Command**, paste into Claude, and press Enter. This verifies the MCP link is live and shows all 83+ available AI-Prowler tools.
+Optional — MCP finds AI-Prowler's tools on its own. To check the connection, click **📋 Copy Command**, paste it into a Claude, Muse, or Grok chat and press Enter: it verifies the MCP link is live and lists all available AI-Prowler tools.
 
 ### 🤖 Autonomous AI Task Queue
 
 The **Autonomous AI Task Queue** runs your queued analysis tasks — both **Common Business AI Analysis** and **My Custom AI Analyses**, below — on a schedule via Claude Code, without you opening a chat and pasting the run command yourself.
 
-These are AI-assisted tasks that can be queued and stored for repeated and/or future execution. Claude AI has tools to manage, add, and run these task queues via AI-Prowler MCP tools remotely, in addition to the manual configuration described here.
+These are AI-assisted tasks that can be queued and stored for repeated and/or future execution. Claude, Muse, or Grok has tools to manage, add, and run these task queues via AI-Prowler MCP tools remotely, in addition to the manual configuration described here.
 
 > **Not available in server mode.**
+
+> **Unattended runs work with Claude and Grok.** Claude runs use the Claude Code CLI (via your subscription or an Anthropic API key). Grok runs call the xAI API directly with a Grok API key — no CLI needed. Muse has no API key released yet, so unattended Muse runs aren't possible; with Muse, queue the tasks (**▶ Queue**), then open a Muse chat and paste the run command (**Ctrl+V**).
 
 > **Requires a Claude Pro subscription or higher** to use Claude Code CLI — the free Claude tier does not include Claude Code access. Not required if you use an API Key instead (see Auth, below).
 
@@ -1946,7 +1959,7 @@ Below the toggle, a live status line shows the *actual* Windows-reported state �
 | **Check queue: N times/day** | How often the queue itself gets checked for due work — independent of any individual task's own schedule. **1** (default) keeps the classic once-a-day check at Scheduled time above. **>1** switches to an hourly-interval Windows trigger instead (e.g. 10×/day ≈ every 2 hours), checking around the clock. A task still only actually *runs* when it's due per its own schedule — this field only controls how often AI-Prowler looks. |
 | **Credit-usage warning** | Appears automatically next to the times/day field once it's set above 1 — a reminder that each automatic check draws from your Claude subscription's usage pool (or metered API billing, if configured that way). Not shown at 1×/day, since a single daily check barely costs anything. |
 | **Text me when a run finishes** | Optional SMS/WhatsApp notification, sent to whichever method is selected. |
-| **Auth** | **Subscription (OAuth)** — uses your Claude Pro/Max plan; click **🔑 Get / Renew Token** to sign in. **API Key (metered billing)** — a separate pay-as-you-go account; paste a key from console.anthropic.com and click **Save Key** (and **Clear Key** to remove one). |
+| **Auth** | **Subscription (OAuth)** — uses your Claude Pro/Max plan; click **🔑 Get / Renew Token** to sign in. **Anthropic API Key (metered billing)** — Claude only; a separate pay-as-you-go account; paste a key from console.anthropic.com and click **Save Key** (and **Clear Key** to remove one). **Grok API Key (xAI)** — Grok only; paste a key from console.x.ai and click **Save Key**. Muse has no API key released yet. |
 | **🧪 Test Setup (Dry Run)** | Runs a checklist (Claude Code CLI installed, MCP config current, token/key valid) without actually running any tasks, so you can confirm everything is wired up before turning it on. |
 | **📄 View Audit Log** | Read-only history of past autonomous runs. |
 
@@ -1956,7 +1969,7 @@ Turning automation on for the first time (off → on) automatically resyncs any 
 
 ### 🧠 Common Business AI Analysis
 
-The **Common Business AI Analysis** section provides five one-click analysis commands that use Claude's full reasoning capability over your local data — no API key required, no cloud uploads.
+The **Common Business AI Analysis** section provides five one-click analysis commands that use Claude/Muse/Grok's full reasoning capability over your local data — no API key required, no cloud uploads.
 
 > **Not available in server mode.** This section and My Custom AI Analyses are hidden automatically when AI-Prowler detects `mode=server` in config.json.
 
@@ -1969,33 +1982,33 @@ Hovering any button shows a one-line tooltip in the status bar describing what t
 1. Click an analysis button (e.g. **📊 Analyze My Business**)
 2. A **Configure** popup opens — set scope, output, schedule, and report folder (see popup fields below). For **🧠 Run Pending Analysis**, no popup appears — the command is copied immediately.
 3. Click **Queue Analysis →** — AI-Prowler writes the task to `~/.ai-prowler/pending_tasks.json` and copies the run command to your clipboard
-4. Open a new Claude chat and press **Ctrl+V** — **the command runs ALL tasks currently in the queue**
-5. Claude calls `get_pending_analysis_tasks()`, reads every queued task, and executes each full analysis using all available AI-Prowler tools
-6. Claude records findings as learnings via `record_learning()`
-7. Claude calls `complete_analysis_task(task_id, summary)` to mark each task done and auto-advance the next due date if a schedule was set
+4. Open a new Claude, Muse, or Grok chat and press **Ctrl+V** — **the command runs ALL tasks currently in the queue**
+5. Claude, Muse, or Grok calls `get_pending_analysis_tasks()`, reads every queued task, and executes each full analysis using all available AI-Prowler tools
+6. Claude, Muse, or Grok records findings as learnings via `record_learning()`
+7. Claude, Muse, or Grok calls `complete_analysis_task(task_id, summary)` to mark each task done and auto-advance the next due date if a schedule was set
 
-This approach works entirely within the MCP architecture — Claude is the reasoning engine, AI-Prowler is the data server. No Anthropic API key is needed in AI-Prowler itself.
+This approach works entirely within the MCP architecture — Claude, Muse, or Grok is the reasoning engine, AI-Prowler is the data server. No Anthropic API key is needed in AI-Prowler itself.
 
 #### Analysis buttons
 
 | Button | What it does |
 |---|---|
-| 🧠 **Run Pending Analysis** | Copies the run-queue command to clipboard immediately — no popup. Opens a small info box reminding you to press Ctrl+V in Claude. Each queued task already has its own scope, output, and schedule from when it was created. |
+| 🧠 **Run Pending Analysis** | Copies the run-queue command to clipboard immediately — no popup. Opens a small info box reminding you to press Ctrl+V in Claude, Muse, or Grok. Each queued task already has its own scope, output, and schedule from when it was created. |
 | 📊 **Analyze My Business** | Full business health check. Uses QuickBooks (invoices, payments, customers, P&L, AR aging) if connected; otherwise reads job tracker data (the same data shown in the Jobs PWA App). Searches indexed documents and learnings. Records 3–5 `business_insight` learnings. |
 | 💡 **Weekly Business Advisor** | End-of-week debrief. Uses QuickBooks (invoices/payments this week, cash in vs out, overdue this week) if connected; otherwise reads the job tracker. Also checks weather for next week's scheduling. Records `weekly_review` learnings. |
 | ⚠️ **Find Problems** | Scans for overdue invoices by aging bucket (using QuickBooks AR/AP aging if connected, otherwise AI-Prowler AR report), jobs over estimate by >20%, unanswered customer SMS, unresolved problem flags. Records each as a `problem_flag` learning. |
 | 📈 **Growth Opportunities** | Mines financial data for growth signals. With QuickBooks: P&L by service type, net margin per service, seasonal revenue trends, customer value rankings. Without QuickBooks: job history, fast-paying customers, geographic clusters, upsell pairs. Records 3–5 `growth_opportunity` learnings. |
 
-> **🔌 QuickBooks Integration:** If you connect the QuickBooks Online MCP connector in Claude.ai (Settings → Connectors), Claude will automatically detect it when executing any of these analyses and use QuickBooks as the primary financial data source — giving you real P&L, true net margins, expense ratios, AP aging, and cash flow data that goes beyond what the job tracker can provide on its own. No configuration change needed in AI-Prowler; the prompts detect and use QuickBooks automatically at runtime.
+> **🔌 QuickBooks Integration:** If you connect the QuickBooks Online MCP connector in Claude.ai (Settings → Connectors), Claude, Muse, or Grok will automatically detect it when executing any of these analyses and use QuickBooks as the primary financial data source — giving you real P&L, true net margins, expense ratios, AP aging, and cash flow data that goes beyond what the job tracker can provide on its own. No configuration change needed in AI-Prowler; the prompts detect and use QuickBooks automatically at runtime.
 
-**Importing from QuickBooks into the job tracker.** With the QuickBooks connector connected in Claude.ai, you can also ask Claude conversationally to pull data from QuickBooks into the Jobs database — for example: *"Import new customers from QuickBooks,"* *"Import this month's QuickBooks invoices and link them to jobs,"* or *"Import QuickBooks payments and update job payment statuses."* What Claude does:
+**Importing from QuickBooks into the job tracker.** With the QuickBooks connector connected in Claude.ai, you can also ask Claude, Muse, or Grok conversationally to pull data from QuickBooks into the Jobs database — for example: *"Import new customers from QuickBooks,"* *"Import this month's QuickBooks invoices and link them to jobs,"* or *"Import QuickBooks payments and update job payment statuses."* What Claude, Muse, or Grok does:
 
 - **Customers:** queries QuickBooks customers, matches against the Jobs DB (by phone, then name + email), and creates only the new ones (`CUST-####`, never reusing numbers). On matched customers it fills in blank fields only — never overwrites your service preferences (frequency, time windows, pricing).
 - **Invoices:** imports QuickBooks invoices, links each to its job by customer + date, and writes the invoice ID back onto the job. Already-imported invoices are skipped, so re-running is safe.
 - **Payments:** applies QuickBooks payments to their invoices (`amount paid`, `payment date`, `payment method`, Paid/Partial status) and cascades the status to the linked jobs.
 - **Receipts (sales receipts):** creates paid-in-full invoice records and stamps the job's receipt-sent date.
 
-Claude always previews counts and matches before writing anything, so you can review before it commits. (There are no QuickBooks buttons in the app itself — that would require building Intuit OAuth into AI-Prowler, which isn't included; the conversational path above is the supported workflow.)
+Claude, Muse, or Grok always previews counts and matches before writing anything, so you can review before it commits. (There are no QuickBooks buttons in the app itself — that would require building Intuit OAuth into AI-Prowler, which isn't included; the conversational path above is the supported workflow.)
 
 #### Configure Popup
 
@@ -2005,7 +2018,7 @@ When you click any button except 🧠 Run Pending Analysis, a scrollable **Confi
 |---|---|
 | **Analysis** | Read-only — shows the button name |
 | **What this does** | Green info box explaining what data will be read and what output will be produced |
-| **Prompt (auto)** | Collapsed by default. Click **▶ Show prompt** to expand and read the full Claude instruction (read-only). |
+| **Prompt (auto)** | Collapsed by default. Click **▶ Show prompt** to expand and read the full Claude, Muse, or Grok instruction (read-only). |
 | **Scope directories** | Scrollable checklist of all indexed directories. Check one or more to restrict the analysis. Leave all unchecked to search everything. |
 | **Output — 💡 Save key insights to Learnings** | Default ✅. Appends `record_learning()` instruction to the prompt. |
 | **Output — 📄 Save full analysis as Word document (.docx)** | Default ☐. Appends `save_analysis_report()` instruction with the report folder path. |
@@ -2014,11 +2027,11 @@ When you click any button except 🧠 Run Pending Analysis, a scrollable **Confi
 | **Start time / End time / Times per day** (Daily only) | Shown only when **Daily** is selected. Times per day = 1 (default) runs once, at Start time. Greater than 1 spreads that many runs evenly across the day, landing exactly on Start time and exactly on End time (e.g. Start 08:00, End 20:00, 3×/day → 08:00, 14:00, 20:00). Max 24/day — "24× between 00:00–23:00" is how an hourly cadence is expressed; there's no separate Hourly option. A live **"Runs at: ..."** preview below the fields shows exactly what your settings produce, and the credit-usage warning (below) appears automatically once times/day is set above 1. |
 | **First due date** | YYYY-MM-DD. Enabled when a schedule is selected. Defaults to today if left blank. The anchor date for schedule advancement — e.g. a "Weekly" task due June 24 will next be due July 1, then July 8, etc. |
 | **Report folder** | Where `.docx` reports are saved. Defaults to `~/Documents/AI-Prowler_tasks_reports`. Click **Browse…** to change. |
-| **Ctrl+V reminder** | Italic reminder: *"After clicking Queue Analysis → open a new Claude chat and press Ctrl+V to run all queued tasks."* |
+| **Ctrl+V reminder** | Italic reminder: *"After clicking Queue Analysis → open a new Claude, Muse, or Grok chat and press Ctrl+V to run all queued tasks."* |
 
-> **Autonomous AI Task Queue usage note:** a static reminder appears in this popup — *"If the Autonomous AI Task Queue is enabled, each automatic check uses Claude subscription usage credits."* This is plain GUI text, not something Claude says in conversation.
+> **Autonomous AI Task Queue usage note:** a static reminder appears in this popup — *"If the Autonomous AI Task Queue is enabled, each automatic check uses Claude subscription usage credits."* This is plain GUI text, not something Claude, Muse, or Grok says in conversation.
 
-> **Scheduling built-in tasks:** When you set a schedule on a Common Business button, `complete_analysis_task()` automatically advances `next_due` after Claude finishes — anchored to the original due date (not the completion date). The entry re-arms — `status` resets to `"pending"` and it stays in the queue permanently, resurfacing in `get_pending_analysis_tasks()` on its own once the new `next_due` arrives. You don't need to re-queue it manually each cycle; only one-shot (`schedule: none`) buttons complete permanently. The next due date is reported back to Claude as `Next scheduled run: YYYY-MM-DD`.
+> **Scheduling built-in tasks:** When you set a schedule on a Common Business button, `complete_analysis_task()` automatically advances `next_due` after Claude, Muse, or Grok finishes — anchored to the original due date (not the completion date). The entry re-arms — `status` resets to `"pending"` and it stays in the queue permanently, resurfacing in `get_pending_analysis_tasks()` on its own once the new `next_due` arrives. You don't need to re-queue it manually each cycle; only one-shot (`schedule: none`) buttons complete permanently. The next due date is reported back to Claude, Muse, or Grok as `Next scheduled run: YYYY-MM-DD`.
 
 #### Task queue JSON schema
 
@@ -2048,17 +2061,17 @@ Tasks are stored in `~/.ai-prowler/pending_tasks.json`. The full schema:
 
 `next_due` is a full date+time (`YYYY-MM-DDTHH:MM:SS`) for `"daily"` schedule entries — it carries the actual next run time, not just the date — and stays a plain date (`YYYY-MM-DD`) for every other schedule (weekly, monthly, etc.), which have no time-of-day granularity.
 
-When Claude completes the task, a one-shot entry (`schedule: "none"`) has `status` change to `"completed"` permanently — `completed_at` and `completion_summary` are added, and it's kept for audit rather than deleted. A recurring entry instead has `next_due` advanced and `status` reset back to `"pending"` (re-armed) — it stays live in the queue and resurfaces on its own next cycle rather than needing to be re-queued manually.
+When Claude, Muse, or Grok completes the task, a one-shot entry (`schedule: "none"`) has `status` change to `"completed"` permanently — `completed_at` and `completion_summary` are added, and it's kept for audit rather than deleted. A recurring entry instead has `next_due` advanced and `status` reset back to `"pending"` (re-armed) — it stays live in the queue and resurfaces on its own next cycle rather than needing to be re-queued manually.
 
 The collapsible **▶ Show Queue** panel (below the analysis buttons) lets you see what's waiting, remove individual items (✕), or clear everything (🗑 Clear Queue). Each recurring item shows a due badge — 🟢 **Due now** if it's actually ready to run, or ⏳ **Due YYYY-MM-DD** if it's queued but the date hasn't arrived yet — so you can tell at a glance whether something sitting in the queue is about to fire or just waiting. The list also refreshes live the moment a new task is saved & queued while the panel is already expanded, instead of requiring a manual collapse/re-expand.
 
 #### Tips
 
-- Queue multiple analyses before opening Claude — click several buttons in sequence, paste the command once. Claude runs all pending tasks in sequence.
-- Findings are stored as learnings and immediately searchable in future Claude conversations via `search_learnings()`.
-- Use **🧠 Run Pending Analysis** as a batch shortcut — just click it, press Ctrl+V in Claude, and everything in the queue runs.
+- Queue multiple analyses before opening Claude, Muse, or Grok — click several buttons in sequence, paste the command once. Claude, Muse, or Grok runs all pending tasks in sequence.
+- Findings are stored as learnings and immediately searchable in future Claude, Muse, or Grok conversations via `search_learnings()`.
+- Use **🧠 Run Pending Analysis** as a batch shortcut — just click it, press Ctrl+V in Claude, Muse, or Grok, and everything in the queue runs.
 - For recurring analyses (weekly review, monthly AR check), set a **Schedule** in the popup instead of clicking the button manually each time.
-- **Connect QuickBooks Online** in Claude.ai for richer financial analysis — Claude automatically detects it and uses QuickBooks P&L, true margins, AP/AR aging, and cash flow data without any extra setup.
+- **Connect QuickBooks Online** in Claude.ai for richer financial analysis — Claude, Muse, or Grok automatically detects it and uses QuickBooks P&L, true margins, AP/AR aging, and cash flow data without any extra setup.
 
 ---
 
@@ -2066,7 +2079,7 @@ The collapsible **▶ Show Queue** panel (below the analysis buttons) lets you s
 
 **My Custom AI Analyses** lets you define your own analysis tasks — with a custom name, prompt, optional directory scope, schedule, and output format. Up to **25** custom tasks are supported.
 
-These user custom-defined tasks are AI-assisted tasks that can be queued and stored for repeated and/or future execution. In addition to manual configuration here, Claude can also create and add these via AI-Prowler MCP tools remotely.
+These user custom-defined tasks are AI-assisted tasks that can be queued and stored for repeated and/or future execution. In addition to manual configuration here, Claude, Muse, or Grok can also create and add these via AI-Prowler MCP tools remotely.
 
 > **Not available in server mode.** Hidden automatically when `mode=server` is detected.
 
@@ -2077,13 +2090,13 @@ Click **+ New Custom Analysis** to open the task editor (scrollable, 806×884). 
 | Field | Description |
 |---|---|
 | **Name** | Short label shown on the task card (e.g. "Monthly Customer Review") |
-| **Prompt** | Full instruction for Claude — describe what to analyze and what to produce. Be specific: mention which tools to use, which learning categories to record under, and any report preferences. |
+| **Prompt** | Full instruction for Claude, Muse, or Grok — describe what to analyze and what to produce. Be specific: mention which tools to use, which learning categories to record under, and any report preferences. |
 | **Scope directories** | Scrollable checklist. Only absolute directory paths shown — metadata fields filtered out automatically. Leave all unchecked to search everything. |
 | **Schedule** | Manual only / Daily / Weekly / Every 2 weeks / Monthly / Quarterly / Yearly |
 | **Start time / End time / Times per day** (Daily only) | Shown only when **Daily** is selected. Times per day = 1 (default) runs once, at Start time. Greater than 1 spreads that many runs evenly across the day, landing exactly on Start time and exactly on End time (e.g. Start 08:00, End 20:00, 3×/day → 08:00, 14:00, 20:00). Max 24/day — "24× between 00:00–23:00" is how an hourly cadence is expressed; there's no separate Hourly option. A live **"Runs at: ..."** preview shows exactly what your settings produce. |
 | **First due date** | YYYY-MM-DD. When the first scheduled run should occur. Leave blank for manual-only tasks. Auto-populates with today when you select a schedule. |
-| **Output — 💡 Save key insights to Learnings** | Claude's prompt instructs it to call `record_learning()` with key findings |
-| **Output — 📄 Save full analysis as Word document (.docx)** | Claude's prompt instructs it to call `save_analysis_report()` and save a `.docx` report |
+| **Output — 💡 Save key insights to Learnings** | Claude/Muse/Grok's prompt instructs it to call `record_learning()` with key findings |
+| **Output — 📄 Save full analysis as Word document (.docx)** | Claude/Muse/Grok's prompt instructs it to call `save_analysis_report()` and save a `.docx` report |
 | **Output — ✉️ Email the analysis** | Sends the finished analysis via AI-Prowler's own configured SMTP account — attaches the Word document automatically if that output is also checked. **At least one of the three outputs must be selected.** |
 | **Report folder** | Defaults to `~/Documents/AI-Prowler_tasks_reports`. Click **Browse…** to change. |
 
@@ -2092,7 +2105,7 @@ A static reminder — *"If the Autonomous AI Task Queue is enabled, each automat
 #### Save / Save & Queue
 
 - **Save** — saves the task definition. It appears in the My Custom AI Analyses list for future use.
-- **Save & Queue** — saves the task AND immediately queues it in `pending_tasks.json` and copies the run-all command to clipboard. Paste into Claude to run it right away.
+- **Save & Queue** — saves the task AND immediately queues it in `pending_tasks.json` and copies the run-all command to clipboard. Paste into Claude, Muse, or Grok to run it right away.
 
 #### Task Cards
 
@@ -2120,16 +2133,16 @@ Here is a well-formed custom prompt for a monthly customer review:
 1. Task created → saved in `~/.ai-prowler/custom_analysis_tasks.json`
 2. Task queued via **▶ Queue** (in the GUI, or the same **▶ Queue / ▶ Re-Queue** button in the Remote App, or `queue_single_task()`) — written to `pending_tasks.json` with `status: pending` and its own self-describing `schedule`/`next_due`. Tasks are queued one at a time only; there's no bulk "queue everything that's due" step, since one tap could otherwise start several AI runs (and spend credits) at once.
 3. `get_pending_analysis_tasks()` returns it once `next_due` is today or earlier (`is_queue_entry_ready()`) — a task queued ahead of time stays hidden until then
-4. Claude picks it up and executes the prompt
-5. Claude calls `complete_analysis_task(task_id, summary)` → for a recurring task, `next_due` advances and `status` resets back to `pending` (re-armed, not closed) — same entry surfaces again automatically next cycle. A one-shot (`schedule: none`) task closes permanently instead.
+4. Claude, Muse, or Grok picks it up and executes the prompt
+5. Claude, Muse, or Grok calls `complete_analysis_task(task_id, summary)` → for a recurring task, `next_due` advances and `status` resets back to `pending` (re-armed, not closed) — same entry surfaces again automatically next cycle. A one-shot (`schedule: none`) task closes permanently instead.
 6. Next scheduled run date is auto-advanced from the original anchor date (e.g. Monthly June 24 → July 24, not "30 days from completion")
-7. `update_analysis_task()` and `delete_analysis_task()` let Claude edit or remove a task from chat without opening the GUI
+7. `update_analysis_task()` and `delete_analysis_task()` let Claude, Muse, or Grok edit or remove a task from chat without opening the GUI
 
 #### Shared Scheduling Behaviour (Common Business + Custom)
 
 Both Common Business buttons and Custom Analyses share the same scheduling engine:
 
-- **Anchor-based advancement** — `next_due` advances from the previous `next_due`, not from the completion date. A weekly task due Monday stays on Mondays even if Claude runs it on Wednesday.
+- **Anchor-based advancement** — `next_due` advances from the previous `next_due`, not from the completion date. A weekly task due Monday stays on Mondays even if Claude, Muse, or Grok runs it on Wednesday.
 - **`complete_analysis_task()` unified re-arm** — built-in and custom recurring tasks are handled by the exact same code path and behave identically: `next_due` advances and `status` resets to `pending`, so the queue entry stays alive and resurfaces on its own next cycle. Custom tasks additionally sync the advanced `next_due` back to `custom_analysis_tasks.json` so the GUI's task list stays accurate. Only one-shot (`schedule: none`) tasks — built-in or custom — close permanently.
 - **Queueing is manual, one task at a time** — `queue_single_task()` (or ▶ Queue in the GUI / Remote App) puts one specific task in the run queue now. The old `sync_due_tasks_to_queue()`, which pushed every due custom task in at once, was removed so a single tap can't start several AI runs together.
 - **Schedules available:** Manual only, Daily (once a day, or up to 24 evenly spaced runs between a start and end time), Weekly, Every 2 weeks, Monthly. Weekly, every-2-weeks and monthly tasks can be pinned to a weekday. (Quarterly and Yearly were removed — use Monthly.)
@@ -2139,7 +2152,7 @@ Both Common Business buttons and Custom Analyses share the same scheduling engin
 
 ### ⏰ Proactive Alerts
 
-**Proactive Alerts** is a background scheduler built into AI-Prowler that pushes email alerts to you automatically — no Claude session needed, zero API cost. It runs as a daemon thread inside the AI-Prowler process and checks every 60 seconds whether any job is due.
+**Proactive Alerts** is a background scheduler built into AI-Prowler that pushes email alerts to you automatically — no Claude, Muse, or Grok session needed, zero API cost. It runs as a daemon thread inside the AI-Prowler process and checks every 60 seconds whether any job is due.
 
 > **Personal mode only.** The Proactive Alerts section is automatically hidden in server mode — same suppression as Common Business AI Analysis.
 
@@ -2277,7 +2290,7 @@ See Section 9 for full details. Appears only when `edition = business` AND `mode
 
 ### SMS Configuration (Settings Tab)
 
-In server mode, SMS is configured in the GUI rather than via Claude:
+In server mode, SMS is configured in the GUI rather than via Claude, Muse, or Grok:
 
 1. Open Settings → **📱 SMS Configuration**
 2. Select your SMS provider (Twilio, SignalWire, or Vonage)
@@ -2377,10 +2390,10 @@ After OCR, text is embedded into ChromaDB using `all-MiniLM-L6-v2` (sentence-tra
 ### Full End-to-End Flow: English Query → Spanish Documents
 
 ```
-You ask Claude (in English):
+You ask Claude, Muse, or Grok (in English):
 "Find all overdue invoices from last month"
 ↓
-Claude calls search_documents()
+Claude, Muse, or Grok calls search_documents()
 ↓
 all-MiniLM-L6-v2 encodes your query as a 384-dim semantic vector
 ↓
@@ -2391,14 +2404,14 @@ ChromaDB computes cosine similarity against ALL indexed chunks
 ↓
 Top results returned (may include Spanish text)
 ↓
-Claude reads Spanish text natively, synthesizes into English answer:
+Claude, Muse, or Grok reads Spanish text natively, synthesizes into English answer:
 "I found 3 overdue invoices. Torres owes $450 (45 days overdue),
 Ramirez owes $280 (32 days overdue)..."
 ```
 
 ### What Is and Isn't Translated
 
-**Nothing is translated.** Spanish text is stored in ChromaDB exactly as extracted from the document. Claude reads it directly — Claude is natively multilingual and reads Spanish fluently. AI-Prowler never calls a translation API.
+**Nothing is translated.** Spanish text is stored in ChromaDB exactly as extracted from the document. Claude, Muse, or Grok reads it directly — Claude, Muse, or Grok is natively multilingual and reads Spanish fluently. AI-Prowler never calls a translation API.
 
 | Stage | What happens to Spanish text |
 |---|---|
@@ -2407,7 +2420,7 @@ Ramirez owes $280 (32 days overdue)..."
 | Word / Excel / etc. | python-docx / openpyxl extract Unicode — Spanish preserved |
 | ChromaDB storage | Raw Spanish text stored as-is |
 | Embedding | Encoded into multilingual semantic vector — no translation |
-| Claude response | Claude reads Spanish natively, responds in the language you asked in |
+| Claude, Muse, or Grok response | Claude, Muse, or Grok reads Spanish natively, responds in the language you asked in |
 
 ### Best Practices for Bilingual Document Collections
 
@@ -2435,7 +2448,7 @@ Download the corresponding `.traineddata` files from the [Tesseract GitHub tessd
 
 ## 16. Email Indexing
 
-Claude has built-in connector tools for Gmail and Microsoft that allow active search — it is recommended to add those connectors instead of using AI-Prowler to index email files. However, AI-Prowler does support indexing of exported email database files:
+Claude, Muse, or Grok has built-in connector tools for Gmail and Microsoft that allow active search — it is recommended to add those connectors instead of using AI-Prowler to index email files. However, AI-Prowler does support indexing of exported email database files:
 
 | Provider | Format | Export Method |
 |---|---|---|
@@ -2479,7 +2492,7 @@ For always-on remote access, activate the Named Tunnel as a Windows service via 
 
 ### Proactive Alerts (Background Email Scheduler)
 
-Proactive Alerts sends scheduled email briefings and alerts without needing an active Claude session — a background daemon thread inside the AI-Prowler desktop process ticks every 60 seconds and fires any job whose configured time/day has arrived. Configured from the Links & Analysis tab.
+Proactive Alerts sends scheduled email briefings and alerts without needing an active Claude, Muse, or Grok session — a background daemon thread inside the AI-Prowler desktop process ticks every 60 seconds and fires any job whose configured time/day has arrived. Configured from the Links & Analysis tab.
 
 **Six built-in jobs:** Morning Briefing, Overdue Invoice Alert, Due Analysis Tasks, SMS Reply Monitor, Weather Watch, End-of-Day Summary. Each has its own ON/OFF toggle, a time field (`HH:MM` 24-hour, or `every_Nh`/`every_Nm` for interval jobs), and a days selector (daily / weekdays / weekends / a specific day).
 
@@ -2502,13 +2515,13 @@ Proactive Alerts sends scheduled email briefings and alerts without needing an a
 
 ## 18. GPU Support
 
-AI-Prowler detects NVIDIA GPUs automatically. The installer installs the correct PyTorch build (CUDA 12.8 for RTX 50xx/Blackwell, or CPU-only). The sentence-transformer embedding model (`all-MiniLM-L6-v2`) uses CUDA automatically when available, significantly speeding up indexing. This is the only place a GPU helps — all language reasoning happens in Claude (cloud).
+AI-Prowler detects NVIDIA GPUs automatically. The installer installs the correct PyTorch build (CUDA 12.8 for RTX 50xx/Blackwell, or CPU-only). The sentence-transformer embedding model (`all-MiniLM-L6-v2`) uses CUDA automatically when available, significantly speeding up indexing. This is the only place a GPU helps — all language reasoning happens in Claude, Muse, or Grok (cloud).
 
 The `all-MiniLM-L6-v2` model is multilingual — it supports English, Spanish, and 100+ other languages in the same semantic vector space. See **Section 15a** for full bilingual language support documentation.
 
 ### Blackwell (RTX 50xx) Note
 
-PyTorch stable does not yet include CUDA 12.8 compute kernels for Blackwell SM 12.0+ architecture. Embeddings run on CPU on RTX 50xx cards even though CUDA is detected. This affects only indexing speed, not search quality or Claude's reasoning.
+PyTorch stable does not yet include CUDA 12.8 compute kernels for Blackwell SM 12.0+ architecture. Embeddings run on CPU on RTX 50xx cards even though CUDA is detected. This affects only indexing speed, not search quality or Claude/Muse/Grok's reasoning.
 
 ---
 
@@ -2535,7 +2548,7 @@ The MCP log is the most useful for debugging Claude Desktop and Claude.ai connec
 
 ### Common Debug Workflow
 
-**Problem: Claude says it can't find information that should be indexed**
+**Problem: Claude, Muse, or Grok says it can't find information that should be indexed**
 1. Open the log and find the tool call for `search_documents`
 2. Check the similarity scores — if all are below 0.3, the content may not be well-represented
 3. Try `get_database_stats` to verify the file is actually indexed
@@ -2558,7 +2571,7 @@ Error 1033 means `cloudflared` is running but cannot reach the local AI-Prowler 
 3. In AI-Prowler Settings → Stop Tunnel → Uninstall Service → Activate Tunnel Service
 
 **Problem: SMS not sending**
-1. Run `check_tools_status` — Claude will report which SMS tools are configured and which are missing credentials
+1. Run `check_tools_status` — Claude, Muse, or Grok will report which SMS tools are configured and which are missing credentials
 2. Check that your Twilio/SignalWire/Vonage Account SID and Auth Token are correct in Settings → SMS Configuration
 3. Verify your from-number is correctly formatted (E.164: `+15555551234`)
 
@@ -2623,7 +2636,7 @@ The uninstaller removes all AI-Prowler application files and Python (if installe
 
 ### Overview
 
-The Self-Learning System gives AI-Prowler a persistent, semantically-searchable memory separate from the main document RAG. When you tell Claude "learn this" — or when Claude detects a correction or insight during conversation — the fact is written to a structured JSON file and indexed in ChromaDB. The next time a related question comes up, Claude calls `search_learnings` first, finds the stored fact, and applies it automatically.
+The Self-Learning System gives AI-Prowler a persistent, semantically-searchable memory separate from the main document RAG. When you tell Claude, Muse, or Grok "learn this" — or when Claude, Muse, or Grok detects a correction or insight during conversation — the fact is written to a structured JSON file and indexed in ChromaDB. The next time a related question comes up, Claude, Muse, or Grok calls `search_learnings` first, finds the stored fact, and applies it automatically.
 
 No GPU. No training. New knowledge is queryable within roughly 1 second of being recorded.
 
@@ -2751,7 +2764,7 @@ Set `"heartbeat_enabled": false` in `config.json` and restart AI-Prowler.
 
 ### What It Is
 
-The Jobs App is a mobile-friendly web app for field crew and business owners to manage the day's work without opening a Claude conversation — clock in/out, view the schedule, build and follow routes, take job photos, message customers, and send invoices, all from a phone in the truck. It reads and writes the exact same SQLite-backed job tracker database Claude uses through its MCP tools — the app and talking to Claude are two paths into one dataset, never two separate systems. Since the job tracker's canonical store is a database rather than a spreadsheet you'd open in Excel, **the Jobs App is the primary day-to-day view into that data for a person** — Claude handles conversational and bulk work, the app handles the moment-to-moment tapping-on-a-phone work. Clocking in from the app and later asking Claude "what's my schedule tomorrow?" from the same phone's browser both see the identical, up-to-date data.
+The Jobs App is a mobile-friendly web app for field crew and business owners to manage the day's work without opening a Claude, Muse, or Grok conversation — clock in/out, view the schedule, build and follow routes, take job photos, message customers, and send invoices, all from a phone in the truck. It reads and writes the exact same SQLite-backed job tracker database Claude, Muse, or Grok uses through its MCP tools — the app and talking to Claude, Muse, or Grok are two paths into one dataset, never two separate systems. Since the job tracker's canonical store is a database rather than a spreadsheet you'd open in Excel, **the Jobs App is the primary day-to-day view into that data for a person** — Claude, Muse, or Grok handles conversational and bulk work, the app handles the moment-to-moment tapping-on-a-phone work. Clocking in from the app and later asking Claude, Muse, or Grok "what's my schedule tomorrow?" from the same phone's browser both see the identical, up-to-date data.
 
 ### Setup & Access
 
@@ -2790,13 +2803,13 @@ The app has ten bottom-nav tabs: **Jobs**, **Board**, **Route**, **Calendar**, *
 
 **Route** — pick a day, check it for problems (prescreen), build the day's route, adjust the stop order (▲▼, drag ✋, edit ✏️, remove 🗑️), pin stops with 📌 "Fix stop #", approve it, and send the route or a phone link to the crew. Approving (**Approve — Allows Email & Link Viewing**) allows emailing the route and makes its link viewable on the Jobs and Calendar pages — it never changes any job's time window, and un-approving fully undoes it. Where each route starts and ends is set by **Route Origin Mode** (see #### Route Origin Mode). Whether approving a route also emails it automatically is set by **Email Route On Approve** — the **📧 Email Approved Route Now** button sends an approved route on request either way (see #### Email Route On Approve). In server mode field crew work only with their own route.
 
-**Clock** — shows active clock-in status and a simple manual clock in/out control, the same underlying action as asking Claude to clock you in or out.
+**Clock** — shows active clock-in status and a simple manual clock in/out control, the same underlying action as asking Claude, Muse, or Grok to clock you in or out.
 
 **Photos** — attach job photos straight from the camera or camera roll.
 
 **Messages** — the SMS/WhatsApp thread view, where SMS is configured (Section 11). Checking for new replies is a deliberate manual action (a button press), not automatic, so opening this tab never silently fires an outbound API call.
 
-**Database** — a raw, tab-switchable table view of every table in the job tracker (Jobs_Schedule, Customers, Invoices, Quotes, TimeLog, Route_Planner, Services_Pricing, Settings, Commands) — this is the app's general-purpose, row-level view into the same SQLite database Claude reads and writes, for anything the Board and Jobs tabs don't have a purpose-built screen for. (Labeled "Database" in the app; still called the "Sheet" screen internally and in a few places in this guide — same tab, same name change reflecting that there's no underlying spreadsheet file anymore.) Every row is editable via a generic edit form, and tables that support it have a **+ Add** button for appending a brand-new row.
+**Database** — a raw, tab-switchable table view of every table in the job tracker (Jobs_Schedule, Customers, Invoices, Quotes, TimeLog, Route_Planner, Services_Pricing, Settings, Commands) — this is the app's general-purpose, row-level view into the same SQLite database Claude, Muse, or Grok reads and writes, for anything the Board and Jobs tabs don't have a purpose-built screen for. (Labeled "Database" in the app; still called the "Sheet" screen internally and in a few places in this guide — same tab, same name change reflecting that there's no underlying spreadsheet file anymore.) Every row is editable via a generic edit form, and tables that support it have a **+ Add** button for appending a brand-new row.
 - A manual refresh button next to the table tabs re-fetches whichever one is currently open, in place — no need to switch tabs away and back just to see new data. Switching between table tabs has always re-fetched fresh data on every switch.
 - The Customers table's **⇅ ID** button cycles the CustomerID sort: default order → ascending → descending. It's numeric-aware (`CUST-2026-10` sorts after `CUST-2026-2`), and sorting is view-only — it never changes the database order.
 - After you save an edit, the table keeps your scroll position instead of jumping back to the top-left — handy when working across a wide table.
@@ -2844,7 +2857,7 @@ Good to know:
 
 ### What It Is
 
-The Remote PWA is a standalone, human-facing dashboard for managing your own personal AI-Prowler install from any phone or browser — separate from the Jobs App (field-service focused, Section 25) and separate from the MCP connection Claude.ai uses to actually reach your knowledge base. Where the Jobs App is about running the day's work, the Remote PWA is about checking on and administering AI-Prowler while away from the PC it runs on: browsing files, running a search, managing permissions, reviewing self-learning entries, checking the agentic task queue, and viewing system health — all without a Claude conversation open.
+The Remote PWA is a standalone, human-facing dashboard for managing your own personal AI-Prowler install from any phone or browser — separate from the Jobs App (field-service focused, Section 25) and separate from the MCP connection Claude.ai uses to actually reach your knowledge base. Where the Jobs App is about running the day's work, the Remote PWA is about checking on and administering AI-Prowler while away from the PC it runs on: browsing files, running a search, managing permissions, reviewing self-learning entries, checking the agentic task queue, and viewing system health — all without a Claude, Muse, or Grok conversation open.
 
 ### Setup & Access
 
@@ -2859,11 +2872,11 @@ The app has seven bottom-nav tabs: **Dashboard**, **Files**, **Search**, **Perms
 
 **Dashboard** — an at-a-glance status view, plus a **Quick Access** panel of shortcuts straight into the other six tabs.
 
-**Files** — browse, download, and upload tracked files directly from the phone or browser, with no Claude conversation needed. This is the human-usable counterpart to the `get_file_download_url()` / `get_file_upload_url()` MCP tools (Section 7 → File Transfer Tools), which let *Claude* do the same thing programmatically during a conversation.
+**Files** — browse, download, and upload tracked files directly from the phone or browser, with no Claude, Muse, or Grok conversation needed. This is the human-usable counterpart to the `get_file_download_url()` / `get_file_upload_url()` MCP tools (Section 7 → File Transfer Tools), which let *Claude, Muse, or Grok* do the same thing programmatically during a conversation.
 
-The tab has two sections: **Indexed Folders** (your tracked folders) and, below them, **Access-Only Folders** (readable by Claude, never indexed — see §4). Both work the same way: **📥 Download** opens a folder browser (Open → / ← Back, **👁 View** for text and images, **⬇ Get** to download), and **📷 Upload** appears on folders with write access (a folder without it shows 🔒 Read only — turn write access on in the **Perms** tab). The difference is what happens to an upload: in an indexed folder it's saved **and indexed** into AI-Prowler; in an access-only folder it's **saved only — never indexed**, and the folder is not added to tracking.
+The tab has two sections: **Indexed Folders** (your tracked folders) and, below them, **Access-Only Folders** (readable by Claude, Muse, or Grok, never indexed — see §4). Both work the same way: **📥 Download** opens a folder browser (Open → / ← Back, **👁 View** for text and images, **⬇ Get** to download), and **📷 Upload** appears on folders with write access (a folder without it shows 🔒 Read only — turn write access on in the **Perms** tab). The difference is what happens to an upload: in an indexed folder it's saved **and indexed** into AI-Prowler; in an access-only folder it's **saved only — never indexed**, and the folder is not added to tracking.
 
-**Search** — run a semantic search against your knowledge base directly from this tab, using the same underlying search `search_documents()` uses when Claude searches on your behalf.
+**Search** — run a semantic search against your knowledge base directly from this tab, using the same underlying search `search_documents()` uses when Claude, Muse, or Grok searches on your behalf.
 
 **Perms** — view and manage the readable/writable directory allowlist, the same permission set the `list_writable_directories()`, `grant_write_access()`, and `revoke_write_access()` MCP tools operate on. Useful for checking or fixing folder permissions without needing to ask Claude to do it. Turning write access **on** asks you to re-enter your Bearer token; turning it off is instant.
 
@@ -2873,7 +2886,7 @@ Below the indexed folders is the **Access-Only Folders** section (folders Claude
 
 **Tasks** — the agentic analysis task queue, grouped into **Due Now**, **Scheduled**, and **Completed / One-off**, with a **+ New Custom AI Task** form for defining a new one and **Edit** on each task. In Edit, every field can be changed — and cleared: emptying the Report folder or un-ticking every scope folder removes them, and First due can be emptied on a **Run once** task (a scheduled task always needs one, so the form says so instead of saving). Mirrors what `list_analysis_tasks()`, `get_pending_analysis_tasks()`, `create_analysis_task()` and `update_analysis_task()` work with.
 
-**System** — **AI-Prowler Status** and **Database Stats** panels, the same information `check_ai_prowler_status()` and `get_database_stats()` return to Claude.
+**System** — **AI-Prowler Status** and **Database Stats** panels, the same information `check_ai_prowler_status()` and `get_database_stats()` return to Claude, Muse, or Grok.
 
 ### Personal Mode vs. Server Mode
 
@@ -2907,7 +2920,7 @@ To upgrade: `pip install --upgrade mcp`
 - SMS inbox and thread logs
 
 **What leaves your machine:**
-- Text of retrieved document chunks (when Claude processes them)
+- Text of retrieved document chunks (when Claude, Muse, or Grok processes them)
 - Anonymous daily heartbeat (install_id, version, edition, mode, OS, chunk count, tool call count)
 - Subscription check (reads public registry from GitHub — no data sent)
 - Update check (read-only version check)

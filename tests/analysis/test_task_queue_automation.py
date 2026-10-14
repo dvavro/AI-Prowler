@@ -50,6 +50,9 @@ def _isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH",
                          tmp_path / "_no_such_dir" / "ai_prowler_mcp.py")
     monkeypatch.setattr(tqa, "API_KEY_PATH", tmp_path / ".ai-prowler" / "claude_api_key.txt")
+    # 2026-10-12: same isolation for the Grok key file — without this, Grok
+    # key tests would read/write the REAL ~/.ai-prowler/grok_api_key.txt.
+    monkeypatch.setattr(tqa, "GROK_API_KEY_PATH", tmp_path / ".ai-prowler" / "grok_api_key.txt")
     # v8.1.6: same isolation requirement for the new OAuth-token files —
     # without this, tests would read/write the REAL
     # ~/.ai-prowler/claude_oauth_token.json on the machine running them.
@@ -2417,10 +2420,14 @@ def test_wrapper_script_never_embeds_raw_api_key_value():
     # text — only the file-read mechanism. This test can't check "no key
     # anywhere" directly (there is no key passed in), so it asserts the
     # function signature has no parameter that could carry a raw key value.
+    # (2026-10-12: "api_key_provider" is explicitly allowed — it's a provider
+    # NAME like "grok", never a key value.)
     import inspect
     sig = inspect.signature(tqa.build_wrapper_script_content)
-    assert "api_key" not in sig.parameters  # only "use_api_key" (a bool) should exist
     assert "use_api_key" in sig.parameters
+    for _name in sig.parameters:
+        assert "key" not in _name or _name in ("use_api_key", "api_key_provider"), \
+            f"parameter {_name!r} could carry a raw key value"
 
 
 def test_wrapper_script_api_key_block_fails_loudly_if_file_missing():
@@ -2830,7 +2837,7 @@ def test_run_queue_now_success_reuses_wrapper_script(_isolated_home, monkeypatch
     wrapper_calls = []
     def _fake_install_wrapper(target_dir, mcp_config_path, allowed_tools,
                                notify_on_complete=False, notify_method="sms",
-                               use_api_key=False):
+                               use_api_key=False, **_kw):
         wrapper_calls.append((target_dir, mcp_config_path, allowed_tools,
                                notify_on_complete, notify_method, use_api_key))
         return Path("fake_wrapper.bat")

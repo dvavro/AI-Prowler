@@ -293,6 +293,11 @@ def browser_context_args(browser_context_args):
 @pytest.fixture
 def page(page, request, guard, token, app_url):
     page.set_default_timeout(20_000)
+    # --sandbox with a test date other than today (2026-10-13): the browser's
+    # clock matches the time machine server's, so "today" agrees everywhere.
+    _bc = os.environ.get("E2E_BROWSER_CLOCK", "").strip()
+    if _bc:
+        page.clock.install(time=_dt.datetime.fromisoformat(_bc))
     # Bypass alarm (2026-09-26): count every /pwa-api request that leaves the
     # browser (context-level — also sees service-worker traffic) against the
     # ones the guard's route handler actually handled. Any difference means a
@@ -447,6 +452,13 @@ def clean_slate(data):
 # ── SUMMARY.txt ───────────────────────────────────────────────────────────────
 def pytest_sessionfinish(session, exitstatus):
     oc = STATE["outcomes"]
+    # 2026-10-14: a plain run_tests.bat loads this conftest but deselects every
+    # jobs_gui_e2e test. Without this guard the hook wrote a FAIL SUMMARY.txt and
+    # forced exit status 1 on an otherwise green run (release_gate reads it).
+    # Launched by run_gui_jobs_e2e.py, E2E_RUN_DIR is set, so a pre-flight stop
+    # is still reported as before.
+    if not oc and not os.environ.get("E2E_RUN_DIR"):
+        return
     passed = sum(1 for o in oc.values() if o[0] == "passed")
     failed = [(k, v) for k, v in oc.items() if v[0] == "failed"]
     skipped = sum(1 for o in oc.values() if o[0] == "skipped")

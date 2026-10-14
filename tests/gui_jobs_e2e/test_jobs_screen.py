@@ -95,18 +95,35 @@ def test_JOBS_V1_no_customer_is_refused(form):
     assert form.is_open()
 
 
-def test_JOBS_V2_hard_job_without_start_time_is_refused(form, data):
-    form.open_new()
-    form.customer(data.customer_id()).text("jfAddress", "210 Sams Ave").set("jfDate", SANDBOX_DATE)
-    form.choose("jfSchedType", "Hard").set("jfStart", "").set("jfDuration", "30").save()
-    expect(form.error()).to_contain_text("hard schedule needs a Start Time")
-    assert form.is_open()
+# 2026-10-07 (David's rule, jobs/index.html "Hard/Soft schedule validation"):
+# the ONLY blocking case is start > end. A Hard job with no start ("any time"),
+# and a Soft window shorter than the job, both SAVE — the window/duration
+# mismatch is a live, non-blocking warning (#jfSchedMsg). Updated 2026-10-13:
+# these two tests still encoded the old blocking rules.
+def test_JOBS_V2_hard_job_without_start_time_saves(form, api, data):
+    token = f"JV2-{int(time.time())}"
+    _fill_new(form, data, token, sched="Hard", start="", dur="30").save("create_job")
+    expect(form.modal).to_be_hidden()
+    j = _job_with_note(api, token)
+    assert j and j.get("Schedule Type (Hard/Soft)") == "Hard", "a Hard job with no start time must save"
+    form.guard_note = j[JOB_ID]
 
 
-def test_JOBS_V3_soft_window_shorter_than_the_job_is_refused(form, data):
+def test_JOBS_V3_soft_window_shorter_than_the_job_warns_but_saves(form, api, data, page):
     token = f"JV3-{int(time.time())}"
-    _fill_new(form, data, token, start="09:00", end="09:30", dur="60").save()
-    expect(form.error()).to_contain_text("shorter than the Est. Duration")
+    _fill_new(form, data, token, start="09:00", end="09:30", dur="60")
+    expect(page.locator("#jfSchedMsg")).to_contain_text("shorter than the Est. Duration")
+    form.save("create_job")
+    expect(form.modal).to_be_hidden()
+    j = _job_with_note(api, token)
+    assert j, "a soft window shorter than the job must still save"
+    form.guard_note = j[JOB_ID]
+
+
+def test_JOBS_V4_start_after_end_is_refused(form, data):
+    token = f"JV4-{int(time.time())}"
+    _fill_new(form, data, token, start="14:00", end="09:00", dur="30").save()
+    expect(form.error()).to_contain_text("start time is after the end time")
     assert form.is_open()
 
 

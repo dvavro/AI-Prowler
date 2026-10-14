@@ -363,9 +363,11 @@ class TestUploadRouteWiring:
         assert '_hrsrv_subpath == "/documents/upload"' in ai_prowler_source
         assert "_hr_handle_document_upload(\n                        _hrsrv_body_bytes" in ai_prowler_source
 
-    def test_wired_into_personal_mode_router(self, ai_prowler_source):
-        assert '_hrp_subpath == "/documents/upload"' in ai_prowler_source
-        assert "_hr_handle_document_upload(\n                        _hrp_body_bytes" in ai_prowler_source
+    def test_not_wired_into_personal_mode_router(self, ai_prowler_source):
+        # 2026-10-11 (David): the HR apps are AI-Prowler SERVER only — the
+        # personal router answers "server only" and never handles an upload.
+        assert '_hrp_subpath == "/documents/upload"' not in ai_prowler_source
+        assert "_hr_handle_document_upload(\n                        _hrp_body_bytes" not in ai_prowler_source
 
     def test_25mb_size_cap_present(self, ai_prowler_source):
         assert "25 * 1024 * 1024" in ai_prowler_source

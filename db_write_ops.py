@@ -153,7 +153,7 @@ JOBS_HEADER_MAP = {
     # deliberately NOT touched by approve_route_schedule/
     # unapprove_route_schedule (those two read/write Start Time/End Time
     # only). Changed only via a genuine manual edit through this same
-    # generic mechanism, or an explicit Claude instruction to update it.
+    # generic mechanism, or an explicit Claude, Muse, or Grok instruction to update it.
     "Original Start Time": "original_start_time",
     "Original End Time": "original_end_time",
     "Created By": "created_by",
@@ -456,7 +456,7 @@ def _coerce_value(db_col: str, normalized_header: str, val):
 
 # ── R-057: fixed-choice fields (David 2026-09-28) ─────────────────────────
 # In the Jobs app these fields are dropdowns, so only an allowed value can be
-# picked. But Claude (voice or chat), imports and direct API calls write
+# picked. But Claude, Muse, or Grok (voice or chat), imports and direct API calls write
 # through the same create/update engine with whatever word they choose — and
 # the server used to store it as-is. A job saved "Completed" instead of the
 # app's "Complete" looked done but never counted as serviced (customer
@@ -1203,7 +1203,7 @@ def db_create_job(db_path: str, updates: dict, actor: str) -> str:
     #
     # Both failure cases are caught and translated into a clear,
     # tool-layer message here — never a raw FK-constraint stack trace up
-    # to the caller (Claude, voice, PWA).
+    # to the caller (Claude, Muse, or Grok, voice, PWA).
     updates = dict(updates)
     customer_id = _mapped_value(updates, JOBS_HEADER_MAP, "customer_id")
     if not customer_id or not str(customer_id).strip():

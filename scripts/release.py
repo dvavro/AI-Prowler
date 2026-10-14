@@ -653,6 +653,35 @@ MANIFEST_FILES = [
     "remote/sw.js",
     "remote/icon-192.png",
     "remote/icon-512.png",
+    # Added 2026-10-14 (V9.2 install/manifest audit): files already in
+    # AI-Prowler-Setup.iss [Files] (and in update_install*.bat) but missing
+    # here, so in-app updates never delivered them. setup_wizard.py backs the
+    # Setup Center and every Settings-tab QR button; startup_log.py is rag_gui's
+    # startup log. Both are imported inside try/except, so a client without
+    # them doesn't crash -- those features just silently disappear.
+    "setup_wizard.py",
+    "startup_log.py",
+    # HR apps (AI-Prowler Server only, but shipped in every install, same as the
+    # installer). hr_task_tracking.json is NOT listed: it is mutable state that
+    # hr_scheduler.py keeps in the per-user state folder, not {app}.
+    "hr_scheduler.py",
+    "hr_state_rules.json",
+    "hr_task_templates.json",
+    "hr_forms_library.json",
+    "hr_admin/index.html",
+    "hr_admin/manifest.json",
+    "hr_admin/sw.js",
+    "hr_admin/icon-192.png",
+    "hr_admin/icon-512.png",
+    "hr_portal/index.html",
+    "hr_portal/employee_manifest.json",
+    "hr_portal/icon-192.png",
+    "hr_portal/icon-512.png",
+    # Globs are expanded by write_update_manifest() -- they mirror the .iss
+    # "hr_portal\docs\*.html" / "*.pdf" lines so new policy/training docs ship
+    # without editing this list. (The .docx specs in docs\ are dev-only.)
+    "hr_portal/docs/*.html",
+    "hr_portal/docs/*.pdf",
     # NOTE: rag_icon.ico and python-3.11.8-amd64.exe are intentionally excluded.
     # rag_icon.ico rarely changes and is large binary noise in the update.
     # python-3.11.8-amd64.exe is the bundled Python installer — it is never
@@ -666,7 +695,21 @@ def write_update_manifest(new_version: str) -> None:
 
     entries = []
     missing = []
+    # Expand glob entries (e.g. "hr_portal/docs/*.html") into concrete,
+    # sorted, forward-slash paths; a glob that matches nothing is reported
+    # as missing just like a plain file.
+    _rels = []
     for rel in MANIFEST_FILES:
+        if any(c in rel for c in "*?["):
+            hits = sorted(p.relative_to(REPO_ROOT).as_posix()
+                          for p in REPO_ROOT.glob(rel) if p.is_file())
+            if hits:
+                _rels.extend(hits)
+            else:
+                missing.append(rel)
+        else:
+            _rels.append(rel)
+    for rel in _rels:
         fp = REPO_ROOT / rel
         if not fp.exists():
             missing.append(rel)

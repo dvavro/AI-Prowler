@@ -49,8 +49,10 @@ def test_CAL_01_todays_job_is_on_the_today_row(clean_slate, app, page, data):
     # 9 AM is listed before 1 PM
     chips = today.locator(".cal-job-chip")
     expect(chips.nth(0)).to_contain_text("9:00 AM")
-    # both jobs have a block on the day's time bar
-    expect(today.locator(".cal-occ-bar .seg:not(.occ-lunch)")).to_have_count(2)
+    # 2026-10-06 design: the day's time bar shows the APPROVED schedule only —
+    # these jobs have no approved route yet, so they have no block on it (the
+    # blocks after approval are checked in CAL-07)
+    expect(today.locator(".cal-occ-bar .seg:not(.occ-lunch):not(.occ-drive)")).to_have_count(0)
     # not on tomorrow
     expect(_chip(_row(page, 1), hard)).to_have_count(0)
 
@@ -264,11 +266,19 @@ def test_CAL_07_routed_day_shows_route_link(clean_slate, app, page, data):
     route.press_route_selected_date(accept_errors=True)
     route.wait_quiet()
     route.expect_stops_include(ids)
+    # 2026-10-05 design: the 📍 link is the route's phone map link, which is
+    # pinned only once the route is APPROVED (updated 2026-10-13).
+    expect(route.approve_btn()).to_be_visible(timeout=15_000)
+    with page.expect_request(lambda r: "/pwa-api" in r.url and "approve_route_schedule" in (r.post_data or "")):
+        route.approve_btn().click()
+    route.wait_quiet()
     _open_calendar(app, page)
     link = _row(page, 0).locator("a[title^='Route built for this day']")
     expect(link).to_have_count(1)
     expect(link).to_have_attribute("href", re.compile(r"^https://www\.google\.com/maps/"))
     expect(_row(page, 1).locator("a[title^='Route built for this day']")).to_have_count(0)
+    # the approved stops now have their blocks on today's time bar
+    expect(_row(page, 0).locator(".cal-occ-bar .seg:not(.occ-lunch):not(.occ-drive)")).to_have_count(2)
     _row(page, 0).locator(".cal-week-date .dow").click()
     expect(page.locator("#calDayModalRoute")).to_contain_text("Route for this day")
 

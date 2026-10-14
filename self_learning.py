@@ -2,11 +2,11 @@
 """
 AI-Prowler Self-Learning Engine
 ================================
-A RAG-based self-learning system that allows Claude (and operators) to
+A RAG-based self-learning system that allows Claude, Muse, or Grok (and operators) to
 record, retrieve, and apply learned knowledge over time.
 
 Learnings are stored in a structured JSON file AND indexed into ChromaDB
-for semantic retrieval.  This gives Claude instant access to corrections,
+for semantic retrieval.  This gives Claude, Muse, or Grok instant access to corrections,
 business lessons, project insights, and updated facts — no 30-minute
 LoRA training cycle required.
 
@@ -64,7 +64,7 @@ VALID_CATEGORIES = [
 
 VALID_SOURCES = [
     "operator",              # Personal mode, no owner name configured
-    "claude_detected",       # Legacy — Claude identified superseding information
+    "claude_detected",       # Legacy — Claude, Muse, or Grok identified superseding information
     "project_review",        # Post-project review / retrospective
     "post_mortem",           # After-incident analysis
     "research",              # From web search or document research

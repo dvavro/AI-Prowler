@@ -874,7 +874,7 @@ def advance_next_due(tasks: list, task_id: str,
                      completed_date: str = None) -> str:
     """
     Advance next_due by one schedule interval after task completion.
-    Called by the complete_analysis_task MCP tool (Claude triggers this).
+    Called by the complete_analysis_task MCP tool (Claude, Muse, or Grok triggers this).
 
     Uses the ORIGINAL due date as the anchor (schedule option B) so that
     a "monthly on the 1st" task stays on the 1st regardless of when it ran.
@@ -882,7 +882,7 @@ def advance_next_due(tasks: list, task_id: str,
     Args:
         tasks:          The loaded custom tasks list (modified in-place).
         task_id:        The task to advance.
-        completed_date: YYYY-MM-DD date Claude reports as completion date.
+        completed_date: YYYY-MM-DD date Claude, Muse, or Grok reports as completion date.
                         Defaults to today.
 
     Returns:
@@ -923,7 +923,7 @@ def catch_up_all_due_tasks(tasks: list) -> int:
     """v8.1.6: called when the Autonomous Task Queue is enabled — advances
     every currently due/overdue task's next_due to its next occurrence
     after today, WITHOUT marking it as run/completed (unlike
-    advance_next_due(), which is for an actual completion Claude reports).
+    advance_next_due(), which is for an actual completion Claude, Muse, or Grok reports).
 
     Rationale: enabling the daily scheduled automation shouldn't cause a
     pile of backlog to all fire on day one just because they'd accumulated
@@ -963,7 +963,7 @@ def catch_up_all_due_tasks(tasks: list) -> int:
 
 def build_task_prompt(task: dict) -> str:
     """
-    Build the full Claude prompt for a custom task, injecting scope dirs
+    Build the full Claude, Muse, or Grok prompt for a custom task, injecting scope dirs
     and output instructions automatically.
     """
     lines = []

@@ -7,7 +7,7 @@ try:
     print(f"Portal loads: YES ({len(html):,} bytes)")
     print(f"Has openITModal: {'openITModal' in html}")
     print(f"Has openFeedbackModal: {'openFeedbackModal' in html}")
-    print(f"Has it-modal div: {'id=\"it-modal\"' in html}")
-    print(f"Has fb-type input: {'id=\"fb-type\"' in html}")
+    print("Has it-modal div:", 'id="it-modal"' in html)        # 3.11: no backslash in an f-string expression
+    print("Has fb-type input:", 'id="fb-type"' in html)
 except Exception as e:
     print(f"Portal load FAILED: {e}")

@@ -26,8 +26,17 @@ PANEL_TITLE = "🧩 MCP Tool Configuration"
 
 @pytest.fixture
 def state_dir(monkeypatch, tmp_path):
-    """Must be requested BEFORE `gui` so the panel reads/writes here."""
+    """Must be requested BEFORE `gui` so the panel reads/writes here.
+
+    2026-10-12: Job Tracker and SMS start OFF on a new install; these tests
+    exercise the panel on an install that uses them, so both are recorded on
+    (the default-off behaviour is tested in tests/unit/test_default_off_groups.py)."""
+    import json
     monkeypatch.setenv("AIPROWLER_TEST_STATE_DIR", str(tmp_path))
+    (tmp_path / "tool_config.json").write_text(json.dumps({
+        "schema_version": 1,
+        "optional_groups": {m: {"job_tracker": True, "sms_whatsapp": True}
+                            for m in ("personal", "server")}}), encoding="utf-8")
     return tmp_path
 
 

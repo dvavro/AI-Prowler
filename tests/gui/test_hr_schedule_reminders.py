@@ -2,7 +2,7 @@
 tests/gui/test_hr_schedule_reminders.py
 ========================================
 Regression guard for the Schedule tab "boxes" month-grid view and business
-reminders feature added to hr/index.html on 2026-08-29 (user request: "I
+reminders feature added to hr_admin/index.html on 2026-08-29 (user request: "I
 want the calendar to have another way you can view this calendar like more
 open and boxes looking... put in dates and reminders for business use").
 
@@ -18,12 +18,15 @@ Covers:
     tasks/reminders for the tapped date and HTML-escapes free-text reminder
     fields (XSS regression guard -- reminder title/note are user-supplied).
 
-Safe: reads hr/index.html as plain text only; runs extracted JS in an
+Safe: reads hr_admin/index.html as plain text only; runs extracted JS in an
 isolated Node subprocess with mocked globals (including a fixed Date so the
 grid math is deterministic). Never imports ai_prowler_mcp.py, never touches
 hr_db.json or a live server. Same technique as
 tests/gui/test_hr_setup_wizard_captures_all_steps.py.
 """
+# 2026-10-11 (David): the original /hr/ app is retired — HR Admin (hr_admin/) is
+# the same app, so this test now reads hr_admin/. HR is AI-Prowler server only.
+
 from __future__ import annotations
 
 import os
@@ -38,7 +41,7 @@ _real_Popen = subprocess.Popen
 
 _SRC = os.environ.get("AI_PROWLER_SRC")
 SRC_ROOT = Path(_SRC).resolve() if _SRC else Path(__file__).resolve().parent.parent.parent
-HR_INDEX = SRC_ROOT / "hr" / "index.html"
+HR_INDEX = SRC_ROOT / "hr_admin" / "index.html"
 
 
 @pytest.fixture(scope="module")

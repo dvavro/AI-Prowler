@@ -90,6 +90,13 @@ def _prepare_home(home: pathlib.Path, mode: str = "personal", users: dict | None
                 assert str(u.get(field, "")).endswith("@time-machine.test"), f"non-test user address: {u}"
         (state / "users.json").write_text(json.dumps(users, indent=1), encoding="utf-8")
     (state / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    # 2026-10-12+: "Job Tracker & Routing" and "SMS & WhatsApp" start OFF on a
+    # NEW install, and an empty sandbox looks like one — the Jobs app would
+    # refuse sign-in. The sandbox exists to test those features: record both ON.
+    (state / "tool_config.json").write_text(json.dumps({
+        "schema_version": 1,
+        "optional_groups": {m: {"job_tracker": True, "sms_whatsapp": True}
+                            for m in ("personal", "server")}}), encoding="utf-8")
     return state
 
 

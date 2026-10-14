@@ -1239,7 +1239,7 @@ def safe_num_ctx_for_prompt(prompt: str, max_tokens: int, model_name: str) -> in
 # unconditionally, on every import of this module — including by
 # ai_prowler_mcp.py (the MCP server), which never calls query_ollama(),
 # rag_query(), prewarm_ollama(), or validate_model_config() itself, and
-# doesn't need a local LLM at all in the current MCP-only design (Claude
+# doesn't need a local LLM at all in the current MCP-only design (Claude, Muse, or Grok
 # does all reasoning; AI-Prowler just serves indexed chunks). That import-
 # time call made every MCP server startup silently depend on Ollama being
 # installed and reachable at localhost:11434, purely as an unrequested
@@ -1300,7 +1300,7 @@ SUPPORTED_EXTENSIONS = {
 
 # ── Code / script extensions — security-scan only ────────────────────────────
 # Indexed as ONE chunk containing only the first 500 lines, prefixed with
-# [SECURITY SCAN ONLY]. Lets Claude detect malicious scripts without flooding
+# [SECURITY SCAN ONLY]. Lets Claude, Muse, or Grok detect malicious scripts without flooding
 # semantic search with code boilerplate. Use grep for code search.
 #
 # INTENTIONALLY EXCLUDED from this set (fully semantically chunked instead):
@@ -1692,7 +1692,7 @@ def load_pdf(filepath: str) -> str:
     1. pdfplumber — fast; perfect for PDFs that have a real text layer.
        Also extracts tables structurally using extract_tables(), rendered as
        [PDF Table: page N, table M] [Row R]\nColumn: Value blocks so that
-       Claude can answer "what is column X for row Y?" reliably.
+       Claude, Muse, or Grok can answer "what is column X for row Y?" reliably.
     2. If the total extracted text is under OCR_MIN_CHARS the file is an
        image-only PDF (living trust, court docs, old contracts, scanned pages).
        pypdfium2 renders each page at 300 DPI and Tesseract reads the image.
@@ -1844,7 +1844,7 @@ def load_csv_tsv(filepath: str) -> str:
     Extract text from CSV and TSV files using key=value per-row format.
 
     Uses the same approach as load_xlsx/load_xls — the header row is glued to
-    every data row so that every chunk is self-contained and Claude can always
+    every data row so that every chunk is self-contained and Claude, Muse, or Grok can always
     tell which column a value belongs to, regardless of where the word-based
     splitter cuts the file.
 
@@ -1972,7 +1972,7 @@ def load_xlsx(filepath: str) -> str:
     Each data row is rendered as a self-contained block of "Column: Value" pairs
     so that every chunk — regardless of where the word-based splitter cuts —
     carries full column context for every value it contains.  This lets the
-    embedding model (and Claude) answer "what is column X for row Y?" reliably
+    embedding model (and Claude, Muse, or Grok) answer "what is column X for row Y?" reliably
     even across very large spreadsheets.
 
     Format:
@@ -2762,7 +2762,7 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE,
 # ═══════════════════════════════════════════════════════════
 #
 # These functions build provenance metadata that is stored with every chunk
-# in ChromaDB.  The goal is to give Claude (or any MCP client) enough
+# in ChromaDB.  The goal is to give Claude, Muse, or Grok (or any MCP client) enough
 # structural context to NEVER confuse content from one document/case/project
 # with another, even when filenames are identical across directories.
 #
@@ -2783,7 +2783,7 @@ def build_chunk_header(filepath: str, filename: str,
                        file_modified: str = '') -> str:
     """Build a one-line provenance header that is prepended to chunk text.
 
-    The header is embedded IN the stored chunk content so Claude always sees
+    The header is embedded IN the stored chunk content so Claude, Muse, or Grok always sees
     it, even if it ignores metadata fields.  Format:
 
         [SOURCE: ParentDir/filename.pdf | chunk 3/12 | modified 2024-06-15]
@@ -6849,7 +6849,7 @@ def access_only_add_check(directory, access_list, tracked_list=None) -> dict:
         if Path(t).is_file():
             continue                                   # a tracked single file covers no folder
         if path_equals(t, resolved):
-            out["error"] = f"'{resolved}' is already an indexed folder — Claude can already read it."
+            out["error"] = f"'{resolved}' is already an indexed folder — Claude, Muse, or Grok can already read it."
             return out
         if path_startswith(resolved, t):
             out["error"] = (f"'{resolved}' is already readable — it's inside indexed folder "

@@ -1143,7 +1143,12 @@ textarea::placeholder{color:#c0c6d8}
       </div>
     </div>
   </div>
-  </div>
+  <!-- (2026-10-13, E2E MOB-01/02) A second "/.main" </div> stood here after
+       the 2026-10-06 repair had already closed .main right after the last
+       screen — so this one closed #app instead, and the bottom nav ended up
+       OUTSIDE #app: below the 100dvh app box, off the bottom of a phone
+       screen, with the Jobs screen sitting over it. Removed; .main is closed
+       once, after #screenSheet. -->
   <!-- /.main — bottomnav must be OUTSIDE .main (a sibling in #app) so it
        stays pinned to the screen bottom instead of scrolling with content.
        (There was previously a stray extra closing div in the Photos screen
@@ -1199,6 +1204,9 @@ textarea::placeholder{color:#c0c6d8}
       <span class="nav-label">Profile</span>
     </button>
   </nav>
+  </div><!-- /#app (2026-10-13) — closed right after the bottom nav. The
+       modals, #toast and the scripts below stay outside #app exactly as
+       they already were (all of them are position:fixed). -->
   <!-- No closing </div> needed here anymore — .main now closes earlier
        (right before <nav> opens, see comment above), so <nav> is a direct
        sibling of .main inside #app, as intended, instead of being nested
@@ -3002,10 +3010,10 @@ function closeCalDayModal(e) { if(!e||e.target===document.getElementById('calDay
 // app's own startup/auth/sync sequence.
 const WIZ_STEPS = [
   { icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 20L15 9"/><path d="M15 9l1.5-1.5M15 9l-1.5-1.5M19 5l1 1M19 5l-1 1M19 5V3M19 5h2"/></svg>',
-    title: "A typical day, start to finish", text: "Same path your crew already follows — each step below is a real thing you can do today in AI-Prowler Jobs App manually or in Claude AI Chat (text or voice commands). Have QuickBooks? Start there instead: connect QuickBooks in Claude.ai and ask to import your customers, invoices, and payments — no manual entry needed.",
+    title: "A typical day, start to finish", text: "Same path your crew already follows — each step below is a real thing you can do today in AI-Prowler Jobs App manually or in Claude, Muse, or Grok Chat (text or voice commands). Have QuickBooks? Start there instead: connect QuickBooks in Claude.ai and ask to import your customers, invoices, and payments — no manual entry needed.",
     list: ['Import from QuickBooks (fastest start)', 'Add a customer', 'Record a quote', 'Add a job', 'Build the route', 'Clock in & out', 'Add photos', 'Invoice', 'Send the receipt'] },
   { icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 15a3 3 0 003-3V6a3 3 0 00-6 0v6a3 3 0 003 3z"/><path d="M19 11a7 7 0 01-14 0M12 18v3M9 21h6"/></svg>',
-    title: "Or just tell Claude", text: "Every screen in this wizard has a matching voice or text command. Instead of tapping through the app, just tell Claude what you want — by typing, by talking, or right here in AI-Prowler — and it happens the same way, instantly. Claude writes straight into your Jobs database — customers, jobs, invoices, payments — so a voice command and a tap do the exact same thing.",
+    title: "Or just tell Claude, Muse, or Grok", text: "Every screen in this wizard has a matching voice or text command. Instead of tapping through the app, just tell Claude, Muse, or Grok what you want — by typing, by talking, or right here in AI-Prowler — and it happens the same way, instantly. Claude, Muse, or Grok writes straight into your Jobs database — customers, jobs, invoices, payments — so a voice command and a tap do the exact same thing.",
     note: "Every step from here on shows a real example. The full list lives on the 📖 Commands tab, any time." },
   { icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20c1.2-4 4-6 7.5-6s6.3 2 7.5 6"/></svg>',
     title: "Add a customer", text: "Every job starts with a customer record — name, address, and how they like to be reached. Once they're in, on the Customers tab, you never retype their details again.",
@@ -3035,9 +3043,9 @@ const WIZ_STEPS = [
   { icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3h12v18l-2.5-1.5L13 21l-2.5-1.5L8 21l-2-1.5z"/><path d="M9 8h6M9 12h6"/></svg>',
     title: "Send the receipt", text: "Paid by cash or check? Email Receipt (Paid Cash/Check) sits right on the same screen — no invoice needed for that. The customer's record now holds the whole story.",
     voice: "Email a receipt for INV-0002, paid by check",
-    note: "💬 Or just tell Claude who paid — \"Mark JOB-4099 as paid, the customer paid $180\" — and the payment lands on the invoice. Ask \"Which customers owe me money?\" any time." },
+    note: "💬 Or just tell Claude, Muse, or Grok who paid — \"Mark JOB-4099 as paid, the customer paid $180\" — and the payment lands on the invoice. Ask \"Which customers owe me money?\" any time." },
   { icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16.5 9"/></svg>',
-    title: "You're set", text: "That's the whole loop — every step above by tap, or by just telling Claude. The Job Board, the live view of every job all day, is one tap away.",
+    title: "You're set", text: "That's the whole loop — every step above by tap, or by just telling Claude, Muse, or Grok. The Job Board, the live view of every job all day, is one tap away.",
     note: "Running solo? Your board and your crew tools live in one merged view. And the 📖 Commands tab always has more examples than fit in here." }
 ];
 let _wizIdx = 0;
@@ -4198,8 +4206,8 @@ function renderRouteLinkBanner() {
 }
 
 // Lets the crew build today's route right from the Jobs page — previously
-// this needed a Claude/voice call to build_daily_route with no in-app
-// equivalent at all, so if Claude wasn't available there was no way to
+// this needed a Claude, Muse, or Grok/voice call to build_daily_route with no in-app
+// equivalent at all, so if Claude, Muse, or Grok wasn't available there was no way to
 // route the day's jobs. Always targets TODAY's date specifically (the
 // same date renderRouteLinkBanner() and the banner above check); Route
 // Origin Mode, Start/End Address, and email-on-build all come from
@@ -4926,7 +4934,7 @@ function showScreen(name, btn) {
   }
   if (btn) btn.classList.add('active');
   // Auto-refresh on navigation — data changed elsewhere (another device,
-  // or an MCP tool call from a Claude conversation) should show up the
+  // or an MCP tool call from a Claude, Muse, or Grok conversation) should show up the
   // moment the user taps back to a data-driven tab, not require a manual
   // refresh tap first. Clock and Messages are deliberately NOT auto-
   // refreshed here: clock history renders from already-loaded client-side
@@ -9393,9 +9401,15 @@ function onBoardCardPointerDown(e, jobId) {
     startY: e.clientY,
     dragging: false,
   };
-  card.addEventListener('pointermove', _onBoardCardPointerMove);
-  card.addEventListener('pointerup', _onBoardCardPointerUp);
-  card.addEventListener('pointercancel', _onBoardCardPointerUp);
+  // (2026-10-13, E2E BRD-02) Listen on the WINDOW, not the card: pointer
+  // capture can be lost mid-drag (seen in Chromium with no re-render at
+  // all — lostpointercapture fired, then pointerup went to the column
+  // under the cursor), and a card-only listener then never heard the drop:
+  // the move was silently thrown away. Window listeners hear the drag's
+  // moves and its release whether or not capture holds.
+  window.addEventListener('pointermove', _onBoardCardPointerMove);
+  window.addEventListener('pointerup', _onBoardCardPointerUp);
+  window.addEventListener('pointercancel', _onBoardCardPointerUp);
 }
 
 function _onBoardCardPointerMove(e) {
@@ -9427,9 +9441,9 @@ function _onBoardCardPointerMove(e) {
 function _onBoardCardPointerUp(e) {
   if (!_boardDrag || e.pointerId !== _boardDrag.pointerId) return;
   var drag = _boardDrag;
-  drag.card.removeEventListener('pointermove', _onBoardCardPointerMove);
-  drag.card.removeEventListener('pointerup', _onBoardCardPointerUp);
-  drag.card.removeEventListener('pointercancel', _onBoardCardPointerUp);
+  window.removeEventListener('pointermove', _onBoardCardPointerMove);
+  window.removeEventListener('pointerup', _onBoardCardPointerUp);
+  window.removeEventListener('pointercancel', _onBoardCardPointerUp);
 
   if (drag.dragging) {
     var target = document.elementFromPoint(e.clientX, e.clientY);
@@ -10891,9 +10905,11 @@ function onRouteStopPointerDown(e, stopId) {
     startY: e.clientY, startIndex: parseInt(row.getAttribute('data-index'), 10),
     dragging: false,
   };
-  row.addEventListener('pointermove', _onRouteStopPointerMove);
-  row.addEventListener('pointerup', _onRouteStopPointerUp);
-  row.addEventListener('pointercancel', _onRouteStopPointerUp);
+  // Window-level, like the Board's card drag (2026-10-13): a lost pointer
+  // capture must not swallow the drop.
+  window.addEventListener('pointermove', _onRouteStopPointerMove);
+  window.addEventListener('pointerup', _onRouteStopPointerUp);
+  window.addEventListener('pointercancel', _onRouteStopPointerUp);
 }
 
 function _onRouteStopPointerMove(e) {
@@ -10931,9 +10947,9 @@ function _onRouteStopPointerMove(e) {
 function _onRouteStopPointerUp(e) {
   if (!_routeDrag || e.pointerId !== _routeDrag.pointerId) return;
   var drag = _routeDrag;
-  drag.row.removeEventListener('pointermove', _onRouteStopPointerMove);
-  drag.row.removeEventListener('pointerup', _onRouteStopPointerUp);
-  drag.row.removeEventListener('pointercancel', _onRouteStopPointerUp);
+  window.removeEventListener('pointermove', _onRouteStopPointerMove);
+  window.removeEventListener('pointerup', _onRouteStopPointerUp);
+  window.removeEventListener('pointercancel', _onRouteStopPointerUp);
   document.querySelectorAll('.route-stop.drag-over').forEach(function(r){ r.classList.remove('drag-over'); });
 
   if (drag.dragging) {
@@ -11166,13 +11182,13 @@ async function approveRouteSchedule() {
 // AI Suggestion" and call routeGetAiSuggestion()/suggest_route_schedule()
 // (removed 2026-09-19 — the button's onclick no longer referenced it and
 // nothing else called it; suggest_route_schedule itself stays available
-// as a plain MCP tool for Claude/voice use, this only removed the dead
+// as a plain MCP tool for Claude, Muse, or Grok/voice use, this only removed the dead
 // PWA wrapper). Kicks off a REAL headless Claude Code session
 // (start_ai_routing, ai_prowler_mcp.py) that reasons through the day's
 // jobs — hard commitments respected with wait-not-early-start, idle gaps
 // filled with well-matched soft jobs, poor fits deferred to open time —
 // instead of suggest_route_schedule's free nearest-neighbor heuristic
-// above. Genuinely spends real Claude usage and genuinely takes a while (a
+// above. Genuinely spends real Claude, Muse, or Grok usage and genuinely takes a while (a
 // real multi-step agentic session, not one quick lookup) — the confirm()
 // and the button's own label both exist so tapping this is an informed
 // choice, not a surprise mid-task.
@@ -11275,7 +11291,7 @@ function _aiRoutePickOrigin(crew) {
       var b = _aiRouteSheet('Where does the day start and end?',
         _aiRouteOption('gps', '\uD83D\uDCCD Current location', gpsNote, !gps) +
         _aiRouteOption('home', '\uD83C\uDFE0 ' + escapeHtml(homeLabel), homeNote, !home) +
-        _aiRouteNote('Uses real Claude usage and can take a few minutes.', 'var(--muted)') +
+        _aiRouteNote('Uses real Claude, Muse, or Grok usage and can take a few minutes.', 'var(--muted)') +
         _aiRouteBtns('<button class="btn btn-ghost" id="aoCancel">Cancel</button>' +
                      '<button class="btn btn-primary" id="aoGo" disabled>Run AI Routing</button>'));
       var go = b.querySelector('#aoGo');
@@ -11353,11 +11369,11 @@ function _aiRouteConnect() {
         showError((r || 'The sign-in could not be started.').replace(/^\u274C\s*/, ''), signin);
         return;
       }
-      var b = _aiRouteSheet('Sign in to Claude',
+      var b = _aiRouteSheet('Sign in to Claude, Muse, or Grok',
         _aiRouteNote('1. Tap the button and sign in to YOUR Claude account.\n' +
-                     '2. Claude will show a code \u2014 copy all of it.\n' +
+                     '2. Claude, Muse, or Grok will show a code \u2014 copy all of it.\n' +
                      '3. Come back here and paste it below.') +
-        '<a id="acLink" class="btn btn-primary" target="_blank" rel="noopener" style="text-decoration:none">Open Claude sign-in</a>' +
+        '<a id="acLink" class="btn btn-primary" target="_blank" rel="noopener" style="text-decoration:none">Open Claude, Muse, or Grok sign-in</a>' +
         '<input id="acCode" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" ' +
           'placeholder="Paste the code here" style="' + _AI_ROUTE_INPUT_STYLE + '">' +
         '<div id="acMsg"></div>' +
@@ -11435,7 +11451,7 @@ async function runAiRouting(fromJobsPage) {
     var params = { route_date: date, crew: crew };
     var startResult = await mcpCall('start_ai_routing', params);
 
-    // No Claude connection saved for this user (first use, or it expired):
+    // No Claude, Muse, or Grok connection saved for this user (first use, or it expired):
     // connect it now, then start the same run again.
     if ((startResult || '').indexOf('NO_CLI_TOKEN') !== -1) {
       _setRouteStatusBoxes('');
