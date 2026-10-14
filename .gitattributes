@@ -1,3 +1,32 @@
 # Enforce CRLF line endings on Windows batch files — cmd.exe cannot parse LF-only .bat files
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Binary files: never convert line endings (2026-10-14, v9.3.0 update failure).
+# With core.autocrlf=true git guesses text vs binary by looking for zero bytes.
+# The HR Portal PDFs use ASCII85-encoded streams (no zero bytes), so git treated
+# them as text and stripped their CRs on commit -- GitHub then served different
+# bytes from the ones update_manifest.json hashed, and every in-app update to
+# v9.3.0 failed the integrity check on those PDFs. Declaring the types binary
+# makes git store and serve the exact bytes. Keep in step with _BINARY_EXTS in
+# scripts/release.py (tests/unit/test_release_binary_attrs.py checks it).
+*.pdf binary
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.zip binary
+*.whl binary
+*.exe binary
+*.xlsx binary
+*.xls binary
+*.docx binary
+*.doc binary
+*.pptx binary
+*.db binary
+*.sqlite3 binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
