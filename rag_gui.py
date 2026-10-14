@@ -5372,8 +5372,40 @@ or from the Help menu."""
                 # Must mirror write_update_manifest() in scripts/release.py.
                 # Fixed 2026-08-25: PNG icons were being LF-normalized,
                 # corrupting their hashes vs what GitHub actually serves.
+                # 2026-10-14: scripts/release.py now hashes with EXACTLY this
+                # set (its _BINARY_EXTS must equal it -- see
+                # tests/unit/test_release_binary_attrs.py). Every installed
+                # client verifies with this rule, so the manifest has to as
+                # well; .pdf is deliberately NOT here (hashed LF-normalised,
+                # like every 9.2.x client does).
                 _BIN_EXTS = {".png", ".ico", ".exe", ".jpg",
                              ".jpeg", ".gif", ".webp", ".zip"}
+
+                def _verify_digest(_fn, _data):
+                    _bin = any(_fn.endswith(e) for e in _BIN_EXTS)
+                    return _hashlib_upd.sha256(
+                        _data if _bin else _data.replace(b"\r\n", b"\n")).hexdigest()
+
+                # ── Resume cache (2026-10-14) ─────────────────────────────
+                # Every file that downloads AND verifies is also written to
+                # update_cache\v<version>\ right away. If this attempt fails on
+                # some files, the next attempt for the SAME version re-checks
+                # each cached file against the manifest hash and reuses it, so
+                # only the failed files are downloaded again. The all-or-
+                # nothing rule is unchanged: nothing reaches pending_update
+                # until every file has verified. Files without a manifest hash
+                # are never reused. Caches for other versions are discarded.
+                import shutil as _shutil_upd
+                _cache_root = staging_dir.parent / 'update_cache'
+                _cache_dir = _cache_root / f"v{version}"
+                try:
+                    if _cache_root.is_dir():
+                        for _old in _cache_root.iterdir():
+                            if _old.is_dir() and _old.name != _cache_dir.name:
+                                _shutil_upd.rmtree(_old, ignore_errors=True)
+                except Exception as _cache_exc:
+                    _ulog(f"update_cache cleanup skipped: {_cache_exc}")
+                _reused = 0
 
                 for fname in _files:
                     if _cancel_event.is_set():
@@ -5381,6 +5413,28 @@ or from the Help menu."""
                         return
                     _url = f"{_base}{fname}"
                     _expected = _file_hashes.get(fname)
+
+                    if _expected:
+                        try:
+                            _cached = _cache_dir / fname
+                            if _cached.is_file():
+                                _cb = _cached.read_bytes()
+                                if _verify_digest(fname, _cb) == _expected:
+                                    _downloaded_content[fname] = _cb
+                                    _reused += 1
+                                    if _byte_mode:
+                                        _cumulative_bytes += len(_cb)
+                                        _prog_queue.put(("progress", fname,
+                                                         _cumulative_bytes))
+                                    else:
+                                        _done_count += 1
+                                        _prog_queue.put(("file_done", fname,
+                                                         _done_count))
+                                    _ulog(f"--- {fname}: reused verified copy "
+                                          f"from an earlier attempt")
+                                    continue
+                        except Exception as _cache_exc:
+                            _ulog(f"  cache read skipped for {fname}: {_cache_exc}")
 
                     # ── Exponential back-off retry loop ───────────────────
                     # GitHub's raw content CDN rate-limits aggressive burst
@@ -5457,9 +5511,7 @@ or from the Help menu."""
                     # ── Integrity check ───────────────────────────────────
                     if _expected:
                         _is_bin = any(fname.endswith(e) for e in _BIN_EXTS)
-                        _verify_bytes = (_content if _is_bin
-                                         else _content.replace(b"\r\n", b"\n"))
-                        _actual = _hashlib_upd.sha256(_verify_bytes).hexdigest()
+                        _actual = _verify_digest(fname, _content)
                         _hash_ok = _actual == _expected
                         _ulog(f"  hash {'OK' if _hash_ok else 'MISMATCH'} "
                               f"(bin={_is_bin}) "
@@ -5473,6 +5525,13 @@ or from the Help menu."""
                             continue
 
                     _downloaded_content[fname] = _content
+                    if _expected:   # verified -> keep it for a retry
+                        try:
+                            _cp = _cache_dir / fname
+                            _cp.parent.mkdir(parents=True, exist_ok=True)
+                            _cp.write_bytes(_content)
+                        except Exception as _cache_exc:
+                            _ulog(f"  cache write skipped for {fname}: {_cache_exc}")
                     if _byte_mode:
                         _cumulative_bytes += len(_content)
                     else:
@@ -5494,6 +5553,13 @@ or from the Help menu."""
                         for fn, reason in _failures[:8])
                     _more = (f"\n  …and {len(_failures) - 8} more file(s)"
                              if len(_failures) > 8 else "")
+                    _kept = len(_downloaded_content)
+                    _resume_note = (
+                        f"The {_kept} file(s) that downloaded and verified "
+                        f"correctly are kept — the retry only downloads the "
+                        f"{len(_failures)} that failed.\n\n" if _kept else "")
+                    _ulog(f"Resume cache kept {_kept} verified file(s) in {_cache_dir} "
+                          f"({_reused} reused this attempt)")
                     _prog_queue.put(("done", "error",
                         "Update Not Applied",
                         f"The update for v{version} could not be verified "
@@ -5502,6 +5568,7 @@ or from the Help menu."""
                         f"failed:\n{_fail_lines}{_more}\n\n"
                         f"Your current AI-Prowler installation is "
                         f"unchanged and safe to keep using.\n\n"
+                        f"{_resume_note}"
                         f"This is usually a temporary network issue — "
                         f"click '📥 Download Update' again to retry.",
                         f"❌ Update v{version} failed integrity check — "
@@ -5527,6 +5594,10 @@ or from the Help menu."""
                     out_path.parent.mkdir(parents=True, exist_ok=True)
                     out_path.write_bytes(content)
                     downloaded += 1
+
+                # Everything is in pending_update now -- the resume cache for
+                # this version has done its job.
+                _shutil_upd.rmtree(_cache_dir, ignore_errors=True)
 
                 if downloaded > 0:
                     # Write the flag file so RAG_RUN.bat knows to apply

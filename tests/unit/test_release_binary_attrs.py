@@ -1,12 +1,14 @@
-"""Release integrity: every file type release.py hashes RAW (no CRLF->LF
-normalisation) must be declared binary in .gitattributes.
+"""Release integrity for in-app updates (2026-10-14, after v9.3.0 failed).
 
-Why (2026-10-14, v9.3.0): write_update_manifest() hashes binary types byte-for-
-byte from the working copy, but git only keeps those bytes if it knows the file
-is binary. The HR Portal PDFs have no zero bytes, so git (core.autocrlf=true)
-treated them as text and stripped their CRs on commit; raw.githubusercontent.com
-then served different bytes and every in-app update failed its integrity check
-on 4 PDFs. Declaring the types binary in .gitattributes prevents that.
+v9.3.0 shipped HR Portal PDFs that no client could verify, for two reasons:
+  1. git treated the PDFs as text (no zero bytes) and, with core.autocrlf=true,
+     stripped their CRs on commit -- GitHub served altered bytes;
+  2. scripts/release.py hashed .pdf RAW while every client's updater
+     (rag_gui.py _BIN_EXTS) hashes .pdf LF-normalised.
+
+So: the manifest must hash exactly the way the client verifies (release.py
+_BINARY_EXTS == client _BIN_EXTS), and every binary file type must be declared
+binary in .gitattributes so the repo keeps its exact bytes.
 """
 import re
 import subprocess
@@ -17,14 +19,20 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _binary_exts_from_release_py():
-    src = (ROOT / "scripts" / "release.py").read_text(encoding="utf-8")
-    m = re.search(r"_BINARY_EXTS\s*=\s*\{(.*?)\}", src, re.S)
-    assert m, "_BINARY_EXTS not found in scripts/release.py"
+def _set_literal(src, name):
+    m = re.search(name + r"\s*=\s*\{(.*?)\}", src, re.S)
+    assert m, f"{name} not found"
     body = "\n".join(l.split("#", 1)[0] for l in m.group(1).splitlines())   # drop comments
-    exts = set(re.findall(r'"(\.[a-z0-9]+)"', body))
-    assert ".pdf" in exts and ".png" in exts, exts
-    return exts
+    return set(re.findall(r'"(\.[a-z0-9]+)"', body))
+
+
+def _release_raw_exts():
+    return _set_literal((ROOT / "scripts" / "release.py").read_text(encoding="utf-8"),
+                        "_BINARY_EXTS")
+
+
+def _client_raw_exts():
+    return _set_literal((ROOT / "rag_gui.py").read_text(encoding="utf-8"), "_BIN_EXTS")
 
 
 def _gitattributes_binary_exts():
@@ -33,10 +41,18 @@ def _gitattributes_binary_exts():
             for m in re.finditer(r"^\*\.([A-Za-z0-9]+)\s+.*\bbinary\b", txt, re.M)}
 
 
-def test_every_raw_hashed_type_is_binary_in_gitattributes():
-    missing = _binary_exts_from_release_py() - _gitattributes_binary_exts()
-    assert not missing, (f"declare these binary in .gitattributes or GitHub may serve "
-                         f"different bytes than update_manifest.json hashes: {sorted(missing)}")
+def test_manifest_hash_rule_matches_the_client_updater():
+    rel, cli = _release_raw_exts(), _client_raw_exts()
+    assert ".png" in cli, cli
+    assert rel == cli, (f"release.py hashes raw {sorted(rel)} but the updater verifies raw "
+                        f"{sorted(cli)} -- every file in the difference would fail on clients")
+
+
+def test_binary_types_are_binary_in_gitattributes():
+    need = _client_raw_exts() | {".pdf", ".xlsx", ".docx", ".db"}
+    missing = need - _gitattributes_binary_exts()
+    assert not missing, (f"declare these binary in .gitattributes or git may rewrite their "
+                         f"bytes on commit: {sorted(missing)}")
 
 
 def test_hr_portal_pdfs_resolve_as_binary():

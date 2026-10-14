@@ -741,18 +741,16 @@ def write_update_manifest(new_version: str) -> None:
         # serves at the tag URL (the LF git blob).
         # Fixed 2026-08-25 after v9.1.0 PNG icons caused hash mismatches on
         # every update attempt (5 of 40 files failing every time).
+        # 2026-10-14: this MUST be exactly the client's _BIN_EXTS in
+        # rag_gui.py's updater -- the manifest hash has to be computed the
+        # way every installed client verifies it. The old set here also had
+        # .pdf/.whl/.xlsx, which clients hash LF-normalised: v9.3.0's HR
+        # Portal PDFs could never verify on any client. Raw-vs-normalised is
+        # only about the HASH; .gitattributes keeps every binary type's bytes
+        # exact in the repo either way. tests/unit/test_release_binary_attrs.py
+        # keeps the two sets identical.
         _BINARY_EXTS = {".png", ".ico", ".exe", ".jpg", ".jpeg",
-                        ".gif", ".webp", ".zip", ".whl", ".pdf",
-                        # Added 2026-08-26: .xlsx is a ZIP/Office-Open-XML
-                        # container — arbitrary compressed binary content that
-                        # can incidentally contain the 0x0D 0x0A byte pair.
-                        # AI-Prowler_Job_Tracker.xlsx joined MANIFEST_FILES
-                        # this same day (see that entry's comment) and would
-                        # have hit the exact same "hash mismatch on every
-                        # update attempt" bug already fixed for PNGs above,
-                        # just never triggered yet since no .xlsx had shipped
-                        # through this manifest before now.
-                        ".xlsx"}
+                        ".gif", ".webp", ".zip"}
         is_binary = fp.suffix.lower() in _BINARY_EXTS
         normalized = raw_bytes if is_binary else raw_bytes.replace(b"\r\n", b"\n")
         digest = hashlib.sha256(normalized).hexdigest()
