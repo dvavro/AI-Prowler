@@ -1,1 +1,0 @@
-{"backend": "smtp", "smtp_host": "outbox.time-machine.invalid", "smtp_port": 587, "username": "owner@time-machine.test", "from_address": "owner@time-machine.test", "default_to": "owner@time-machine.test", "use_tls": true}

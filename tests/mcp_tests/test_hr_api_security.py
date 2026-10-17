@@ -29,7 +29,7 @@ PUBLIC = {("POST", "/auth/employee")}          # signs employees in — must be 
 def ap(tmp_path, monkeypatch):
     import ai_prowler_mcp as m
     monkeypatch.setattr(m, "_HR_DB_PATH", str(tmp_path / "hr_db.json"))
-    (tmp_path / "hr_db.json").write_text(json.dumps({
+    m._hr_save_db({        # 2026-10-16: seed through the real per-folder storage
         "config": {"company_name": "ZTEST Co", "setup_complete": True, "doc_root": str(tmp_path / "docs")},
         "employees": [
             {"id": "EMP-00001", "first_name": "Real", "last_name": "Person", "status": "Active",
@@ -42,7 +42,7 @@ def ap(tmp_path, monkeypatch):
         "messages": [{"id": "M1", "employee_id": "EMP-00001"}, {"id": "M2", "employee_id": "EMP-00002"}],
         "directory_contacts": [{"id": "C1", "name": "Real Vendor"}, {"id": "C2", "name": "ZTEST Contact"}],
         "locations": [{"id": "L1", "name": "Shop", "employee_ids": ["EMP-00001", "EMP-00002"]}],
-        "documents": [], "audit_log": [], "attendance": []}), encoding="utf-8")
+        "documents": [], "audit_log": [], "attendance": []})
     return m
 
 

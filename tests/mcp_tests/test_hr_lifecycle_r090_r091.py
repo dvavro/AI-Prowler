@@ -32,9 +32,9 @@ D = lambda n: (TODAY + dt.timedelta(days=n)).isoformat()      # noqa: E731
 def ap(tmp_path, monkeypatch):
     import ai_prowler_mcp as m
     monkeypatch.setattr(m, "_HR_DB_PATH", str(tmp_path / "hr_db.json"))
-    (tmp_path / "hr_db.json").write_text(json.dumps({
+    m._hr_save_db({        # 2026-10-16: seed through the real per-folder storage
         "config": {"company_name": "ZTEST", "setup_complete": True, "doc_root": str(tmp_path / "docs")},
-        "employees": [], "tasks": [], "documents": [], "audit_log": []}), encoding="utf-8")
+        "employees": [], "tasks": [], "documents": [], "audit_log": []})
     return m
 
 
@@ -134,7 +134,9 @@ def test_server_refuses_terminated_sessions_and_sign_ins():
     src = (ROOT / "ai_prowler_mcp.py").read_text(encoding="utf-8")
     blk = src[src.index("# ── HR apps — HR Admin + HR Portal, AI-Prowler SERVER only"):]
     blk = blk[:blk.index("# ── end HR REST API")]
-    assert "and not _hr_is_terminated(e)), None)" in blk, "AI-Prowler portal sign-in"
+    # 2026-10-16: sign-in finds/links/creates the record, then refuses a Terminated one.
+    assert "if _hr_is_terminated(_hrl_emp):" in blk and '"error": "terminated"' in blk, \
+        "AI-Prowler portal sign-in"
     assert re.search(r"_hrsrv_emp_id and _hr_is_terminated\(next\(", blk), "every portal request"
 
 

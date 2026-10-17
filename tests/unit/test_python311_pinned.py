@@ -59,7 +59,8 @@ _NEW_FEATURES = {
 def test_no_312_library_features():
     hits = []
     for f in _tracked_py():
-        if f.startswith("tests/unit/test_python311_pinned.py"):
+        # the checkers themselves list the 3.12 names as search patterns
+        if f in ("tests/unit/test_python311_pinned.py", "tests/dev/py311_check.py"):
             continue
         text = (ROOT / f).read_text(encoding="utf-8", errors="replace")
         for rx, what in _NEW_FEATURES.items():

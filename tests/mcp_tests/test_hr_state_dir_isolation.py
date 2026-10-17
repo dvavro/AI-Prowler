@@ -222,34 +222,39 @@ class TestHrStateDirSourceWiring:
         assert '_HR_PWA_DIR             = _hros.path.join(_HR_ROOT_DIR, "hr_admin")' \
             in hr_engine_block
 
+    # 2026-10-16 (per-employee folders): every path to an employee's folder
+    # (data + documents) goes through _hr_employees_base(), which resolves a
+    # relative doc_root under the HR data folder = dirname(_HR_DB_PATH), and
+    # _HR_DB_PATH is under _HR_STATE_DIR. Only an ABSOLUTE doc_root chosen in
+    # Company Setup (e.g. D:\HR) is used as-is.
+    @staticmethod
+    def _fn(src, name):
+        return src.split(f"def {name}(", 1)[1].split("\ndef ", 1)[0]
+
     def test_create_document_folders_uses_state_dir(self, ai_prowler_source):
-        block = ai_prowler_source.split(
-            "def _hr_create_document_folders", 1)[1].split("\n\n", 1)[0]
-        assert "_HR_STATE_DIR" in block
+        block = self._fn(ai_prowler_source, "_hr_create_document_folders")
+        assert "_hr_employees_base(doc_root)" in block
         assert "_HR_ROOT_DIR" not in block
 
     def test_handle_document_upload_doc_root_uses_state_dir(self, ai_prowler_source):
         block = ai_prowler_source.split(
             "def _hr_handle_document_upload", 1)[1].split("def _hr_api_route", 1)[0]
-        assert 'doc_root if _hros.path.isabs(doc_root) else _hros.path.join(_HR_STATE_DIR, doc_root)' \
-            in block
-        # Confirm the OLD (unsandboxed) form is fully gone from this function,
-        # not just that the new form is present somewhere else in it.
-        assert '_hros.path.join(_HR_ROOT_DIR, doc_root)' not in block
+        assert "_HR_ROOT_DIR" not in block
+        assert "_hr_employee_dir_path(" in block or "_hr_employees_base(" in block
 
     def test_no_stray_root_dir_usages_remain_for_mutable_state(self, ai_prowler_source):
-        """Belt-and-suspenders: hr_db.json's path constant line and both
-        doc-root base-resolution call sites must each reference
-        _HR_STATE_DIR, and there must be exactly one definition of
-        _HR_STATE_DIR itself (no accidental duplicate/shadowing)."""
+        """Belt-and-suspenders: one definition of _HR_STATE_DIR, the employee
+        base resolves under the HR data folder (never the install folder), and
+        no doc-root resolution anywhere uses _HR_ROOT_DIR."""
         assert ai_prowler_source.count(
             '_HR_STATE_DIR           = (_hros.environ.get("AIPROWLER_TEST_STATE_DIR"'
         ) == 1
-        # 2026-10-11: was "== 2" — Jamie's later code (merged from GitHub) added
-        # two more CORRECT state-dir resolutions, so the count went stale (it
-        # already failed on origin/main). The real rule: every doc-root base
-        # resolution uses _HR_STATE_DIR, and none uses the install folder.
-        assert ai_prowler_source.count('_hros.path.join(_HR_STATE_DIR, doc_root)') >= 2
+        base = self._fn(ai_prowler_source, "_hr_employees_base")
+        assert "_hr_data_root()" in base and "_HR_ROOT_DIR" not in base
+        root = self._fn(ai_prowler_source, "_hr_data_root")
+        assert "_HR_DB_PATH" in root and "_HR_ROOT_DIR" not in root
+        emp_dir = self._fn(ai_prowler_source, "_hr_employee_dir_path")
+        assert "_hr_employees_base(" in emp_dir
         assert ai_prowler_source.count('_hros.path.join(_HR_ROOT_DIR, doc_root)') == 0
 
 
@@ -271,7 +276,8 @@ class TestHrSchedulerStateDirSourceWiring:
             in hr_scheduler_source
 
     def test_tracking_path_uses_sched_state_dir_not_root_dir(self, hr_scheduler_source):
-        assert '_HR_TRACKING_PATH     = os.path.join(_HR_SCHED_STATE_DIR, "hr_task_tracking.json")' \
+        # 2026-10-16: scheduler state moved into the HR company folder
+        assert '_HR_TRACKING_PATH     = os.path.join(_HR_SCHED_STATE_DIR, "company", "scheduler_state.json")' \
             in hr_scheduler_source
         assert '_HR_TRACKING_PATH     = os.path.join(_HR_SCHED_ROOT_DIR, "hr_task_tracking.json")' \
             not in hr_scheduler_source

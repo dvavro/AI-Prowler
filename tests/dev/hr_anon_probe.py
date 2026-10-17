@@ -23,7 +23,7 @@ seed = {"config": {"company_name": "ZTEST Co", "setup_complete": True},
         "documents": [], "audit_log": [], "attendance": [{"id": "ATT-1", "employee_id": "EMP-00001"}],
         "pto_requests": [], "messages": [], "incidents": [], "training": [], "reminders": [],
         "locations": [], "timeclock": [], "directory": [], "swaps": [], "schedule_changes": []}
-Path(ap._HR_DB_PATH).write_text(json.dumps(seed), encoding="utf-8")
+ap._hr_save_db(seed)        # 2026-10-16: per-folder storage under tmp
 
 src = (ROOT / "ai_prowler_mcp.py").read_text(encoding="utf-8")
 body = src[src.index("def _hr_api_route("):]

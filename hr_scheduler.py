@@ -73,7 +73,12 @@ _HR_SCHED_ROOT_DIR    = os.path.dirname(os.path.abspath(__file__))
 _HR_SCHED_STATE_DIR   = (os.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
                           or os.path.join(os.path.expanduser("~"), ".ai-prowler", "hr"))
 os.makedirs(_HR_SCHED_STATE_DIR, exist_ok=True)
-_HR_TRACKING_PATH     = os.path.join(_HR_SCHED_STATE_DIR, "hr_task_tracking.json")
+# (2026-10-16, David) The scheduler's own run times / digest state live with the
+# other company files. Per-TASK tracking (which reminder / notice / escalation was
+# already sent) is stored per employee, in each employee folder's
+# task_tracking.json — ai_prowler_mcp._hr_save_db() handles that. The old
+# hr_task_tracking.json next to the retired hr_db.json is no longer used.
+_HR_TRACKING_PATH     = os.path.join(_HR_SCHED_STATE_DIR, "company", "scheduler_state.json")
 
 _HR_TRACKING_DEFAULT = {
     "_meta": {
@@ -130,6 +135,7 @@ def _load_tracking() -> dict:
 
 
 def _save_tracking(data: dict) -> None:
+    os.makedirs(os.path.dirname(_HR_TRACKING_PATH), exist_ok=True)
     tmp = _HR_TRACKING_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -715,11 +721,11 @@ def job_weekly_owner_summary() -> str:
 
 
 def job_employee_backup() -> str:
-    """Recurring full backup of every actively-employed employee's own
-    directory (record.json + all uploaded documents) to an admin-configured
+    """Recurring full backup of ALL HR data (the company folder and every
+    employee folder with their documents — 2026-10-16) to an admin-configured
     destination, for disaster recovery. Unlike the compliance jobs above,
-    this one's schedule (weekly/monthly, day, time) and destination are
-    GUI/tool-configurable — see hr_set_backup_settings in ai_prowler_mcp.py —
+    this one's schedule (daily/weekly/monthly, day, time) and destination are
+    set in HR Admin → Settings → Backups (or hr_set_backup_settings) —
     so its cadence is resolved live each tick by _employee_backup_cadence()
     below instead of being a fixed tuple in JOB_REGISTRY. Retention (how many
     snapshots to keep per employee) is enforced by the shared
@@ -759,6 +765,8 @@ def _employee_backup_cadence():
             return None
         hour = max(0, min(23, int(cfg.get("hour", 2))))
         minute = max(0, min(59, int(cfg.get("minute", 0))))
+        if cfg.get("schedule") == "daily":
+            return ("daily", hour, minute)
         if cfg.get("schedule") == "monthly":
             day = max(1, min(28, int(cfg.get("day_of_month", 1))))
             return ("monthly", day, hour, minute)
@@ -854,7 +862,50 @@ def _scheduler_enabled() -> bool:
         return True
 
 
+# ── One runner per machine (2026-10-15) ──────────────────────────────────────
+# start() runs in EVERY ai_prowler_mcp.py process on a server with HR on — the
+# server-mode HTTP process plus any stdio copies an AI client (Claude Desktop,
+# Claude Code, ...) launched on the same PC. _hr_db_lock / _hr_tracking_lock
+# are in-process threading locks, so with three processes all three ticks read
+# the same "not sent yet" task within the same minute and each sent the email:
+# a new hire's onboarding-task emails arrived 3 times. Now each tick first takes
+# an OS-level, cross-process lock on hr_scheduler.lock (held for the life of
+# the process; the OS frees it when the process exits), so exactly one process
+# runs the jobs. The others skip their ticks and take over if that one stops.
+_RUNNER_LOCK_PATH = os.path.join(_HR_SCHED_STATE_DIR, "hr_scheduler.lock")
+_runner_lock_fh = None
+
+
+def _acquire_runner_lock() -> bool:
+    """True if THIS process is (or just became) the one HR scheduler runner."""
+    global _runner_lock_fh
+    if _runner_lock_fh is not None:
+        return True
+    try:
+        fh = open(_RUNNER_LOCK_PATH, "a+")
+    except Exception:
+        _log.warning("hr_scheduler: can't open %s — running without the "
+                     "one-runner lock", _RUNNER_LOCK_PATH)
+        return True
+    try:
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return False   # another AI-Prowler process is the runner
+    _runner_lock_fh = fh
+    _log.info("hr_scheduler: this process (pid %s) runs the HR jobs", os.getpid())
+    return True
+
+
 def _tick() -> None:
+    if not _acquire_runner_lock():
+        return
     if not _scheduler_enabled():
         return
     now = datetime.datetime.utcnow()

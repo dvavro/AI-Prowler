@@ -609,7 +609,7 @@ Emails: `jamievavroaiprowler+zz-<name>@gmail.com` (all land in Jamie's inbox; al
 
 | Field | Test value |
 |---|---|
-| Preferred name / pronouns | `ZZTEST Tess` · she/her |
+| Preferred name / gender | `ZZTEST Tess` · F |
 | Date of birth | Oct 16, 1990 (birthday shows on calendars) |
 | Emergency contact | `ZZTEST Alex Tester` · Spouse · (480) 555-0142 · backup `ZZTEST Jordan Tester` (480) 555-0143 |
 | Fun Stuff / Work Style | Fun fact, "☕ Coffee — always!", "🌅 Morning", "📋 Planner" |
@@ -833,7 +833,7 @@ Existing X-* tests (Section 8) become the individual checkpoints inside these st
 | Sept 25 · code review | **Second "Send Message to HR" form may lose HR's replies.** | **Not a bug (Sept 28).** The function `sendMsgToHR` is unused leftover code — the form it expects (`#msg-subject`) doesn't exist and nothing calls it. The only send form is on the Messages page, proven by X-MSG-01. PRT-MSG-02 closed. Leftover function can be removed during cleanup |
 | Sept 25 · code review | `/messages/mine` also matches messages by **exact sender name** as a fallback, so two employees with the same full name could see each other's HR replies | Low — note for later; fix alongside the item above |
 | Sept 28 · **ADM-LAY-01** | **HR Admin 📚 Training page crashed every time it opened** — old `loadTraining()` still ran after the tab was rebuilt as "Training Portfolios" and wrote to a removed `#training-list` box | **Fixed & deployed Sept 28** (old loader skips when its box isn't there) |
-| Sept 28 · code review while building E2E-01 | **Portal PTO balances are hard-coded** — the PTO / Time Off page always shows "8.5d PTO · 3d sick · 4d holidays" for every employee, not their real balance or what they've used | **Open — feature gap, needs Jamie's decision** (how PTO accrues / sick-day policy). PRT-PTO-01 currently only proves the boxes show numbers |
+| Sept 28 · code review while building E2E-01 | **Portal PTO balances are hard-coded** — the PTO / Time Off page always shows "8.5d PTO · 3d sick · 4d holidays" for every employee, not their real balance or what they've used | **Partly fixed 2026-10-16 (David)** — the boxes now show PTO used / sick days used (approved, this year) and pending requests, counted from the employee's real requests. Balances/accrual still aren't tracked — needs Jamie's decision (how PTO accrues / sick-day policy) |
 | Sept 28 · **E2E-01** | **Record IDs get reused after deletions.** The first time-off request after all were deleted got `PTOREQ-00001` — numbering restarts from the highest ID still present, so a deleted request's ID can be given to a new one. An old email, note, or log mentioning that ID would then point at a different request | **Low — open.** Fix later: keep a running counter per record type so IDs are never reused |
 | Sept 28 · **E2E-06** | **Employees never saw HR's progress on their incident reports.** HR Admin sets Open / Under Review / Resolved (saved on the server), but the Portal's "My Submitted Reports" badge only ever showed "Pending" or "↩ HR Replied" | **Fixed, deployed & verified Sept 28** (E2E-06 passes: Portal shows Under Review, then Resolved) — badge now shows HR's real status plus "↩ HR Replied"; detail box shows "HR status" |
 | Sept 28 · **watch-mode full run** | **Getting Started pop-up reopened right after ✕** — startup runs twice on a page reload and each run scheduled its own pop-up timer | **Fixed, deployed & verified Sept 28** — scheduled once per page load; guarded by REG-17 |

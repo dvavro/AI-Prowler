@@ -1353,7 +1353,9 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
     <div id="wizard-steps-container"></div>
   </div>
   <div class="wizard-footer">
+    <button class="wizard-btn-back" onclick="closeSetupWizard()" id="wizard-cancel-btn" style="display:none">Cancel</button>
     <button class="wizard-btn-back" onclick="wizardBack()" id="wizard-back-btn" style="display:none">Back</button>
+    <button class="wizard-btn-back" onclick="wizardSaveNow()" id="wizard-save-btn" style="display:none">Save Changes</button>
     <button class="wizard-btn-next" onclick="wizardNext()" id="wizard-next-btn">Next</button>
   </div>
 </div>
@@ -1374,6 +1376,8 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
       </button>
     </div>
       <nav id="sidebar-nav">
+        <!-- (2026-10-16) Company Setup wizard: change company info or add work states -->
+        <button class="sidebar-item" id="sb-company-setup" onclick="closeSidebar();openSetupWizard()" title="Company details, work states, tax registrations, payroll and benefits"><span class="si-icon">🧭</span> Company Setup</button>
         <button class="sidebar-item active" data-tab="employees" onclick="navTo('employees',this)"><span class="si-icon">👥</span> Employees<span class="si-badge hidden" id="sb-badge-employees"></span></button>
         <button class="sidebar-item" data-tab="messages"    onclick="navTo('messages',this);loadMessages()"><span class="si-icon">💬</span> Messages<span class="si-badge hidden" id="sb-badge-messages"></span><span class="tab-alert-dot hidden" id="tab-dot-messages"></span></button>
         <button class="sidebar-item" data-tab="tasks"     onclick="navTo('tasks',this)"><span class="si-icon">✅</span> Admin Task<span class="si-badge hidden" id="sb-badge-tasks"></span></button>
@@ -1713,6 +1717,13 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
         <h2>Settings</h2>
       </div>
       <div id="settings-body">
+        <div class="settings-section" id="setup-card">
+          <h3>Company Setup</h3>
+          <div style="padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+            <div style="font-size:13px;color:var(--text2)">Company details, work states, tax registrations, payroll and benefits.<div style="margin-top:4px">Work states: <strong style="color:var(--text)" id="setup-card-states">—</strong></div></div>
+            <button class="btn-primary" style="width:auto" onclick="openSetupWizard()">Open Setup Wizard</button>
+          </div>
+        </div>
         <div class="settings-section">
           <h3>Company</h3>
           <div class="settings-item" onclick="openSetting('company_name')">
@@ -1726,6 +1737,10 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
           <div class="settings-item" onclick="openSetting('payroll_platform')">
             <span class="settings-item-label">Payroll Platform</span>
             <span class="settings-item-value" id="setting-payroll_platform">Not set</span>
+          </div>
+          <div class="settings-item" onclick="openSetting('company_about')">
+            <span class="settings-item-label">About the Company</span>
+            <span class="settings-item-value" id="setting-company_about">Shown on the HR Portal's News page</span>
           </div>
         </div>
         <div class="settings-section" style="margin-top:16px">
@@ -1759,7 +1774,7 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
         </div>
         <div class="settings-section" style="margin-top:16px">
           <h3>Setup</h3>
-          <!-- Bug fixed 2026-08-29: openSetting() below is still a Week 6
+          <!-- Bug fixed 2026-08-29 (openSetting() has since been finished): openSetting() was a Week 6
                stub (just a toast), and openSetupWizard() was previously only
                ever called from the initial /config load when setup_complete
                was false -- once it flips true (even from a run that saved
@@ -1768,12 +1783,23 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
                wizard from the UI at all. This entry point re-opens the full
                wizard on demand so company info can always be corrected. -->
           <div class="settings-item" onclick="openSetupWizard()">
-            <span class="settings-item-label">Redo Company Setup</span>
-            <span class="settings-item-value">Re-enter company info</span>
+            <span class="settings-item-label">Company Setup Wizard</span>
+            <span class="settings-item-value">Change company info or work states</span>
           </div>
         </div>
         <div class="settings-section" style="margin-top:16px">
-          <h3>Privacy &amp; Location</h3>
+          <h3>Time Clock, Privacy &amp; Location</h3>
+          <div class="settings-item" style="cursor:default">
+            <div>
+              <span class="settings-item-label">Who clocks in</span>
+              <div style="font-size:11px;color:var(--text2);margin-top:2px">Hours must be recorded for non-exempt employees. Exempt staff can skip it. Change one person on their record (Clocks in). Running Late / Out Today always work.</div>
+            </div>
+            <select id="setting-time_clock_mode" class="form-input" style="width:auto;min-width:190px" onchange="saveClockMode(this.value)">
+              <option value="everyone">Everyone</option>
+              <option value="non_exempt">Only non-exempt employees</option>
+              <option value="nobody">Nobody</option>
+            </select>
+          </div>
           <div class="settings-item" style="cursor:default">
             <div>
               <span class="settings-item-label">Track location on Clock In / Clock Out</span>
@@ -1806,6 +1832,37 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
           </div>
           <div id="location-consent-roster" style="margin-top:10px;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:12px;color:var(--text2)">
             Loading consent status…
+          </div>
+        </div>
+        <!-- (2026-10-16) Phase 3: what employees see in the HR Portal -->
+        <div class="settings-section" style="margin-top:16px" id="pto-policy-section">
+          <h3>Time Off Policy</h3>
+          <div id="pto-policy-body" style="padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;color:var(--text2)">Loading...</div>
+        </div>
+        <div class="settings-section" style="margin-top:16px" id="holiday-policy-section">
+          <h3>Paid Holidays</h3>
+          <div id="holiday-policy-body" style="padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;color:var(--text2)">Loading...</div>
+        </div>
+        <div class="settings-section" style="margin-top:16px" id="ann-section">
+          <h3>Announcements (HR Portal Feed &amp; News)</h3>
+          <div id="ann-body" style="padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;color:var(--text2)">Loading...</div>
+        </div>
+        <div class="settings-section" style="margin-top:16px" id="res-section">
+          <h3>Employee Resources (Handbook, Policies, Forms)</h3>
+          <div id="res-body" style="padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;color:var(--text2)">Loading...</div>
+        </div>
+        <div class="settings-section" style="margin-top:16px" id="nonemp-section">
+          <h3>Server Users Who Aren't Employees</h3>
+          <div id="nonemp-body" style="padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;color:var(--text2)">Loading...</div>
+        </div>
+        <div class="settings-section" id="unmatched-imports-section" style="margin-top:16px;display:none">
+          <h3>Data waiting for an employee</h3>
+          <div id="unmatched-imports-body" style="padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;color:var(--text2)"></div>
+        </div>
+        <div class="settings-section" style="margin-top:16px">
+          <h3>Backups</h3>
+          <div id="backup-settings-body" style="padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;color:var(--text2)">
+            Loading backup settings…
           </div>
         </div>
         <div class="settings-section" style="margin-top:16px">
@@ -1898,6 +1955,7 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
           <button class="filter-chip" onclick="setClockLogPeriod('all',this)">All Time</button>
         </div>
         <div style="padding:0 16px 8px;font-size:12px;color:var(--text2)">Live feed of every clock-in / clock-out submitted from the employee portal's Time Clock, with GPS location where available.</div>
+        <div id="clocklog-off-note" style="display:none;margin:0 16px 10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:12px;color:var(--text2)">Clock In / Clock Out is turned off (Settings → Time Clock, Privacy &amp; Location), so employees aren't asked to clock in. Earlier entries are still shown here.</div>
         <div id="clocklog-list" class="list-body"></div>
       </div>
 
@@ -2212,6 +2270,14 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
           <span class="info-label">🔗 AI-Prowler login</span><span class="info-value" id="info-aiprowler">Not linked</span>
         </div>
         <div class="info-row"><span class="info-label">Emergency Contact</span><span class="info-value" id="info-emergency">—</span></div>
+        <div class="info-row" onclick="editEmpGender()" style="cursor:pointer" title="Tap to edit"><span class="info-label">Gender</span><span class="info-value" id="info-gender">—</span></div>
+        <div class="info-row" id="info-prev-names-row" style="display:none"><span class="info-label">Previous names</span><span class="info-value" id="info-prev-names">—</span></div>
+      </div>
+      <div class="info-section">
+        <h4>Schedule &amp; Time Off</h4>
+        <div class="info-row" onclick="editEmpSchedule()" style="cursor:pointer" title="Tap to edit"><span class="info-label">🕘 Usual hours</span><span class="info-value" id="info-work-hours">—</span></div>
+        <div class="info-row" onclick="openEmpPto()" style="cursor:pointer" title="Tap for details and adjustments"><span class="info-label">🏖 PTO this year</span><span class="info-value" id="info-pto">—</span></div>
+          <div class="info-row" onclick="editEmpClockRule()" style="cursor:pointer" title="Tap to change for this person"><span class="info-label">⏱ Clocks in</span><span class="info-value" id="info-clock">—</span></div>
       </div>
       <div class="info-section">
         <h4>Employment</h4>
@@ -2222,7 +2288,7 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
         <div class="info-row"><span class="info-label">Start Date</span><span class="info-value" id="info-start-date">—</span></div>
         <div class="info-row"><span class="info-label">Work State</span><span class="info-value" id="info-work-state">—</span></div>
         <div class="info-row"><span class="info-label">Employment Type</span><span class="info-value" id="info-emp-type">—</span></div>
-        <div class="info-row"><span class="info-label">FLSA Status</span><span class="info-value" id="info-flsa">—</span></div>
+        <div class="info-row" onclick="editEmpFlsa()" style="cursor:pointer" title="Tap to edit"><span class="info-label">FLSA Status</span><span class="info-value" id="info-flsa">—</span></div>
         <div class="info-row"><span class="info-label">Remote / On-site</span><span class="info-value" id="info-remote">—</span></div>
         <div class="info-row"><span class="info-label">Status</span><span class="info-value" id="info-status">—</span></div>
       </div>
@@ -2437,15 +2503,57 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
             <label>Work State *</label>
             <select class="form-select" id="nef-work-state" onchange="onWorkStateChange(this.value)">
               <option value="">Select…</option>
+              <option value="AL">Alabama</option>
+              <option value="AK">Alaska</option>
+              <option value="AZ">Arizona</option>
+              <option value="AR">Arkansas</option>
               <option value="CA">California</option>
-              <option value="TX">Texas</option>
-              <option value="NY">New York</option>
-              <option value="FL">Florida</option>
-              <option value="IL">Illinois</option>
-              <option value="WA">Washington</option>
               <option value="CO">Colorado</option>
+              <option value="CT">Connecticut</option>
+              <option value="DE">Delaware</option>
+              <option value="DC">District of Columbia</option>
+              <option value="FL">Florida</option>
+              <option value="GA">Georgia</option>
+              <option value="HI">Hawaii</option>
+              <option value="ID">Idaho</option>
+              <option value="IL">Illinois</option>
+              <option value="IN">Indiana</option>
+              <option value="IA">Iowa</option>
+              <option value="KS">Kansas</option>
+              <option value="KY">Kentucky</option>
+              <option value="LA">Louisiana</option>
+              <option value="ME">Maine</option>
+              <option value="MD">Maryland</option>
               <option value="MA">Massachusetts</option>
-              <option value="OTHER">Other</option>
+              <option value="MI">Michigan</option>
+              <option value="MN">Minnesota</option>
+              <option value="MS">Mississippi</option>
+              <option value="MO">Missouri</option>
+              <option value="MT">Montana</option>
+              <option value="NE">Nebraska</option>
+              <option value="NV">Nevada</option>
+              <option value="NH">New Hampshire</option>
+              <option value="NJ">New Jersey</option>
+              <option value="NM">New Mexico</option>
+              <option value="NY">New York</option>
+              <option value="NC">North Carolina</option>
+              <option value="ND">North Dakota</option>
+              <option value="OH">Ohio</option>
+              <option value="OK">Oklahoma</option>
+              <option value="OR">Oregon</option>
+              <option value="PA">Pennsylvania</option>
+              <option value="RI">Rhode Island</option>
+              <option value="SC">South Carolina</option>
+              <option value="SD">South Dakota</option>
+              <option value="TN">Tennessee</option>
+              <option value="TX">Texas</option>
+              <option value="UT">Utah</option>
+              <option value="VT">Vermont</option>
+              <option value="VA">Virginia</option>
+              <option value="WA">Washington</option>
+              <option value="WV">West Virginia</option>
+              <option value="WI">Wisconsin</option>
+              <option value="WY">Wyoming</option>
             </select>
             <div id="nef-state-banner" style="display:none;margin-top:8px;background:var(--amber-dim);border:1px solid var(--amber);border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.5;color:var(--text)"></div>
           </div>
@@ -2732,6 +2840,9 @@ async function initAdminApp() {
     console.warn('Config load failed:', e);
   }
 
+  // (2026-10-16) HR Admin data kept on the server - loaded before any screen uses it
+  await loadAdminStores();
+
   // Load initial data
   loadEmployees();
   loadTasks();
@@ -2750,6 +2861,8 @@ function applyConfig(cfg) {
   if (cfg.hr_admin_email) document.getElementById('setting-hr_admin_email').textContent = cfg.hr_admin_email;
   if (cfg.owner_email) document.getElementById('setting-owner_email').textContent = cfg.owner_email;
   if (cfg.digest_time) document.getElementById('setting-digest_time').textContent = cfg.digest_time;
+  if (cfg.company_about && document.getElementById('setting-company_about'))
+    document.getElementById('setting-company_about').textContent = cfg.company_about.length > 60 ? cfg.company_about.slice(0, 60) + '…' : cfg.company_about;
 }
 
 // ── Employee Self-Service Init ─────────────────────────────────────────
@@ -2811,7 +2924,7 @@ function switchTab(tabName, _btn) {
   document.getElementById('btn-search').style.display = ['employees','tasks','documents'].includes(tabName) ? '' : 'none';
 
   // Lazy loaders for tabs that fetch data
-  if (tabName === 'settings')    loadPrivacySettings();
+  if (tabName === 'settings')    { loadPrivacySettings(); loadBackupSettings(); renderUnmatchedImports(); loadPhase3Settings(); }
   if (tabName === 'recruiting')  loadRecruiting();
   // Show/hide the recruiting fixed header bar (sits above #tab-content)
   const recFH = document.getElementById('rec-fixed-header');
@@ -2928,7 +3041,7 @@ function loadPayroll() {
     btn.disabled = true;
   } else {
     nameEl.textContent = 'No Platform Configured';
-    subEl.textContent  = 'Go to Settings → Redo Company Setup to set your payroll platform';
+    subEl.textContent  = 'Open 🧭 Company Setup (top of the menu) to set your payroll platform';
     iconEl.textContent = '💰';
     btn.disabled = true;
   }
@@ -3110,10 +3223,626 @@ function openPayrollLink(linkKey) {
   }
 }
 
+// ── HR Admin data on the server (2026-10-16, Phase 2) ──────────────────
+// Pay stubs, deposits, tax filings, contracts, benefits, performance,
+// compliance, training portfolios, their documents and employee photos used to
+// live ONLY in this browser (localStorage). They now live in the HR data folders
+// on the AI-Prowler server: each employee's in their own folder, uploaded files
+// as real files. They load once at sign-in (loadAdminStores) and the screens read
+// them as before (getPerfData() etc.); every save goes to the server straight
+// away. Bank details: only the last 4 digits are kept (the server enforces it).
+var ADMIN_STORE_KEYS = ['hr_pay_stubs','hr_tax_filings','hr_contracts','hr_direct_deposits','hr_ben_v2',
+  'hr_perf_v1','hr_comp_v1','hr_train_v1','hr_ben_docs','hr_perf_docs','hr_comp_docs'];
+var ADMIN_STORE_LISTS = ['hr_pay_stubs','hr_tax_filings','hr_contracts'];
+var _adminStore = {};
+var _adminStoreLoaded = false;
+var _adminPhotos = {};
+var _adminUnmatched = [];
+var _asPending = {};
+var _asSending = {};
+
+function _asClone(v) { return v === undefined ? undefined : JSON.parse(JSON.stringify(v)); }
+
+function adminStoreGet(name) {
+  var v = _adminStore[name];
+  if (v === undefined || v === null) v = ADMIN_STORE_LISTS.indexOf(name) >= 0 ? [] : {};
+  return _asClone(v);
+}
+
+// Returns false (and saves nothing) if the server data hasn't loaded — so an
+// empty screen can never overwrite what's on the server.
+function adminStoreSet(name, value) {
+  if (!_adminStoreLoaded) {
+    showToast('HR data has not loaded from the server yet - nothing was saved. Reload the page.', 'error');
+    return false;
+  }
+  _adminStore[name] = _asClone(value);
+  _asPending[name] = _asClone(value);
+  _asFlush(name);
+  return true;
+}
+
+async function _asFlush(name) {
+  if (_asSending[name] || !(name in _asPending)) return;
+  _asSending[name] = true;
+  var value = _asPending[name];
+  delete _asPending[name];
+  try {
+    var r = await apiPost('/admin-store/' + encodeURIComponent(name), { value: value });
+    if (!(name in _asPending) && r && 'value' in r) _adminStore[name] = r.value;   // the server's copy
+  } catch (e) {
+    if (!(name in _asPending)) _asPending[name] = value;                          // keep it and retry
+    showToast('Could not save to the server - retrying. Check that AI-Prowler is running.', 'error');
+    setTimeout(function () { _asSending[name] = false; _asFlush(name); }, 5000);
+    return;
+  }
+  _asSending[name] = false;
+  if (name in _asPending) _asFlush(name);
+}
+
+window.addEventListener('beforeunload', function (e) {
+  if (Object.keys(_asPending).length || Object.keys(_asSending).some(function (k) { return _asSending[k]; })) {
+    e.preventDefault(); e.returnValue = '';
+  }
+});
+
+async function loadAdminStores() {
+  try {
+    var d = await apiGet('/admin-store');
+    _adminStore = d.stores || {};
+    _adminUnmatched = d.unmatched || [];
+    _adminStoreLoaded = true;
+  } catch (e) {
+    console.error('Could not load HR Admin data:', e);
+    showToast('Could not load HR data from the server - check that AI-Prowler is running.', 'error');
+    return;
+  }
+  try { var p = await apiGet('/admin-photos'); _adminPhotos = p.photos || {}; } catch (e) {}
+  await _asMoveBrowserData();
+  if (_adminUnmatched.length) {
+    showToast(_adminUnmatched.length + ' item' + (_adminUnmatched.length === 1 ? '' : 's') +
+      ' from an older HR Admin are waiting for their employee - they attach automatically once that person is added (matched by name), or assign them in Settings.');
+  }
+}
+
+// One-time move: whatever this browser still has is uploaded once, then removed
+// from the browser. The server matches old employee IDs to today's employees by
+// name; anything it can't match for sure is kept on the server, not guessed.
+async function _asMoveBrowserData() {
+  var stores = {}, photos = {}, i, k;
+  ADMIN_STORE_KEYS.forEach(function (key) {
+    var raw = localStorage.getItem(key);
+    if (raw) { try { stores[key] = JSON.parse(raw); } catch (e) {} }
+  });
+  for (i = 0; i < localStorage.length; i++) {
+    k = localStorage.key(i);
+    if (k && /^hr_photo_EMP-\d+$/.test(k)) photos[k.slice('hr_photo_'.length)] = localStorage.getItem(k);
+  }
+  if (!Object.keys(stores).length && !Object.keys(photos).length) return;
+  var r;
+  try { r = await apiPost('/admin-store-import', { stores: stores, photos: photos }); }
+  catch (e) { console.warn('Moving browser HR data to the server failed - will try again next sign-in.', e); return; }
+  if (r && r.stores) _adminStore = r.stores;
+  Object.keys(stores).forEach(function (key) {
+    var raw = localStorage.getItem(key);
+    localStorage.removeItem(key);
+    // Bank details are deleted outright; anything else is kept once more as a backup, just in case
+    if (key !== 'hr_direct_deposits' && raw) { try { localStorage.setItem(key + '_moved_backup', raw); } catch (e) {} }
+  });
+  Object.keys(photos).forEach(function (id) { localStorage.removeItem('hr_photo_' + id); });
+  try { var p = await apiGet('/admin-photos'); _adminPhotos = p.photos || {}; } catch (e) {}
+  try { var d = await apiGet('/admin-store'); _adminUnmatched = d.unmatched || []; } catch (e) {}
+  showToast('Moved the HR data saved in this browser to the server - now the same on every device.', 'success');
+}
+
+// ── Settings → "Data waiting for an employee" (2026-10-16) ──────────────
+// Items an older HR Admin saved for someone the server couldn't match by name
+// (e.g. re-created under a married name). HR picks the employee; the old name
+// is then remembered as one of their previous names.
+var _UNMATCHED_LABELS = {hr_pay_stubs: 'Pay stub', hr_tax_filings: 'Tax filing', hr_contracts: 'Contract',
+  hr_direct_deposits: 'Direct deposit', hr_ben_v2: 'Benefits', hr_perf_v1: 'Performance', hr_comp_v1: 'Compliance',
+  hr_train_v1: 'Training portfolio', hr_ben_docs: 'Benefits document', hr_perf_docs: 'Performance document',
+  hr_comp_docs: 'Compliance document', hr_photo: 'Photo'};
+
+function renderUnmatchedImports() {
+  var sec = document.getElementById('unmatched-imports-section');
+  var host = document.getElementById('unmatched-imports-body');
+  if (!sec || !host) return;
+  var groups = {};
+  (_adminUnmatched || []).forEach(function (u) {
+    var g = groups[u.old_employee_id] = groups[u.old_employee_id] || { name: u.old_name, items: {}, photo: null };
+    var lbl = _UNMATCHED_LABELS[u.store] || u.store;
+    g.items[lbl] = (g.items[lbl] || 0) + 1;
+    if (u.photo) g.photo = u.photo;
+  });
+  var ids = Object.keys(groups);
+  sec.style.display = ids.length ? '' : 'none';
+  if (!ids.length) { host.innerHTML = ''; return; }
+  var emps = (state.employees || []).slice().sort(function (a, b) {
+    return ((a.last_name || '') + (a.first_name || '')).localeCompare((b.last_name || '') + (b.first_name || ''));
+  });
+  var opts = '<option value="">Choose employee...</option>' + emps.map(function (e) {
+    return '<option value="' + escapeHtml(e.id) + '">' + escapeHtml((e.first_name || '') + ' ' + (e.last_name || '')) + '</option>';
+  }).join('');
+  host.innerHTML = '<div style="margin-bottom:10px">Saved by an older HR Admin for someone it couldn\'t match by name - for example after a name change. Pick who it belongs to; their old name is then remembered as a previous name.</div>'
+    + ids.map(function (oid, i) {
+      var g = groups[oid];
+      var what = Object.keys(g.items).map(function (k) { return g.items[k] + ' x ' + escapeHtml(k); }).join(', ');
+      return '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-top:1px solid var(--border)">'
+        + (g.photo ? '<img src="' + g.photo + '" alt="" style="width:40px;height:40px;border-radius:50%;object-fit:cover">' : '')
+        + '<div style="flex:1;min-width:180px"><div style="font-weight:700;color:var(--text)">' + escapeHtml(g.name || 'Unknown name')
+        + ' <span style="font-weight:400;font-size:11px">(old ' + escapeHtml(oid) + ')</span></div>'
+        + '<div style="font-size:11px">' + what + '</div></div>'
+        + '<select id="um-emp-' + i + '" class="form-input" style="width:auto;min-width:180px">' + opts + '</select>'
+        + '<button class="btn-primary" onclick="assignUnmatchedImport(\'' + escapeHtml(oid) + '\',\'um-emp-' + i + '\')">Assign</button>'
+        + '</div>';
+    }).join('');
+}
+
+async function assignUnmatchedImport(oldId, selectId) {
+  var empId = (document.getElementById(selectId) || {}).value;
+  if (!empId) { showToast('Choose the employee first', 'error'); return; }
+  try {
+    var r = await apiPost('/admin-store-unmatched/assign', { old_employee_id: oldId, employee_id: empId });
+    var d = await apiGet('/admin-store');
+    _adminStore = d.stores || _adminStore;
+    _adminUnmatched = d.unmatched || [];
+    try { var p = await apiGet('/admin-photos'); _adminPhotos = p.photos || {}; restoreEmpPhotos(); } catch (e) {}
+    renderUnmatchedImports();
+    showToast('Assigned ' + r.assigned + ' item' + (r.assigned === 1 ? '' : 's') + (r.left ? ' (' + r.left + ' could not be merged)' : ''), 'success');
+  } catch (e) {
+    showToast('Could not assign - check that AI-Prowler is running.', 'error');
+  }
+}
+
+// ── uploaded files (real files in the employee's folder on the server) ──
+function _readAsDataURL(file) {
+  return new Promise(function (resolve, reject) {
+    var r = new FileReader();
+    r.onload = function (e) { resolve(e.target.result); };
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+async function adminUploadFile(store, folder, file, employeeId) {
+  var data = await _readAsDataURL(file);
+  var resp = await apiPost('/admin-files', { store: store, folder: folder || '', name: file.name, data: data,
+                                             employee_id: employeeId || null });
+  return resp.file;
+}
+
+// Uploads the chosen files one by one; addDoc(doc) records each in its store.
+async function _adminAddFiles(input, store, folder, employeeId, addDoc) {
+  var files = Array.from(input.files || []);
+  try { input.value = ''; } catch (e) {}
+  if (!files.length) return 0;
+  if (!_adminStoreLoaded) { adminStoreSet(store, adminStoreGet(store)); return 0; }
+  var today = new Date().toLocaleDateString(), added = 0;
+  for (var i = 0; i < files.length; i++) {
+    var file = files[i];
+    try {
+      var f = await adminUploadFile(store, folder, file, employeeId);
+      if (addDoc({ name: file.name, file_id: f.id, date: today, size: (file.size / 1024).toFixed(1) + ' KB' }) === false) {
+        adminDeleteFile({ file_id: f.id });
+        break;
+      }
+      added++;
+    } catch (e) {
+      showToast('Could not upload ' + file.name + (e.serverError === 'file_too_large_25mb_limit' ? ' (over 25 MB)' : ''), 'error');
+    }
+  }
+  if (added) showToast(added + ' file' + (added !== 1 ? 's' : '') + ' uploaded!', 'success');
+  return added;
+}
+
+async function adminDownloadFile(doc) {
+  if (!doc) { showToast('File not found.'); return; }
+  var a = document.createElement('a');
+  if (doc.data) { a.href = doc.data; a.download = doc.name || 'file'; a.click(); return; }   // very old inline copy
+  if (!doc.file_id) { showToast('File not found.'); return; }
+  try {
+    var r = await apiGet('/admin-files/' + encodeURIComponent(doc.file_id));
+    var bin = atob(r.data_b64 || ''), bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    var url = URL.createObjectURL(new Blob([bytes], { type: r.mime_type || 'application/octet-stream' }));
+    a.href = url; a.download = doc.name || r.filename || 'file'; a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+  } catch (e) {
+    showToast('Could not download the file - check that AI-Prowler is running.', 'error');
+  }
+}
+
+function adminDeleteFile(doc) {
+  if (doc && doc.file_id) apiDelete('/admin-files/' + encodeURIComponent(doc.file_id)).catch(function () {});
+}
+
+// Photos are shrunk to at most 512 px before upload (a profile picture, not a print).
+function _shrinkPhoto(file, max) {
+  max = max || 512;
+  return _readAsDataURL(file).then(function (src) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onerror = reject;
+      img.onload = function () {
+        var scale = Math.min(1, max / Math.max(img.width, img.height));
+        var c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(img.width * scale));
+        c.height = Math.max(1, Math.round(img.height * scale));
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/jpeg', 0.85));
+      };
+      img.src = src;
+    });
+  });
+}
+
+// ══ Phase 3 (2026-10-16): HR Admin screens that feed the HR Portal ══════════
+// Holidays computed for any year, the time-off policy, paid holidays, HR's
+// announcements, employee resources (handbook/policies/forms), and on each
+// employee: gender, previous names, usual weekly hours and their PTO balance.
+function hrHolidaysForYear(y) {
+  var defs = [['new_year', "New Year's Day", ['fixed', 1, 1], 1], ['mlk', 'Martin Luther King Jr. Day', ['nth', 1, 1, 3], 0],
+    ['presidents', "Presidents' Day", ['nth', 2, 1, 3], 0], ['memorial', 'Memorial Day', ['last', 5, 1], 0],
+    ['juneteenth', 'Juneteenth', ['fixed', 6, 19], 1], ['independence', 'Independence Day', ['fixed', 7, 4], 1],
+    ['labor', 'Labor Day', ['nth', 9, 1, 1], 0], ['columbus', 'Columbus Day', ['nth', 10, 1, 2], 0],
+    ['veterans', 'Veterans Day', ['fixed', 11, 11], 1], ['thanksgiving', 'Thanksgiving Day', ['nth', 11, 4, 4], 0],
+    ['day_after_thanksgiving', 'Day after Thanksgiving', ['after', 'thanksgiving', 1], 0],
+    ['christmas_eve', 'Christmas Eve', ['fixed', 12, 24], 0], ['christmas', 'Christmas Day', ['fixed', 12, 25], 1],
+    ['new_years_eve', "New Year's Eve", ['fixed', 12, 31], 0]];
+  var found = {}, out = [];
+  var ymd = function (d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  defs.forEach(function (h) {
+    var r = h[2], d;
+    if (r[0] === 'fixed') d = new Date(y, r[1] - 1, r[2]);
+    else if (r[0] === 'nth') { var f = new Date(y, r[1] - 1, 1); d = new Date(y, r[1] - 1, 1 + ((r[2] - f.getDay() + 7) % 7) + 7 * (r[3] - 1)); }
+    else if (r[0] === 'last') { var l = new Date(y, r[1], 0); d = new Date(y, r[1] - 1, l.getDate() - ((l.getDay() - r[2] + 7) % 7)); }
+    else { d = new Date(found[r[1]]); d.setDate(d.getDate() + r[2]); }
+    found[h[0]] = d;
+    var obs = new Date(d);
+    if (h[3] && d.getDay() === 6) obs.setDate(obs.getDate() - 1);
+    else if (h[3] && d.getDay() === 0) obs.setDate(obs.getDate() + 1);
+    out.push({ key: h[0], name: h[1], date: ymd(d), observed: ymd(obs) });
+  });
+  return out;
+}
+// Fun observances that always fall on the same date (shown on calendars, never days off)
+var _HR_OBSERVANCES = { '02-14': "Valentine's Day", '03-17': "St. Patrick's Day", '05-05': 'Cinco de Mayo', '06-14': 'Flag Day', '10-31': 'Halloween' };
+// {MM-DD: name} for the calendars of `year` (replaces the old fixed FEDERAL_HOLIDAYS table)
+function hrHolidaysForAdmin(year) {
+  year = Number(year) || new Date().getFullYear();
+  var out = Object.assign({}, _HR_OBSERVANCES);
+  [year - 1, year, year + 1].forEach(function (yy) {
+    hrHolidaysForYear(yy).forEach(function (h) {
+      if (h.date.slice(0, 4) === String(year)) out[h.date.slice(5)] = h.name;
+      if (h.observed !== h.date && h.observed.slice(0, 4) === String(year)) out[h.observed.slice(5)] = h.name + ' (observed)';
+    });
+  });
+  return out;
+}
+
+async function adminDownloadPath(path, name) {
+  try {
+    var r = await apiGet(path);
+    var bin = atob(r.data_b64 || ''), bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    var url = URL.createObjectURL(new Blob([bytes], { type: r.mime_type || 'application/octet-stream' }));
+    var a = document.createElement('a'); a.href = url; a.download = name || r.filename || 'file'; a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+  } catch (e) { showToast('Could not download the file - check that AI-Prowler is running.', 'error'); }
+}
+
+function loadPhase3Settings() { renderPtoPolicySettings(); renderHolidayPolicySettings(); renderAnnouncementsSettings(); renderResourcesSettings(); renderNonEmployeeSettings(); }
+
+// ── Settings → Time Off Policy ───────────────────────────────────────────
+async function renderPtoPolicySettings() {
+  var el = document.getElementById('pto-policy-body'); if (!el) return;
+  var p;
+  try { p = (await apiGet('/pto/policy')).policy; } catch (e) { p = null; }
+  if (!p) { el.textContent = 'Could not load the time-off policy.'; return; }
+  var num = function (id, label, v) { return '<div><label class="form-label" for="' + id + '">' + label + '</label><input id="' + id + '" type="number" min="0" max="365" step="0.5" class="form-input" value="' + Number(v) + '"></div>'; };
+  el.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:4px 12px">'
+    + num('pp-days', 'PTO days per year', p.days_per_year) + num('pp-carry', 'Carry over up to (days)', p.carryover_max)
+    + num('pp-sick', 'Sick days per year', p.sick_days_per_year) + '</div>'
+    + '<label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-size:13px;color:var(--text)"><input type="checkbox" id="pp-prorate"' + (p.prorate_first_year ? ' checked' : '') + '> Prorate the first year by start month</label>'
+    + '<div style="font-size:11px;margin-bottom:10px">Each employee gets these days per calendar year. Unused PTO carries over up to the cap; sick days don\'t carry over. Approved time off on weekends and paid company holidays isn\'t counted. A different allowance or a balance correction for one person is set on their record (Info → PTO this year).</div>'
+    + '<button class="btn-primary" onclick="savePtoPolicy()">Save policy</button>';
+}
+async function savePtoPolicy() {
+  var v = function (id) { return document.getElementById(id).value; };
+  try {
+    await apiPost('/pto/policy', { days_per_year: v('pp-days'), carryover_max: v('pp-carry'), sick_days_per_year: v('pp-sick'),
+                                   prorate_first_year: document.getElementById('pp-prorate').checked });
+    showToast('Time-off policy saved', 'success');
+    renderPtoPolicySettings();
+  } catch (e) { showToast(e.serverError || 'Could not save the policy', 'error'); }
+}
+
+// ── Settings → Paid Holidays ─────────────────────────────────────────────
+async function renderHolidayPolicySettings() {
+  var el = document.getElementById('holiday-policy-body'); if (!el) return;
+  var y = new Date().getFullYear(), list;
+  try { list = (await apiGet('/holidays?year=' + y)).holidays || []; } catch (e) { el.textContent = 'Could not load holidays.'; return; }
+  el.innerHTML = '<div style="font-size:11px;margin-bottom:8px">Tick the holidays your company observes as paid days off. They show on everyone\'s calendars and aren\'t counted against PTO. Dates are worked out for every year automatically; a holiday on a weekend is observed the Friday before or the Monday after.</div>'
+    + list.map(function (h) {
+      return '<label style="display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--border);font-size:13px;color:var(--text)">'
+        + '<input type="checkbox" class="hol-paid" value="' + escapeHtml(h.key) + '"' + (h.paid ? ' checked' : '') + '>'
+        + '<span style="flex:1">' + escapeHtml(h.name) + '</span><span style="font-size:11px;color:var(--text2)">'
+        + new Date(h.observed + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
+        + (h.observed !== h.date ? ' (observed)' : '') + '</span></label>';
+    }).join('')
+    + '<button class="btn-primary" style="margin-top:10px" onclick="saveHolidayPolicy()">Save holidays</button>';
+}
+async function saveHolidayPolicy() {
+  var paid = Array.from(document.querySelectorAll('.hol-paid')).filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
+  try { await apiPost('/holidays/policy', { paid: paid }); showToast('Paid holidays saved', 'success'); }
+  catch (e) { showToast('Could not save holidays', 'error'); }
+}
+
+// ── Settings → Announcements (the HR Portal's Feed and News) ─────────────
+var _annList = [];
+var _ANN_TAGS = { announcement: 'Announcement', urgent: 'Urgent', policy: 'Policy', recognition: 'Recognition', update: 'Update', event: 'Event' };
+async function renderAnnouncementsSettings() {
+  var el = document.getElementById('ann-body'); if (!el) return;
+  try { _annList = (await apiGet('/announcements')).announcements || []; } catch (e) { el.textContent = 'Could not load announcements.'; return; }
+  var n = (state.employees || []).filter(function (e) { return e.status !== 'terminated'; }).length;
+  el.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">'
+    + '<div style="font-size:11px">Shown on everyone\'s HR Portal Feed and News, newest first (pinned on top).</div>'
+    + '<button class="btn-primary" onclick="openAnnouncementForm()">+ New</button></div>'
+    + (_annList.length ? _annList.map(function (a) {
+      var exp = a.expires && a.expires < _localYMD();
+      return '<div style="padding:10px 0;border-top:1px solid var(--border);' + (exp ? 'opacity:.55' : '') + '">'
+        + '<div style="display:flex;gap:8px;align-items:center"><div style="flex:1;font-weight:700;color:var(--text)">' + (a.pinned ? '📌 ' : '') + escapeHtml(a.title) + '</div>'
+        + '<button class="btn-secondary" style="padding:4px 10px;font-size:11px" onclick="openAnnouncementForm(\'' + escapeHtml(a.id) + '\')">Edit</button>'
+        + '<button class="btn-secondary" style="padding:4px 10px;font-size:11px;color:var(--red)" onclick="deleteAnnouncement(\'' + escapeHtml(a.id) + '\')">Delete</button></div>'
+        + '<div style="font-size:11px;margin-top:2px">' + escapeHtml(_ANN_TAGS[a.tag] || 'Announcement') + ' · '
+        + new Date(a.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+        + (a.ack_required ? ' · ✓ reviewed by ' + (a.acks || 0) + ' of ' + n : '')
+        + (a.rsvp ? ' · going ' + (a.going || 0) + ', can\'t ' + (a.cant || 0) : '')
+        + (a.expires ? (exp ? ' · expired ' : ' · until ') + escapeHtml(a.expires) : '') + '</div></div>';
+    }).join('') : '<div style="padding:10px 0;border-top:1px solid var(--border)">No announcements yet.</div>');
+}
+function openAnnouncementForm(id) {
+  var a = _annList.filter(function (x) { return x.id === id; })[0] || {};
+  openModal('<div class="modal-header"><h3>' + (id ? 'Edit' : 'New') + ' announcement</h3></div><div class="modal-body">'
+    + '<div class="form-group"><label class="form-label">Title *</label><input id="an-title" class="form-input" maxlength="160" value="' + escapeHtml(a.title || '') + '"></div>'
+    + '<div class="form-group"><label class="form-label">Message</label><textarea id="an-body" class="form-input" rows="5" maxlength="5000">' + escapeHtml(a.body || '') + '</textarea></div>'
+    + '<div class="form-group"><label class="form-label">Type</label><select id="an-tag" class="form-input">' + Object.keys(_ANN_TAGS).map(function (k) { return '<option value="' + k + '"' + ((a.tag || 'announcement') === k ? ' selected' : '') + '>' + _ANN_TAGS[k] + '</option>'; }).join('') + '</select></div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="form-group"><label class="form-label">Event date (optional)</label><input id="an-event" type="date" class="form-input" value="' + escapeHtml(a.event_date || '') + '"></div>'
+    + '<div class="form-group"><label class="form-label">Hide after (optional)</label><input id="an-exp" type="date" class="form-input" value="' + escapeHtml(a.expires || '') + '"></div></div>'
+    + '<label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:4px 0"><input type="checkbox" id="an-ack"' + (a.ack_required ? ' checked' : '') + '> Ask everyone to confirm they\'ve read it</label>'
+    + '<label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:4px 0"><input type="checkbox" id="an-rsvp"' + (a.rsvp ? ' checked' : '') + '> Ask for RSVP (Going / Can\'t make it)</label>'
+    + '<label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:4px 0"><input type="checkbox" id="an-pin"' + (a.pinned ? ' checked' : '') + '> Pin to the top</label>'
+    + '</div><div class="modal-footer"><button class="btn-secondary" onclick="closeModal()">Cancel</button>'
+    + '<button class="btn-primary" onclick="saveAnnouncement(\'' + escapeHtml(id || '') + '\')">' + (id ? 'Save' : 'Post') + '</button></div>');
+}
+async function saveAnnouncement(id) {
+  var v = function (x) { return document.getElementById(x).value; }, c = function (x) { return document.getElementById(x).checked; };
+  var body = { title: v('an-title').trim(), body: v('an-body').trim(), tag: v('an-tag'), event_date: v('an-event'), expires: v('an-exp'),
+               ack_required: c('an-ack'), rsvp: c('an-rsvp'), pinned: c('an-pin') };
+  if (!body.title) { showToast('A title is required', 'error'); return; }
+  try {
+    if (id) await apiPatch('/announcements/' + encodeURIComponent(id), body); else await apiPost('/announcements', body);
+    closeModal(); showToast(id ? 'Announcement saved' : 'Announcement posted', 'success'); renderAnnouncementsSettings();
+  } catch (e) { showToast('Could not save the announcement', 'error'); }
+}
+async function deleteAnnouncement(id) {
+  if (!confirm('Delete this announcement? It disappears from everyone\'s Feed.')) return;
+  try { await apiDelete('/announcements/' + encodeURIComponent(id)); renderAnnouncementsSettings(); }
+  catch (e) { showToast('Could not delete', 'error'); }
+}
+
+// ── Settings → Employee Resources (Portal → Documents and HR Handbook) ───
+var _RES_CATS = { handbook: 'Employee handbook', policy: 'Policy', form: 'Form', safety: 'Safety', training: 'Training', benefits: 'Benefits', other: 'Other' };
+var _resList = [];
+async function renderResourcesSettings() {
+  var el = document.getElementById('res-body'); if (!el) return;
+  try { _resList = (await apiGet('/resources')).resources || []; } catch (e) { el.textContent = 'Could not load employee resources.'; return; }
+  el.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">'
+    + '<div style="font-size:11px">Files every employee can open in the HR Portal: the handbook and policies appear under HR Handbook, everything else under Documents.</div>'
+    + '<button class="btn-primary" onclick="openResourceForm()">+ Add file</button></div>'
+    + (_resList.length ? _resList.map(function (r) {
+      return '<div style="display:flex;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--border)">'
+        + '<div style="flex:1;min-width:0"><div style="font-weight:700;color:var(--text)">' + escapeHtml(r.title) + '</div>'
+        + '<div style="font-size:11px">' + escapeHtml(_RES_CATS[r.category] || 'Other') + ' · ' + escapeHtml(r.name || '') + '</div></div>'
+        + '<button class="btn-secondary" style="padding:4px 10px;font-size:11px" onclick="adminDownloadPath(\'/resources/' + escapeHtml(r.id) + '/download\',\'' + escapeHtml(r.name || '').replace(/'/g, '') + '\')">Open</button>'
+        + '<button class="btn-secondary" style="padding:4px 10px;font-size:11px;color:var(--red)" onclick="deleteResource(\'' + escapeHtml(r.id) + '\')">Delete</button></div>';
+    }).join('') : '<div style="padding:10px 0;border-top:1px solid var(--border)">No files published yet.</div>');
+}
+function openResourceForm() {
+  openModal('<div class="modal-header"><h3>Add a file for employees</h3></div><div class="modal-body">'
+    + '<div class="form-group"><label class="form-label">Title *</label><input id="rs-title" class="form-input" maxlength="160" placeholder="e.g. Employee Handbook 2026"></div>'
+    + '<div class="form-group"><label class="form-label">Kind</label><select id="rs-cat" class="form-input">' + Object.keys(_RES_CATS).map(function (k) { return '<option value="' + k + '">' + _RES_CATS[k] + '</option>'; }).join('') + '</select></div>'
+    + '<div class="form-group"><label class="form-label">Short description (optional)</label><input id="rs-desc" class="form-input" maxlength="500"></div>'
+    + '<div class="form-group"><label class="form-label">File *</label><input id="rs-file" type="file" class="form-input" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.txt"></div>'
+    + '</div><div class="modal-footer"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" id="rs-save" onclick="saveResource()">Publish</button></div>');
+}
+async function saveResource() {
+  var title = document.getElementById('rs-title').value.trim(), f = (document.getElementById('rs-file').files || [])[0];
+  if (!title || !f) { showToast('A title and a file are required', 'error'); return; }
+  var btn = document.getElementById('rs-save'); if (btn) btn.disabled = true;
+  try {
+    var data = await _readAsDataURL(f);
+    await apiPost('/resources', { title: title, category: document.getElementById('rs-cat').value,
+                                  description: document.getElementById('rs-desc').value.trim(), name: f.name, data: data });
+    closeModal(); showToast('Published to the HR Portal', 'success'); renderResourcesSettings();
+  } catch (e) {
+    showToast(e.serverError === 'file_too_large_25mb_limit' ? 'That file is over 25 MB' : 'Could not publish the file', 'error');
+    if (btn) btn.disabled = false;
+  }
+}
+async function deleteResource(id) {
+  if (!confirm('Remove this file from the HR Portal?')) return;
+  try { await apiDelete('/resources/' + encodeURIComponent(id)); renderResourcesSettings(); }
+  catch (e) { showToast('Could not remove the file', 'error'); }
+}
+
+// ── Settings → Server users who aren't employees (2026-10-16) ────────────
+// Everyone in the AI-Prowler server's Admin tab is an employee automatically;
+// people listed here (e.g. contractors) keep their login but stay out of HR.
+async function renderNonEmployeeSettings() {
+  var el = document.getElementById('nonemp-body'); if (!el) return;
+  var rows;
+  try { rows = (await apiGet('/non-employees')).users || []; } catch (e) { el.textContent = 'Could not load this list.'; return; }
+  el.innerHTML = '<div style="font-size:11px;margin-bottom:8px">Everyone in the AI-Prowler server\'s Admin tab is an employee in HR automatically. '
+    + 'People listed here keep their AI-Prowler login but stay out of HR - for example contractors. '
+    + 'To add someone, open their employee record, then \u22ee Options, then Not an employee.</div>'
+    + (rows.length ? rows.map(function (r) {
+        var uid = encodeURIComponent(r.user_id).replace(/'/g, '%27');
+        return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--border)">'
+          + '<div><strong style="color:var(--text)">' + escapeHtml(r.name || r.user_id) + '</strong>'
+          + (r.role ? ' <span style="font-size:11px">\u00b7 ' + escapeHtml(r.role) + '</span>' : '')
+          + (r.still_server_user ? '' : ' <span style="font-size:11px;color:var(--amber)">\u00b7 no longer a server user</span>')
+          + '</div><button class="btn-secondary" onclick="restoreNonEmployee(\'' + uid + '\')">Make an employee</button></div>';
+      }).join('') : '<div style="font-size:12px">Nobody - every server user is an employee.</div>');
+}
+async function restoreNonEmployee(uidEnc) {
+  if (!confirm('Make this person an employee in HR? An employee record linked to their AI-Prowler login is created (or re-linked).')) return;
+  try {
+    var r = await apiPost('/non-employees/' + uidEnc + '/restore', {});
+    showToast(r && r.employee_id ? 'Added as an employee' : 'Done - link their record in Employees', 'success');
+    renderNonEmployeeSettings();
+  } catch (e) { showToast('Could not change this', 'error'); }
+}
+
+// ── Employee record: gender, previous names, usual hours, PTO ────────────
+var _WEEK = [['mon', 'Monday'], ['tue', 'Tuesday'], ['wed', 'Wednesday'], ['thu', 'Thursday'], ['fri', 'Friday'], ['sat', 'Saturday'], ['sun', 'Sunday']];
+function _fmtHM(t) { var p = String(t || '').split(':'), h = +p[0], m = +p[1]; return ((h % 12) || 12) + (m ? ':' + String(m).padStart(2, '0') : '') + (h < 12 ? 'am' : 'pm'); }
+function _hoursSummary(ws) {
+  if (!ws) return 'Not set';
+  var days = _WEEK.filter(function (d) { return ws[d[0]]; });
+  if (!days.length) return 'No working days set';
+  var first = ws[days[0][0]], same = days.every(function (d) { return ws[d[0]].start === first.start && ws[d[0]].end === first.end; });
+  var names = days.map(function (d) { return d[1].slice(0, 3); }).join(', ');
+  return (same ? names + ' ' + _fmtHM(first.start) + '–' + _fmtHM(first.end) : names) + (ws.location ? ' · ' + ws.location : '');
+}
+function populateEmpPhase3(emp) {
+  var set = function (id, val) { var el = document.getElementById(id); if (el) el.textContent = val || '—'; };
+  set('info-gender', emp.gender === 'M' ? 'Male' : emp.gender === 'F' ? 'Female' : 'Not set');
+  var prev = (emp.previous_names || []).map(function (p) { return (p.first_name + ' ' + p.last_name).trim(); }).filter(Boolean);
+  var row = document.getElementById('info-prev-names-row');
+  if (row) row.style.display = prev.length ? '' : 'none';
+  set('info-prev-names', prev.join(', '));
+  set('info-work-hours', _hoursSummary(emp.work_schedule));
+  set('info-clock', emp.clock_required === undefined ? '—'
+      : (emp.clock_required ? 'Yes' : 'No') + (emp.clock_reason ? ' · ' + emp.clock_reason : ''));
+  set('info-pto', 'Loading...');
+  apiGet('/pto/balance?employee_id=' + encodeURIComponent(emp.id)).then(function (b) {
+    var p = b.pto || {}, s = b.sick || {};
+    set('info-pto', p.remaining + ' PTO days left (of ' + (p.allowance + p.carried_over + p.adjusted) + ') · ' + s.remaining + ' sick days left');
+  }).catch(function () { set('info-pto', '—'); });
+}
+function _curEmp() { return state.employees.find(function (e) { return e.id === state.currentEmpId; }); }
+async function _patchCurEmp(body, okMsg) {
+  var emp = _curEmp(); if (!emp) return false;
+  try {
+    var r = await apiPatch('/employees/' + encodeURIComponent(emp.id), body);
+    Object.assign(emp, (r && r.employee) || body);
+    populateEmpInfo(emp); closeModal(); showToast(okMsg, 'success'); return true;
+  } catch (e) { showToast(e.serverMessage || 'Could not save - check that AI-Prowler is running.', 'error'); return false; }
+}
+function editEmpGender() {
+  var emp = _curEmp(); if (!emp) return;
+  openModal('<div class="modal-header"><h3>Gender</h3></div><div class="modal-body"><div class="form-group"><label class="form-label">Gender</label>'
+    + '<select id="eg-val" class="form-input"><option value="">Not set</option><option value="M"' + (emp.gender === 'M' ? ' selected' : '') + '>Male</option>'
+    + '<option value="F"' + (emp.gender === 'F' ? ' selected' : '') + '>Female</option></select></div>'
+    + '<div style="font-size:11px;color:var(--text2)">The employee can also set this in the HR Portal (About Me).</div></div>'
+    + '<div class="modal-footer"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" onclick="_patchCurEmp({gender: document.getElementById(\'eg-val\').value}, \'Gender saved\')">Save</button></div>');
+}
+// (2026-10-16) FLSA status decides who clocks in when Settings says
+// "Only non-exempt employees"; one person can also be set either way.
+function editEmpFlsa() {
+  var emp = _curEmp(); if (!emp) return;
+  var v = emp.flsa_classification || '';
+  openModal('<div class="modal-header"><h3>FLSA Status</h3></div><div class="modal-body"><div class="form-group"><label class="form-label">FLSA Status</label>'
+    + '<select id="ef-val" class="form-input"><option value="">Not set</option>'
+    + '<option value="Non-exempt"' + (v === 'Non-exempt' ? ' selected' : '') + '>Non-exempt (overtime-eligible; hours must be recorded)</option>'
+    + '<option value="Exempt"' + (v === 'Exempt' ? ' selected' : '') + '>Exempt</option></select></div>'
+    + '<div style="font-size:11px;color:var(--text2)">Being paid a salary doesn\'t by itself make someone exempt - check with your payroll provider or accountant if unsure.</div></div>'
+    + '<div class="modal-footer"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" onclick="_patchCurEmp({flsa_classification: document.getElementById(\'ef-val\').value}, \'FLSA status saved\')">Save</button></div>');
+}
+function editEmpClockRule() {
+  var emp = _curEmp(); if (!emp) return;
+  var v = emp.clock_rule || '';
+  openModal('<div class="modal-header"><h3>Clocks in</h3></div><div class="modal-body"><div class="form-group"><label class="form-label">Clock in / clock out for ' + escapeHtml((emp.first_name || '') + ' ' + (emp.last_name || '')) + '</label>'
+    + '<select id="ec-val" class="form-input"><option value="">Company rule (Settings)</option>'
+    + '<option value="required"' + (v === 'required' ? ' selected' : '') + '>Required</option>'
+    + '<option value="not_required"' + (v === 'not_required' ? ' selected' : '') + '>Not required</option></select></div>'
+    + '<div style="font-size:11px;color:var(--text2)">Right now: ' + (emp.clock_required === false ? 'doesn\'t clock in' : 'clocks in') + (emp.clock_reason ? ' (' + escapeHtml(emp.clock_reason) + ')' : '') + '.</div></div>'
+    + '<div class="modal-footer"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" onclick="_patchCurEmp({clock_rule: document.getElementById(\'ec-val\').value}, \'Saved\')">Save</button></div>');
+}
+function editEmpSchedule() {
+  var emp = _curEmp(); if (!emp) return;
+  var ws = emp.work_schedule || { mon: { start: '08:00', end: '16:00' }, tue: { start: '08:00', end: '16:00' }, wed: { start: '08:00', end: '16:00' },
+                                   thu: { start: '08:00', end: '16:00' }, fri: { start: '08:00', end: '16:00' } };
+  openModal('<div class="modal-header"><h3>Usual weekly hours</h3></div><div class="modal-body">'
+    + '<div style="font-size:12px;color:var(--text2);margin-bottom:8px">Shown on ' + escapeHtml(emp.first_name || 'the employee') + '\'s HR Portal as "This Week", with approved time off and company holidays applied.</div>'
+    + _WEEK.map(function (d) {
+      var v = ws[d[0]];
+      return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0"><label style="width:120px;display:flex;gap:6px;align-items:center;font-size:13px">'
+        + '<input type="checkbox" class="ws-on" data-day="' + d[0] + '"' + (v ? ' checked' : '') + '> ' + d[1] + '</label>'
+        + '<input type="time" class="form-input ws-start" data-day="' + d[0] + '" value="' + (v ? v.start : '08:00') + '" style="width:auto">'
+        + '<span>to</span><input type="time" class="form-input ws-end" data-day="' + d[0] + '" value="' + (v ? v.end : '16:00') + '" style="width:auto"></div>';
+    }).join('')
+    + '<div class="form-group" style="margin-top:8px"><label class="form-label">Location (optional)</label><input id="ws-loc" class="form-input" maxlength="80" value="' + escapeHtml(ws.location || '') + '" placeholder="e.g. Main Office"></div>'
+    + '</div><div class="modal-footer"><button class="btn-secondary" onclick="closeModal()">Cancel</button>'
+    + '<button class="btn-secondary" onclick="_patchCurEmp({work_schedule:{location:\'\'}}, \'Hours cleared\')">Clear</button>'
+    + '<button class="btn-primary" onclick="saveEmpSchedule()">Save</button></div>');
+}
+function saveEmpSchedule() {
+  var out = { location: document.getElementById('ws-loc').value.trim() }, bad = false;
+  document.querySelectorAll('.ws-on').forEach(function (c) {
+    var d = c.getAttribute('data-day');
+    if (!c.checked) { out[d] = null; return; }
+    var s = document.querySelector('.ws-start[data-day="' + d + '"]').value, e = document.querySelector('.ws-end[data-day="' + d + '"]').value;
+    if (!s || !e) bad = true;
+    out[d] = { start: s, end: e };
+  });
+  if (bad) { showToast('Each working day needs a start and end time', 'error'); return; }
+  _patchCurEmp({ work_schedule: out }, 'Usual hours saved');
+}
+async function openEmpPto() {
+  var emp = _curEmp(); if (!emp) return;
+  var b;
+  try { b = await apiGet('/pto/balance?employee_id=' + encodeURIComponent(emp.id)); } catch (e) { showToast('Could not load the balance', 'error'); return; }
+  if (!b || !b.pto) { showToast('Could not load the balance', 'error'); return; }
+  var p = b.pto || {}, s = b.sick || {}, adj = (emp.pto_adjustments || []).slice(-8).reverse();
+  b.policy = b.policy || {};
+  var row = function (l, v) { return '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:13px"><span>' + l + '</span><b>' + v + '</b></div>'; };
+  openModal('<div class="modal-header"><h3>PTO ' + b.year + ' — ' + escapeHtml((emp.first_name || '') + ' ' + (emp.last_name || '')) + '</h3></div><div class="modal-body">'
+    + row('Allowance this year', p.allowance) + row('Carried over', p.carried_over) + row('Adjusted by HR', p.adjusted)
+    + row('Used (approved)', p.used) + row('Pending requests', p.pending) + row('PTO days left', p.remaining)
+    + row('Sick days left', s.remaining + ' of ' + (s.allowance + s.adjusted))
+    + '<div class="form-group" style="margin-top:12px"><label class="form-label">Days per year for this person (blank = company policy, ' + b.policy.days_per_year + ')</label>'
+    + '<div style="display:flex;gap:8px"><input id="ep-days" type="number" min="0" max="365" step="0.5" class="form-input" value="' + (emp.pto_days_per_year != null && emp.pto_days_per_year !== '' ? emp.pto_days_per_year : '') + '">'
+    + '<button class="btn-secondary" onclick="_patchCurEmp({pto_days_per_year: document.getElementById(\'ep-days\').value}, \'Allowance saved\')">Save</button></div></div>'
+    + '<div style="font-weight:700;margin:14px 0 6px;color:var(--text)">Adjust a balance</div>'
+    + '<div style="display:grid;grid-template-columns:90px 110px 1fr;gap:8px"><input id="ea-days" type="number" step="0.5" class="form-input" placeholder="+/- days">'
+    + '<select id="ea-kind" class="form-input"><option value="pto">PTO</option><option value="sick">Sick</option></select>'
+    + '<input id="ea-note" class="form-input" maxlength="300" placeholder="Reason (e.g. opening balance)"></div>'
+    + '<button class="btn-primary" style="margin-top:8px" onclick="saveEmpPtoAdjust()">Add adjustment</button>'
+    + (adj.length ? '<div style="margin-top:12px;font-size:12px;color:var(--text2)">' + adj.map(function (a) {
+      return escapeHtml(a.date) + ' · ' + (a.days > 0 ? '+' : '') + a.days + ' ' + escapeHtml(a.kind) + (a.note ? ' — ' + escapeHtml(a.note) : ''); }).join('<br>') + '</div>' : '')
+    + '</div><div class="modal-footer"><button class="btn-secondary" onclick="closeModal()">Close</button></div>');
+}
+async function saveEmpPtoAdjust() {
+  var emp = _curEmp(); if (!emp) return;
+  var days = parseFloat(document.getElementById('ea-days').value);
+  if (!days) { showToast('Enter the number of days (use a minus sign to take days away)', 'error'); return; }
+  try {
+    await apiPost('/pto/adjust', { employee_id: emp.id, days: days, kind: document.getElementById('ea-kind').value,
+                                   note: document.getElementById('ea-note').value.trim() });
+    var fresh = await apiGet('/employees/' + encodeURIComponent(emp.id));
+    Object.assign(emp, fresh.employee || fresh);
+    showToast('Balance adjusted', 'success');
+    openEmpPto(); populateEmpPhase3(emp);
+  } catch (e) { showToast(e.serverError || 'Could not adjust the balance', 'error'); }
+}
+
 // ── Direct Deposit Manager ──────────────────────────────────────────────
 function openDirectDepositManager() {
   const emps = state.employees.filter(e => e.status !== 'terminated');
-  const saved = JSON.parse(localStorage.getItem('hr_direct_deposits') || '{}');
+  const saved = adminStoreGet('hr_direct_deposits');
 
   const rows = emps.map(emp => {
     const dd = saved[emp.id] || null;
@@ -3125,7 +3854,7 @@ function openDirectDepositManager() {
       </div>
       <div style="flex:1">
         <div style="font-size:13px;font-weight:600;color:var(--text)">${escapeHtml(emp.first_name)} ${escapeHtml(emp.last_name)}</div>
-        ${dd ? `<div style="font-size:11px;color:var(--green)">✓ ${dd.bank_name} ····${dd.account_last4} · ${dd.account_type}</div>`
+        ${dd ? `<div style="font-size:11px;color:var(--green)">✓ ${escapeHtml(dd.bank_name||'')} ····${escapeHtml(dd.account_last4||'')} · ${escapeHtml(dd.account_type||'')}</div>`
              : `<div style="font-size:11px;color:var(--text3)">No direct deposit on file</div>`}
       </div>
       <button onclick="openDDForm('${emp.id}')" style="padding:7px 14px;background:${dd?'var(--surface)':'var(--cyan-dim)'};border:1px solid ${dd?'var(--border)':'var(--cyan)'};border-radius:8px;color:${dd?'var(--text2)':'var(--cyan)'};font-size:12px;font-weight:600;cursor:pointer">${dd?'Edit':'Set Up →'}</button>
@@ -3142,7 +3871,7 @@ function openDirectDepositManager() {
 
 function openDDForm(empId) {
   const emp = state.employees.find(e => e.id === empId);
-  const saved = JSON.parse(localStorage.getItem('hr_direct_deposits') || '{}');
+  const saved = adminStoreGet('hr_direct_deposits');
   const dd = saved[empId] || {};
   const today = _localYMD();
   closeModal();
@@ -3157,9 +3886,10 @@ function openDDForm(empId) {
           <option value="Savings" ${dd.account_type==='Savings'?'selected':''}>Savings</option>
         </select></div>
       <div class="form-group"><label class="form-label">Routing Number (9 digits) *</label>
-        <input id="dd-routing" class="form-input" value="${escapeHtml(dd.routing||'')}" placeholder="000000000" maxlength="9"></div>
+        <input id="dd-routing" class="form-input" value="" inputmode="numeric" autocomplete="off" placeholder="${dd.routing_last4 ? 'On file: ending ' + escapeHtml(dd.routing_last4) + ' - leave blank to keep' : '000000000'}" maxlength="9"></div>
       <div class="form-group"><label class="form-label">Account Number *</label>
-        <input id="dd-account" class="form-input" value="${escapeHtml(dd.account||'')}" placeholder="Account number"></div>
+        <input id="dd-account" class="form-input" value="" inputmode="numeric" autocomplete="off" placeholder="${dd.account_last4 ? 'On file: ending ' + escapeHtml(dd.account_last4) + ' - leave blank to keep' : 'Account number'}"></div>
+      <div style="font-size:11px;color:var(--text3);margin:-6px 0 10px">For security, only the last 4 digits are kept. The full numbers belong in your payroll platform.</div>
       <div class="form-group"><label class="form-label">Deposit Amount</label>
         <select id="dd-amount" class="form-input">
           <option value="100%">100% of net pay</option>
@@ -3180,22 +3910,32 @@ function openDDForm(empId) {
 function saveDDForm(empId) {
   const bank    = document.getElementById('dd-bank').value.trim();
   const type    = document.getElementById('dd-type').value;
-  const routing = document.getElementById('dd-routing').value.trim();
-  const account = document.getElementById('dd-account').value.trim();
+  const routing = document.getElementById('dd-routing').value.replace(/\D/g, '');
+  const account = document.getElementById('dd-account').value.replace(/\D/g, '');
   const sig     = document.getElementById('dd-sig').value.trim();
   const date    = document.getElementById('dd-date').value;
-  if (!bank || !routing || !account) { showToast('Bank name, routing, and account number required', 'error'); return; }
-  const saved = JSON.parse(localStorage.getItem('hr_direct_deposits') || '{}');
-  saved[empId] = { bank_name:bank, account_type:type, routing, account, account_last4:account.slice(-4), signature:sig, date, filed_at:new Date().toISOString() };
-  localStorage.setItem('hr_direct_deposits', JSON.stringify(saved));
+  const saved = adminStoreGet('hr_direct_deposits');
+  const prev  = saved[empId] || {};
+  if (!bank) { showToast('Bank name is required', 'error'); return; }
+  if (routing && routing.length !== 9) { showToast('The routing number must be 9 digits', 'error'); return; }
+  if (account && account.length < 4) { showToast('The account number looks too short', 'error'); return; }
+  if ((!routing && !prev.routing_last4) || (!account && !prev.account_last4)) {
+    showToast('Routing and account numbers are required', 'error'); return;
+  }
+  // (2026-10-16) Only the last 4 digits are kept - the server enforces it too.
+  saved[empId] = { bank_name: bank, account_type: type,
+    routing_last4: routing ? routing.slice(-4) : prev.routing_last4,
+    account_last4: account ? account.slice(-4) : prev.account_last4,
+    signature: sig, date, filed_at: new Date().toISOString() };
+  if (!adminStoreSet('hr_direct_deposits', saved)) return;
   closeModal();
-  showToast('✓ Direct deposit saved and filed', 'success');
+  showToast('✓ Direct deposit saved (last 4 digits only)', 'success');
   renderPayrollSummary(state.employees.filter(e=>e.status!=='terminated'));
 }
 
 // ── Tax Filings Manager ─────────────────────────────────────────────────
 function openTaxFilingsManager() {
-  const filings = JSON.parse(localStorage.getItem('hr_tax_filings') || '[]');
+  const filings = adminStoreGet('hr_tax_filings');
   const year    = new Date().getFullYear();
 
   const deadlines = [
@@ -3237,9 +3977,9 @@ function openTaxFilingsManager() {
 }
 
 function markTaxFiled(id, label) {
-  const filings = JSON.parse(localStorage.getItem('hr_tax_filings') || '[]');
+  const filings = adminStoreGet('hr_tax_filings');
   filings.push({ id, label, filed_date: new Date().toLocaleDateString(), filed_at: new Date().toISOString() });
-  localStorage.setItem('hr_tax_filings', JSON.stringify(filings));
+  if (!adminStoreSet('hr_tax_filings', filings)) return;
   showToast(`✓ ${label} marked as filed`, 'success');
   closeModal();
   setTimeout(openTaxFilingsManager, 100);
@@ -3258,8 +3998,8 @@ const BENEFIT_TABS = [
 ];
 const BEN_STATUS = ['Enrolled','Waived','Not Enrolled','Pending'];
 let _benEmpId=null, _benTab='health', _benView='dashboard';
-function getBenData(){return JSON.parse(localStorage.getItem('hr_ben_v2')||'{}');}
-function saveBenData(d){localStorage.setItem('hr_ben_v2',JSON.stringify(d));}
+function getBenData(){return adminStoreGet('hr_ben_v2');}
+function saveBenData(d){return adminStoreSet('hr_ben_v2',d);}
 
 function renderBenefitsFolders(){
   _benView='dashboard';
@@ -3550,8 +4290,8 @@ function _benNavTo(section) {
 }
 
 // ── Benefits Documents ─────────────────────────────────────────────────
-function getBenDocs() { return JSON.parse(localStorage.getItem('hr_ben_docs') || '{}'); }
-function saveBenDocs(d) { localStorage.setItem('hr_ben_docs', JSON.stringify(d)); }
+function getBenDocs() { return adminStoreGet('hr_ben_docs'); }
+function saveBenDocs(d) { return adminStoreSet('hr_ben_docs', d); }
 
 function _renderBenDocuments() {
   var body = document.getElementById('ben-body');
@@ -3640,61 +4380,53 @@ function _benDocIcon(name) {
   return '📄';
 }
 
-function _benUploadDocs(input, folderKey) {
-  var files = Array.from(input.files);
-  if (!files.length) return;
-  var docs = getBenDocs();
-  if (!docs[folderKey]) docs[folderKey] = [];
-  var today = new Date().toLocaleDateString();
-  var processed = 0;
-
-  files.forEach(function(file) {
-    var reader = new FileReader();
-    reader.onload = function(e) {
-      docs[folderKey].push({
-        name: file.name,
-        data: e.target.result,
-        date: today,
-        size: (file.size/1024).toFixed(1)+' KB',
-        emp_id: _benEmpId || null,
-      });
-      processed++;
-      if (processed === files.length) {
-        saveBenDocs(docs);
-        if (typeof showToast === 'function') showToast(files.length+' file'+(files.length!==1?'s':'')+' uploaded!', 'success');
-        _renderBenDocuments();
-      }
-    };
-    reader.readAsDataURL(file);
+async function _benUploadDocs(input, folderKey) {
+  var empId = _benEmpId || null;
+  await _adminAddFiles(input, 'hr_ben_docs', folderKey, empId, function(doc) {
+    var docs = getBenDocs();
+    if (!docs[folderKey]) docs[folderKey] = [];
+    doc.emp_id = empId;
+    docs[folderKey].push(doc);
+    return saveBenDocs(docs);
   });
+  _renderBenDocuments();
 }
 
 function _benDownloadDoc(folderKey, idx) {
-  var docs = getBenDocs();
-  var doc = (docs[folderKey]||[])[idx];
-  if (!doc || !doc.data) { if(typeof showToast==='function')showToast('File not found.'); return; }
-  var a = document.createElement('a');
-  a.href = doc.data;
-  a.download = doc.name;
-  a.click();
+  adminDownloadFile((getBenDocs()[folderKey] || [])[idx]);
 }
 
 function _benDeleteDoc(folderKey, idx) {
   if (!confirm('Delete this document?')) return;
   var docs = getBenDocs();
+  var doc = (docs[folderKey] || [])[idx];
   if (docs[folderKey]) docs[folderKey].splice(idx, 1);
-  saveBenDocs(docs);
+  if (!saveBenDocs(docs)) return;
+  adminDeleteFile(doc);
   _renderBenDocuments();
   if (typeof showToast === 'function') showToast('Document deleted.');
 }
 
 // ── Benefits Manager ────────────────────────────────────────────────────
+// (2026-10-16, David) Enrollment is saved on the employee record in the HR
+// database (emp.benefits) so the HR Portal shows the real enrollment. Older
+// versions kept it only in this browser (localStorage 'hr_benefits_enrollment');
+// those entries still show here, marked, until HR saves them once.
+function _benLegacy() {
+  try { return JSON.parse(localStorage.getItem('hr_benefits_enrollment') || '{}') || {}; } catch (e) { return {}; }
+}
+function _benFor(emp) {
+  if (emp && emp.benefits && typeof emp.benefits === 'object' && Object.keys(emp.benefits).length) return { b: emp.benefits, legacy: false };
+  const old = _benLegacy()[emp && emp.id];
+  return old ? { b: old, legacy: true } : { b: null, legacy: false };
+}
+
 function openBenefitsManager() {
   const emps  = state.employees.filter(e => e.status !== 'terminated');
-  const saved = JSON.parse(localStorage.getItem('hr_benefits_enrollment') || '{}');
 
   const rows = emps.map(emp => {
-    const b = saved[emp.id] || null;
+    const _bf = _benFor(emp);
+    const b = _bf.b;
     const initials = `${(emp.first_name||'?')[0]}${(emp.last_name||'?')[0]}`.toUpperCase();
     return `
     <div style="padding:12px;background:var(--surface2);border-radius:10px;margin-bottom:8px;border:1px solid ${b?'var(--green)':'var(--border)'}">
@@ -3705,7 +4437,7 @@ function openBenefitsManager() {
         <div style="flex:1">
           <div style="font-size:13px;font-weight:600;color:var(--text)">${escapeHtml(emp.first_name)} ${escapeHtml(emp.last_name)}</div>
           <div style="font-size:11px;color:${b?'var(--green)':'var(--text3)'}">
-            ${b ? `✓ Enrolled ${b.enrollment_date}` : 'Not enrolled'}
+            ${b ? `✓ Enrolled ${escapeHtml(b.enrollment_date || '')}` : 'Not enrolled'}${_bf.legacy ? ' <span style="color:var(--amber)">· only in this browser — open and Save to keep it</span>' : ''}
           </div>
         </div>
         <button onclick="openBenefitsForm('${emp.id}')" style="padding:7px 14px;background:${b?'var(--surface)':'var(--cyan-dim)'};border:1px solid ${b?'var(--border)':'var(--cyan)'};border-radius:8px;color:${b?'var(--text2)':'var(--cyan)'};font-size:12px;font-weight:600;cursor:pointer">${b?'Edit':'Enroll →'}</button>
@@ -3730,8 +4462,7 @@ function openBenefitsManager() {
 
 function openBenefitsForm(empId) {
   const emp  = state.employees.find(e => e.id === empId);
-  const saved = JSON.parse(localStorage.getItem('hr_benefits_enrollment') || '{}');
-  const b = saved[empId] || {};
+  const b = _benFor(emp).b || {};
   closeModal();
   setTimeout(() => openModal(`
     <div class="modal-header"><h3>🎁 Benefits — ${escapeHtml(emp?.first_name||'')} ${escapeHtml(emp?.last_name||'')}</h3></div>
@@ -3761,9 +4492,8 @@ function openBenefitsForm(empId) {
     </div>`), 100);
 }
 
-function saveBenefitsForm(empId) {
-  const saved = JSON.parse(localStorage.getItem('hr_benefits_enrollment') || '{}');
-  saved[empId] = {
+async function saveBenefitsForm(empId) {
+  const benefits = {
     health: document.getElementById('ben-health').value,
     dental: document.getElementById('ben-dental').value,
     vision: document.getElementById('ben-vision').value,
@@ -3773,15 +4503,23 @@ function saveBenefitsForm(empId) {
     enrollment_date: new Date().toLocaleDateString(),
     filed_at: new Date().toISOString()
   };
-  localStorage.setItem('hr_benefits_enrollment', JSON.stringify(saved));
-  closeModal();
-  showToast('✓ Benefits enrollment saved', 'success');
-  setTimeout(openBenefitsManager, 100);
+  try {
+    const res = await apiPatch(`/employees/${empId}`, { benefits });
+    const emp = state.employees.find(e => e.id === empId);
+    if (emp) emp.benefits = (res && res.employee && res.employee.benefits) || benefits;
+    // Saved in the HR database now — drop this browser's old copy
+    try { const old = _benLegacy(); if (old[empId]) { delete old[empId]; localStorage.setItem('hr_benefits_enrollment', JSON.stringify(old)); } } catch (e) {}
+    closeModal();
+    showToast('✓ Benefits enrollment saved to the employee record', 'success');
+    setTimeout(openBenefitsManager, 100);
+  } catch (e) {
+    showToast('Could not save the enrollment — nothing was changed. Check that AI-Prowler is running.', 'error');
+  }
 }
 
 // ── Pay Stubs Manager ───────────────────────────────────────────────────
 function openPayStubsManager() {
-  const stubs = JSON.parse(localStorage.getItem('hr_pay_stubs') || '[]');
+  const stubs = adminStoreGet('hr_pay_stubs');
   const emps  = state.employees.filter(e => e.status !== 'terminated');
 
   openModal(`
@@ -3913,16 +4651,16 @@ function savePayStub() {
     net: net.toFixed(2),
     generated_at: new Date().toISOString()
   };
-  const stubs = JSON.parse(localStorage.getItem('hr_pay_stubs') || '[]');
+  const stubs = adminStoreGet('hr_pay_stubs');
   stubs.push(stub);
-  localStorage.setItem('hr_pay_stubs', JSON.stringify(stubs));
+  if (!adminStoreSet('hr_pay_stubs', stubs)) return;
   closeModal();
   showToast(`✓ Pay stub generated — Net: $${net.toFixed(2)}`, 'success');
   setTimeout(openPayStubsManager, 100);
 }
 
 function viewPayStub(stubId) {
-  const stubs = JSON.parse(localStorage.getItem('hr_pay_stubs') || '[]');
+  const stubs = adminStoreGet('hr_pay_stubs');
   const s = stubs.find(x => x.id === stubId);
   if (!s) return;
   const emp = state.employees.find(e => e.id === s.employee_id);
@@ -3954,15 +4692,8 @@ function viewPayStub(stubId) {
     </div>`);
 }
 
-// ── Federal Holidays — shared across every calendar in the app (Time Off,
-// Recruiting) so there's one list to update if a date ever needs changing.
-const FEDERAL_HOLIDAYS = {
-  '01-01':"New Year's Day",'01-20':'MLK Day','02-14':"Valentine's Day",'02-17':"Presidents' Day",
-  '03-17':"St. Patrick's Day",'05-05':'Cinco de Mayo','05-26':'Memorial Day','06-14':'Flag Day',
-  '06-19':'Juneteenth','07-04':'Independence Day','09-01':'Labor Day','10-13':'Columbus Day',
-  '10-31':'Halloween','11-11':'Veterans Day','11-27':'Thanksgiving','12-24':'Christmas Eve',
-  '12-25':'Christmas','12-31':"New Year's Eve",
-};
+// ── Holidays: computed for the year shown (2026-10-16) — see hrHolidaysForAdmin()
+// in the Phase 3 block. (Was a fixed table of one year's dates.)
 
 // ── Recruiting Tab ────────────────────────────────────────────────────
 // All recruiting data lives in localStorage under 'hr_recruiting'
@@ -5372,7 +6103,7 @@ function renderRecCalendar(data) {
   for (let day=1; day<=daysInMonth; day++) {
     const key = `${recCalYear}-${String(recCalMonth+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     const mmdd = key.slice(5);
-    const holidayName = FEDERAL_HOLIDAYS[mmdd];
+    const holidayName = hrHolidaysForAdmin(recCalYear)[mmdd];
     const evs = byDay[key] || [];
     const starts = startDaysMap[key] || [];
     const offersDue = offerDaysMap[key] || [];
@@ -5712,12 +6443,12 @@ function openCreateEmployeeFromOffer(offerId) {
   const esc = v => escapeHtml(String(v || ''));
   openModal(`<div class="modal-header"><h3>🎉 Create an employee record for ${esc(c.name || 'this hire')}?</h3></div>
     <div class="modal-body">
-      <div style="font-size:12px;color:var(--text2);margin-bottom:12px">Filled in from recruiting — check and edit anything before creating. They'll get onboarding tasks, and you can set their Portal PIN next.</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:12px">Filled in from recruiting — check and edit anything before creating. They'll get onboarding tasks. They sign in to the HR Portal with their AI-Prowler name and token from the server's Admin tab.</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div class="form-group"><label class="form-label">First Name *</label><input id="hire-first" class="form-input" value="${esc(first)}"></div>
         <div class="form-group"><label class="form-label">Last Name *</label><input id="hire-last" class="form-input" value="${esc(last)}"></div>
       </div>
-      <div class="form-group"><label class="form-label">Email (used to sign in to the Portal)</label><input id="hire-email" type="email" class="form-input" value="${esc(c.email)}"></div>
+      <div class="form-group"><label class="form-label">Email</label><input id="hire-email" type="email" class="form-input" value="${esc(c.email)}"></div>
       <div class="form-group"><label class="form-label">Phone</label><input id="hire-phone" type="tel" class="form-input" value="${esc(c.phone)}"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div class="form-group"><label class="form-label">Job Title</label><input id="hire-title" class="form-input" value="${esc(o.title || p.title)}"></div>
@@ -5751,16 +6482,21 @@ async function createEmployeeFromOffer(offerId) {
     saveRecData(data); renderOffers(data);
     closeModal();
     try { await loadEmployees(); } catch (e) {}
-    showToast(`✓ ${first} ${last} added to Employees — copy their AI-Prowler token now`, 'success');
-    // Open their record on 🔑 Portal Sign-in and show their brand-new AI-Prowler token (shown only once)
+    showToast(emp.aiprowler_login_linked
+      ? `✓ ${first} ${last} added — linked to their AI-Prowler login for the HR Portal`
+      : `✓ ${first} ${last} added — link their AI-Prowler login so they can use the HR Portal`, 'success');
+    // (2026-10-15) Open their record. Employees sign in to the HR Portal with their
+    // AI-Prowler name + token from the server's Admin tab — no separate HR token/PIN.
     if (emp.id) {
       await openEmpSheet(emp.id);
-      const tab = [...document.querySelectorAll('.emp-sheet-tab')].find(t => /Direct Reports/.test(t.textContent));
-      if (tab) tab.click();
-      if (emp.portal_token) setTimeout(() => showPortalToken(emp.portal_token), 150);
+      if (!emp.aiprowler_login_linked) setTimeout(() => editEmpAiProwlerLogin(), 150);
     }
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = 'Create Employee'; }
+    if (e && e.serverError === 'name_exists') {
+      showToast(e.serverMessage || 'Name already exists', 'error');
+      return;
+    }
     showToast('Could not create the employee — nothing was changed. Check that AI-Prowler is running.', 'error');
   }
 }
@@ -6025,8 +6761,8 @@ function filterTraining(f, btn) {
 // ── Performance Tab ────────────────────────────────────────────────────
 let _perfNav = 'reviews';
 
-function getPerfData() { return JSON.parse(localStorage.getItem('hr_perf_v1') || '{}'); }
-function savePerfData(d) { localStorage.setItem('hr_perf_v1', JSON.stringify(d)); }
+function getPerfData() { return adminStoreGet('hr_perf_v1'); }
+function savePerfData(d) { return adminStoreSet('hr_perf_v1', d); }
 function _perfId() { return 'P' + Date.now() + Math.random().toString(36).slice(2,6); }
 
 function _perfEnsureEmps(cb) {
@@ -6624,7 +7360,7 @@ function _perfRenderDocuments() {
     { key:'recognition_docs', icon:'🏆', label:'Recognition',      desc:'Award certificates, letters of commendation' },
     { key:'other_perf',    icon:'📁', label:'Other Documents',     desc:'Miscellaneous performance documents' },
   ];
-  var docs = JSON.parse(localStorage.getItem('hr_perf_docs') || '{}');
+  var docs = adminStoreGet('hr_perf_docs');
 
   if (body._perfDocFolder) {
     var folder = PERF_DOC_FOLDERS.find(function(f){return f.key===body._perfDocFolder;});
@@ -6678,39 +7414,28 @@ function _perfDocIcon(name) {
   return '📄';
 }
 
-function _perfUploadDocs(input, folderKey) {
-  var files = Array.from(input.files);
-  var docs = JSON.parse(localStorage.getItem('hr_perf_docs')||'{}');
-  if (!docs[folderKey]) docs[folderKey] = [];
-  var today = new Date().toLocaleDateString();
-  var processed = 0;
-  files.forEach(function(file) {
-    var reader = new FileReader();
-    reader.onload = function(e) {
-      docs[folderKey].push({name:file.name,data:e.target.result,date:today,size:(file.size/1024).toFixed(1)+' KB',emp_id:null});
-      processed++;
-      if (processed===files.length) {
-        localStorage.setItem('hr_perf_docs', JSON.stringify(docs));
-        if(typeof showToast==='function')showToast(files.length+' file'+(files.length!==1?'s':'')+' uploaded!','success');
-        _perfRenderDocuments();
-      }
-    };
-    reader.readAsDataURL(file);
+async function _perfUploadDocs(input, folderKey) {
+  await _adminAddFiles(input, 'hr_perf_docs', folderKey, null, function(doc) {
+    var docs = adminStoreGet('hr_perf_docs');
+    if (!docs[folderKey]) docs[folderKey] = [];
+    doc.emp_id = null;
+    docs[folderKey].push(doc);
+    return adminStoreSet('hr_perf_docs', docs);
   });
+  _perfRenderDocuments();
 }
 
 function _perfDownloadDoc(folderKey,idx) {
-  var docs=JSON.parse(localStorage.getItem('hr_perf_docs')||'{}');
-  var doc=(docs[folderKey]||[])[idx];
-  if(!doc||!doc.data)return;
-  var a=document.createElement('a');a.href=doc.data;a.download=doc.name;a.click();
+  adminDownloadFile((adminStoreGet('hr_perf_docs')[folderKey] || [])[idx]);
 }
 
 function _perfDeleteDoc(folderKey,idx) {
   if(!confirm('Delete this document?'))return;
-  var docs=JSON.parse(localStorage.getItem('hr_perf_docs')||'{}');
+  var docs=adminStoreGet('hr_perf_docs');
+  var doc=(docs[folderKey]||[])[idx];
   if(docs[folderKey])docs[folderKey].splice(idx,1);
-  localStorage.setItem('hr_perf_docs',JSON.stringify(docs));
+  if(!adminStoreSet('hr_perf_docs',docs))return;
+  adminDeleteFile(doc);
   _perfRenderDocuments();
   if(typeof showToast==='function')showToast('Document deleted.');
 }
@@ -6718,8 +7443,8 @@ function _perfDeleteDoc(folderKey,idx) {
 // ── Compliance Tab ─────────────────────────────────────────────────────
 let _compNav = 'i9';
 
-function getCompData() { return JSON.parse(localStorage.getItem('hr_comp_v1') || '{}'); }
-function saveCompData(d) { localStorage.setItem('hr_comp_v1', JSON.stringify(d)); }
+function getCompData() { return adminStoreGet('hr_comp_v1'); }
+function saveCompData(d) { return adminStoreSet('hr_comp_v1', d); }
 function _compId() { return 'C' + Date.now() + Math.random().toString(36).slice(2,5); }
 
 function _compEnsureEmps(cb) {
@@ -6983,7 +7708,7 @@ function _compRenderDocs() {
     {key:'policies',icon:'📄',label:'Policies & Handbooks',desc:'Employee handbook, company policies'},
     {key:'other_comp',icon:'📁',label:'Other Documents',desc:'Miscellaneous compliance documents'},
   ];
-  var docs=JSON.parse(localStorage.getItem('hr_comp_docs')||'{}');
+  var docs=adminStoreGet('hr_comp_docs');
 
   if(body._compDocFolder){
     var folder=COMP_FOLDERS.find(function(f){return f.key===body._compDocFolder;});
@@ -7025,22 +7750,17 @@ function _compRenderDocs() {
     }).join('')+'</div></div>';
 }
 
-function _compUploadDocs(input,folderKey){
-  var files=Array.from(input.files);
-  var docs=JSON.parse(localStorage.getItem('hr_comp_docs')||'{}');
-  if(!docs[folderKey])docs[folderKey]=[];
-  var today=new Date().toLocaleDateString(); var processed=0;
-  files.forEach(function(file){
-    var reader=new FileReader();
-    reader.onload=function(e){
-      docs[folderKey].push({name:file.name,data:e.target.result,date:today,size:(file.size/1024).toFixed(1)+' KB'});
-      processed++;
-      if(processed===files.length){localStorage.setItem('hr_comp_docs',JSON.stringify(docs));if(typeof showToast==='function')showToast(files.length+' file'+(files.length!==1?'s':'')+' uploaded!','success');_compRenderDocs();}
-    };reader.readAsDataURL(file);
+async function _compUploadDocs(input,folderKey){
+  await _adminAddFiles(input, 'hr_comp_docs', folderKey, null, function(doc) {
+    var docs = adminStoreGet('hr_comp_docs');
+    if (!docs[folderKey]) docs[folderKey] = [];
+    docs[folderKey].push(doc);
+    return adminStoreSet('hr_comp_docs', docs);
   });
+  _compRenderDocs();
 }
-function _compDownloadDoc(folderKey,idx){var docs=JSON.parse(localStorage.getItem('hr_comp_docs')||'{}');var doc=(docs[folderKey]||[])[idx];if(!doc||!doc.data)return;var a=document.createElement('a');a.href=doc.data;a.download=doc.name;a.click();}
-function _compDeleteDoc(folderKey,idx){if(!confirm('Delete?'))return;var docs=JSON.parse(localStorage.getItem('hr_comp_docs')||'{}');if(docs[folderKey])docs[folderKey].splice(idx,1);localStorage.setItem('hr_comp_docs',JSON.stringify(docs));_compRenderDocs();if(typeof showToast==='function')showToast('Deleted.');}
+function _compDownloadDoc(folderKey,idx){adminDownloadFile((adminStoreGet('hr_comp_docs')[folderKey]||[])[idx]);}
+function _compDeleteDoc(folderKey,idx){if(!confirm('Delete?'))return;var docs=adminStoreGet('hr_comp_docs');var doc=(docs[folderKey]||[])[idx];if(docs[folderKey])docs[folderKey].splice(idx,1);if(!adminStoreSet('hr_comp_docs',docs))return;adminDeleteFile(doc);_compRenderDocs();if(typeof showToast==='function')showToast('Deleted.');}
 
 
 // ── Training Portfolios ────────────────────────────────────────────────
@@ -7059,8 +7779,8 @@ const TRAINING_CATEGORIES = [
   { key:'other',        icon:'📁', label:'Other Training',         desc:'Miscellaneous training records' },
 ];
 
-function getTrainData() { return JSON.parse(localStorage.getItem('hr_train_v1') || '{}'); }
-function saveTrainData(d) { localStorage.setItem('hr_train_v1', JSON.stringify(d)); }
+function getTrainData() { return adminStoreGet('hr_train_v1'); }
+function saveTrainData(d) { return adminStoreSet('hr_train_v1', d); }
 
 let _trainEmpId = null;
 let _trainCatKey = null;
@@ -7248,49 +7968,32 @@ function _renderTrainFileList(empId, catKey) {
     + '</div>';
 }
 
-function _trainUpload(input) {
-  var files = Array.from(input.files);
-  if (!files.length || !_trainEmpId || !_trainCatKey) return;
-  var data = getTrainData();
-  if (!data[_trainEmpId]) data[_trainEmpId] = {};
-  if (!data[_trainEmpId][_trainCatKey]) data[_trainEmpId][_trainCatKey] = { docs: [] };
-  if (!data[_trainEmpId][_trainCatKey].docs) data[_trainEmpId][_trainCatKey].docs = [];
-  var today = new Date().toLocaleDateString();
-  var processed = 0;
-  files.forEach(function(file) {
-    var reader = new FileReader();
-    reader.onload = function(e) {
-      data[_trainEmpId][_trainCatKey].docs.push({
-        name: file.name,
-        data: e.target.result,
-        date: today,
-        size: (file.size / 1024).toFixed(1) + ' KB',
-        notes: ''
-      });
-      processed++;
-      if (processed === files.length) {
-        saveTrainData(data);
-        if (typeof showToast === 'function') showToast(files.length + ' file' + (files.length !== 1 ? 's' : '') + ' uploaded!', 'success');
-        _renderTrainFileList(_trainEmpId, _trainCatKey);
-      }
-    };
-    reader.readAsDataURL(file);
+async function _trainUpload(input) {
+  var empId = _trainEmpId, cat = _trainCatKey;
+  if (!empId || !cat) return;
+  await _adminAddFiles(input, 'hr_train_v1', cat, empId, function(doc) {
+    var data = getTrainData();
+    if (!data[empId]) data[empId] = {};
+    if (!data[empId][cat]) data[empId][cat] = { docs: [] };
+    if (!data[empId][cat].docs) data[empId][cat].docs = [];
+    doc.notes = '';
+    data[empId][cat].docs.push(doc);
+    return saveTrainData(data);
   });
+  _renderTrainFileList(empId, cat);
 }
 
 function _trainDownload(idx) {
-  var data = getTrainData();
-  var doc = (((data[_trainEmpId] || {})[_trainCatKey] || {}).docs || [])[idx];
-  if (!doc || !doc.data) return;
-  var a = document.createElement('a'); a.href = doc.data; a.download = doc.name; a.click();
+  adminDownloadFile((((getTrainData()[_trainEmpId] || {})[_trainCatKey] || {}).docs || [])[idx]);
 }
 
 function _trainDelete(idx) {
   if (!confirm('Delete this training document?')) return;
   var data = getTrainData();
   if (data[_trainEmpId] && data[_trainEmpId][_trainCatKey] && data[_trainEmpId][_trainCatKey].docs) {
-    data[_trainEmpId][_trainCatKey].docs.splice(idx, 1);
-    saveTrainData(data);
+    var doc = data[_trainEmpId][_trainCatKey].docs.splice(idx, 1)[0];
+    if (!saveTrainData(data)) return;
+    adminDeleteFile(doc);
   }
   if (typeof showToast === 'function') showToast('Document deleted.');
   _renderTrainFileList(_trainEmpId, _trainCatKey);
@@ -7455,6 +8158,7 @@ function setClockLogPeriod(period, btn) {
 async function loadLiveClockLog() {
   const el = document.getElementById('clocklog-list');
   if (!el) return;
+  apiGet('/settings').then(d => _syncTimeClockUi((((d && d.settings) || {}).time_clock_mode || 'everyone') !== 'nobody')).catch(() => {});
   el.innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
   try {
     const data = await apiGet(`/timeclock/entries?period=${clockLogPeriod}`);
@@ -7657,53 +8361,6 @@ function nowTime() {
   return `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
 }
 
-function clockIn(empId) {
-  const today = _localYMD();
-  const key = `clock_${empId}_${today}`;
-  const inTime = nowTime();
-  localStorage.setItem(key, JSON.stringify({ in: inTime, out: null }));
-  apiPost('/attendance', { employee_id: empId, date: today, status: 'present', note: `Clocked in at ${inTime}` }).catch(()=>{});
-  showToast(`🟢 Clocked in at ${inTime}`, 'success');
-
-  // Directly update just this employee's row without re-fetching anything
-  const emp = state.employees.find(e => e.id === empId);
-  if (!emp) return;
-  const rowEl = document.querySelector(`[data-emp-clock="${empId}"]`);
-  if (rowEl) {
-    rowEl.style.borderColor = 'var(--green)';
-    const rightEl = rowEl.querySelector('.att-right');
-    if (rightEl) {
-      rightEl.innerHTML = `
-        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
-          <div style="text-align:right">
-            <div style="font-size:12px;color:var(--green);font-weight:700">🟢 In: ${inTime}</div>
-            <div id="timer-${empId}" style="font-size:11px;color:var(--text2);margin-top:2px">0.0 hrs so far</div>
-          </div>
-          <button onclick="clockOut('${empId}')" style="padding:9px 16px;border-radius:10px;background:var(--red-dim);border:2px solid var(--red);color:var(--red);font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap">🔴 Clock Out</button>
-        </div>`;
-    }
-  }
-  startClockTimers();
-}
-
-function clockOut(empId) {
-  const today = _localYMD();
-  const key = `clock_${empId}_${today}`;
-  const cs = JSON.parse(localStorage.getItem(key) || 'null');
-  if (!cs) return;
-  cs.out = nowTime();
-  localStorage.setItem(key, JSON.stringify(cs));
-  const hrs = calcHours(cs.in, cs.out);
-  showToast(`🔴 Clocked out at ${cs.out} · ${hrs} hrs worked`, 'success');
-  renderAttendanceQuickRow();
-}
-
-function clockInAgain(empId) {
-  const today = _localYMD();
-  localStorage.removeItem(`clock_${empId}_${today}`);
-  clockIn(empId);
-}
-
 function quickLogAttendance(empId, status) {
   const emp = state.employees.find(e => e.id === empId);
   const empName = emp ? `${emp.first_name} ${emp.last_name}` : empId;
@@ -7788,22 +8445,6 @@ async function saveQuickLog(empId, status, date) {
   } catch(e) {
     showToast('Could not save — check connection.', 'error');
   }
-}
-
-let _clockTimerInterval = null;
-function startClockTimers() {
-  if (_clockTimerInterval) clearInterval(_clockTimerInterval);
-  _clockTimerInterval = setInterval(() => {
-    const today = _localYMD();
-    state.employees.forEach(emp => {
-      const key = `clock_${emp.id}_${today}`;
-      const cs = JSON.parse(localStorage.getItem(key) || 'null');
-      if (!cs || !cs.in || cs.out) return;
-      const el = document.getElementById(`timer-${emp.id}`);
-      if (!el) return;
-      el.textContent = `${calcHours(cs.in, nowTime())} hrs so far`;
-    });
-  }, 30000); // update every 30s
 }
 
 function setAttendancePeriod(p, btn) {
@@ -7901,37 +8542,27 @@ function openChangePhoto() {
 
 async function saveEmpSheetPhoto(input) {
   const file = input.files[0];
+  try { input.value = ''; } catch (e) {}
   if (!file) return;
   const empId = state.currentEmpId;
   if (!empId) return;
-
-  // Read as base64 data URL
-  const reader = new FileReader();
-  reader.onload = e => {
-    const dataUrl = e.target.result;
-
-    // 1. Update avatar immediately
-    const avatarEl = document.getElementById('emp-sheet-avatar');
-    if (avatarEl) avatarEl.innerHTML = `<img src="${dataUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`;
-
-    // 2. Save to localStorage so it persists across sessions
-    try {
-      localStorage.setItem(`hr_photo_${empId}`, dataUrl);
-    } catch(e) { console.warn('localStorage full, photo not persisted'); }
-
-      // 3. Update in-memory state so list cards show it everywhere
-      const emp = state.employees.find(x => x.id === empId);
-      if (emp) emp.photo_url = dataUrl;
-
-      // 4. Re-render ALL views that show employee avatar circles
-      renderEmployeeList();
-      if (typeof renderTaskList === 'function') renderTaskList();
-      if (typeof renderDocuments === 'function') renderDocuments();
-      if (typeof renderAttendanceQuickRow === 'function') renderAttendanceQuickRow();
-
-      showToast('Profile photo saved!');
-  };
-  reader.readAsDataURL(file);
+  // (2026-10-16) Saved as a real file in the employee's folder on the server
+  // (was only in this browser), shrunk to a profile-picture size first.
+  let dataUrl;
+  try { dataUrl = await _shrinkPhoto(file); }
+  catch (e) { showToast('That file is not a picture HR Admin can read.', 'error'); return; }
+  try { await apiPost('/admin-photos/' + encodeURIComponent(empId), { data: dataUrl }); }
+  catch (e) { showToast('Could not save the photo - check that AI-Prowler is running.', 'error'); return; }
+  _adminPhotos[empId] = dataUrl;
+  const avatarEl = document.getElementById('emp-sheet-avatar');
+  if (avatarEl) avatarEl.innerHTML = `<img src="${dataUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`;
+  const emp = state.employees.find(x => x.id === empId);
+  if (emp) emp.photo_url = dataUrl;
+  renderEmployeeList();
+  if (typeof renderTaskList === 'function') renderTaskList();
+  if (typeof renderDocuments === 'function') renderDocuments();
+  if (typeof renderAttendanceQuickRow === 'function') renderAttendanceQuickRow();
+  showToast('Profile photo saved!');
 }
 
 
@@ -8021,6 +8652,10 @@ function _hrUiStatus(s) {
   return v === 'offboarding' ? 'terminated' : v;
 }
 function _hrUiEmployee(e) {
+  // (2026-10-16) every employee record that arrives gets its photo from the server's set
+  if (e && typeof e === 'object' && e.id && 'first_name' in e && typeof _adminPhotos !== 'undefined' && _adminPhotos[e.id]) {
+    e.photo_url = _adminPhotos[e.id];
+  }
   if (e && typeof e === 'object' && 'first_name' in e && 'status' in e && !('server_status' in e)) {
     e.server_status = e.status;
     e.status = _hrUiStatus(e.status);
@@ -8043,17 +8678,30 @@ async function apiGet(path) {
   return data;
 }
 
+// (2026-10-16) Keep the server's own error text (e.g. "Name already exists: …")
+// on the thrown error as err.serverMessage / err.serverError, so screens can show it.
+async function _apiError(res, path) {
+  const err = new Error(`API ${res.status}: ${path}`);
+  err.status = res.status;
+  try {
+    const j = await res.json();
+    err.serverError = j && j.error;
+    err.serverMessage = j && j.message;
+  } catch (e) {}
+  return err;
+}
+
 async function apiPost(path, body) {
   const res = await apiFetch(path, { method: 'POST', body: JSON.stringify(body) });
   if (res.status === 401) { handle401(); throw new Error('401'); }
-  if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
+  if (!res.ok) throw await _apiError(res, path);
   return res.json();
 }
 
 async function apiPatch(path, body) {
   const res = await apiFetch(path, { method: 'PATCH', body: JSON.stringify(body) });
   if (res.status === 401) { handle401(); throw new Error('401'); }
-  if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
+  if (!res.ok) throw await _apiError(res, path);
   return res.json();
 }
 
@@ -8075,7 +8723,7 @@ function handle401() {
 // ── Photo restore helper — call after ANY fetch that sets state.employees ──
 function restoreEmpPhotos(employees) {
   (employees || state.employees || []).forEach(emp => {
-    const saved = localStorage.getItem('hr_photo_' + emp.id);
+    const saved = _adminPhotos[emp.id];          // loaded from the server at sign-in
     if (saved) emp.photo_url = saved;
   });
 }
@@ -8089,6 +8737,13 @@ async function loadEmployees() {
       state.employees = data.employees || data;
       restoreEmpPhotos();   // inject saved photos into every employee object
       renderEmployeeList();
+      // (2026-10-16) every AI-Prowler server user is an employee automatically
+      const _sync = (data && data.server_user_sync) || {};
+      if ((_sync.created || []).length) showToast(`${_sync.created.length} AI-Prowler server user(s) added as employees - fill in their details`, 'success');
+      if ((_sync.needs_link || []).length && !window._hrNeedsLinkShown) {
+        window._hrNeedsLinkShown = true;
+        showToast(`Couldn't match to one employee record: ${_sync.needs_link.join(', ')} - check for duplicate names`, 'error');
+      }
   } catch(e) {
     list.innerHTML = renderEmpty('No employees found', 'Add your first employee with the + button above.');
   }
@@ -8244,7 +8899,9 @@ async function _impCreate() {
         compensation: {}
       });
       ok.push(r.first + ' ' + r.last);
-    } catch (e) { failed.push(r.first + ' ' + r.last); }
+    } catch (e) {
+      failed.push(r.first + ' ' + r.last + (e && e.serverError === 'name_exists' ? ' (name already exists)' : ''));
+    }
   }
   closeModal();
   if (ok.length) showToast(`✓ Created ${ok.length} employee${ok.length === 1 ? '' : 's'}: ${ok.join(', ')}`, 'success');
@@ -8405,11 +9062,6 @@ async function renderEmpAttendancePane(empId) {
     records = attendanceData.filter(r => r.employee_id === empId);
   }
 
-  // Also get clock records from localStorage for today
-  const today = _localYMD();
-  const clockKey = `clock_${empId}_${today}`;
-  const cs = JSON.parse(localStorage.getItem(clockKey) || 'null');
-
   // Separate by status
   const onTime   = records.filter(r => r.status === 'present');
   const late     = records.filter(r => r.status === 'late');
@@ -8484,6 +9136,18 @@ async function renderEmpAttendancePane(empId) {
       </div>
     </details>` : '';
 
+  // (2026-10-17) Today's REAL clock entry (server), and HR can clock them in/out.
+  const _ymd = _localYMD();
+  const _openEn = clockEntries.find(en => !en.clock_out);
+  const _todayEn = _openEn || clockEntries.filter(en => (en.date || String(en.clock_in || '').slice(0, 10)) === _ymd)
+    .sort((a, b) => (b.clock_in || '').localeCompare(a.clock_in || ''))[0];
+  const _tm = iso => iso ? new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '';
+  const _clockToday = `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;background:${_openEn ? 'var(--green-dim)' : 'var(--surface2)'};border:1px solid ${_openEn ? 'var(--green)' : 'var(--border)'};border-radius:10px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:${_openEn ? 'var(--green)' : 'var(--text2)'};font-weight:600">
+      <div>${_todayEn ? (_todayEn.clock_out ? `Today: clocked in ${_tm(_todayEn.clock_in)} · out ${_tm(_todayEn.clock_out)}` : `🟢 Clocked in at ${_tm(_todayEn.clock_in)} — still active`) : 'Not clocked in today'}${_todayEn && (_todayEn.entered_by || _todayEn.clock_out_entered_by) ? ' · entered by HR' : ''}</div>
+      ${_openEn ? `<button class="btn-secondary" style="width:auto" onclick="hrClockFor('${empId}','out')">🔴 Clock out now</button>`
+        : (emp.clock_required === false ? `<span style="font-weight:400">Doesn't clock in</span>` : `<button class="btn-secondary" style="width:auto" onclick="hrClockFor('${empId}','in')">🟢 Clock in now</button>`)}
+    </div>`;
+
   el.innerHTML = `
     <!-- Stats header -->
     <div style="background:var(--surface2);border-radius:12px;padding:14px 16px;margin-bottom:14px;border:1px solid var(--border)">
@@ -8500,10 +9164,7 @@ async function renderEmpAttendancePane(empId) {
       <div style="font-size:11px;color:var(--text2);margin-top:4px">${pctOnTime}% attendance rate · ${totalDays} total days logged</div>
     </div>
 
-    ${cs && cs.in ? `
-    <div style="background:var(--green-dim);border:1px solid var(--green);border-radius:10px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:var(--green);font-weight:600">
-      🟢 Today: ${cs.out ? `Clocked in ${cs.in} · Clocked out ${cs.out} · ${calcHours(cs.in,cs.out)} hrs` : `Clocked in at ${cs.in} — still active`}
-    </div>` : ''}
+    ${_clockToday}
 
     ${clockLogSection}
 
@@ -8515,6 +9176,16 @@ async function renderEmpAttendancePane(empId) {
     <button onclick="openLogAttendanceForEmp('${empId}')" style="width:100%;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:13px;font-weight:600;cursor:pointer;margin-top:4px">
       + Log Attendance for ${escapeHtml(emp.first_name)}
     </button>`;
+}
+
+// (2026-10-17) HR clocks an employee in or out (e.g. they forgot) - a real
+// time entry on the server, marked "entered by HR".
+async function hrClockFor(empId, action) {
+  try {
+    await apiPost('/timeclock/admin', { employee_id: empId, action });
+    showToast(action === 'in' ? 'Clocked in' : 'Clocked out', 'success');
+    renderEmpAttendancePane(empId);
+  } catch (e) { showToast(e.serverMessage || 'Could not change this - check that AI-Prowler is running.', 'error'); }
 }
 
 function openLogAttendanceForEmp(empId) {
@@ -8813,7 +9484,7 @@ function renderCalendarWithSections(el) {
     const cur = new Date(r.start_date+'T12:00:00'), end = new Date(r.end_date+'T12:00:00');
     while(cur<=end){ const ds=cur.toISOString().slice(0,10); if(cur.getFullYear()===calYear&&cur.getMonth()===calMonth) addEv(ds,{label:`⏳ ${name}`,color:'#ffb700'}); cur.setDate(cur.getDate()+1); }
   });
-  Object.entries(FEDERAL_HOLIDAYS).forEach(([mmdd,name]) => addEv(`${calYear}-${mmdd}`,{label:`🗓 ${name}`,color:'#5a5e7a'}));
+  Object.entries(hrHolidaysForAdmin(calYear)).forEach(([mmdd,name]) => addEv(`${calYear}-${mmdd}`,{label:`🗓 ${name}`,color:'#5a5e7a'}));
   reminders.forEach(r => { if(r.date&&r.date.startsWith(`${calYear}-${String(calMonth+1).padStart(2,'0')}`)) addEv(r.date,{label:`📌 ${r.title}`,color:'#f59e0b'}); });
 
   // ── Self-reported Late / Out Today — show accepted ones on calendar ──
@@ -8876,7 +9547,7 @@ function renderCalendarWithSections(el) {
 
   // Holidays section
   const year = calYear;
-  const holidays = Object.entries(FEDERAL_HOLIDAYS).map(([mmdd,name])=>({date:`${year}-${mmdd}`,name}));
+  const holidays = Object.entries(hrHolidaysForAdmin(year)).sort((a,b)=>a[0].localeCompare(b[0])).map(([mmdd,name])=>({date:`${year}-${mmdd}`,name}));
   const holidayHtml = `
     <details style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:8px">
       <summary style="display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer;list-style:none;background:var(--surface2)">
@@ -9006,7 +9677,7 @@ function renderTimeOffCalendar(el) {
   const requests   = getTimeOffRequests();
   const reminders  = getBizEvents();   // server-stored calendar events (was browser-only)
 
-  // Holidays (FEDERAL_HOLIDAYS is now a shared global constant — see top of file)
+  // Holidays: hrHolidaysForAdmin(calYear) — computed for the year shown
 
   const firstDay  = new Date(calYear, calMonth, 1);
   const lastDay   = new Date(calYear, calMonth + 1, 0);
@@ -9052,7 +9723,7 @@ function renderTimeOffCalendar(el) {
   });
 
   // Add federal holidays
-  Object.entries(FEDERAL_HOLIDAYS).forEach(([mmdd, name]) => {
+  Object.entries(hrHolidaysForAdmin(calYear)).forEach(([mmdd, name]) => {
     const ds = `${calYear}-${mmdd}`;
     addEvent(ds, { label: `🗓 ${name}`, color:'#5a5e7a', type:'holiday' });
   });
@@ -9172,7 +9843,7 @@ function openCalendarDay(dateStr) {
   const dayReminders = reminders.filter(r => r.date === dateStr);
 
   const mmdd = dateStr.slice(5);
-  const holiday = FEDERAL_HOLIDAYS[mmdd];
+  const holiday = hrHolidaysForAdmin(+dateStr.slice(0,4))[mmdd];
 
   const label = new Date(dateStr+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
 
@@ -9350,31 +10021,22 @@ function renderPTOBalances(el) {
   </div>`;
 }
 
-function renderHolidays(el) {
+async function renderHolidays(el) {
+  // (2026-10-16) Dates computed for this year; paid/unpaid is HR's own list (Settings → Paid Holidays)
   const year = new Date().getFullYear();
-  const holidays = [
-    { name:"New Year's Day",           date:`${year}-01-01`, paid:true },
-    { name:"Martin Luther King Jr. Day",date:`${year}-01-20`, paid:true },
-    { name:"Presidents' Day",           date:`${year}-02-17`, paid:false },
-    { name:"Memorial Day",              date:`${year}-05-26`, paid:true },
-    { name:"Juneteenth",                date:`${year}-06-19`, paid:true },
-    { name:"Independence Day",          date:`${year}-07-04`, paid:true },
-    { name:"Labor Day",                 date:`${year}-09-01`, paid:true },
-    { name:"Columbus Day",              date:`${year}-10-13`, paid:false },
-    { name:"Veterans Day",              date:`${year}-11-11`, paid:false },
-    { name:"Thanksgiving Day",          date:`${year}-11-27`, paid:true },
-    { name:"Christmas Day",             date:`${year}-12-25`, paid:true },
-  ];
+  let holidays = [];
+  try { holidays = (await apiGet('/holidays?year=' + year)).holidays || []; }
+  catch (e) { holidays = hrHolidaysForYear(year).map(h => ({ ...h, paid: false })); }
   const today = _localYMD();
   el.innerHTML = `<div style="padding:12px 16px 80px">
-    <div style="font-size:11px;color:var(--text2);padding:4px 0 12px">Federal holidays ${year}. Mark which ones your company observes as paid days off.</div>
+    <div style="font-size:11px;color:var(--text2);padding:4px 0 12px">Holidays ${year}. Change which ones are paid days off in Settings → Paid Holidays.</div>
     ${holidays.map(h => {
-      const isPast = h.date < today;
-      const isToday = h.date === today;
+      const isPast = h.observed < today;
+      const isToday = h.observed === today;
       return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);opacity:${isPast?'0.5':'1'}">
         <div style="flex:1">
-          <div style="font-size:13px;font-weight:600;color:${isToday?'var(--cyan)':'var(--text)'}">${h.name}${isToday?' 🎉':''}</div>
-          <div style="font-size:11px;color:var(--text2);margin-top:2px">${new Date(h.date+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</div>
+          <div style="font-size:13px;font-weight:600;color:${isToday?'var(--cyan)':'var(--text)'}">${escapeHtml(h.name)}${isToday?' 🎉':''}</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:2px">${new Date(h.observed+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}${h.observed!==h.date?' (observed)':''}</div>
         </div>
         <span style="font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;${h.paid?'color:var(--green);background:var(--green-dim)':'color:var(--text3);background:var(--surface2)'}">${h.paid?'Paid':'Unpaid'}</span>
       </div>`;
@@ -9539,6 +10201,7 @@ async function saveEmpAiProwlerLogin(empId) {
     closeModal();
     showToast(val ? 'AI-Prowler login linked ✓' : 'AI-Prowler login removed', 'success');
     populateEmpInfo(emp);
+    try { if (typeof renderDirectReports === 'function') renderDirectReports(); } catch(e) {}
   } catch(e) {
     showToast('Could not save — check connection.', 'error');
   }
@@ -9583,6 +10246,7 @@ function populateEmpInfo(emp) {
   set('info-pay-rate', emp.pay_type === 'salary' ? `$${(emp.pay_rate||0).toLocaleString()}/yr` : `$${(emp.pay_rate||0).toFixed(2)}/hr`);
   set('info-pay-freq', emp.pay_frequency);
   set('info-payroll-platform', emp.payroll_platform || state.config.payroll_platform);
+  if (typeof populateEmpPhase3 === 'function') populateEmpPhase3(emp);   // 2026-10-16
 }
 
 // ── Emp Tasks ─────────────────────────────────────────────────────────
@@ -10680,7 +11344,29 @@ function loadSettings() {
   applyConfig(state.config);
 }
 
+// (2026-10-16) Some companies don't track time: with the time clock off the
+// clock-location switch has nothing to do, and the Clock In/Out Log says so.
+window._hrTimeClockOn = true;
+function _syncTimeClockUi(on) {
+  window._hrTimeClockOn = on !== false;
+  const loc = document.getElementById('setting-toggle-location_clock');
+  if (loc) { loc.disabled = !window._hrTimeClockOn; const row = loc.closest('.settings-item'); if (row) row.style.opacity = window._hrTimeClockOn ? '' : '0.5'; }
+  const note = document.getElementById('clocklog-off-note');
+  if (note) note.style.display = window._hrTimeClockOn ? 'none' : '';
+}
+
+async function saveClockMode(mode) {
+  try {
+    await apiPost('/settings', { time_clock_mode: mode });
+    _syncTimeClockUi(mode !== 'nobody');
+    // each person's "Clocks in" answer comes with the employee list - refresh it
+    apiGet('/employees').then(d => { if (d && d.employees) { state.employees = d.employees; restoreEmpPhotos(); } }).catch(() => {});
+    showToast('Setting saved', 'success');
+  } catch (e) { showToast('Could not save setting', 'error'); loadPrivacySettings(); }
+}
+
 async function loadPrivacySettings() {
+  _renderSetupCard();
   try {
     const data = await apiGet('/settings');
     const s = data.settings || {};
@@ -10688,6 +11374,9 @@ async function loadPrivacySettings() {
     const lateEl = document.getElementById('setting-toggle-location_running_late');
     const outEl = document.getElementById('setting-toggle-location_out_today');
     if (clockEl) clockEl.checked = !!s.location_clock;
+    const tcEl = document.getElementById('setting-time_clock_mode');
+    if (tcEl) tcEl.value = s.time_clock_mode || 'everyone';
+    _syncTimeClockUi((s.time_clock_mode || 'everyone') !== 'nobody');
     if (lateEl) lateEl.checked = !!s.location_running_late;
     if (outEl) outEl.checked = !!s.location_out_today;
   } catch(e) { console.error('loadPrivacySettings failed', e); }
@@ -10712,6 +11401,194 @@ async function loadLocationConsentRoster() {
   } catch(e) { host.textContent = 'Could not load consent status.'; }
 }
 
+// ── Settings → Backups (2026-10-16) ─────────────────────────────────────
+// The server stores the backup time (and weekday / day of month) in UTC; this
+// screen shows and edits it in the admin's local time. Weekday uses the
+// server's convention: 0 = Monday … 6 = Sunday.
+const _BK_DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+let _bkData = null;
+
+function _bkOffsetMin() { return -new Date().getTimezoneOffset(); }   // e.g. -240 for EDT
+
+function _bkUtcToLocal(s) {
+  // returns {hour, minute, weekday, day_of_month} in local time
+  let m = (Number(s.hour) || 0) * 60 + (Number(s.minute) || 0) + _bkOffsetMin();
+  const shift = Math.floor(m / 1440);
+  m = ((m % 1440) + 1440) % 1440;
+  return {
+    hour: Math.floor(m / 60), minute: m % 60,
+    weekday: (((Number(s.weekday) || 0) + shift) % 7 + 7) % 7,
+    day_of_month: Math.min(28, Math.max(1, (Number(s.day_of_month) || 1) + shift)),
+  };
+}
+
+function _bkLocalToUtc(hour, minute, weekday, dom) {
+  let m = hour * 60 + minute - _bkOffsetMin();
+  const shift = Math.floor(m / 1440);
+  m = ((m % 1440) + 1440) % 1440;
+  return {
+    hour: Math.floor(m / 60), minute: m % 60,
+    weekday: ((weekday + shift) % 7 + 7) % 7,
+    day_of_month: Math.min(28, Math.max(1, dom + shift)),
+  };
+}
+
+function _bkSnapLabel(name) {
+  // HR_20261016T020000Z -> local date/time
+  const m = /^HR_(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(name || '');
+  if (!m) return escapeHtml(name || '');
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+  return escapeHtml(d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }));
+}
+
+function _bkIsoLabel(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d) ? escapeHtml(iso) : escapeHtml(d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }));
+}
+
+async function loadBackupSettings() {
+  const host = document.getElementById('backup-settings-body');
+  if (!host) return;
+  try {
+    _bkData = await apiGet('/backup');
+    renderBackupSettings();
+  } catch (e) {
+    host.textContent = 'Could not load backup settings.';
+  }
+}
+
+function renderBackupSettings() {
+  const host = document.getElementById('backup-settings-body');
+  if (!host || !_bkData) return;
+  const s = _bkData.settings || {};
+  const loc = _bkUtcToLocal(s);
+  const sched = s.schedule || 'weekly';
+  const pad = n => String(n).padStart(2, '0');
+  const lr = _bkData.last_result;
+  const snaps = _bkData.snapshots || [];
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time';
+  const lbl = 'display:block;font-size:12px;font-weight:600;color:var(--text);margin:10px 0 4px';
+  const inp = 'width:100%;box-sizing:border-box';
+  let last = '<span>Never run yet.</span>';
+  if (lr) {
+    last = lr.ok
+      ? `<span style="color:var(--green)">✓ OK</span> — ${_bkIsoLabel(lr.at)} · ${Number(lr.employees) || 0} employee folder(s)`
+      : `<span style="color:var(--red)">✗ Failed</span> — ${_bkIsoLabel(lr.at)}`
+        + ((lr.errors || []).length ? `<div style="margin-top:4px;color:var(--red)">${(lr.errors || []).map(escapeHtml).join('<br>')}</div>` : '');
+  }
+  host.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <div>
+        <div style="font-weight:700;color:var(--text)">Scheduled backups</div>
+        <div style="font-size:11px;margin-top:2px">Each backup is one complete dated copy of all HR data — the company folder and every employee folder with their documents.</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="bk-enabled" ${s.enabled ? 'checked' : ''}>
+        <span class="switch-slider"></span>
+      </label>
+    </div>
+    <label style="${lbl}" for="bk-dir">Backup folder</label>
+    <input id="bk-dir" class="form-input" style="${inp}" value="${escapeHtml(s.backup_dir || '')}" placeholder="D:\\AI-Prowler HR Backups">
+    <div style="font-size:11px;margin-top:3px">Full path on the AI-Prowler server. Ideally another drive or device, never inside the live HR data folder${_bkData.data_folder ? ' (' + escapeHtml(_bkData.data_folder) + ')' : ''}.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0 12px">
+      <div>
+        <label style="${lbl}" for="bk-schedule">How often</label>
+        <select id="bk-schedule" class="form-input" style="${inp}" onchange="_bkToggleScheduleFields()">
+          <option value="daily" ${sched === 'daily' ? 'selected' : ''}>Daily</option>
+          <option value="weekly" ${sched === 'weekly' ? 'selected' : ''}>Weekly</option>
+          <option value="monthly" ${sched === 'monthly' ? 'selected' : ''}>Monthly</option>
+        </select>
+      </div>
+      <div id="bk-weekday-wrap">
+        <label style="${lbl}" for="bk-weekday">Day</label>
+        <select id="bk-weekday" class="form-input" style="${inp}">
+          ${_BK_DAYS.map((d, i) => `<option value="${i}" ${i === loc.weekday ? 'selected' : ''}>${d}</option>`).join('')}
+        </select>
+      </div>
+      <div id="bk-dom-wrap">
+        <label style="${lbl}" for="bk-dom">Day of month</label>
+        <select id="bk-dom" class="form-input" style="${inp}">
+          ${Array.from({ length: 27 }, (_, i) => i + 1).map(d => `<option value="${d}" ${d === Math.min(27, loc.day_of_month) ? 'selected' : ''}>${d}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label style="${lbl}" for="bk-time">Time (${escapeHtml(tz)})</label>
+        <input id="bk-time" type="time" class="form-input" style="${inp}" value="${pad(loc.hour)}:${pad(loc.minute)}">
+      </div>
+      <div>
+        <label style="${lbl}" for="bk-keep">Backups to keep</label>
+        <input id="bk-keep" type="number" min="1" max="365" class="form-input" style="${inp}" value="${Number(s.retention_count) || 3}">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <button class="btn-primary" id="bk-save-btn" onclick="saveBackupSettings()">Save</button>
+      <button class="btn-secondary" id="bk-now-btn" onclick="runBackupNow()">Back up now</button>
+    </div>
+    <div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border)">
+      <div style="font-weight:700;color:var(--text);margin-bottom:4px">Last backup</div>
+      <div>${last}</div>
+    </div>
+    <div style="margin-top:12px">
+      <div style="font-weight:700;color:var(--text);margin-bottom:4px">Backups on file (${snaps.length})</div>
+      ${snaps.length
+        ? `<div style="display:flex;flex-direction:column;gap:4px">${snaps.map(n =>
+            `<div style="display:flex;justify-content:space-between;gap:8px"><span>${_bkSnapLabel(n)}</span><span style="font-family:monospace;font-size:11px">${escapeHtml(n)}</span></div>`).join('')}</div>`
+        : '<div>None yet.</div>'}
+      <div style="font-size:11px;margin-top:6px">To restore an employee from a backup, ask Claude (hr_restore_employee) — their current folder is set aside, never deleted.</div>
+    </div>`;
+  _bkToggleScheduleFields();
+}
+
+function _bkToggleScheduleFields() {
+  const v = document.getElementById('bk-schedule')?.value;
+  const w = document.getElementById('bk-weekday-wrap');
+  const d = document.getElementById('bk-dom-wrap');
+  if (w) w.style.display = v === 'weekly' ? '' : 'none';
+  if (d) d.style.display = v === 'monthly' ? '' : 'none';
+}
+
+async function saveBackupSettings() {
+  const btn = document.getElementById('bk-save-btn');
+  const t = (document.getElementById('bk-time').value || '02:00').split(':');
+  const utc = _bkLocalToUtc(parseInt(t[0], 10) || 0, parseInt(t[1], 10) || 0,
+                            parseInt(document.getElementById('bk-weekday').value, 10) || 0,
+                            parseInt(document.getElementById('bk-dom').value, 10) || 1);
+  const body = {
+    enabled: document.getElementById('bk-enabled').checked,
+    backup_dir: document.getElementById('bk-dir').value.trim(),
+    schedule: document.getElementById('bk-schedule').value,
+    hour: utc.hour, minute: utc.minute, weekday: utc.weekday, day_of_month: utc.day_of_month,
+    retention_count: parseInt(document.getElementById('bk-keep').value, 10) || 3,
+  };
+  if (btn) btn.disabled = true;
+  try {
+    _bkData = await apiPost('/backup/settings', body);
+    renderBackupSettings();
+    showToast('Backup settings saved', 'success');
+  } catch (e) {
+    showToast(e.serverError || 'Could not save backup settings', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function runBackupNow() {
+  const btn = document.getElementById('bk-now-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Backing up…'; }
+  try {
+    _bkData = await apiPost('/backup/now', {});
+    renderBackupSettings();
+    showToast('Backup complete', 'success');
+  } catch (e) {
+    showToast(e.serverError || 'Backup failed', 'error');
+    loadBackupSettings();
+  } finally {
+    const b = document.getElementById('bk-now-btn');
+    if (b) { b.disabled = false; b.textContent = 'Back up now'; }
+  }
+}
+
 async function updateSetting(key, value) {
   try {
     await apiPost('/settings', { [key]: value });
@@ -10728,6 +11605,7 @@ function openSetting(key) {
   const labels = {
     company_name: 'Company Name', ein: 'EIN', payroll_platform: 'Payroll Platform',
     hr_admin_email: 'HR Admin Email', owner_email: 'Owner Email', digest_time: 'Daily Digest Time (HH:MM)',
+    company_about: 'About the Company (HR Portal News)',
   };
   const current = (state.config || {})[key] || '';
   const label = labels[key] || key;
@@ -10757,8 +11635,40 @@ async function saveSetting(key) {
     showToast('Could not save setting — check connection.', 'error');
   }
 }
-function openFormsLibrary() { showToast('Forms Library coming in Week 7'); }
-function openStateRules() { showToast('State Rules editor coming in Week 6'); }
+// (2026-10-17) Federal + state forms for the company's work states, with
+// official links (hr_forms_library.json on the server).
+const _NO_STATE_INCOME_TAX = ['AK', 'FL', 'NV', 'NH', 'SD', 'TN', 'TX', 'WA', 'WY'];
+async function openFormsLibrary() {
+  let d;
+  try { d = await apiGet('/forms'); } catch (e) { showToast('Could not load the forms library', 'error'); return; }
+  const forms = d.forms || [], states = d.work_states || [];
+  const link = (u, t) => u ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener" style="color:var(--cyan);font-size:12px;font-weight:600;margin-right:12px">${t}</a>` : '';
+  const card = f => `<div style="padding:10px 0;border-top:1px solid var(--border)">
+      <div style="font-size:13px;font-weight:700;color:var(--text)">${escapeHtml(f.form_number || f.key)} \u2014 ${escapeHtml(f.name || '')}
+        <span style="font-weight:400;color:var(--text2)">\u00b7 ${escapeHtml(f.agency || '')}</span></div>
+      ${f.deadline ? `<div style="font-size:12px;color:var(--amber);margin-top:2px">When: ${escapeHtml(f.deadline)}</div>` : ''}
+      ${f.description ? `<div style="font-size:12px;color:var(--text2);margin-top:3px;line-height:1.5">${escapeHtml(f.description)}</div>` : ''}
+      <div style="margin-top:5px">${link(f.pdf_url, 'Official form (PDF)')}${link(f.instructions_url, 'Instructions')}${link(f.employer_handbook_url, 'Employer handbook')}</div>
+    </div>`;
+  const fed = forms.filter(f => f.applies_to_states === 'all');
+  let html = `<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Federal \u2014 every employee</div>` + fed.map(card).join('');
+  (states.length ? states : []).forEach(st => {
+    const mine = forms.filter(f => Array.isArray(f.applies_to_states) && f.applies_to_states.includes(st));
+    html += `<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:16px">${escapeHtml(_stateName(st))} (${escapeHtml(st)})</div>`;
+    html += mine.length ? mine.map(card).join('')
+      : `<div style="padding:10px 0;border-top:1px solid var(--border);font-size:12px;color:var(--text2)">${_NO_STATE_INCOME_TAX.includes(st)
+          ? 'No state income tax on wages, so there is no state withholding certificate. State new-hire reporting still applies (it is in each new hire\'s onboarding tasks).'
+          : 'This state\'s withholding form isn\'t in the library yet \u2014 get it from the state\'s department of revenue website.'}</div>`;
+  });
+  if (!states.length) html += `<div style="margin-top:14px;font-size:12px;color:var(--text2)">Add your work states in \U0001F9ED Company Setup to see their state forms here.</div>`;
+  openModal(`<div class="modal-header"><h3>Federal &amp; State Forms</h3></div>
+    <div class="modal-body" style="max-height:70vh;overflow-y:auto">${html}
+      ${d.disclaimer ? `<div style="font-size:11px;color:var(--text3);margin-top:14px">${escapeHtml(d.disclaimer)}</div>` : ''}</div>
+    <div class="modal-footer"><button class="btn-secondary" onclick="closeModal();openStateRules()">Change work states</button>
+      <button class="btn-primary" onclick="closeModal()">Close</button></div>`);
+}
+// (2026-10-17) Work states are part of Company Setup - open the wizard right at that step.
+function openStateRules() { openSetupWizard('work_states'); }
 
 // ── Reports Tab ────────────────────────────────────────────────────────
 async function loadReports() {
@@ -10908,10 +11818,10 @@ function switchObView(view, btn) {
 
 // ── Contracts ───────────────────────────────────────────────────────────
 function getContracts() {
-  return JSON.parse(localStorage.getItem('hr_contracts') || '[]');
+  return adminStoreGet('hr_contracts');
 }
 function saveContracts(contracts) {
-  localStorage.setItem('hr_contracts', JSON.stringify(contracts));
+  return adminStoreSet('hr_contracts', contracts);
 }
 
 const CONTRACT_TEMPLATES = {
@@ -11334,7 +12244,22 @@ async function loadOnboarding() {
     state.employees = ed.employees || ed || [];
     state.tasks     = td.tasks     || td || [];
   } catch(e) { /* use cache */ }
+  await _obLoadDone();
   renderObFolders();
+}
+
+// (2026-10-17) Which onboarding forms are done comes from the server
+// (it used to live only in one browser).
+state.obDone = state.obDone || {};
+async function _obLoadDone() {
+  try {
+    const d = await apiGet('/onboarding-forms');
+    state.obDone = {};
+    Object.entries((d && d.done) || {}).forEach(([emp, rows]) => { state.obDone[emp] = rows.map(r => r.form); });
+  } catch (e) { /* keep what we had */ }
+}
+function _obDoneFor(empId) {
+  return (state.obDone[empId] || []).map(k => k === 'step_completed' ? 'step_completed' : k);
 }
 
 function renderObFolders() {
@@ -11350,14 +12275,14 @@ function renderObFolders() {
 
 function renderObEmpFolder(emp) {
   const initials = `${(emp.first_name||'?')[0]}${(emp.last_name||'?')[0]}`.toUpperCase();
-  const completedForms = JSON.parse(localStorage.getItem(`ob_forms_${emp.id}`) || '[]');
+  const completedForms = _obDoneFor(emp.id);
 
   // Count completed steps
   const totalForms = OB_STEPS.reduce((n, s) => n + Math.max(s.forms.length, 1), 0);
   const doneCount  = completedForms.length;
   const stepsDone  = OB_STEPS.filter(s =>
     s.forms.length === 0
-      ? completedForms.includes(`step_${s.key}`)
+      ? completedForms.includes('step_completed')
       : s.forms.every(f => completedForms.includes(f.key))
   ).length;
   const pct = Math.round(stepsDone / OB_STEPS.length * 100);
@@ -11414,7 +12339,7 @@ function renderObEmpFolder(emp) {
 
 function renderObStep(step, emp, completedForms) {
   const isCompleted = step.forms.length === 0
-    ? completedForms.includes(`step_${step.key}`)
+    ? completedForms.includes('step_completed')
     : step.forms.every(f => completedForms.includes(f.key));
   const isPartial = !isCompleted && step.forms.some(f => completedForms.includes(f.key));
 
@@ -11481,15 +12406,13 @@ function renderObStep(step, emp, completedForms) {
   </details>`;
 }
 
-function obMarkComplete(formKey, empId) {
-  const key = `ob_forms_${empId}`;
-  const completed = JSON.parse(localStorage.getItem(key) || '[]');
-  if (!completed.includes(formKey)) {
-    completed.push(formKey);
-    localStorage.setItem(key, JSON.stringify(completed));
-  }
-  showToast('🎉 Onboarding complete!', 'success');
-  renderObFolders();
+async function obMarkComplete(formKey, empId) {
+  try {
+    await apiPost(`/onboarding-forms/${encodeURIComponent(empId)}/step_completed`, {});
+    await _obLoadDone();
+    showToast('🎉 Onboarding complete!', 'success');
+    renderObFolders();
+  } catch (e) { showToast(e.serverMessage || 'Could not save - check that AI-Prowler is running.', 'error'); }
 }
 
 function obFormRow(emp, formType, icon, label, meta, completedForms) {
@@ -11505,8 +12428,97 @@ function obFormRow(emp, formType, icon, label, meta, completedForms) {
   </div>`;
 }
 
+// ── Signed forms (2026-10-17) ──────────────────────────────────────────
+// W-4, I-9, state withholding and the acknowledgements must be SIGNED by the
+// employee, so the app doesn't retype them (and never asks for an SSN): HR
+// attaches the signed copy (stored in the employee's Onboarding documents) or
+// confirms the signed paper copy is on file.
+const OB_SIGNED_FORMS = {
+  w4:           { title: 'W-4 \u2014 Federal Tax Withholding Certificate', lib: 'W-4' },
+  state_tax:    { title: 'State Tax Withholding Form', lib: 'STATE' },
+  i9:           { title: 'I-9 \u2014 Employment Eligibility Verification', lib: 'I-9' },
+  pay_ack:      { title: 'Pay Rate & Classification Acknowledgment' },
+  handbook_ack: { title: 'Employee Handbook Acknowledgment' },
+  nda:          { title: 'Confidentiality / NDA Agreement' },
+  final_review: { title: 'Onboarding Packet Review & Sign-Off' },
+};
+async function openSignedFormUpload(formType, empId) {
+  const f = OB_SIGNED_FORMS[formType];
+  const emp = state.employees.find(e => e.id === (empId || obSelectedEmpId)) || {};
+  const name = `${emp.first_name || ''} ${emp.last_name || ''}`.trim();
+  let link = '';
+  if (f.lib) {
+    try {
+      const lib = (await apiGet('/forms')).forms || [];
+      const st = emp.work_state || '';
+      const hit = f.lib === 'STATE'
+        ? lib.find(x => Array.isArray(x.applies_to_states) && x.applies_to_states.includes(st))
+        : lib.find(x => x.key === f.lib);
+      if (hit && hit.pdf_url) link = `<a href="${escapeHtml(hit.pdf_url)}" target="_blank" rel="noopener" style="color:var(--cyan);font-weight:600">Get the blank ${escapeHtml(hit.form_number || hit.key)} (official PDF)</a>`;
+      else if (f.lib === 'STATE') link = (typeof _NO_STATE_INCOME_TAX !== 'undefined' && _NO_STATE_INCOME_TAX.includes(st))
+        ? `${escapeHtml(st || 'This state')} has no state income tax on wages \u2014 no state withholding form is needed. Confirm below.`
+        : `Get the state withholding form from ${escapeHtml(st || 'the work state')}'s department of revenue.`;
+    } catch (e) {}
+  }
+  const done = (state.obDone[emp.id] || []).includes(formType);
+  openModal(`<div class="modal-header"><div><h3>${escapeHtml(f.title)}</h3>
+      ${name ? `<div style="font-size:12px;color:var(--cyan);margin-top:4px;font-weight:600">Employee: ${escapeHtml(name)}</div>` : ''}</div></div>
+    <div class="modal-body" style="font-size:13px;line-height:1.6">
+      <p style="color:var(--text2)">The employee fills in and signs this form. Attach the signed copy here (it's saved in their
+        <b>Onboarding</b> documents), or confirm the signed paper copy is kept on file.${f.lib === 'I-9' ? ' Keep the I-9 with your other I-9s, separate from personnel files.' : ''}</p>
+      ${link ? `<p>${link}</p>` : ''}
+      ${done ? `<p style="color:var(--green);font-weight:600">\u2713 Already marked done.</p>` : ''}
+      <div class="form-group"><label class="form-label">Signed copy (PDF or photo)</label>
+        <input id="sf-file" type="file" class="form-input" accept=".pdf,.png,.jpg,.jpeg"></div>
+      <label style="display:flex;gap:8px;align-items:center;font-size:13px;color:var(--text)">
+        <input id="sf-paper" type="checkbox"> The signed paper copy is kept on file instead</label>
+    </div>
+    <div class="modal-footer">
+      ${done ? `<button class="btn-secondary" onclick="undoSignedForm('${formType}','${emp.id}')">Mark not done</button>` : ''}
+      <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn-primary" id="sf-save" onclick="saveSignedForm('${formType}','${emp.id}')">Save &amp; Mark Complete</button>
+    </div>`);
+}
+async function saveSignedForm(formType, empId) {
+  const file = document.getElementById('sf-file').files[0];
+  const paper = document.getElementById('sf-paper').checked;
+  if (!file && !paper) { showToast('Attach the signed copy, or tick that the paper copy is on file.', 'error'); return; }
+  if (file && file.size > 25 * 1024 * 1024) { showToast('File must be under 25MB.', 'error'); return; }
+  const btn = document.getElementById('sf-save'); btn.disabled = true; btn.textContent = 'Saving\u2026';
+  try {
+    let docId = null;
+    if (file) {
+      const form = new FormData();
+      form.append('employee_id', empId); form.append('category', 'onboarding');
+      form.append('name', file.name); form.append('notes', 'Signed ' + OB_SIGNED_FORMS[formType].title);
+      form.append('file', file);
+      const resp = await fetch('/hr-api/documents/upload', { method: 'POST', headers: { 'Authorization': `Bearer ${state.token || ''}` }, body: form });
+      if (!resp.ok) throw new Error('upload');
+      docId = ((await resp.json()).document || {}).id || null;
+    }
+    await apiPost(`/onboarding-forms/${encodeURIComponent(empId)}/${formType}`, docId ? { doc_id: docId } : { paper_copy: true });
+    // tick the matching onboarding task, as the record forms do
+    const kw = { w4: 'W-4', i9: 'I-9', state_tax: 'State', pay_ack: 'Pay Rate', handbook_ack: 'Handbook', nda: 'NDA', final_review: 'Review' }[formType];
+    const task = state.tasks.find(t => t.employee_id === empId && t.name && kw && t.name.toLowerCase().includes(kw.toLowerCase()) && t.status !== 'Completed');
+    if (task) { try { await apiPost(`/tasks/${task.id}/complete`, { notes: 'Signed copy ' + (docId ? 'attached' : 'on file (paper)') }); task.status = 'Completed'; } catch (e) {} }
+    await _obLoadDone();
+    closeModal(); renderObFolders(); updateNavBadges();
+    showToast('\u2713 ' + OB_SIGNED_FORMS[formType].title + ' marked complete', 'success');
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Save & Mark Complete';
+    showToast(e.serverMessage || 'Could not save - check that AI-Prowler is running.', 'error');
+  }
+}
+async function undoSignedForm(formType, empId) {
+  try {
+    await apiDelete(`/onboarding-forms/${encodeURIComponent(empId)}/${formType}`);
+    await _obLoadDone(); closeModal(); renderObFolders();
+  } catch (e) { showToast('Could not change this', 'error'); }
+}
+
 // ── Fillable Form Modal ─────────────────────────────────────────────────
 function openFormFill(formType, empId) {
+  if (OB_SIGNED_FORMS[formType]) return openSignedFormUpload(formType, empId);
   const emp = state.employees.find(e => e.id === (empId || obSelectedEmpId)) || {};
   const firstName = emp.first_name || '';
   const lastName  = emp.last_name  || '';
@@ -11516,37 +12528,6 @@ function openFormFill(formType, empId) {
 
 
   const FORMS = {
-    w4: {
-      title: 'W-4 — Employee\'s Withholding Certificate',
-      subtitle: 'IRS Form W-4 (2024) · Keep on file — do NOT send to IRS',
-      fields: [
-        { label:'Legal First Name & Middle Initial', id:'w4_first', value: firstName, placeholder:'First name MI' },
-        { label:'Legal Last Name', id:'w4_last', value: lastName, placeholder:'Last name' },
-        { label:'Social Security Number', id:'w4_ssn', placeholder:'XXX-XX-XXXX', type:'text' },
-        { label:'Home Address (Street)', id:'w4_addr', value: emp.address||'', placeholder:'123 Main St' },
-        { label:'City, State, ZIP', id:'w4_city', placeholder:'City, ST 00000' },
-        { label:'Filing Status', id:'w4_filing', type:'select', options:['Single or Married filing separately','Married filing jointly','Head of household'] },
-        { label:'Additional Withholding per Pay Period ($)', id:'w4_extra', placeholder:'0.00', type:'number' },
-        { label:'Signature Date', id:'w4_date', value: today, type:'date' },
-      ]
-    },
-    i9: {
-      title: 'I-9 — Employment Eligibility Verification',
-      subtitle: 'USCIS Form I-9 · Section 1 completed by employee on Day 1',
-      fields: [
-        { label:'Last Name (Family Name)', id:'i9_last', value: lastName },
-        { label:'First Name', id:'i9_first', value: firstName },
-        { label:'Middle Initial', id:'i9_mi', placeholder:'MI' },
-        { label:'Other Last Names Used', id:'i9_other', placeholder:'N/A if none' },
-        { label:'Address (Street)', id:'i9_addr', value: emp.address||'' },
-        { label:'Date of Birth', id:'i9_dob', type:'date' },
-        { label:'U.S. Social Security Number', id:'i9_ssn', placeholder:'XXX-XX-XXXX' },
-        { label:'Email Address', id:'i9_email', value: emp.personal_email||'', type:'email' },
-        { label:'Telephone Number', id:'i9_phone', value: emp.phone||'' },
-        { label:'Citizenship / Immigration Status', id:'i9_status', type:'select', options:['U.S. Citizen','Noncitizen National of the U.S.','Lawful Permanent Resident','Alien authorized to work'] },
-        { label:'Signature Date', id:'i9_date', value: today, type:'date' },
-      ]
-    },
     direct_deposit: {
       title: 'Direct Deposit Authorization',
       subtitle: 'Banking information for payroll · Keep on file',
@@ -11555,53 +12536,11 @@ function openFormFill(formType, empId) {
         { label:'Employee ID', id:'dd_empid', value: emp.id||'' },
         { label:'Bank Name', id:'dd_bank', placeholder:'e.g. Chase, Wells Fargo' },
         { label:'Account Type', id:'dd_type', type:'select', options:['Checking','Savings'] },
-        { label:'Routing Number (9 digits)', id:'dd_routing', placeholder:'000000000' },
-        { label:'Account Number', id:'dd_account', placeholder:'Account number' },
+        { label:'Routing Number — last 4 digits only', id:'dd_routing', placeholder:'1234' },
+        { label:'Account Number — last 4 digits only', id:'dd_account', placeholder:'5678' },
         { label:'Deposit Amount', id:'dd_amount', type:'select', options:['100% of net pay','Fixed amount','Percentage'] },
         { label:'Effective Date', id:'dd_date', value: today, type:'date' },
         { label:'Employee Signature', id:'dd_sig', placeholder:'Type full name as signature' },
-      ]
-    },
-    pay_ack: {
-      title: 'Pay Rate Acknowledgment',
-      subtitle: 'Confirms compensation agreement · Keep signed copy on file',
-      fields: [
-        { label:'Employee Full Name', id:'pa_name', value: fullName },
-        { label:'Job Title', id:'pa_title', value: emp.title||'' },
-        { label:'Department', id:'pa_dept', value: emp.department||'' },
-        { label:'Employment Type', id:'pa_type', value: emp.employment_type||'' },
-        { label:'Pay Type', id:'pa_paytype', value: emp.pay_type||'' },
-        { label:'Pay Rate', id:'pa_rate', value: emp.pay_rate ? `$${emp.pay_rate}` : '' },
-        { label:'Pay Frequency', id:'pa_freq', value: emp.pay_frequency||'' },
-        { label:'Start Date', id:'pa_start', value: emp.start_date||'', type:'date' },
-        { label:'Employee Signature', id:'pa_sig', placeholder:'Type full name as signature' },
-        { label:'Signature Date', id:'pa_date', value: today, type:'date' },
-      ]
-    },
-    handbook_ack: {
-      title: 'Employee Handbook Acknowledgment',
-      subtitle: 'Confirms receipt and understanding of company handbook',
-      fields: [
-        { label:'Employee Full Name', id:'hb_name', value: fullName },
-        { label:'Employee ID', id:'hb_id', value: emp.id||'' },
-        { label:'Department', id:'hb_dept', value: emp.department||'' },
-        { label:'Start Date', id:'hb_start', value: emp.start_date||'', type:'date' },
-        { label:'Acknowledgment Statement', id:'hb_stmt', type:'textarea', value:'I acknowledge that I have received, read, and understood the Employee Handbook. I agree to comply with its policies and understand that the handbook may be updated at any time.', readonly:true },
-        { label:'Employee Signature', id:'hb_sig', placeholder:'Type full name as signature' },
-        { label:'Date', id:'hb_date', value: today, type:'date' },
-      ]
-    },
-    nda: {
-      title: 'Confidentiality / Non-Disclosure Agreement',
-      subtitle: 'Protects company trade secrets and proprietary information',
-      fields: [
-        { label:'Employee Full Name', id:'nda_name', value: fullName },
-        { label:'Employee ID', id:'nda_id', value: emp.id||'' },
-        { label:'Job Title', id:'nda_title', value: emp.title||'' },
-        { label:'Start Date', id:'nda_start', value: emp.start_date||'', type:'date' },
-        { label:'Agreement Statement', id:'nda_stmt', type:'textarea', value:'I agree to maintain the confidentiality of all proprietary information, trade secrets, and confidential data belonging to the Company. I will not disclose such information during or after my employment without prior written consent.', readonly:true },
-        { label:'Employee Signature', id:'nda_sig', placeholder:'Type full name as signature' },
-        { label:'Date', id:'nda_date', value: today, type:'date' },
       ]
     },
     benefits_enrollment: {
@@ -11638,35 +12577,7 @@ function openFormFill(formType, empId) {
         { label:'Date', id:'pi_date', value: today, type:'date' },
       ]
     },
-    state_tax: {
-      title: 'State Tax Withholding Form',
-      subtitle: 'State-specific withholding — varies by work state',
-      fields: [
-        { label:'Employee Full Name', id:'st_name', value: fullName },
-        { label:'Work State', id:'st_state', value: emp.work_state||'' },
-        { label:'Filing Status', id:'st_filing', type:'select', options:['Single','Married filing jointly','Head of household','Exempt'] },
-        { label:'State Allowances / Exemptions', id:'st_allow', placeholder:'0', type:'number' },
-        { label:'Additional State Withholding ($)', id:'st_extra', placeholder:'0.00', type:'number' },
-        { label:'Note', id:'st_note', type:'textarea', value:'CA: use DE-4 | NY: use IT-2104 | IL: use IL-W-4 | CO: use DR-0004 | MA: use M-4 | TX/FL/WA: no state income tax', readonly:true },
-        { label:'Employee Signature', id:'st_sig', placeholder:'Type full name as signature' },
-        { label:'Date', id:'st_date', value: today, type:'date' },
-      ]
-    },
-    final_review: {
-      title: 'Onboarding Packet Review & Sign-Off',
-      subtitle: 'Employee confirms all onboarding documents have been reviewed',
-      fields: [
-        { label:'Employee Full Name', id:'fr_name', value: fullName },
-        { label:'Employee ID', id:'fr_id', value: emp.id||'' },
-        { label:'Start Date', id:'fr_start', value: emp.start_date||'', type:'date' },
-        { label:'Review Statement', id:'fr_stmt', type:'textarea', readonly:true, value:'I confirm that I have completed and reviewed all required onboarding documents including: Personal Information, Employment Classification, Tax Forms (W-4 and State), I-9 Employment Eligibility, Direct Deposit Authorization, Employee Handbook, Confidentiality Agreement, and Benefits Enrollment. I understand my rights and responsibilities as an employee.' },
-        { label:'Employee Signature', id:'fr_sig', placeholder:'Type full name as signature' },
-        { label:'HR Representative Name', id:'fr_hr', placeholder:'HR Admin name' },
-        { label:'HR Signature', id:'fr_hr_sig', placeholder:'HR Admin signature' },
-        { label:'Date', id:'fr_date', value: today, type:'date' },
-      ]
-      },
-      emergency_contact: {
+    emergency_contact: {
         title: 'Emergency Contact Form',
         subtitle: 'Required · Keep current and update annually',
         fields: [
@@ -11723,12 +12634,28 @@ async function saveFormFill(formType, empId) {
     data[el.id] = el.value;
   });
 
-  // Mark form complete in localStorage so ✓ Done badge persists
-  const key = `ob_forms_${empId}`;
-  const completed = JSON.parse(localStorage.getItem(key) || '[]');
-  if (!completed.includes(formType)) {
-    completed.push(formType);
-    localStorage.setItem(key, JSON.stringify(completed));
+  // (2026-10-17) Saved into the employee record on the server (bank numbers:
+  // last 4 digits only), and the Done mark is kept there too.
+  const v = id => (data[id] || '').trim();
+  const PAYLOAD = {
+    personal_info_form: { preferred_name: v('pi_pref'), date_of_birth: v('pi_dob'), personal_email: v('pi_email'),
+                          phone: v('pi_phone'), address: v('pi_addr'), ec_name: v('pi_ec_name'),
+                          ec_relationship: v('pi_ec_rel'), ec_phone: v('pi_ec_phone') },
+    emergency_contact:  { name: v('ec1_name'), relationship: v('ec1_rel'), phone: v('ec1_phone'),
+                          name2: v('ec2_name'), relationship2: v('ec2_rel'), phone2: v('ec2_phone') },
+    direct_deposit:     { bank_name: v('dd_bank'), account_type: v('dd_type'), deposit_amount: v('dd_amount'),
+                          routing: v('dd_routing').replace(/\D/g, '').slice(-4), account: v('dd_account').replace(/\D/g, '').slice(-4) },
+    benefits_enrollment:{ health: v('be_health'), dental: v('be_dental'), vision: v('be_vision'), k401: v('be_401k'),
+                          beneficiary: v('be_bene'), beneficiary_relationship: v('be_rel'), signature: v('be_sig') },
+  };
+  try {
+    const r = await apiPost(`/onboarding-forms/${encodeURIComponent(empId)}/${formType}`, { data: PAYLOAD[formType] || {} });
+    const emp = state.employees.find(e => e.id === empId);
+    if (emp && r && r.employee) Object.assign(emp, r.employee);
+    await _obLoadDone();
+  } catch (e) {
+    showToast(e.serverMessage || 'Could not save - check that AI-Prowler is running.', 'error');
+    return;
   }
 
   // Find matching task and mark complete
@@ -11755,7 +12682,7 @@ async function saveFormFill(formType, empId) {
     renderObFolders();
   } catch(e) {
     closeModal();
-    showToast('Saved locally', 'success');
+    showToast('Form saved - but its task could not be marked done. Mark it in Tasks.', 'error');
     renderObFolders();
   }
 }
@@ -12128,12 +13055,18 @@ async function doTerminate(empId) {
   const notes = document.getElementById('term-notes').value.trim();
   if (!date) { showToast('Last day of work is required.', 'error'); return; }
   try {
-    await apiPatch(`/employees/${empId}`, { status: 'terminated', termination_type: type, end_date: date, termination_notes: notes });
+    const res = await apiPatch(`/employees/${empId}`, { status: 'terminated', termination_type: type, end_date: date, termination_notes: notes });
     // Update in-memory state so the sheet reflects immediately
     const emp = state.employees.find(e => e.id === empId);
-    if (emp) { emp.status = 'terminated'; emp.termination_type = type; emp.end_date = date; }
+    // (2026-10-17) The server starts the full offboarding: tasks are created now, and
+    // the person stays Offboarding (keeps HR Portal access) until their last day.
+    const srvStatus = (res && res.employee && res.employee.status) || 'Terminated';
+    if (emp) { emp.status = 'terminated'; emp.server_status = srvStatus; emp.termination_type = type; emp.end_date = date; }
     closeModal();
-    showToast(`${emp ? emp.first_name + ' ' + emp.last_name : empId} terminated. Generate offboarding tasks from the Tasks tab.`, 'success');
+    const nTasks = res && res.offboarding_tasks_created;
+    showToast(`${emp ? emp.first_name + ' ' + emp.last_name : empId}: offboarding started`
+      + (nTasks != null ? ` \u2014 ${nTasks} offboarding tasks created` : '')
+      + (srvStatus === 'Offboarding' ? ` \u00b7 Offboarding until ${date}, then Terminated` : ' \u00b7 Terminated'), 'success');
     renderOffboardingPane(empId);
     loadEmployees();
     loadOffboardingTab();
@@ -12468,11 +13401,17 @@ async function saveNewEmployee() {
       if (newEmpId && document.getElementById('nef-photo-input')?.files[0]) {
         await uploadEmpPhoto(newEmpId);
       }
-      showToast(`${first} ${last} added — tasks generated ✓`, 'success');
+      showToast(res && res.aiprowler_login_linked
+        ? `${first} ${last} added — tasks generated, AI-Prowler login linked ✓`
+        : `${first} ${last} added — tasks generated ✓ (link their AI-Prowler login for the HR Portal)`, 'success');
       closeNewEmployee();
       loadEmployees();
       loadTasks();
     } catch(e) {
+      if (e && e.serverError === 'name_exists') {
+        showToast(e.serverMessage || 'Name already exists', 'error');
+        return;
+      }
       showToast('Could not save employee', 'error');
     }
   }
@@ -12557,10 +13496,22 @@ function switchSSTab(tab, btn) {
   document.querySelectorAll('.ss-tab').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   if (tab === 'todo') loadSelfServiceTasks();
-  else showToast(`${tab} coming in Week 7`);
 }
 
-function openClaudeHelp() { showToast('Claude, Muse, or Grok help chat coming in Week 7'); }
+// (2026-10-17) The "?" button: quick answers for the common HR Admin tasks.
+function openClaudeHelp() {
+  const tip = (t, d) => `<div style="padding:9px 0;border-top:1px solid var(--border)"><div style="font-size:13px;font-weight:700;color:var(--text)">${t}</div><div style="font-size:12px;color:var(--text2);margin-top:2px;line-height:1.5">${d}</div></div>`;
+  openModal(`<div class="modal-header"><h3>Help</h3></div><div class="modal-body" style="max-height:70vh;overflow-y:auto">
+    ${tip('Add a new hire', 'Employees \u2192 <b>+</b>. Onboarding tasks for their work state are created automatically.')}
+    ${tip('Change company info or add a work state', '<b>\U0001F9ED Company Setup</b> (top of the menu). It opens with your answers filled in \u2014 change what you need and tap <b>Save Changes</b>.')}
+    ${tip('Server users and contractors', 'Everyone in the AI-Prowler server\'s Admin tab is an employee automatically. For a contractor, open their record \u2192 \u22ee Options \u2192 <b>Not an employee</b>.')}
+    ${tip('Time off and holidays', 'Settings \u2192 <b>Time Off Policy</b> and <b>Paid Holidays</b>. Adjust one person on their record (\U0001F3D6 PTO this year).')}
+    ${tip('Who clocks in', 'Settings \u2192 <b>Who clocks in</b>: everyone, only non-exempt employees, or nobody. Change one person on their record (\u23f1 Clocks in).')}
+    ${tip('Forms', 'Settings \u2192 <b>View All Federal &amp; State Forms</b> for official links.')}
+    ${tip('Backups', 'Settings \u2192 <b>Backups</b>: choose a folder, then <b>Back up now</b>.')}
+    <div style="font-size:12px;color:var(--text2);margin-top:12px">More detail is in the AI-Prowler User Guide (HR section), or ask your AI assistant connected to AI-Prowler.</div>
+  </div><div class="modal-footer"><button class="btn-primary" onclick="closeModal()">Close</button></div>`);
+}
 
 // ── Setup Wizard ───────────────────────────────────────────────────────
 const WIZARD_STEPS = [
@@ -12577,12 +13528,12 @@ const WIZARD_STEPS = [
     { id:'wiz-eftps', label:'Are you enrolled in EFTPS?', type:'select', options:['Yes','No — I need to enroll'], key:'eftps_enrolled' },
   ]},
   { title: 'Work States', desc: 'Select all states where you have or will have employees. This determines which state registrations and tasks are generated.', fields: [
-    { id:'wiz-states', label:'Work States', type:'multiselect', options:['CA','TX','NY','FL','IL','WA','CO','MA'], key:'work_states' },
+    { id:'wiz-states', label:'Work States', type:'multiselect', options:['AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY'], key:'work_states' },
   ]},
   { title: 'State SUI Registration', desc: 'State Unemployment Insurance registration is required in every state where you have employees.', fields: [
     { id:'wiz-sui', label:'Are you registered for SUI in all work states?', type:'select', options:['Yes, all states','No — I need to register'], key:'sui_registered' },
   ]},
-  { title: 'State Income Tax', desc: 'CA, NY, IL, CO, and MA require a state withholding account. TX, FL, and WA have no state income tax.', fields: [
+  { title: 'State Income Tax', desc: 'Most states require a state withholding account. AK, FL, NV, NH, SD, TN, TX, WA and WY have no state income tax on wages.', fields: [
     { id:'wiz-state-tax', label:'Have you registered state withholding accounts in all required states?', type:'select', options:['Yes','No — I need to register'], key:'state_tax_registered' },
   ]},
   { title: 'Workers Compensation', desc: 'Workers compensation insurance is mandatory in most states before an employee begins work.', fields: [
@@ -12600,14 +13551,52 @@ const WIZARD_STEPS = [
     { id:'wiz-owner-email', label:'Owner Email', type:'email', placeholder:'owner@company.com', key:'owner_email' },
   ]},
 ];
+// (2026-10-16) Every state + DC -- the wizard and forms used to list only 8.
+const US_STATES = [['AL','Alabama'],['AK','Alaska'],['AZ','Arizona'],['AR','Arkansas'],['CA','California'],['CO','Colorado'],['CT','Connecticut'],['DE','Delaware'],['DC','District of Columbia'],['FL','Florida'],['GA','Georgia'],['HI','Hawaii'],['ID','Idaho'],['IL','Illinois'],['IN','Indiana'],['IA','Iowa'],['KS','Kansas'],['KY','Kentucky'],['LA','Louisiana'],['ME','Maine'],['MD','Maryland'],['MA','Massachusetts'],['MI','Michigan'],['MN','Minnesota'],['MS','Mississippi'],['MO','Missouri'],['MT','Montana'],['NE','Nebraska'],['NV','Nevada'],['NH','New Hampshire'],['NJ','New Jersey'],['NM','New Mexico'],['NY','New York'],['NC','North Carolina'],['ND','North Dakota'],['OH','Ohio'],['OK','Oklahoma'],['OR','Oregon'],['PA','Pennsylvania'],['RI','Rhode Island'],['SC','South Carolina'],['SD','South Dakota'],['TN','Tennessee'],['TX','Texas'],['UT','Utah'],['VT','Vermont'],['VA','Virginia'],['WA','Washington'],['WV','West Virginia'],['WI','Wisconsin'],['WY','Wyoming']];
+function _stateName(c) { const s = US_STATES.find(x => x[0] === c); return s ? s[1] : c; }
+// saved answers go back into the wizard's fields as attribute values
+function _wizEsc(v) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
 
 let wizardStep = 0;
 let wizardData = {};
+let _wizardRevisit = false;   // re-opened after setup: Cancel shown, last button says Save Changes
 
-function openSetupWizard() {
+function openSetupWizard(startKey) {
+  // (2026-10-16) Re-opening starts from the SAVED answers, so adding a work
+  // state never means retyping (or wiping) everything else.
+  const cfg = (state && state.config) || {};
+  wizardData = {};
+  WIZARD_STEPS.forEach(s => s.fields.forEach(f => {
+    if (cfg[f.key] !== undefined && cfg[f.key] !== null) wizardData[f.key] = cfg[f.key];
+  }));
+  _wizardRevisit = !!cfg.setup_complete;
   document.getElementById('setup-wizard').classList.remove('hidden');
   document.getElementById('app').style.display = 'none';
-  renderWizardStep(0);
+  const _start = startKey ? WIZARD_STEPS.findIndex(s => s.fields.some(f => f.key === startKey)) : 0;
+  renderWizardStep(_start > 0 ? _start : 0);
+}
+
+function closeSetupWizard() {
+  document.getElementById('setup-wizard').classList.add('hidden');
+  document.getElementById('app').style.display = 'flex';
+}
+
+function _renderSetupCard() {
+  const el = document.getElementById('setup-card-states');
+  if (!el) return;
+  const ws = ((state && state.config) || {}).work_states;
+  el.textContent = (Array.isArray(ws) && ws.length) ? ws.join(', ') : 'None yet';
+}
+
+function _captureWizardStep() {
+  WIZARD_STEPS[wizardStep].fields.forEach(f => {
+    const el = document.getElementById(f.id);
+    if (!el) return;
+    wizardData[f.key] = f.type === 'multiselect'
+      ? Array.from(el.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value)
+      : el.value;
+  });
 }
 
 function renderWizardStep(step) {
@@ -12618,7 +13607,12 @@ function renderWizardStep(step) {
   document.getElementById('wizard-progress-fill').style.width = pct + '%';
   document.getElementById('wizard-step-label').textContent = `Step ${step + 1} of ${WIZARD_STEPS.length} — ${s.title}`;
   document.getElementById('wizard-back-btn').style.display = step > 0 ? '' : 'none';
-  document.getElementById('wizard-next-btn').textContent = step === WIZARD_STEPS.length - 1 ? 'Complete Setup' : 'Next';
+  document.getElementById('wizard-next-btn').textContent = step === WIZARD_STEPS.length - 1
+    ? (_wizardRevisit ? 'Save Changes' : 'Complete Setup') : 'Next';
+  const _cb = document.getElementById('wizard-cancel-btn');
+  if (_cb) _cb.style.display = _wizardRevisit ? '' : 'none';
+  const _sb = document.getElementById('wizard-save-btn');
+  if (_sb) _sb.style.display = (_wizardRevisit && step < WIZARD_STEPS.length - 1) ? '' : 'none';
   container.innerHTML = `
     <div class="wizard-step active">
       <h3>${s.title}</h3>
@@ -12632,25 +13626,44 @@ function renderWizardField(f) {
     return `<div class="form-group">
       <label>${f.label}</label>
       <select class="form-select" id="${f.id}">
-        ${f.options.map(o => `<option value="${o}">${o}</option>`).join('')}
+        ${f.options.map(o => `<option value="${o}"${String(wizardData[f.key] ?? '') === o ? ' selected' : ''}>${o}</option>`).join('')}
       </select>
     </div>`;
   }
   if (f.type === 'multiselect') {
     return `<div class="form-group">
       <label>${f.label}</label>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px" id="${f.id}">
-        ${f.options.map(o => `<label style="display:flex;align-items:center;gap:6px;font-size:14px;color:var(--text)">
-          <input type="checkbox" value="${o}" style="width:16px;height:16px"> ${o}
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:8px 10px;margin-top:6px" id="${f.id}">
+        ${f.options.map(o => `<label title="${_stateName(o)}" style="display:flex;align-items:center;gap:6px;font-size:14px;color:var(--text)">
+          <input type="checkbox" value="${o}"${(wizardData[f.key] || []).includes(o) ? ' checked' : ''} style="width:16px;height:16px"> ${o}
         </label>`).join('')}
       </div>
     </div>`;
   }
   return `<div class="form-group">
     <label>${f.label}</label>
-    <input class="form-input" type="${f.type}" id="${f.id}" placeholder="${f.placeholder || ''}">
+    <input class="form-input" type="${f.type}" id="${f.id}" placeholder="${f.placeholder || ''}" value="${_wizEsc(wizardData[f.key] ?? '')}">
   </div>`;
 }
+
+// (2026-10-17) Saving the wizard - from the last step, or from any step on a revisit.
+async function _wizardFinish() {
+  const configUpdate = { ...wizardData, setup_complete: true };
+  try {
+    await apiPost('/setup/complete', configUpdate);
+    state.config = { ...state.config, ...configUpdate };
+    document.getElementById('setup-wizard').classList.add('hidden');
+    document.getElementById('app').style.display = 'flex';
+    applyConfig(state.config);
+    loadEmployees();
+    loadTasks();
+    _renderSetupCard();
+    showToast(_wizardRevisit ? 'Company setup saved ✓' : 'Company setup complete ✓', 'success');
+  } catch(e) {
+    showToast('Could not save setup — check connection', 'error');
+  }
+}
+async function wizardSaveNow() { _captureWizardStep(); await _wizardFinish(); }
 
 async function wizardNext() {
   // Capture THIS step's field values into the running accumulator before
@@ -12675,24 +13688,12 @@ async function wizardNext() {
     renderWizardStep(wizardStep + 1);
   } else {
     // Complete wizard
-    const configUpdate = { ...wizardData, setup_complete: true };
-    try {
-      await apiPost('/setup/complete', configUpdate);
-      state.config = { ...state.config, ...configUpdate };
-      document.getElementById('setup-wizard').classList.add('hidden');
-      document.getElementById('app').style.display = 'flex';
-      applyConfig(state.config);
-      loadEmployees();
-      loadTasks();
-      showToast('Company setup complete ✓', 'success');
-    } catch(e) {
-      showToast('Could not save setup — check connection', 'error');
-    }
+    await _wizardFinish();
   }
 }
 
 function wizardBack() {
-  if (wizardStep > 0) renderWizardStep(wizardStep - 1);
+  if (wizardStep > 0) { _captureWizardStep(); renderWizardStep(wizardStep - 1); }
 }
 
 // ── Nav Badges ─────────────────────────────────────────────────────────
@@ -12814,6 +13815,10 @@ function openEmpMenu() {
         style="padding:12px 16px;background:var(--amber-dim);border:1px solid var(--amber);border-radius:10px;color:var(--amber);font-size:14px;font-weight:500;cursor:pointer;text-align:left">
         🚪 Initiate Termination / Offboarding
       </button>
+      ${emp.aiprowler_user_id ? `<button onclick="closeModal();confirmNotEmployee('${empId}')"
+        style="padding:12px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;font-weight:500;cursor:pointer;text-align:left">
+        🧾 Not an employee (e.g. contractor) — keeps their AI-Prowler login
+      </button>` : ''}
       <button onclick="closeModal();confirmDeleteEmployee('${empId}')"
         style="padding:12px 16px;background:var(--red-dim);border:1px solid var(--red);border-radius:10px;color:var(--red);font-size:14px;font-weight:600;cursor:pointer;text-align:left">
         🗑 Permanently Delete Employee
@@ -12822,6 +13827,38 @@ function openEmpMenu() {
     <div class="modal-footer">
       <button class="btn-secondary" onclick="closeModal()">Cancel</button>
     </div>`);
+}
+
+// (2026-10-16) A server user who isn't an employee (e.g. a contractor):
+// the record leaves HR, their AI-Prowler login keeps working, and they're
+// listed in Settings -> Server Users Who Aren't Employees (reversible).
+function confirmNotEmployee(empId) {
+  const emp = (state.employees || []).find(e => e.id === empId);
+  if (!emp) return;
+  const name = `${emp.first_name} ${emp.last_name}`;
+  openModal(`
+    <div class="modal-header"><h3>🧾 Not an employee</h3></div>
+    <div class="modal-body" style="font-size:13px;line-height:1.6">
+      <p><strong>${escapeHtml(name)}</strong> will be removed from HR (no onboarding, time off, pay or HR Portal).
+      Their AI-Prowler login keeps working for everything else.</p>
+      <p style="color:var(--text2)">Use this for contractors and other non-employees who need the server.
+      Their W-9 and 1099 stay with your bookkeeping. Their HR folder is set aside, not erased, and you can
+      make them an employee again in Settings → Server Users Who Aren't Employees.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn-primary" onclick="markNotEmployee('${empId}')">Remove from HR</button>
+    </div>`);
+}
+async function markNotEmployee(empId) {
+  const emp = (state.employees || []).find(e => e.id === empId);
+  const name = emp ? `${emp.first_name} ${emp.last_name}` : empId;
+  try {
+    await apiPost(`/employees/${empId}/not-employee`, {});
+    state.employees = state.employees.filter(e => e.id !== empId);
+    closeModal(); closeEmpSheet(); renderEmployeeList();
+    showToast(`${name} removed from HR - AI-Prowler login unchanged`, 'success');
+  } catch (e) { showToast('Could not change this', 'error'); }
 }
 
 function confirmDeleteEmployee(empId) {
@@ -12839,7 +13876,7 @@ function confirmDeleteEmployee(empId) {
         <strong>This cannot be undone.</strong>
       </div>
       <div style="font-size:13px;color:var(--text2)">
-        💡 If this employee worked for you, consider using <strong>Termination / Offboarding</strong> instead to keep a proper HR record.
+        💡 If this employee worked for you, consider using <strong>Termination / Offboarding</strong> instead to keep a proper HR record.${emp.aiprowler_user_id ? `<br><br>ℹ️ ${escapeHtml(name)} is a user of the AI-Prowler server. Their login keeps working, and they'll be listed in <strong>Settings → Server Users Who Aren't Employees</strong> so they aren't added back automatically.` : ''}
       </div>
     </div>
     <div class="modal-footer">
@@ -12855,12 +13892,13 @@ async function deleteEmployee(empId) {
   try {
     const res = await apiFetch(`/employees/${empId}`, { method: 'DELETE' });
     if (!res.ok) throw new Error(`${res.status}`);
+    let _dj = {}; try { _dj = await res.json(); } catch (_) {}
     // Remove from in-memory state
     state.employees = state.employees.filter(e => e.id !== empId);
     closeModal();
     closeEmpSheet();
     renderEmployeeList();
-    showToast(`${name} deleted ✓`, 'success');
+    showToast(_dj.marked_not_employee ? `${name} deleted - listed under Server Users Who Aren't Employees` : `${name} deleted ✓`, 'success');
   } catch(e) {
     showToast(`Could not delete — ${e.message}`, 'error');
   }
@@ -13145,36 +14183,22 @@ function renderDirectReports() {
       others.map(e => `<option value="${e.id}">${escapeHtml(e.first_name + ' ' + e.last_name)} — ${escapeHtml(e.title || e.department || '')}</option>`).join('');
   }
 
-  // (2026-09-30, E2E bug #18) This section used to say employees sign in with the AI-Prowler
-  // Bearer Token — but the server only accepts each employee's OWN PIN/token (never the shared
-  // token), so nobody could sign in following it, and the Set PIN box had been removed.
-  // Restored: shows which email to use + lets HR set/reset the employee's Portal PIN.
+  // (2026-10-15, David) The HR Portal signs in with the employee's AI-Prowler name +
+  // bearer token, exactly as stored in the AI-Prowler server's Admin tab — the same
+  // credentials as AI-Prowler itself. No separate HR token or PIN any more: this box
+  // shows which AI-Prowler login the employee is linked to, and links/changes it.
   const _pinEmp = (state.employees || []).find(e => e.id === empId) || {};
-  const _signInEmail = _pinEmp.work_email || _pinEmp.personal_email || '';
+  const _apName = _pinEmp.aiprowler_user_name || _pinEmp.aiprowler_user_id || '';
   const pinSection = `
-    <div style="margin-top:18px;padding:14px;background:var(--surface2);border-radius:10px;border:1px solid var(--border)">
-      <div style="font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🔑 Portal Sign-in</div>
+    <div id="dr-signin-box" style="margin-top:18px;padding:14px;background:var(--surface2);border-radius:10px;border:1px solid var(--border)">
+      <div style="font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🔑 HR Portal Sign-in</div>
       <div style="font-size:13px;color:var(--text2);line-height:1.6">
-        Sign in to the Employee Portal with:<br>
-        <span style="color:var(--text3)">Email:</span> <strong style="color:var(--text)">${escapeHtml(_signInEmail || '(no email on file — add one on the Info tab)')}</strong><br>
-        <span style="color:var(--text3)">Access token:</span> <strong style="color:var(--text)">their own AI-Prowler token</strong>
-        <div style="font-size:11px;color:var(--text3);margin-top:4px">Each employee has their own AI-Prowler token, so nobody can sign in as someone else. For security it's shown only once — if it's lost, make a new one (the old one stops working).</div>
+        ${_apName
+          ? `Signs in to the HR Portal as <strong style="color:var(--text)">${escapeHtml(_apName)}</strong>, with that name and their AI-Prowler token from the AI-Prowler server's Admin tab.`
+          : `<strong style="color:var(--amber)">Not linked to an AI-Prowler login yet</strong>, so they can't sign in to the HR Portal. Link the AI-Prowler user (from the server's Admin tab) they'll sign in as.`}
+        <div style="font-size:11px;color:var(--text3);margin-top:4px">The HR Portal uses the same name and bearer token as AI-Prowler — there's no separate HR password, PIN or token. To give someone a new token, change it in the AI-Prowler server's Admin tab.</div>
       </div>
-      <div style="margin-top:10px"><button class="btn-primary" id="dr-token-btn" onclick="makeNewPortalToken()">🔑 Make a new AI-Prowler token</button></div>
-      <div id="dr-token-box" style="display:none;margin-top:10px;padding:10px;border-radius:8px;background:var(--surface);border:1px solid var(--green)">
-        <div style="font-size:11px;color:var(--text3);margin-bottom:6px">New AI-Prowler token — copy it now and give it to the employee. It won't be shown again.</div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <code id="dr-token-value" style="flex:1;min-width:180px;font-size:13px;word-break:break-all;color:var(--text)"></code>
-          <button class="btn-secondary" onclick="copyPortalToken()">📋 Copy</button>
-        </div>
-      </div>
-      <details style="margin-top:12px"><summary style="font-size:12px;color:var(--text3);cursor:pointer">Optional: set a short PIN instead</summary>
-        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-          <input id="dr-pin-input" class="form-input" type="password" inputmode="numeric" autocomplete="new-password" placeholder="New PIN — 4+ digits" style="flex:1;min-width:140px">
-          <button class="btn-primary" onclick="setEmployeePortalPin()">Set PIN</button>
-        </div>
-      </details>
-      <div id="dr-pin-status" style="font-size:12px;margin-top:6px;color:var(--text3)"></div>
+      <div style="margin-top:10px"><button class="btn-primary" id="dr-link-btn" onclick="editEmpAiProwlerLogin()">🔗 ${_apName ? 'Change' : 'Link'} AI-Prowler login</button></div>
     </div>`;
 
 // Retired: this used to let HR Admin pull GPS for a self-reported entry
@@ -13615,16 +14639,6 @@ async function loadIncidents() {
     } catch(e) {}
   }
 
-  // 3. Also merge any localStorage incidents (submitted after new code deployed)
-  try {
-    const local = JSON.parse(localStorage.getItem('hr_incidents') || '[]');
-    local.forEach(loc => {
-      if (!incidentData.find(x => x.id === loc.id)) {
-        incidentData.push(loc);
-      }
-    });
-  } catch(e) {}
-
   renderIncidentStats();
   renderIncidents();
   updateIncidentBadge();
@@ -13800,18 +14814,22 @@ async function checkAlerts() {
     if (incNew > prevInc) hasNew = true;
   } catch(e) {}
 
-  // 3. New training completions in localStorage
+  // 3. New training completions (server) since HR last opened Training
+  let trainNew = 0;
   try {
-    const tc = JSON.parse(localStorage.getItem('hr_training_completions') || '[]');
-    const unseen = tc.filter(t => !t._seen_by_admin).length;
-    if (unseen > 0) hasNew = true;
+    let seen = localStorage.getItem('hr_training_seen_at');
+    if (!seen) { seen = new Date().toISOString(); localStorage.setItem('hr_training_seen_at', seen); }
+    const dd = await apiGet('/documents');
+    trainNew = ((dd && dd.documents) || []).filter(d => d.source === 'training_complete'
+      && String(d.created_at || d.uploaded_at || '') > seen).length;
+    if (trainNew > 0) hasNew = true;
   } catch(e) {}
 
   // Update logo dots and individual tab dots
   const setDot = (id, on) => { const d = document.getElementById(id); if (d) { if (on) d.classList.remove('hidden'); else d.classList.add('hidden'); } };
   const hasNewMsg = msgUnread > 0;
   const hasNewInc = incNew > 0;
-  const hasNewTrain = (() => { try { return JSON.parse(localStorage.getItem('hr_training_completions') || '[]').filter(t => !t._seen_by_admin).length > 0; } catch(e) { return false; } })();
+  const hasNewTrain = trainNew > 0;
 
   setDot('tab-dot-messages', hasNewMsg);
   setDot('tab-dot-incidents', hasNewInc);
@@ -13832,7 +14850,7 @@ function clearAlertDot(tab) {
   if (!tab || tab === 'messages')  { _alertSeenCounts.messages  = 999; document.getElementById('tab-dot-messages')  && document.getElementById('tab-dot-messages').classList.add('hidden'); }
   if (!tab || tab === 'incidents') { _alertSeenCounts.incidents = 999; document.getElementById('tab-dot-incidents') && document.getElementById('tab-dot-incidents').classList.add('hidden'); }
   if (!tab || tab === 'training')  {
-    try { const tc = JSON.parse(localStorage.getItem('hr_training_completions') || '[]'); tc.forEach(t => t._seen_by_admin = true); localStorage.setItem('hr_training_completions', JSON.stringify(tc)); } catch(e) {}
+    try { localStorage.setItem('hr_training_seen_at', new Date().toISOString()); } catch(e) {}
     document.getElementById('tab-dot-training') && document.getElementById('tab-dot-training').classList.add('hidden');
   }
   localStorage.setItem('hr_alert_seen', JSON.stringify(_alertSeenCounts));

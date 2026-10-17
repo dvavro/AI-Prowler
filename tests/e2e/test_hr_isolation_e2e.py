@@ -218,13 +218,27 @@ class TestHrStateDirIsolationE2E:
         status, body = hr_isolated_server.get("/health")
         assert status == 200, f"Expected 200, got {status}: {body[:200]}"
 
+    # 2026-10-16: since 2026-10-11 the HR apps are AI-Prowler SERVER only -- a
+    # personal install answers every /hr-api call with 404 hr_server_only and
+    # writes nothing. Employee creation into the sandbox is now proven by the
+    # server-mode counterpart, tests/e2e/test_hr_isolation_server_mode_e2e.py.
     def test_bad_token_rejected(self, hr_isolated_server):
-        """Sanity check the auth path actually gates -- a wrong bearer token
-        must not be treated as admin before we trust the "real" token below."""
         status, body = hr_isolated_server.get("/hr-api/employees", token="not-the-real-token")
-        assert status == 401, f"Expected 401 for bad token, got {status}: {body[:200]}"
+        assert status == 404 and "hr_server_only" in body, f"got {status}: {body[:200]}"
 
-    def test_create_employee_writes_to_sandbox(self, hr_isolated_server):
+    def test_personal_mode_refuses_hr_and_writes_nothing(self, hr_isolated_server):
+        payload = {"personal": {"first_name": "ZTEST", "last_name": "Sandbox",
+                                "personal_email": "ztest.sandbox+hrtest@example.test"},
+                   "employment": {"start_date": "2026-01-01", "work_state": "CA"},
+                   "compensation": {}}
+        status, body = hr_isolated_server.post_json("/hr-api/employees", payload, token=TOKEN)
+        assert status == 404 and "hr_server_only" in body, f"got {status}: {body[:300]}"
+        status, body = hr_isolated_server.get("/hr-api/employees", token=TOKEN)
+        assert status == 404 and "hr_server_only" in body, f"got {status}: {body[:300]}"
+        sandbox = hr_isolated_server.state_dir
+        assert not list((sandbox / "employees").glob("*/employee.json")), "personal mode wrote an employee"
+
+    def _retired_create_employee_writes_to_sandbox(self, hr_isolated_server):   # personal HR retired 2026-10-11
         payload = {
             "personal": {
                 "first_name": "Sandra",
@@ -246,14 +260,16 @@ class TestHrStateDirIsolationE2E:
         assert result["id"].startswith("EMP-"), result
         assert result["tasks_generated"] > 0, "Expected onboarding tasks to be generated"
 
-        sandbox_db_path = hr_isolated_server.state_dir / "hr_db.json"
-        assert sandbox_db_path.exists(), (
-            "hr_db.json was not created under the sandbox AIPROWLER_TEST_STATE_DIR "
+        # 2026-10-16: HR data is stored as company\ + employees\<EMP>_Last_First\
+        sandbox = hr_isolated_server.state_dir
+        assert (sandbox / "company" / "settings.json").exists(), (
+            "company\\settings.json was not created under the sandbox AIPROWLER_TEST_STATE_DIR "
             "-- the path-isolation fix regressed."
         )
-        sandbox_db = json.loads(sandbox_db_path.read_text(encoding="utf-8"))
-        assert any(e["id"] == result["id"] for e in sandbox_db["employees"]), (
-            "The created employee is not present in the sandbox hr_db.json."
+        sandbox_emps = [json.loads(p.read_text(encoding="utf-8"))
+                        for p in (sandbox / "employees").glob("*/employee.json")]
+        assert any(e["id"] == result["id"] for e in sandbox_emps), (
+            "The created employee has no folder under the sandbox employees\\."
         )
 
         # The GET list route should see it too, over the same real HTTP path.
@@ -262,16 +278,17 @@ class TestHrStateDirIsolationE2E:
         listed = json.loads(body)["employees"]
         assert any(e["id"] == result["id"] for e in listed)
 
-    def test_document_folders_created_under_sandbox(self, hr_isolated_server):
+    def _retired_document_folders_created_under_sandbox(self, hr_isolated_server):   # see above
         """Employee creation calls _hr_create_document_folders -- confirm the
-        hr_documents tree landed under the sandbox state dir."""
-        sandbox_docs = hr_isolated_server.state_dir / "hr_documents"
-        assert sandbox_docs.exists() and sandbox_docs.is_dir(), (
-            "hr_documents/ was not created under the sandbox state dir -- "
+        employee's document folders landed under the sandbox state dir
+        (2026-10-16: inside their own employees\\<EMP>_Last_First\\ folder)."""
+        sandbox_emps = hr_isolated_server.state_dir / "employees"
+        assert sandbox_emps.exists() and sandbox_emps.is_dir(), (
+            "employees/ was not created under the sandbox state dir -- "
             "_hr_create_document_folders may still be using _HR_ROOT_DIR."
         )
-        subfolders = {p.name for p in sandbox_docs.iterdir()}
-        assert len(subfolders) >= 1, "Expected at least one employee doc folder"
+        with_docs = [p for p in sandbox_emps.iterdir() if (p / "onboarding").is_dir()]
+        assert len(with_docs) >= 1, "Expected at least one employee folder with document subfolders"
 
     def test_real_install_hr_db_untouched(self, hr_isolated_server, real_hr_snapshot):
         """Re-read the REAL install's hr_db.json now, AFTER the sandboxed

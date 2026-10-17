@@ -1,7 +1,0 @@
-TIME MACHINE ready (personal mode, server_mode=False): app http://127.0.0.1:58942/jobs/  control :58943  sandbox C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_timemachine\artifacts\personal\20261009_132518\sandbox_home\.ai-prowler  today 2026-10-12
-🚀 AI-Prowler HTTP MCP server starting…
-   Local endpoint : http://127.0.0.1:58942/mcp
-   Health check   : http://127.0.0.1:58942/health
-   OAuth login    : http://127.0.0.1:58942/authorize
-   Auth           : OAuth 2.0 + PKCE  (token: 32 chars)
-   AI-Prowler HTTP server ready

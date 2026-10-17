@@ -50,8 +50,12 @@ class TestRemindersSchemaChoice:
     inventing a new top-level key requiring a schema migration."""
 
     def test_load_db_default_schema_has_events_key(self, mcp_source):
+        # 2026-10-16: the default schema moved into _hr_db_default(), which
+        # _hr_load_db() starts from (per-employee folder storage).
+        default_block = mcp_source.split("def _hr_db_default()", 1)[1].split("\ndef ", 1)[0]
+        assert '"events": []' in default_block
         load_db_block = mcp_source.split("def _hr_load_db()", 1)[1].split("\ndef _hr_save_db", 1)[0]
-        assert '"events": []' in load_db_block
+        assert "_hr_db_default()" in load_db_block
 
     def test_reminders_routes_read_and_write_the_events_key(self, reminders_block):
         assert 'db.get("events"' in reminders_block or 'db.setdefault("events"' in reminders_block

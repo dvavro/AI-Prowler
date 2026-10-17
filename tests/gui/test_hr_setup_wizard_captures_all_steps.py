@@ -286,8 +286,11 @@ class TestWizardIsReachableAfterSetupComplete:
     """
 
     def test_settings_tab_has_a_redo_setup_entry_point(self, hr_index_text):
-        assert "Redo Company Setup" in hr_index_text
+        # 2026-10-16: renamed "Company Setup Wizard", plus a Company Setup card at
+        # the top of Settings and a "Company Setup" item first in the left menu.
+        assert "Company Setup Wizard" in hr_index_text
         assert 'onclick="openSetupWizard()"' in hr_index_text
+        assert 'onclick="closeSidebar();openSetupWizard()"' in hr_index_text
 
     def test_open_setup_wizard_is_called_from_more_than_just_the_initial_load_gate(self, hr_index_text):
         # Before the fix there were exactly two hits for the bare substring

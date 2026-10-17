@@ -1,8 +1,0 @@
-AI-Prowler Remote PWA E2E — PASS
-Finished: 2026-10-11 11:23:29
-Tests: 1 passed, 0 failed, 0 skipped
-Cleanup: {'learnings': 0, 'tasks': 0, 'files': 1}
-Cleanup: 0 ZTEST items left ✅
-Access-only test folder: clean ✅
-
-Full log: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_remote_e2e\artifacts\20261011_112317\run.log

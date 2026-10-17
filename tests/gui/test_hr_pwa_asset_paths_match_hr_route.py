@@ -5,8 +5,8 @@ Regression guard: the HR Admin app must serve HR's own assets, not the Jobs
 PWA's (a copy-pasted mount pointing at the wrong asset directory).
 
 2026-10-11 (David): converted for the server-only HR apps. The original /hr/
-app (hr/index.html) is retired — HR Admin is the same app at /hr_admin/, and
-/hr or /hr/... redirects there. HR Admin + HR Portal exist only in the SERVER
+app (hr/index.html) is retired — HR Admin is the same app at /hr_admin/ (the
+/hr redirect was removed 2026-10-16). HR Admin + HR Portal exist only in the SERVER
 router (behind the HR apps switch); the personal router answers "server only".
 
 Safe: reads hr_admin/index.html, hr_admin/manifest.json, hr_admin/sw.js and
@@ -68,9 +68,12 @@ class TestHrRouteIsMountedSeparatelyFromJobs:
         assert '_hrs_app = "hr_admin" if path.startswith("/hr_admin") else "hr_portal"' in server_hr_block
         assert "if not _path_is_inside(_hrs_fp, _hrs_root):" in server_hr_block
 
-    def test_old_hr_mount_redirects_to_hr_admin(self, server_hr_block):
-        assert 'if path == "/hr" or path.startswith("/hr/"):' in server_hr_block
-        assert '[b"location", b"/hr_admin/"]' in server_hr_block
+    def test_old_hr_mount_is_gone(self, server_hr_block, personal_hr_block):
+        # 2026-10-16 (David): nobody used the old /hr/ address — its redirect
+        # to /hr_admin/ was removed; /hr is an ordinary unknown path now.
+        for b in (server_hr_block, personal_hr_block):
+            assert 'path == "/hr"' not in b and '"/hr/"' not in b
+        assert '[b"location", b"/hr_admin/"]' not in server_hr_block
 
     def test_hr_api_route_is_registered(self, server_hr_block, personal_hr_block):
         assert '"/hr-api"' in server_hr_block and '"/hr-api"' in personal_hr_block

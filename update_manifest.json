@@ -1,6 +1,6 @@
 {
   "version": "9.3.0",
-  "generated": "2026-10-14T14:28:23",
+  "generated": "2026-10-17T14:58:06",
   "files": [
     {
       "path": "rag_gui.py",
@@ -14,8 +14,8 @@
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "022b7ecfce69c04a6e952d06c64455deb91a8258e04fa9181dc329f920e2a2dd",
-      "bytes": 1603301
+      "sha256": "f295ac80fccaff91b95ac39f1f1ba6bcb53ae452e473de247f83348dc03a617e",
+      "bytes": 1729356
     },
     {
       "path": "mcp_diagnostics.py",
@@ -59,8 +59,8 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "7f4a8b9d218ab0e3a800c7c06f62875d7697f8e67e91c8fbbb19352e57e2d99f",
-      "bytes": 268230
+      "sha256": "d542525d60a30e816cabafcb7c66cf05b0d14f89bb7546ef760207cf9d3eefc3",
+      "bytes": 277960
     },
     {
       "path": "VERSION",
@@ -194,8 +194,8 @@
     },
     {
       "path": "jobs/index.html",
-      "sha256": "539d62e8ca6d53d4939d28c295f1ae04cb9bc08323c4fddac16c3980dfb119ae",
-      "bytes": 1003613
+      "sha256": "21807b1668f2709e6696f7887a56fb82a4affa9e2cae3fead237e2dbddd2c033",
+      "bytes": 1004618
     },
     {
       "path": "jobs/manifest.json",
@@ -259,8 +259,8 @@
     },
     {
       "path": "hr_scheduler.py",
-      "sha256": "fed7edc3152a62239c475965a542951072c8ff184bda3f6ec44a53262bab4c06",
-      "bytes": 43470
+      "sha256": "c6234f33f630999da0511b12a8241b0b58b2c630e54231c276215d06ab30def6",
+      "bytes": 45953
     },
     {
       "path": "hr_state_rules.json",
@@ -279,8 +279,8 @@
     },
     {
       "path": "hr_admin/index.html",
-      "sha256": "6060f1f12f089008e5664908d33418117051e83e5e882cb0b791e62ac9287718",
-      "bytes": 847068
+      "sha256": "3839eac14457ac49e6f15ecebc409589108cca6c49948c6eae4502fdf62dff2c",
+      "bytes": 921676
     },
     {
       "path": "hr_admin/manifest.json",
@@ -304,13 +304,13 @@
     },
     {
       "path": "hr_portal/index.html",
-      "sha256": "6f5c46d0c384c95dc2efba6bf133c695d72a7abfb1ce69aef072ee7b70174c94",
-      "bytes": 603120
+      "sha256": "3ca7e3188a01ba05f8302e4b0233848965c4bb351ccc87241771e22df33f4df3",
+      "bytes": 591281
     },
     {
       "path": "hr_portal/employee_manifest.json",
-      "sha256": "2f59e33f4ce081aaba1b632e7648541e7336f93e1ddfa695f93c8e6b2ffb2723",
-      "bytes": 470
+      "sha256": "3cf2e1f7ebb2089de1e5d74d7bd60ceac1db232da6b511b96032141c8ae40698",
+      "bytes": 497
     },
     {
       "path": "hr_portal/icon-192.png",

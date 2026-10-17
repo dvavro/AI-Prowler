@@ -127,6 +127,11 @@ $RECYCLE.BIN/
 # logs, traces, screenshots, videos and the saved login state.
 tests/gui_jobs_e2e/artifacts/
 tests/gui_jobs_e2e/.auth/
+# (2026-10-17) Same for the other browser suites: run results only, recreated
+# by every run (tests/run_gui_jobs_e2e.py and each suite's conftest.py).
+tests/gui_jobs_e2e_server/artifacts/
+tests/gui_jobs_timemachine/artifacts/
+tests/gui_remote_e2e/artifacts/
 *.orig
 *.pid
 

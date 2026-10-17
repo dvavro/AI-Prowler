@@ -6,7 +6,8 @@ Needs the HR apps switched ON on the server (Settings → MCP Tool Configuration
 → "HR apps (HR Admin + HR Portal)" → Save). Otherwise every test is skipped
 with that instruction.
 
-  HR-01  /hr (the retired original app) redirects to /hr_admin/
+  HR-01  /hr (the retired original app) no longer leads anywhere (redirect
+         removed 2026-10-16)
   HR-02  HR Admin / HR Portal static files can't be escaped with ../
   HR-03  HR Admin sign-in rules (API): owner + manager get in; field crew is
          refused ("HR Admin is for owners and managers"); a wrong token is refused
@@ -166,11 +167,14 @@ def _portal_sign_in(page, origin, user):
 
 
 # ── tests ────────────────────────────────────────────────────────────────────
-def test_HR_01_old_hr_app_redirects_to_hr_admin(hr):
+def test_HR_01_old_hr_address_is_gone(hr):
+    # 2026-10-16 (David): nobody used the retired /hr/ address — its redirect to
+    # /hr_admin/ was removed. It must not lead to HR Admin (or serve HR files).
     for p in ("/hr", "/hr/", "/hr/index.html"):
-        st, h, _ = _http("GET", hr["origin"] + p)
+        st, h, body = _http("GET", hr["origin"] + p)
         loc = {k.lower(): v for k, v in h.items()}.get("location", "")
-        assert st == 302 and loc.endswith("/hr_admin/"), f"{p}: HTTP {st} location={loc!r}"
+        assert not loc.endswith("/hr_admin/"), f"{p}: still redirects to {loc!r}"
+        assert st != 200 or "AI-Prowler HR Admin" not in (body or ""), f"{p}: serves HR Admin"
 
 
 def test_HR_02_static_files_cannot_be_escaped(hr):

@@ -297,6 +297,10 @@ def test_overrun_stop_kept_while_open_and_future_one_dropped_on_complete(db, hor
         def json(self):
             return {"code": "Ok", "routes": [{"legs": [{"duration": 600}], "distance": 1000, "duration": 600}]}
     monkeypatch.setattr(requests, "get", lambda *a, **k: _R())
+    # 2026-10-16: the 7-day stale-stop housekeeping sweep uses the real clock —
+    # a 2026-10-07 stop is "stale" from 2026-10-14 on and the second build swept
+    # it. Not what this test checks (same fix as the R-058 route test above).
+    monkeypatch.setattr(ro, "_cleanup_stale_route_stops", lambda *a, **k: 0)
     jid = _job(db, 2, "day", **{"Job Status": "In Progress"})    # planned Mon..Tue
     ro.db_suggest_route_schedule(db, _day(2), SAM, actor="t")    # overrun day 3 (Wed)
     ro.db_suggest_route_schedule(db, _day(3), SAM, actor="t")    # overrun day 4 (Thu)

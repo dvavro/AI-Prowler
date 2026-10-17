@@ -73,7 +73,12 @@ html,body{height:100%;background:var(--bg);color:#ffffff;font-family:'Inter',-ap
 #screen-calendar.active{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
 #screen-calendar.active>:not(#calendarContent){flex:none}
 #calendarContent{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}
-.bottomnav{display:flex;background:var(--surface);border-top:1px solid var(--border);padding-bottom:var(--safe-bot);flex-shrink:0;z-index:20}
+.bottomnav{display:flex;background:var(--surface);border-top:1px solid var(--border);padding-bottom:var(--safe-bot);flex-shrink:0;z-index:20;position:relative;
+  /* (2026-10-15) Phones: 10 tabs don't fit, so the bar scrolls sideways
+     instead of cutting off the right side. Each .nav-btn has a min-width; on
+     wide screens they still share the width evenly and nothing scrolls. */
+  overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;scrollbar-width:none}
+.bottomnav::-webkit-scrollbar{display:none}
 /* Update-available banner — see the serviceWorker 'updatefound' handler
    near DOMContentLoaded. Fixed-position overlay (not part of page flow),
    so it never needs to know about the bottom nav's height or any given
@@ -86,10 +91,10 @@ html,body{height:100%;background:var(--bg);color:#ffffff;font-family:'Inter',-ap
 #updateBanner button{border:none;border-radius:9px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent}
 #updateBanner .btn-later{background:transparent;border:1px solid var(--border);color:var(--muted)}
 #updateBanner .btn-refresh{background:var(--cyan);color:#04121a}
-.nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;background:none;border:none;color:#c0c6d8;cursor:pointer;transition:color .15s;-webkit-tap-highlight-color:transparent}
+.nav-btn{flex:1;min-width:72px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;background:none;border:none;color:#c0c6d8;cursor:pointer;transition:color .15s;-webkit-tap-highlight-color:transparent}
 .nav-btn.active{color:var(--cyan)}
 .nav-btn svg{width:22px;height:22px}
-.nav-label{font-size:11px;font-weight:600;letter-spacing:.04em}
+.nav-label{font-size:11px;font-weight:600;letter-spacing:.04em;white-space:nowrap}
 .card{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;margin-bottom:12px}
 .card-header{padding:14px 16px 10px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
 .card-title{font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#ffffff}
@@ -4932,7 +4937,18 @@ function showScreen(name, btn) {
   } else {
     pwaDbg('showScreen: no element for "' + name + '"', '#f87171');
   }
-  if (btn) btn.classList.add('active');
+  if (btn) {
+    btn.classList.add('active');
+    // (2026-10-15) On phones the bottom bar scrolls sideways — bring the
+    // selected tab into view (e.g. when a job's Photos/Message shortcut
+    // switches to a tab that is scrolled off-screen). Scrolls only the bar.
+    var _nav = btn.parentElement;
+    if (_nav && _nav.scrollWidth > _nav.clientWidth) {
+      var _l = btn.offsetLeft, _r = _l + btn.offsetWidth;
+      if (_l < _nav.scrollLeft) _nav.scrollLeft = Math.max(0, _l - 8);
+      else if (_r > _nav.scrollLeft + _nav.clientWidth) _nav.scrollLeft = _r - _nav.clientWidth + 8;
+    }
+  }
   // Auto-refresh on navigation — data changed elsewhere (another device,
   // or an MCP tool call from a Claude, Muse, or Grok conversation) should show up the
   // moment the user taps back to a data-driven tab, not require a manual

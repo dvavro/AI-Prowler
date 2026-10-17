@@ -55,12 +55,12 @@ def hr(tmp_path, monkeypatch, time_machine):
     import ai_prowler_mcp as ap
     import hr_scheduler as hs
     monkeypatch.setattr(ap, "_HR_DB_PATH", str(tmp_path / "hr_db.json"))
-    monkeypatch.setattr(hs, "_HR_TRACKING_PATH", str(tmp_path / "hr_task_tracking.json"))
-    (tmp_path / "hr_db.json").write_text(json.dumps({
+    monkeypatch.setattr(hs, "_HR_TRACKING_PATH", str(tmp_path / "company" / "scheduler_state.json"))
+    ap._hr_save_db({       # 2026-10-16: seed through the real per-folder storage
         "config": {"company_name": "ZTEST Co", "setup_complete": True, "work_states": ["FL"],
                    "hr_admin_email": HR_ADMIN, "owner_email": OWNER,
                    "doc_root": str(tmp_path / "hr_documents")},
-        "employees": [], "tasks": [], "documents": [], "audit_log": []}), encoding="utf-8")
+        "employees": [], "tasks": [], "documents": [], "audit_log": []})
     mails = []
 
     def capture(subject, html, to_addr):

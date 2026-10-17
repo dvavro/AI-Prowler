@@ -153,6 +153,11 @@ def hr_isolated_server_mode(tmp_path_factory, real_hr_snapshot) -> Generator[_Ha
     }
     (state_dir / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     (state_dir / "users.json").write_text(json.dumps(USERS_DOC, indent=2), encoding="utf-8")
+    # 2026-10-11+: the HR apps are OFF on a server until the owner switches them on
+    # (Settings -> MCP Tool Configuration). That switch lives in tool_config.json --
+    # switched on here in the SANDBOX state dir only.
+    (state_dir / "tool_config.json").write_text(
+        json.dumps({"schema_version": 1, "hr_apps_enabled": True}, indent=2), encoding="utf-8")
 
     env = dict(os.environ)
     env["AIPROWLER_TEST_STATE_DIR"] = str(state_dir)
@@ -267,16 +272,21 @@ class TestHrServerModeRbacE2E:
         assert result["id"].startswith("EMP-"), result
         assert result["tasks_generated"] > 0
 
-        sandbox_db_path = hr_isolated_server_mode.state_dir / "hr_db.json"
-        assert sandbox_db_path.exists(), (
-            "hr_db.json was not created under the sandbox AIPROWLER_TEST_STATE_DIR "
+        # 2026-10-16: HR data is stored as company\ + employees\<EMP>_Last_First\
+        sandbox = hr_isolated_server_mode.state_dir
+        assert (sandbox / "company" / "settings.json").exists(), (
+            "company\\settings.json was not created under the sandbox AIPROWLER_TEST_STATE_DIR "
             "in server mode -- the path-isolation fix regressed."
         )
-        sandbox_db = json.loads(sandbox_db_path.read_text(encoding="utf-8"))
-        assert any(e["id"] == result["id"] for e in sandbox_db["employees"])
+        sandbox_emps = [json.loads(p.read_text(encoding="utf-8"))
+                        for p in (sandbox / "employees").glob("*/employee.json")]
+        assert any(e["id"] == result["id"] for e in sandbox_emps)
+        # ...with its document folders inside its own employee folder
+        assert [p for p in (sandbox / "employees").iterdir() if (p / "onboarding").is_dir()], \
+            "no employee folder with document subfolders under the sandbox"
 
         # The staff-created record from the prior (401) test must NOT exist.
-        assert not any(e["last_name"] == "NotExist" for e in sandbox_db["employees"]), (
+        assert not any(e.get("last_name") == "NotExist" for e in sandbox_emps), (
             "A staff user's rejected employee-creation attempt somehow wrote "
             "a record anyway -- the 401 did not actually block the write."
         )

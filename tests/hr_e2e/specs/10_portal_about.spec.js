@@ -4,7 +4,8 @@ const { test, expect } = require('@playwright/test');
 const { addClickMarker, watchForProblems, loginPortal } = require('../helpers/common');
 const { adminApi, testTag, getEmployee, patchEmployee } = require('../helpers/api');
 
-const FIELDS = ['nickname', 'pronouns', 'about_fun', 'work_style'];
+// 2026-10-16 (David): Pronouns was replaced by Gender (M/F)
+const FIELDS = ['nickname', 'gender', 'about_fun', 'work_style'];
 
 test('PRT-ABT-01…07 · About Me: edit, save, persist, cancel, locked email', async ({ page }, testInfo) => {
   const ttId = process.env.HR_E2E_TT_ID;
@@ -59,12 +60,14 @@ test('PRT-ABT-01…07 · About Me: edit, save, persist, cancel, locked email', a
     await test.step('PRT-ABT-02: Edit Preferred Name → Save', async () => {
       await page.locator('#ab-sec-personal').getByRole('button', { name: /Edit/ }).click();
       await page.locator('#ab-personal-nickname').fill(nick);
-      await page.locator('#ab-personal-pronouns').fill('she/her');
+      await expect(page.locator('#ab-personal-pronouns'), 'Pronouns box should be gone').toHaveCount(0);
+      await page.locator('#ab-personal-gender').selectOption('F');
       await page.locator('#ab-save-personal').click();
       await expect(page.locator('#ab-toast')).toContainText('Saved', { timeout: 15_000 });
       await expect(page.locator('#ab-sec-personal')).toContainText(nick);
       await expect.poll(async () => (await getEmployee(api, ttId)).nickname, { timeout: 10_000 }).toBe(nick);
-      report.push('✓ Saved: toast shown, card updated, server has the new Preferred Name');
+      await expect.poll(async () => (await getEmployee(api, ttId)).gender, { timeout: 10_000 }).toBe('F');
+      report.push('✓ Saved: toast shown, card updated, server has the new Preferred Name and Gender');
     });
 
     await test.step('PRT-ABT-03: Still there after leaving and reloading', async () => {

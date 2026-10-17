@@ -16,7 +16,7 @@ Every run writes to logs\\run_<date>_<time>\\ :
     results.json           machine-readable results
     report\\index.html     click-through report with screenshots / videos / traces
     test-results\\         screenshots, videos (.webm), traces (.zip) per test
-    hr_db.snapshot.json    emergency backup of the HR database (NOT auto-restored)
+    hr_snapshot\\          emergency copy of the HR data folders (NOT auto-restored)
 """
 import argparse, datetime, json, os, random, shutil, ssl, subprocess, sys, time
 import urllib.request, urllib.error
@@ -26,7 +26,10 @@ HOME = os.path.expanduser("~")
 AIP_CONFIG = os.path.join(HOME, ".ai-prowler", "config.json")
 DEFAULTS = {
     "base_url": "https://ap-jamievavroaiprowler-f68efeed.ai-prowler.com",
-    "hr_db_path": os.path.join(HOME, ".ai-prowler", "hr", "hr_db.json"),
+    # The HR data folder of the account the AI-Prowler server runs as. Set
+    # "hr_data_dir" in test_config.json when that isn't this Windows user
+    # (e.g. C:\Users\AI-Prowler-Server\.ai-prowler\hr). Read-only (snapshot).
+    "hr_data_dir": os.path.join(HOME, ".ai-prowler", "hr"),
     "test_employee": {"first_name": "Test", "last_name": "Tester",
                       "email": "jamievavroaiprowler+hrtest@gmail.com"},
     "watch": True,
@@ -168,13 +171,23 @@ def main():
         if args.test: log(f"Filter     : tests containing \"{args.test}\"")
         log("=" * 72)
 
-        # 1. Emergency snapshot of the HR database (NOT restored automatically)
-        db = cfg["hr_db_path"]
-        if os.path.exists(db):
-            shutil.copy2(db, os.path.join(run_dir, "hr_db.snapshot.json"))
-            log("✓ Saved emergency snapshot of hr_db.json (not auto-restored — see TEST_SPEC 2.4)")
+        # 1. Emergency snapshot of the HR data (NOT restored automatically).
+        # 2026-10-16: HR data is now <HR data folder>\company\ + employees\<EMP>_Last_First\
+        # (the old single hr_db.json is no longer used). Read-only copy.
+        hr_dir = cfg.get("hr_data_dir") or os.path.dirname(cfg.get("hr_db_path") or "")
+        snap_dir = os.path.join(run_dir, "hr_snapshot")
+        ignore = shutil.ignore_patterns("*.tmp", "*.lock")
+        copied = []
+        for part in ("company", "employees"):
+            src = os.path.join(hr_dir, part)
+            if os.path.isdir(src):
+                shutil.copytree(src, os.path.join(snap_dir, part), ignore=ignore)
+                copied.append(part)
+        if copied:
+            log(f"✓ Saved emergency snapshot of the HR data ({', '.join(copied)}) to hr_snapshot\\ "
+                "(not auto-restored — see TEST_SPEC 2.4)")
         else:
-            log(f"! hr_db.json not found at {db} — no snapshot taken")
+            log(f"! No HR data found in {hr_dir} — no snapshot taken")
 
         # 2. Admin token from AI-Prowler's own config
         token = read_admin_token()

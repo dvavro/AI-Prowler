@@ -6,7 +6,7 @@ the owner turns them on in Settings → MCP Tool Configuration ("HR apps (HR
 Admin + HR Portal)" — one switch for both apps and all 20 hr_* tools).
 HR Admin signs in with an AI-Prowler account (owners/managers); HR Portal with
 the AI-Prowler account HR linked to the employee record. The original /hr/ app
-is retired (/hr -> /hr_admin/).
+is retired (its /hr -> /hr_admin/ redirect was removed 2026-10-16).
 
 Behaviour is tested where it can run without a live server (the switch, the
 HR API's link rules); the HTTP handler's wiring is checked in the source and
@@ -119,12 +119,11 @@ def test_hr_apps_turned_off(monkeypatch, server, switch, off):
 @pytest.fixture()
 def hr_db(tmp_path, monkeypatch):
     import ai_prowler_mcp as ap
-    db_path = tmp_path / "hr_db.json"
-    db_path.write_text(json.dumps({"config": {}, "employees": [
+    monkeypatch.setattr(ap, "_HR_DB_PATH", str(tmp_path / "hr_db.json"))   # data root = tmp_path
+    ap._hr_save_db({"config": {}, "employees": [        # 2026-10-16: real per-folder storage
         {"id": "EMP-00001", "first_name": "ZTEST", "last_name": "One", "status": "Active"},
         {"id": "EMP-00002", "first_name": "ZTEST", "last_name": "Two", "status": "Active"}],
-        "tasks": [], "documents": [], "audit_log": []}), encoding="utf-8")
-    monkeypatch.setattr(ap, "_HR_DB_PATH", str(db_path))
+        "tasks": [], "documents": [], "audit_log": []})
     return ap
 
 
@@ -152,21 +151,25 @@ def test_link_rules(hr_db):
 # ── HTTP handler wiring (proved live by test_srv_hr_apps.py) ─────────────────
 def test_server_block_switch_redirect_and_path_guard():
     b = SERVER_HR
-    assert b.index("if _hr_apps_turned_off():") < b.index('"/hr_admin/"'), "switch checked first"
-    assert '"status": 302' in b and '[b"location", b"/hr_admin/"]' in b
+    assert b.index("if _hr_apps_turned_off():") < b.index("_hrs_app = "), "switch checked first"
     assert "if not _path_is_inside(_hrs_fp, _hrs_root):" in b
-    assert '"/hr")' not in b.replace("/hr_admin", "").replace("/hr_portal", "") or True
+    # 2026-10-16: the old /hr/ and /employee/ addresses and their redirects are gone
+    assert 'path == "/hr"' not in b and '"/hr/"' not in b
+    assert 'path == "/employee"' not in b and '"/employee/"' not in b
+    assert '[b"location", b"/hr_admin/"]' not in b and '[b"location", b"/hr_portal/"]' not in b
 
 
 def test_server_block_sign_ins():
     b = SERVER_HR
     i = b.index('if _hrsrv_subpath in ("/auth/login", "/auth/aiprowler") and method == "POST":')
-    signin = b[i:i + 4000]
+    signin = b[i:i + 6000]      # 2026-10-16: grew with the "not an employee" check
     assert "_resolve_user(_hot_reload_users(users_data), _hrl_tok)" in signin
     assert '.strip().lower() != _hrl_name.lower()' in signin, "name must match the token's user"
     assert 'get("can_manage_hr")' in signin and '"not_hr_admin"' in signin
     assert "_srv_pwa_last_used[_hrl_access]" in signin, "HR Admin sessions use the idle timeout"
-    assert 'e.get("aiprowler_user_id") == _hrl_user.get("id")' in signin and '"not_linked"' in signin
+    # 2026-10-16: any active Admin-tab user may sign in — the employee record
+    # is found, linked or created for them (no more "not_linked" refusal).
+    assert "_hr_portal_employee_for_user(_hrl_user, _hrl_db)" in signin and '"not_linked"' not in signin
     assert '_hrl_email = "aiprowler:" + str(_hrl_user.get("id"))' in signin
 
 
@@ -187,7 +190,8 @@ def test_server_block_user_picker_admin_only_no_tokens():
 
 def test_personal_block_answers_server_only():
     b = PERSONAL_HR
-    assert 'path.startswith(("/hr/", "/hr_admin", "/hr_portal", "/hr-api"))' in b
+    assert 'path.startswith(("/hr_admin", "/hr_portal", "/hr-api"))' in b
+    assert 'path == "/hr"' not in b and '"/hr/"' not in b
     assert "_HR_SERVER_ONLY_MESSAGE" in b and "_access_tokens" not in b, "no personal HR sign-in left"
 
 

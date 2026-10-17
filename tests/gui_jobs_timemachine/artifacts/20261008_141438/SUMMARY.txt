@@ -1,7 +1,0 @@
-AI-Prowler Jobs app TIME MACHINE (personal mode) — FAIL
-Finished: 2026-10-08 14:14:41   (throwaway copy of the app — real data never touched)
-Tests: 0 passed, 0 failed, 0 skipped
-Sandbox: 
-Outbox (caught, never sent): empty
-
-Full log: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_timemachine\artifacts\20261008_141438\run.log
