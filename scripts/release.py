@@ -556,6 +556,12 @@ MANIFEST_FILES = [
     # Save (rag_gui.py imports it and refuses to save without it). Was only
     # deployed by update_install*.bat, so in-app updates never received it.
     "tool_config_store.py",
+    # 2026-10-19: crash-safe / reader-safe saves (temp file + atomic swap) for
+    # settings, allowlists, task queue, tokens, licences. Imported by rag_gui,
+    # ai_prowler_mcp, rag_preprocessor, task_queue_automation, scheduler_engine,
+    # custom_tasks_manager, subscription_client (each falls back to a plain write
+    # if it's missing, but every install must get it).
+    "safe_save.py",
     "self_learning.py",
     "RAG_RUN.bat",
     "create_shortcut.py",

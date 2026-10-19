@@ -117,7 +117,7 @@ def hr_sandbox(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def browser(hr_sandbox):
+def hr_browser(hr_sandbox):
     # MODULE scope on purpose: Playwright's sync API keeps an asyncio loop
     # "running" in this thread while it's started, and every later test that
     # calls asyncio.run() would fail ("cannot be called from a running event

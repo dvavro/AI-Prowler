@@ -1,21 +1,21 @@
 {
   "version": "9.3.0",
-  "generated": "2026-10-17T14:58:06",
+  "generated": "2026-10-19T18:01:01",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "2fb84b5f1db5d52dab8f93a993e219f3e137f168646eda2fc9e89f9dc143f52e",
-      "bytes": 1493118
+      "sha256": "d4b05735dfef27d189b11aa5edc502c787548c3b4540c448413145ad937a6577",
+      "bytes": 1502073
     },
     {
       "path": "rag_preprocessor.py",
-      "sha256": "dcaac9da5a148743e4019a4c25275eb368c4b851d934f842d9bbf56dcf0c388f",
-      "bytes": 331768
+      "sha256": "73ebe959347341d83430f2bf768a0cf209e3047dd897ce211e34e14048b2b0bd",
+      "bytes": 340273
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "f295ac80fccaff91b95ac39f1f1ba6bcb53ae452e473de247f83348dc03a617e",
-      "bytes": 1729356
+      "sha256": "2451e8d9d1e18176bf0a7d3ac49bee6d5d17a193d317241316f8ac0d142e0c59",
+      "bytes": 1731400
     },
     {
       "path": "mcp_diagnostics.py",
@@ -33,9 +33,14 @@
       "bytes": 14021
     },
     {
+      "path": "safe_save.py",
+      "sha256": "4dc096bce8dd952a315e9f55fe56bac761b7777db182cde82d48c3c7743e4149",
+      "bytes": 5123
+    },
+    {
       "path": "self_learning.py",
-      "sha256": "1f2dfe877e89a3e6033e201f66bcfe69837a8bb9fed0e24e2614cf12b1af6704",
-      "bytes": 42117
+      "sha256": "0e545c1df810cfb1ef833b38108f48f9942d651448e45d0c698800dd2dff4583",
+      "bytes": 43746
     },
     {
       "path": "RAG_RUN.bat",
@@ -84,13 +89,13 @@
     },
     {
       "path": "subscription_client.py",
-      "sha256": "e71d24fdd69c18150301d7b9ebfe82e7deefe7fb6fcce2a2a5b038a515fab2b9",
-      "bytes": 21504
+      "sha256": "de688a49ebf4f704e2ec61facb564f417f76ecfb44b4a5c11876e983e0c396cc",
+      "bytes": 21746
     },
     {
       "path": "mobile_activator.py",
-      "sha256": "0c9f80a9582785d60cc065f3a09221690fae38548775efb35fe86416a6cc6568",
-      "bytes": 28694
+      "sha256": "9631b0ef63fd9d889498e688945aeb511e43e7449253135f9c8cfedd0264be0d",
+      "bytes": 30371
     },
     {
       "path": "cloudflared_service_helper.py",
@@ -109,8 +114,8 @@
     },
     {
       "path": "custom_tasks_manager.py",
-      "sha256": "3eab4b3da6ac90e9a8049554c9ac40e199d4f44bf0f5122d6cd0a2288024117a",
-      "bytes": 51934
+      "sha256": "342e79f51e207ccc0144c00b4ebb1e2a10005bf03928ebf2dc9c68f5a9c72dff",
+      "bytes": 53174
     },
     {
       "path": "scheduler_jobs.py",
@@ -119,13 +124,13 @@
     },
     {
       "path": "scheduler_engine.py",
-      "sha256": "a7526e7fe24b7b00371eeabfafa01c75b8e8d55545f2a6ac504ca613ab5b680b",
-      "bytes": 16916
+      "sha256": "e9e8610c2fa163b288faaac2c72a8f5fe36c2a30e9e0d8e0a50e381f496b898d",
+      "bytes": 17612
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "902ae15f7ad8eb71016d9172dbf1384543d41c132bc1a587adf134018c0c8829",
-      "bytes": 191874
+      "sha256": "e38516d555f1da153f1c800a9887161e7e5fa4a69ce71edbf98e90472de0e782",
+      "bytes": 192940
     },
     {
       "path": ".claude/settings.json",
@@ -194,8 +199,8 @@
     },
     {
       "path": "jobs/index.html",
-      "sha256": "21807b1668f2709e6696f7887a56fb82a4affa9e2cae3fead237e2dbddd2c033",
-      "bytes": 1004618
+      "sha256": "0729f71323fc5272cbe12df95a55dcf504757eb8542a782c9980e381b6bc6fc7",
+      "bytes": 1017084
     },
     {
       "path": "jobs/manifest.json",
@@ -249,8 +254,8 @@
     },
     {
       "path": "setup_wizard.py",
-      "sha256": "f1b1f5a018536579d5123b0b20497854ad57fd6901381ac85879cdd3190a46ce",
-      "bytes": 129051
+      "sha256": "5e10a2d82621f908bb2f49ee25f964fea42e4d7331c68473b4b896d9e914700a",
+      "bytes": 129290
     },
     {
       "path": "startup_log.py",

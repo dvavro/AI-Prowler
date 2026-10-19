@@ -48,7 +48,48 @@ File schema (list of task objects):
 
 import json
 import datetime
+import shutil
+import time
 from pathlib import Path
+
+# Safe-save: write to a temp file then swap it in, so a reader (or a crash)
+# never sees a half-written / empty task file. Falls back to a plain write if
+# safe_save.py is missing (partial update).
+try:
+    from safe_save import atomic_write_text as _ss_write_text, read_json_retry as _ss_read_json
+except Exception:  # pragma: no cover
+    def _ss_write_text(path, text, encoding="utf-8", **_k):
+        Path(path).write_text(text, encoding=encoding)
+
+    def _ss_read_json(path, default=None, **_k):
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return default
+
+
+def _load_json_keep_unreadable(path: Path, want_type, empty):
+    """Read `path` as JSON of type `want_type`, retrying a mid-save read.
+
+    Missing file -> `empty`. If the file exists but still can't be read (or
+    is the wrong shape), a copy is kept as <name>.unreadable-<timestamp>
+    BEFORE returning `empty`, so the next save can never silently throw the
+    user's saved tasks away."""
+    if not path.exists():
+        return empty
+    try:
+        data = _ss_read_json(path)
+        if isinstance(data, want_type):
+            return data
+    except Exception:
+        pass
+    try:
+        keep = path.with_name(f"{path.name}.unreadable-{time.strftime('%Y%m%d-%H%M%S')}")
+        shutil.copy2(path, keep)
+        print(f"[custom_tasks_manager] {path.name} could not be read - kept a copy as {keep.name}")
+    except Exception:
+        pass
+    return empty
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -427,13 +468,7 @@ def load_custom_tasks() -> list:
     Load custom tasks from disk.
     Returns empty list if file is absent or corrupt.
     """
-    try:
-        if CUSTOM_TASKS_PATH.exists():
-            data = json.loads(CUSTOM_TASKS_PATH.read_text(encoding="utf-8"))
-            return data if isinstance(data, list) else []
-    except Exception:
-        pass
-    return []
+    return _load_json_keep_unreadable(CUSTOM_TASKS_PATH, list, [])
 
 
 def save_custom_tasks(tasks: list) -> bool:
@@ -443,10 +478,8 @@ def save_custom_tasks(tasks: list) -> bool:
     """
     try:
         CUSTOM_TASKS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CUSTOM_TASKS_PATH.write_text(
-            json.dumps(tasks, indent=2, ensure_ascii=False),
-            encoding="utf-8"
-        )
+        _ss_write_text(CUSTOM_TASKS_PATH,                  # atomic (safe_save)
+                       json.dumps(tasks, indent=2, ensure_ascii=False))
         return True
     except Exception as e:
         print(f"[custom_tasks_manager] save failed: {e}")
@@ -465,21 +498,15 @@ def save_custom_tasks(tasks: list) -> bool:
 def load_builtin_analysis_config() -> dict:
     """Load all built-in analysis settings. Returns {} if absent/corrupt —
     callers get sensible defaults via get_builtin_analysis_settings()."""
-    try:
-        if BUILTIN_ANALYSIS_CONFIG_PATH.exists():
-            data = json.loads(BUILTIN_ANALYSIS_CONFIG_PATH.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
-    except Exception:
-        pass
-    return {}
+    return _load_json_keep_unreadable(BUILTIN_ANALYSIS_CONFIG_PATH, dict, {})
 
 
 def save_builtin_analysis_config(cfg: dict) -> bool:
     """Save all built-in analysis settings. Returns True on success."""
     try:
         BUILTIN_ANALYSIS_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        BUILTIN_ANALYSIS_CONFIG_PATH.write_text(
-            json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+        _ss_write_text(BUILTIN_ANALYSIS_CONFIG_PATH,       # atomic (safe_save)
+                       json.dumps(cfg, indent=2, ensure_ascii=False))
         return True
     except Exception as e:
         print(f"[custom_tasks_manager] save_builtin_analysis_config failed: {e}")

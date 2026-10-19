@@ -75,6 +75,51 @@ import argparse
 from pathlib import Path
 from typing import Optional
 
+# ── Crash-safe / reader-safe saves (2026-10-19) — see safe_save.py ────────────
+# Settings, allowlists, the task queue, licence cache and files written by the
+# file tools go through these: temp file + atomic swap, so a reader (the GUI,
+# the scheduler, another request) never sees the file empty or half-written.
+try:
+    from safe_save import (atomic_write_bytes as _ss_write_bytes, atomic_write_text as _ss_write_text,
+                           atomic_write_json as _ss_write_json, read_json_retry as _ss_read_json)
+except Exception:                                    # safe_save.py missing (partial update): plain writes
+    def _ss_write_bytes(path, data, **_k):
+        with open(path, "wb") as _f:
+            _f.write(data)
+
+    def _ss_write_text(path, text, encoding="utf-8", errors="strict", newline=None, **_k):
+        with open(path, "w", encoding=encoding, errors=errors, newline=newline) as _f:
+            _f.write(text)
+
+    def _ss_write_json(path, obj, indent=2, encoding="utf-8", newline=None, ensure_ascii=True, **_k):
+        _ss_write_text(path, json.dumps(obj, indent=indent, ensure_ascii=ensure_ascii), encoding=encoding, newline=newline)
+
+    _SS_MISSING = object()
+
+    def _ss_read_json(path, default=_SS_MISSING, **_k):
+        try:
+            with open(path, "r", encoding="utf-8") as _f:
+                return json.load(_f)
+        except Exception:
+            if default is _SS_MISSING:
+                raise
+            return default
+
+
+def _ss_overwrite_user_file(path, data: bytes) -> None:
+    """Save the user's own file for the file tools (create_file / write_file /
+    str_replace_in_file / line_replace_in_file): atomic swap, so the file
+    watcher / indexer / an editor never sees it half-written and a crash
+    mid-save can't leave it truncated. If Windows refuses the swap because
+    another program holds the file open (an editor), fall back to the old
+    in-place write so these tools never fail where they used to work - the
+    .bak<N> copy they make first still protects the original."""
+    try:
+        _ss_write_bytes(path, data, retries=10)
+    except PermissionError:
+        with open(path, "wb") as _f:
+            _f.write(data)
+
 # ── File logging — all output captured here since the window is hidden ────────
 import logging
 import traceback
@@ -21890,8 +21935,7 @@ def _writable_allowlist_load() -> list:
     try:
         if not _WRITABLE_DIRS_FILE.exists():
             return []
-        with open(_WRITABLE_DIRS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = _ss_read_json(_WRITABLE_DIRS_FILE)        # retries a mid-save read
         if isinstance(data, list):
             return [str(p) for p in data if isinstance(p, str)]
         return []
@@ -21904,8 +21948,7 @@ def _writable_allowlist_save(entries: list) -> bool:
     """Write the writable-path allowlist to disk. Returns True on success."""
     try:
         _WRITABLE_DIRS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(_WRITABLE_DIRS_FILE, "w", encoding="utf-8") as f:
-            json.dump(sorted(set(entries)), f, indent=2)
+        _ss_write_json(_WRITABLE_DIRS_FILE, sorted(set(entries)))   # atomic (safe_save)
         return True
     except Exception as exc:
         _log.error("writable allowlist write failed: %s", exc)
@@ -21955,8 +21998,7 @@ def access_allowlist_load() -> list:
     try:
         if not _ACCESS_ONLY_DIRS_FILE.exists():
             return []
-        with open(_ACCESS_ONLY_DIRS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = _ss_read_json(_ACCESS_ONLY_DIRS_FILE)     # retries a mid-save read
         if isinstance(data, list):
             return [str(p) for p in data if isinstance(p, str)]
         return []
@@ -21969,8 +22011,7 @@ def access_allowlist_save(dirs: list) -> bool:
     """Write the access-only folder list to disk. Returns True on success."""
     try:
         _ACCESS_ONLY_DIRS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(_ACCESS_ONLY_DIRS_FILE, "w", encoding="utf-8") as f:
-            json.dump(sorted(set(dirs)), f, indent=2)
+        _ss_write_json(_ACCESS_ONLY_DIRS_FILE, sorted(set(dirs)))   # atomic (safe_save)
         return True
     except Exception as exc:
         _log.error("access-only allowlist write failed: %s", exc)
@@ -21982,8 +22023,7 @@ def _queue_write_approval(path: str) -> None:
     try:
         pending = []
         if _WRITE_APPROVAL_QUEUE_FILE.exists():
-            with open(_WRITE_APPROVAL_QUEUE_FILE, "r", encoding="utf-8") as f:
-                pending = json.load(f)
+            pending = _ss_read_json(_WRITE_APPROVAL_QUEUE_FILE)    # retries a mid-save read
             if not isinstance(pending, list):
                 pending = []
         seen_paths = {p.get("path") for p in pending if isinstance(p, dict)}
@@ -21992,8 +22032,7 @@ def _queue_write_approval(path: str) -> None:
                 "path": path,
                 "requested_at": _time.strftime("%Y-%m-%dT%H:%M:%S"),
             })
-            with open(_WRITE_APPROVAL_QUEUE_FILE, "w", encoding="utf-8") as f:
-                json.dump(pending, f, indent=2)
+            _ss_write_json(_WRITE_APPROVAL_QUEUE_FILE, pending)     # atomic (safe_save)
     except Exception as exc:
         _log.warning("queue_write_approval failed: %s", exc)
 
@@ -22577,10 +22616,9 @@ def create_file(filepath: str, content: str, encoding: str = "text", ctx: "Conte
     if not ok:
         return msg
 
-    # Write
+    # Write (atomic - a reader never sees a partial file)
     try:
-        with open(resolved, "wb") as f:
-            f.write(content_bytes)
+        _ss_overwrite_user_file(resolved, content_bytes)
     except Exception as exc:
         return f"⚠️  Write failed: {exc}"
 
@@ -22699,10 +22737,9 @@ def write_file(filepath: str, content: str, verify_after_write: bool = False, en
     if backup_err:
         return f"⚠️  Aborting write — could not create backup: {backup_err}"
 
-    # Write
+    # Write (atomic - a reader never sees a partial file)
     try:
-        with open(resolved, "wb") as f:
-            f.write(content_bytes)
+        _ss_overwrite_user_file(resolved, content_bytes)
     except Exception as exc:
         return (f"⚠️  Write failed (backup preserved at {backup_path}): {exc}\n"
                 f"Use restore_backup to recover if needed.")
@@ -23057,8 +23094,7 @@ def str_replace_in_file(filepath: str,
     # Write — re-apply the original line ending convention. new_bytes_on_disk
     # was already computed above for the size report; reuse it here.
     try:
-        with open(resolved, "wb") as f:
-            f.write(new_bytes_on_disk)
+        _ss_overwrite_user_file(resolved, new_bytes_on_disk)      # atomic
     except Exception as exc:
         return (f"⚠️  Write failed (backup preserved at {backup_path}): {exc}\n"
                 f"Use restore_backup to recover.")
@@ -23254,8 +23290,7 @@ def line_replace_in_file(filepath: str,
         return f"⚠️  Could not create backup: {backup_err}"
 
     try:
-        with open(resolved, "wb") as f:
-            f.write(new_bytes_on_disk)
+        _ss_overwrite_user_file(resolved, new_bytes_on_disk)      # atomic
     except Exception as exc:
         return f"⚠️  Write failed (backup at {backup_path}): {exc}"
 
@@ -27044,7 +27079,7 @@ def _load_pending_tasks() -> list:
     """Load pending_tasks.json, returning an empty list if absent or corrupt."""
     try:
         if _PENDING_TASKS_FILE.exists():
-            data = json.loads(_PENDING_TASKS_FILE.read_text(encoding="utf-8"))
+            data = _ss_read_json(_PENDING_TASKS_FILE)      # retries a mid-save read
             return data if isinstance(data, list) else []
     except Exception:
         pass
@@ -27054,10 +27089,8 @@ def _load_pending_tasks() -> list:
 def _save_pending_tasks(tasks: list) -> None:
     """Write the tasks list to pending_tasks.json atomically."""
     _PENDING_TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _PENDING_TASKS_FILE.write_text(
-        json.dumps(tasks, indent=2, ensure_ascii=False),
-        encoding="utf-8"
-    )
+    # (The docstring always said "atomically" - now it actually is: safe_save.)
+    _ss_write_json(_PENDING_TASKS_FILE, tasks, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -27613,7 +27646,7 @@ def queue_single_task(task_id: str, ctx: Context = None) -> str:
                 f"Use list_analysis_tasks() to see available task IDs.")
 
     try:
-        _pending = json.loads(_pending_file.read_text(encoding="utf-8"))             if _pending_file.exists() else []
+        _pending = _ss_read_json(_pending_file) if _pending_file.exists() else []   # retries a mid-save read
     except Exception:
         _pending = []
 
@@ -27646,8 +27679,7 @@ def queue_single_task(task_id: str, ctx: Context = None) -> str:
     _pending.append(_new_entry)
 
     try:
-        _pending_file.write_text(
-            json.dumps(_pending, indent=2), encoding="utf-8")
+        _ss_write_json(_pending_file, _pending)                    # atomic (safe_save)
     except Exception as _e:
         return f"Error writing pending queue: {_e}"
 
@@ -29465,7 +29497,7 @@ def _load_license_cache_for(license_key: str) -> dict:
     try:
         if not _LICENSE_CACHE_PATH.exists():
             return {}
-        raw = json.loads(_LICENSE_CACHE_PATH.read_text(encoding="utf-8-sig")) or {}
+        raw = _ss_read_json(_LICENSE_CACHE_PATH) or {}       # retries a mid-save read
     except Exception as _e:
         _log.warning("license_cache.json unreadable (%s)", _e)
         return {}
@@ -29491,8 +29523,7 @@ def _save_license_cache_for(license_key: str, entry: dict) -> None:
         existing = {}
         if _LICENSE_CACHE_PATH.exists():
             try:
-                existing = json.loads(
-                    _LICENSE_CACHE_PATH.read_text(encoding="utf-8-sig")) or {}
+                existing = _ss_read_json(_LICENSE_CACHE_PATH) or {}
             except Exception:
                 existing = {}
 
@@ -29508,8 +29539,7 @@ def _save_license_cache_for(license_key: str, entry: dict) -> None:
             pass
 
         licenses_map[license_key] = entry
-        _LICENSE_CACHE_PATH.write_text(
-            json.dumps({"licenses": licenses_map}, indent=2), encoding="utf-8")
+        _ss_write_json(_LICENSE_CACHE_PATH, {"licenses": licenses_map})   # atomic (safe_save)
     except Exception as _e:
         _log.warning("Could not write license_cache.json (%s)", _e)
 

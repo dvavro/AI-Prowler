@@ -487,9 +487,12 @@ def sync_seats(license_key, admin_token=None):
     if status == 200 and isinstance(body, dict):
         # Write local cache
         seats_path = Path.home() / ".ai-prowler" / "license_seats.json"
-        seats_path.write_text(
-            json.dumps(body, indent=2), encoding="utf-8"
-        )
+        _text = json.dumps(body, indent=2)
+        try:
+            from safe_save import atomic_write_text as _ss_write_text   # atomic (safe_save)
+            _ss_write_text(seats_path, _text)
+        except ImportError:  # pragma: no cover - partial update without safe_save.py
+            seats_path.write_text(_text, encoding="utf-8")
         return body
     if status == 404:
         raise ValueError(f"License key not found: {license_key}")

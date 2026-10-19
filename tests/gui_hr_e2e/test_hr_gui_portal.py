@@ -21,8 +21,8 @@ STAFF_PAGES = ["welcome", "about", "portfolio", "details", "emergency", "news", 
 
 
 @pytest.fixture(scope="module")
-def anna(browser, hr_sandbox):
-    ctx, page, watch = new_page(browser, "anna")
+def anna(hr_browser, hr_sandbox):
+    ctx, page, watch = new_page(hr_browser, "anna")
     sign_in_portal(page, hr_sandbox, "anna")
     yield page, watch
     ctx.close()
@@ -95,9 +95,18 @@ def test_three_employees_clock_in_and_out_at_the_same_time(hr_sandbox):
                 await ctx.close()
             await b.close()
 
-    t = threading.Thread(target=lambda: asyncio.run(main()))                       # own event loop
+    def runner():
+        try:
+            asyncio.run(main())
+        except Exception as e:                       # surface it (it used to vanish -> KeyError: 'open')
+            result["error"] = f"{type(e).__name__}: {e}"
+
+    t = threading.Thread(target=runner)                                              # own event loop
     t.start(); t.join(240)
     assert not t.is_alive(), "the three-employee run didn't finish"
+    if "error" in result and "Executable doesn't exist" in result["error"]:
+        pytest.skip("Playwright's Chromium isn't installed (python -m playwright install chromium)")
+    assert "error" not in result, f"the three-employee browser run failed: {result['error']}"
     by_emp = {}
     for en in result["open"]:
         by_emp.setdefault(en["employee_id"], []).append(en)
@@ -115,12 +124,12 @@ def test_three_employees_clock_in_and_out_at_the_same_time(hr_sandbox):
 
 
 # ── HR Admin and the Portal together ────────────────────────────────────────
-def test_announcement_reaches_the_feed_and_review_reaches_hr(browser, hr_sandbox):
+def test_announcement_reaches_the_feed_and_review_reaches_hr(hr_browser, hr_sandbox):
     st, j = hr_sandbox.api("POST", "/announcements", {"title": "ZTEST Safety meeting Friday", "body": "Bring boots.",
                                                       "tag": "urgent", "ack_required": True}, who="manager")
     assert st in (200, 201), j
     ann_id = (j.get("announcement") or j).get("id")
-    ctx, page, watch = new_page(browser, "ben")
+    ctx, page, watch = new_page(hr_browser, "ben")
     sign_in_portal(page, hr_sandbox, "ben")
     _go(page, "feed")
     assert "ZTEST Safety meeting Friday" in visible_text(page, "#page-feed")
@@ -134,10 +143,10 @@ def test_announcement_reaches_the_feed_and_review_reaches_hr(browser, hr_sandbox
     ctx.close()
 
 
-def test_who_clocks_in_nobody_hides_the_clock(browser, hr_sandbox):
+def test_who_clocks_in_nobody_hides_the_clock(hr_browser, hr_sandbox):
     assert hr_sandbox.api("POST", "/settings", {"time_clock_mode": "nobody"}, who="manager")[0] == 200
     try:
-        ctx, page, watch = new_page(browser, "cara")
+        ctx, page, watch = new_page(hr_browser, "cara")
         sign_in_portal(page, hr_sandbox, "cara")
         _go(page, "timeclock")
         assert not page.is_visible("#clock-btn")

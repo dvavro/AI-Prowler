@@ -49,6 +49,21 @@ import sys
 import time
 from pathlib import Path
 
+# Safe-save: write to a temp file then swap it in, so a reader (or a crash)
+# never sees a half-written / empty config.json, token or seats file. Falls
+# back to a plain write if safe_save.py is missing (partial update).
+try:
+    from safe_save import atomic_write_text as _ss_write_text, read_json_retry as _ss_read_json
+except Exception:  # pragma: no cover
+    def _ss_write_text(path, text, encoding="utf-8", **_k):
+        Path(path).write_text(text, encoding=encoding)
+
+    def _ss_read_json(path, default=None, **_k):
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return default
+
 import subscription_client as sc
 
 # ---------------------------------------------------------------------------
@@ -296,10 +311,13 @@ def activate_from_payload(payload):
     # Write the tunnel token to a reference file (informational only —
     # the service reads from the Windows registry, not this file).
     token_file_cfg = CLOUDFLARED_DIR / "tunnel_token.txt"
-    token_file_cfg.write_text(tunnel_token, encoding="utf-8")
+    _ss_write_text(token_file_cfg, tunnel_token)      # atomic (safe_save)
 
     # -- 2. config.json — update tunnel fields, preserve all others -------------
-    cfg = _load_json(CONFIG_PATH, default={})
+    # Read-for-update: if config.json exists but can't be read, STOP rather
+    # than writing back a config that holds only the tunnel fields (that would
+    # wipe every other setting).
+    cfg = _load_json_for_update(CONFIG_PATH)
     cfg["tunnel_domain"]  = domain
     cfg["tunnel_token"]   = tunnel_token
     cfg["tunnel_name"]    = tunnel_name
@@ -624,16 +642,36 @@ def _load_json(path, default=None):
     """Load JSON from path, returning default if file missing or invalid."""
     try:
         if Path(path).exists():
-            return json.loads(Path(path).read_text(encoding="utf-8"))
+            return _ss_read_json(path)                # retries a mid-save read
     except Exception:
         pass
     return default if default is not None else {}
 
 
+def _load_json_for_update(path):
+    """Load a JSON object that is about to be changed and saved back.
+
+    Missing file -> {}. A file that exists but can't be read (after retries)
+    or isn't a JSON object raises RuntimeError - so the caller never saves a
+    near-empty dict over the user's real settings."""
+    p = Path(path)
+    if not p.exists():
+        return {}
+    try:
+        data = _ss_read_json(p)
+    except Exception as e:
+        raise RuntimeError(f"{p.name} could not be read ({e}); nothing was changed. "
+                           "Close any program editing it and try again.") from e
+    if not isinstance(data, dict):
+        raise RuntimeError(f"{p.name} is not a settings object; nothing was changed.")
+    return data
+
+
 def _write_json(path, data):
-    """Write data as indented JSON to path, creating parent dirs if needed."""
+    """Write data as indented JSON to path, creating parent dirs if needed.
+    Atomic (safe_save): temp file + swap, never a half-written file."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+    _ss_write_text(path, json.dumps(data, indent=2))
 
 
 def _now_iso():

@@ -99,7 +99,9 @@ KNOWN = {
               "+": "SAFE", "−": "SAFE",            # map zoom in / out
               "🏠": "SAFE", "🏁": "SAFE",           # map start / finish markers
               "unrouted-edit": "SAFE",              # ✏️ on a job that isn't a stop yet
-              "unrouted-pause": "WRITE"},           # ⏸️ on a job that isn't a stop yet
+              "unrouted-pause": "WRITE",            # ⏸️ on a job that isn't a stop yet
+              # 2026-10-18: ⛶ full-screen map (phone layout tested in MOB-07)
+              "routeMapFsBtn": "SAFE"},
 }
 
 
@@ -346,6 +348,33 @@ def test_BTN_ROUTE_map_zoom_in_and_out(app, page, two_jobs):
     zout.click()
     after_out = _settled_zoom(page)
     assert after_out < after_in, f"zoom − didn't zoom out: {after_in} -> {after_out}"
+
+
+def test_BTN_ROUTE_map_full_screen_opens_and_closes(app, page, two_jobs):
+    """⛶ on the desktop Route map: opens the map full screen with its stop strip;
+    ⛶/✕ again and Escape each bring it back into the Route screen."""
+    from app import RouteScreen
+    app.goto("route")
+    RouteScreen(page, app.log).pick_date(SANDBOX_DATE)
+    fs, m = page.locator("#routeMapFsBtn"), page.locator("#routeMap")
+    strip = page.get_by_test_id("route-map-full-strip")
+    expect(fs).to_be_visible(timeout=15_000)
+    full = re.compile(r"\broute-map-full\b")
+    fs.click()
+    expect(m).to_have_class(full)
+    expect(strip).to_be_visible()
+    vp, mb = page.viewport_size, m.bounding_box()
+    assert mb["width"] >= vp["width"] - 2 and mb["height"] >= vp["height"] - 2, f"map isn't full screen: {mb} vs {vp}"
+    fs.click()                                            # same button is the ✕ while full
+    expect(m).not_to_have_class(full)
+    expect(strip).to_be_hidden()
+    fs.click()
+    expect(m).to_have_class(full)
+    page.keyboard.press("Escape")
+    expect(m).not_to_have_class(full)
+    expect(page.locator("#screen-route")).to_be_visible()
+    assert page.evaluate("() => !!document.getElementById('routeMap').closest('#screen-route')"), \
+        "the map didn't go back into the Route screen"
 
 
 def test_BTN_ROUTE_map_start_and_finish_markers_respond(app, page, two_jobs):

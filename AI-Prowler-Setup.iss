@@ -305,6 +305,10 @@ Source: "mcp_tool_catalog.py"; DestDir: "{app}"; Flags: ignoreversion
 ; MCP Tool Configuration -> Save. rag_gui.py refuses to save without it, so it
 ; must ship with every install (it was only in update_install*.bat).
 Source: "tool_config_store.py"; DestDir: "{app}"; Flags: ignoreversion
+; safe_save.py (2026-10-19): crash-safe / reader-safe saves (temp file + atomic
+; swap) used by rag_gui, ai_prowler_mcp, rag_preprocessor, the task queue and
+; scheduler for settings, allowlists, the task queue, tokens and licences.
+Source: "safe_save.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "self_learning.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "setup_wizard.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "subscription_client.py"; DestDir: "{app}"; Flags: ignoreversion

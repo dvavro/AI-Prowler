@@ -16,6 +16,67 @@ import queue
 import os
 from datetime import datetime
 
+# ── Crash-safe / reader-safe saves (2026-10-19) — see safe_save.py ────────────
+# Shared settings files (config.json, the allowlists, pending_tasks.json, the
+# learnings file, the tracking DB, email/SMS settings, licence seats) are also
+# read by the MCP server and the scheduler while the GUI saves them. Temp file +
+# atomic swap: a reader never sees them empty or half-written.
+try:
+    from safe_save import (atomic_write_text as _ss_write_text, atomic_write_json as _ss_write_json,
+                           atomic_write_bytes as _ss_write_bytes, read_json_retry as _ss_read_json)
+except Exception:                                    # safe_save.py missing (partial update): plain writes
+    def _ss_write_bytes(path, data, **_k):
+        with open(path, "wb") as _f:
+            _f.write(data)
+
+    def _ss_write_text(path, text, encoding="utf-8", errors="strict", newline=None, **_k):
+        with open(path, "w", encoding=encoding, errors=errors, newline=newline) as _f:
+            _f.write(text)
+
+    def _ss_write_json(path, obj, indent=2, encoding="utf-8", newline=None, ensure_ascii=True, **_k):
+        _ss_write_text(path, json.dumps(obj, indent=indent, ensure_ascii=ensure_ascii), encoding=encoding, newline=newline)
+
+    _SS_MISSING = object()
+
+    def _ss_read_json(path, default=_SS_MISSING, **_k):
+        try:
+            with open(path, "r", encoding="utf-8") as _f:
+                return json.load(_f)
+        except Exception:
+            if default is _SS_MISSING:
+                raise
+            return default
+
+
+def _ss_read_for_update(path) -> dict:
+    """A JSON settings dict that is about to be changed and SAVED BACK
+    (config.json, email_config.json, ...). Missing file -> {} (first save).
+    If the file exists but can't be read even after retries, RAISE instead of
+    returning {} - the old `except: data = {}` saved back only the one changed
+    key and wiped everything else (bearer token, licence key, settings). The
+    callers' existing error handling then reports the failed save, and the
+    file is left untouched."""
+    p = Path(path)
+    if not p.exists():
+        return {}
+    data = _ss_read_json(p)                       # raises if still unreadable
+    if not isinstance(data, dict):
+        raise ValueError(f"{p.name} is not a JSON object - not saving over it")
+    return data
+
+
+def _ss_read_list_for_update(path) -> list:
+    """Same as _ss_read_for_update for JSON LIST files (pending_tasks.json, the
+    allowlists): missing -> [], unreadable / not a list -> raise, so a queue or
+    allowlist is never saved back as just the one item being added."""
+    p = Path(path)
+    if not p.exists():
+        return []
+    data = _ss_read_json(p)
+    if not isinstance(data, list):
+        raise ValueError(f"{p.name} is not a JSON list - not saving over it")
+    return data
+
 
 def most_recent_scheduled_backup_date(frequency, day_of_week, month_position, today):
     """The most recent date on/before `today` that a scheduled backup
@@ -1016,7 +1077,18 @@ class RAGGui:
         # On subsequent launches the model is already cached and this returns in
         # milliseconds, so the cost is negligible.
         if RAG_AVAILABLE:
+            # 2026-10-19: timed ChromaDB-init steps go to startup.log, so a
+            # stuck start shows exactly which step it stopped on.
+            try:
+                import rag_preprocessor as _rp_hook
+                _rp_hook._INIT_STEP_HOOK = _slog.step
+            except Exception:
+                pass
             self.root.after(4000, self._prewarm_embedding_model)
+
+        # 2026-10-19: hang recorder — if the window stops responding for 45 s,
+        # every thread's stack is written to logs\hang_dump.log.
+        self._start_hang_watchdog()
 
         # MCP status bar indicator — check once on startup
         self.root.after(2000, self._refresh_mcp_status_bar)
@@ -1447,21 +1519,22 @@ class RAGGui:
         try:
             if not pending_path.exists():
                 return
-            with open(pending_path, "r", encoding="utf-8") as f:
-                pending = json.load(f)
+            pending = _ss_read_json(pending_path)            # retries a mid-save read
             if not isinstance(pending, list) or not pending:
                 return
         except Exception:
             return
 
-        # Load current writable allowlist
+        # Load current writable allowlist. 2026-10-19: if the file EXISTS but
+        # can't be read, skip this round - the old `writable = []` fallback
+        # saved back only the newly approved folder and wiped every earlier
+        # approval. The pending requests stay queued for the next poll.
         try:
-            with open(writable_path, "r", encoding="utf-8") as f:
-                writable = json.load(f)
+            writable = _ss_read_json(writable_path) if writable_path.exists() else []
             if not isinstance(writable, list):
-                writable = []
+                return
         except Exception:
-            writable = []
+            return
 
         for req in pending:
             try:
@@ -1493,8 +1566,7 @@ class RAGGui:
         # Save updated writable allowlist
         try:
             writable_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(writable_path, "w", encoding="utf-8") as f:
-                json.dump(sorted(set(writable)), f, indent=2)
+            _ss_write_json(writable_path, sorted(set(writable)))     # atomic (safe_save)
         except Exception as exc:
             try:
                 messagebox.showerror(
@@ -1505,10 +1577,15 @@ class RAGGui:
             except Exception:
                 pass
 
-        # Clear the pending queue (user has now responded to each request)
+        # Clear the requests the user just answered. Re-read first and keep any
+        # request the MCP server queued while the dialogs were open (the old
+        # blanket `[]` dropped those).
         try:
-            with open(pending_path, "w", encoding="utf-8") as f:
-                json.dump([], f)
+            answered = {r.get("path") for r in pending if isinstance(r, dict)}
+            now = _ss_read_json(pending_path, [])
+            left = [r for r in (now if isinstance(now, list) else [])
+                    if not (isinstance(r, dict) and r.get("path") in answered)]
+            _ss_write_json(pending_path, left, indent=None)          # atomic (safe_save)
         except Exception:
             pass
 
@@ -4441,18 +4518,12 @@ or from the Help menu."""
         try:
             cfg_path = Path.home() / '.ai-prowler' / 'config.json'
             cfg_path.parent.mkdir(parents=True, exist_ok=True)
-            data = {}
-            if cfg_path.exists():
-                try:
-                    data = json.loads(cfg_path.read_text(encoding='utf-8-sig'))
-                except Exception:
-                    data = {}
+            data = _ss_read_for_update(cfg_path)    # unreadable -> raise, never save over it
             if enabled is not None:
                 data['telemetry_enabled'] = bool(enabled)
             if endpoint is not None:
                 data['telemetry_endpoint'] = str(endpoint)
-            cfg_path.write_text(
-                json.dumps(data, indent=2), encoding='utf-8')
+            _ss_write_json(cfg_path, data)          # atomic (safe_save)
         except Exception:
             pass
 
@@ -6331,8 +6402,7 @@ or from the Help menu."""
                                 lang_url, headers={'User-Agent': 'AI-Prowler-OCR'})
                             with urllib.request.urlopen(req, timeout=120) as resp:
                                 lang_data = resp.read()
-                            with open(lang_file, 'wb') as lf:
-                                lf.write(lang_data)
+                            _ss_write_bytes(lang_file, lang_data)   # atomic: never a half-written pack
                             self._ocr_log(
                                 f'[OCR] ✅ {lang_code} language pack installed '
                                 f'({len(lang_data) / 1024 / 1024:.1f} MB).')
@@ -6532,8 +6602,7 @@ or from the Help menu."""
                                           headers={'User-Agent': 'AI-Prowler-OCR'})
                         with _ur.urlopen(req, timeout=120) as resp:
                             lang_data = resp.read()
-                        with open(lang_file, 'wb') as lf:
-                            lf.write(lang_data)
+                        _ss_write_bytes(lang_file, lang_data)   # atomic: never a half-written pack
                         self._ocr_log(
                             f'[OCR] ✅ {lang_code} language pack installed '
                             f'({len(lang_data) / 1024 / 1024:.1f} MB).')
@@ -7208,15 +7277,9 @@ or from the Help menu."""
 
             tasks_path = _Path_bq.home() / ".ai-prowler" / "pending_tasks.json"
             try:
-                existing = []
-                if tasks_path.exists():
-                    try:
-                        existing = _json_bq.loads(
-                            tasks_path.read_text(encoding="utf-8")) or []
-                        if not isinstance(existing, list):
-                            existing = []
-                    except Exception:
-                        existing = []
+                # Unreadable queue -> raise (reported as "Task queue error"),
+                # never save it back as just this one task (2026-10-19).
+                existing = _ss_read_list_for_update(tasks_path)
 
                 ts = _dt_bq.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
                 schedule_key  = settings.get("schedule", "none")
@@ -7257,9 +7320,7 @@ or from the Help menu."""
                 }
                 existing.append(task)
                 tasks_path.parent.mkdir(parents=True, exist_ok=True)
-                tasks_path.write_text(
-                    _json_bq.dumps(existing, indent=2, ensure_ascii=False),
-                    encoding="utf-8")
+                _ss_write_json(tasks_path, existing, ensure_ascii=False)   # atomic (safe_save)
                 return True, None
             except Exception as _e:
                 return False, str(_e)
@@ -7796,7 +7857,7 @@ or from the Help menu."""
             from pathlib import Path as _Path
             p = _Path.home() / ".ai-prowler" / "pending_tasks.json"
             try:
-                tasks = _json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+                tasks = _ss_read_json(p) if p.exists() else []      # retries a mid-save read
                 pending = [t for t in tasks if t.get("status") not in ("completed",)]
                 n = len(pending)
             except Exception:
@@ -7816,7 +7877,7 @@ or from the Help menu."""
                 w.destroy()
             p = _Path.home() / ".ai-prowler" / "pending_tasks.json"
             try:
-                tasks = _json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+                tasks = _ss_read_json(p) if p.exists() else []      # retries a mid-save read
                 pending = [t for t in tasks if t.get("status") not in ("completed",)]
             except Exception:
                 pending = []
@@ -7883,9 +7944,9 @@ or from the Help menu."""
                         import json as _j
                         from pathlib import Path as _P
                         _p = _P.home() / ".ai-prowler" / "pending_tasks.json"
-                        _tasks = _j.loads(_p.read_text(encoding="utf-8")) if _p.exists() else []
+                        _tasks = _ss_read_list_for_update(_p)    # unreadable -> raise, no save
                         _tasks = [x for x in _tasks if x.get("task_id") != tid]
-                        _p.write_text(_j.dumps(_tasks, indent=2), encoding="utf-8")
+                        _ss_write_json(_p, _tasks)               # atomic (safe_save)
                     except Exception:
                         pass
                     _refresh_queue_list()
@@ -7906,9 +7967,9 @@ or from the Help menu."""
                     import json as _j
                     from pathlib import Path as _P
                     _p = _P.home() / ".ai-prowler" / "pending_tasks.json"
-                    _tasks = _j.loads(_p.read_text(encoding="utf-8")) if _p.exists() else []
+                    _tasks = _ss_read_list_for_update(_p)        # unreadable -> raise, no save
                     _tasks = [x for x in _tasks if x.get("status") != "pending"]
-                    _p.write_text(_j.dumps(_tasks, indent=2), encoding="utf-8")
+                    _ss_write_json(_p, _tasks)                   # atomic (safe_save)
                 except Exception:
                     pass
                 _refresh_queue_list()
@@ -8138,16 +8199,9 @@ or from the Help menu."""
                     import json as _j
                     from pathlib import Path as _P
                     p = _P.home() / ".ai-prowler" / "pending_tasks.json"
-                    existing = []
-                    if p.exists():
-                        try:
-                            existing = _j.loads(p.read_text(encoding="utf-8"))
-                            if not isinstance(existing, list):
-                                existing = []
-                        except Exception:
-                            existing = []
+                    existing = _ss_read_list_for_update(p)   # unreadable -> raise, no save
                     existing.extend(entries)
-                    p.write_text(_j.dumps(existing, indent=2), encoding="utf-8")
+                    _ss_write_json(p, existing)              # atomic (safe_save)
 
                     # Copy run command to clipboard
                     _cmd = (
@@ -8640,16 +8694,9 @@ or from the Help menu."""
                             import json as _j
                             from pathlib import Path as _P
                             p = _P.home() / ".ai-prowler" / "pending_tasks.json"
-                            existing_q = []
-                            if p.exists():
-                                try:
-                                    existing_q = _j.loads(
-                                        p.read_text(encoding="utf-8"))
-                                except Exception:
-                                    existing_q = []
+                            existing_q = _ss_read_list_for_update(p)   # unreadable -> raise, no save
                             existing_q.extend(entries)
-                            p.write_text(_j.dumps(existing_q, indent=2),
-                                         encoding="utf-8")
+                            _ss_write_json(p, existing_q)              # atomic (safe_save)
                             _cmd = (
                                 "Call get_pending_analysis_tasks() and for each "
                                 "pending task: execute the full analysis, save "
@@ -13025,9 +13072,15 @@ or from the Help menu."""
                                       command=self._on_corrupt_btn_click)
         self._corrupt_btn.pack(side='left', padx=5)
         self._corrupt_state = None  # None=checking, True=corrupt, False=healthy
-        # Delay the first check slightly so the embedding prewarm gets a head
-        # start (avoids a spurious RED while ChromaDB is still initializing).
-        self.root.after(3000, self._check_index_integrity_async)
+        # 2026-10-19 startup-hang fix: the first check no longer runs on a
+        # 3 s timer, in parallel with the embedding prewarm (two full scans of
+        # the index while ChromaDB was opening it froze cold starts). The
+        # prewarm runs the integrity check itself; its 'embedding_ready' /
+        # 'embedding_ready_error' handler sets this button from that result
+        # (_apply_startup_integrity_result). Without RAG there is no prewarm,
+        # so check on the old timer.
+        if not RAG_AVAILABLE:
+            self.root.after(3000, self._check_index_integrity_async)
 
         # ── Email Configuration ────────────────────────────────────────────
         # Shown in BOTH personal and server mode, but serves different purposes:
@@ -13789,8 +13842,9 @@ or from the Help menu."""
                 # switches to Outlook-only and then re-enables SMTP later.
                 _p2 = Path.home() / '.ai-prowler' / 'email_config.json'
                 try:
-                    _existing = _j.loads(
-                        _p2.read_text(encoding='utf-8')) if _p2.exists() else {}
+                    _existing = _ss_read_json(_p2, {}) if _p2.exists() else {}   # retries a mid-save read
+                    if not isinstance(_existing, dict):
+                        _existing = {}
                 except Exception:
                     _existing = {}
                 for _k in ('smtp_host', 'smtp_port', 'use_tls', '_password_b64'):
@@ -13799,7 +13853,7 @@ or from the Help menu."""
 
             p = Path.home() / '.ai-prowler' / 'email_config.json'
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(_j.dumps(cfg, indent=2), encoding='utf-8')
+            _ss_write_json(p, cfg)                       # atomic (safe_save)
 
             labels = {
                 'outlook+smtp': 'Outlook + SMTP fallback',
@@ -14187,8 +14241,11 @@ or from the Help menu."""
             pid = _prov_id()
             p = Path.home() / '.ai-prowler' / 'config.json'
             p.parent.mkdir(parents=True, exist_ok=True)
-            try: existing = _j.loads(p.read_text(encoding='utf-8-sig')) if p.exists() else {}
-            except Exception: existing = {}
+            # config.json also holds the bearer token / licence / tunnel - an
+            # unreadable read must NOT become {} and be saved back (2026-10-19).
+            try: existing = _ss_read_for_update(p)
+            except Exception as _e:
+                _sms_status_var.set(f"❌ Couldn't read config.json - nothing saved ({_e})"); return
             for k in ('twilio_account_sid','twilio_auth_token','twilio_from_number',
                       'twilio_sms_enabled','whatsapp_enabled',
                       'signalwire_project_id','signalwire_auth_token',
@@ -14219,7 +14276,9 @@ or from the Help menu."""
                     key=_vn_key_var.get().strip(); sec=_vn_secret_var.get().strip(); frm=_vn_from_var.get().strip()
                     if not (key and sec and frm): _sms_status_var.set('API Key, Secret, and From are required.'); return
                     existing.update({'vonage_api_key':key,'vonage_api_secret':sec,'vonage_from_number':frm})
-            p.write_text(_j.dumps(existing, indent=2), encoding='utf-8')
+            try: _ss_write_json(p, existing)            # atomic (safe_save)
+            except Exception as _e:
+                _sms_status_var.set(f"❌ Could not save SMS config: {_e}"); return
             _sms_status_var.set(f'SMS config saved ({pid.title()}).' if _sms_enabled_var.get() else 'SMS config cleared.')
             _update_webhook_url()
 
@@ -14248,7 +14307,7 @@ or from the Help menu."""
             p = Path.home() / '.ai-prowler' / 'config.json'
             try:
                 import json as _j
-                ex = _j.loads(p.read_text(encoding='utf-8-sig')) if p.exists() else {}
+                ex = _ss_read_for_update(p)     # unreadable -> raise (reported below), never saved over
                 for k in ('twilio_account_sid','twilio_auth_token','twilio_from_number',
                           'twilio_sms_enabled','whatsapp_enabled',
                           'signalwire_project_id','signalwire_auth_token',
@@ -14256,7 +14315,7 @@ or from the Help menu."""
                           'vonage_api_key','vonage_api_secret','vonage_from_number',
                         'sms_provider','sms_callback_signature','sms_optout_enabled',
                         'sms_help_reply_text'): ex.pop(k, None)
-                p.write_text(_j.dumps(ex, indent=2), encoding='utf-8')
+                _ss_write_json(p, ex)                       # atomic (safe_save)
             except Exception as _e: _sms_status_var.set(f'❌ Could not clear: {_e}'); return
             for v in (_sms_sid_var,_sms_token_var,_sms_from_var,
                       _sw_project_var,_sw_token_var,_sw_space_var,_sw_from_var,
@@ -15035,14 +15094,9 @@ or from the Help menu."""
                     import json as _jmod
                     _cfg_p = Path.home() / '.ai-prowler' / 'config.json'
                     _cfg_p.parent.mkdir(parents=True, exist_ok=True)
-                    _cfg_d = {}
-                    if _cfg_p.exists():
-                        try:
-                            _cfg_d = _jmod.loads(_cfg_p.read_text(encoding='utf-8-sig'))
-                        except Exception:
-                            pass
+                    _cfg_d = _ss_read_for_update(_cfg_p)   # unreadable -> error shown, nothing saved
                     _cfg_d['remote_token'] = tok
-                    _cfg_p.write_text(_jmod.dumps(_cfg_d, indent=2), encoding='utf-8')
+                    _ss_write_json(_cfg_p, _cfg_d)          # atomic (safe_save)
                     self.status_var.set("✅ Token saved")
                     self.root.after(3000, lambda: self.status_var.set("Ready"))
                 except Exception as _e:
@@ -15109,14 +15163,9 @@ or from the Help menu."""
                 import json as _jmod2
                 _cfg_p2 = Path.home() / '.ai-prowler' / 'config.json'
                 _cfg_p2.parent.mkdir(parents=True, exist_ok=True)
-                _cfg_d2 = {}
-                if _cfg_p2.exists():
-                    try:
-                        _cfg_d2 = _jmod2.loads(_cfg_p2.read_text(encoding='utf-8-sig'))
-                    except Exception:
-                        pass
+                _cfg_d2 = _ss_read_for_update(_cfg_p2)     # unreadable -> error shown, nothing saved
                 _cfg_d2['license_key'] = lk
-                _cfg_p2.write_text(_jmod2.dumps(_cfg_d2, indent=2), encoding='utf-8')
+                _ss_write_json(_cfg_p2, _cfg_d2)            # atomic (safe_save)
                 self.status_var.set(
                     "✅ Parent License Key saved" if _settings_is_server_mode
                     else "✅ License key saved")
@@ -15763,10 +15812,7 @@ or from the Help menu."""
                             try:
                                 import json as _jcfg
                                 _cfgp = Path.home() / '.ai-prowler' / 'config.json'
-                                _cfg_data = {}
-                                if _cfgp.exists():
-                                    _cfg_data = _jcfg.loads(
-                                        _cfgp.read_text(encoding='utf-8'))
+                                _cfg_data = _ss_read_for_update(_cfgp)   # unreadable -> raise, never saved over
                                 _tok = _cfg_data.get('tunnel_token', '')
                                 if _tok:
                                     _tun_token_var.set(_tok)
@@ -15775,8 +15821,7 @@ or from the Help menu."""
                                 # this server's parent license on next launch.
                                 _cfg_data['license_key']   = result.get('license_key', '')
                                 _cfg_data['tunnel_domain'] = result.get('domain', '')
-                                _cfgp.write_text(
-                                    _jcfg.dumps(_cfg_data), encoding='utf-8')
+                                _ss_write_json(_cfgp, _cfg_data, indent=None)   # atomic (safe_save)
                             except Exception:
                                 pass
                             self.root.after(500, _run_status_check)
@@ -17426,15 +17471,10 @@ or from the Help menu."""
                 import json as _jmod_sc
                 _sc_path = Path.home() / '.ai-prowler' / 'config.json'
                 _sc_path.parent.mkdir(parents=True, exist_ok=True)
-                _sc_d = {}
-                if _sc_path.exists():
-                    try:
-                        _sc_d = _jmod_sc.loads(_sc_path.read_text(encoding='utf-8'))
-                    except Exception:
-                        pass
+                _sc_d = _ss_read_for_update(_sc_path)    # unreadable -> raise, never saved over
                 _sc_d['tunnel_domain'] = domain
                 _sc_d['tunnel_token']  = tok
-                _sc_path.write_text(_jmod_sc.dumps(_sc_d, indent=2), encoding='utf-8')
+                _ss_write_json(_sc_path, _sc_d)           # atomic (safe_save)
             except Exception:
                 pass
 
@@ -18194,10 +18234,23 @@ or from the Help menu."""
             return {}
 
         def _save_cfg(updates: dict):
-            _cfg_path.parent.mkdir(parents=True, exist_ok=True)
-            d = _load_cfg()
-            d.update(updates)
-            _cfg_path.write_text(_json.dumps(d, indent=2), encoding='utf-8')
+            # 2026-10-19: _load_cfg() returns {} on ANY read error (fine for
+            # showing values), but saving that {} + updates wiped the rest of
+            # config.json (bearer token, licence, tunnel...). Read strictly here
+            # and refuse to save over a file we couldn't read.
+            try:
+                _cfg_path.parent.mkdir(parents=True, exist_ok=True)
+                d = _ss_read_for_update(_cfg_path)
+                d.update(updates)
+                _ss_write_json(_cfg_path, d)        # atomic (safe_save)
+                return True
+            except Exception as _e:
+                try:
+                    messagebox.showerror("AI-Prowler", f"Settings were NOT saved - config.json "
+                                                       f"couldn't be read or written:\n{_e}")
+                except Exception:
+                    pass
+                return False
 
         # ── 1. OVERVIEW BANNER ────────────────────────────────────────────────
         # v9.1.x: this used to list all 12 tools + 8 example prompts inline,
@@ -20748,18 +20801,23 @@ or from the Help menu."""
                         # Manually patch the supersedes/superseded_by linkage
                         # by reading + writing the JSON file directly. The
                         # update_learning API doesn't accept those fields.
-                        import json as _j
-                        f = _learnings_file
-                        data = _j.loads(f.read_text(encoding='utf-8'))
+                        # 2026-10-19: go through the learnings engine's own
+                        # load/save (retrying read + atomic save) - the old
+                        # in-place write_text could be caught half-written by
+                        # the MCP server, which then "started fresh" and wiped
+                        # every learning on its next save.
+                        data = _sl_engine._load_db()
+                        _ids = {ll.get('id') for ll in data.get('learnings', [])}
+                        if loser['id'] not in _ids or winner['id'] not in _ids:
+                            raise RuntimeError("Couldn't read the learnings file - nothing changed. "
+                                               "Try again in a moment.")
                         for ll in data['learnings']:
                             if ll['id'] == loser['id']:
                                 ll['superseded_by'] = winner['id']
                             elif ll['id'] == winner['id']:
                                 if not ll.get('supersedes'):
                                     ll['supersedes'] = loser['id']
-                        f.write_text(_j.dumps(data, indent=2,
-                                              ensure_ascii=False),
-                                     encoding='utf-8')
+                        _sl_engine._save_db(data)
                         # Reindex both so ChromaDB metadata stays in sync
                         _sl_engine._index_learning(
                             next(ll for ll in data['learnings']
@@ -21673,8 +21731,7 @@ or from the Help menu."""
                             _users_p = _Path.home() / ".ai-prowler" / "users.json"
                             if _users_p.exists():
                                 try:
-                                    _udata = _json.loads(
-                                        _users_p.read_text(encoding="utf-8"))
+                                    _udata = _ss_read_json(_users_p)   # retries; raises if unreadable (no save)
                                     _changed = False
                                     for _u in _udata.get("users", {}).values():
                                         if (isinstance(_u, dict)
@@ -21683,9 +21740,7 @@ or from the Help menu."""
                                             _u["seat_id"]           = ""
                                             _changed = True
                                     if _changed:
-                                        _users_p.write_text(
-                                            _json.dumps(_udata, indent=2),
-                                            encoding="utf-8")
+                                        _ss_write_json(_users_p, _udata)   # atomic (safe_save)
                                         _log.warning(
                                             "[Admin] Cleared seat assignments "
                                             "from users.json — admin must "
@@ -22539,7 +22594,7 @@ or from the Help menu."""
             from pathlib import Path as _psync
             _lsf = _psync.home() / ".ai-prowler" / "license_seats.json"
             if _lsf.exists() and data.get("users"):
-                _lsd = _jsync.loads(_lsf.read_text(encoding="utf-8"))
+                _lsd = _ss_read_json(_lsf)           # retries; raises if unreadable (no save)
                 # Build assigned map from users.json
                 _assigned = {}
                 for _u in data["users"].values():
@@ -22572,7 +22627,7 @@ or from the Help menu."""
                                 _s["assigned_to"] = None
                                 _changed = True
                 if _changed:
-                    _lsf.write_text(_jsync.dumps(_lsd, indent=2), encoding="utf-8")
+                    _ss_write_json(_lsf, _lsd)       # atomic (safe_save)
                     # Reload seats after sync so summary strip is correct
                     seats = self._admin_load_seats()
         except Exception:
@@ -22698,7 +22753,7 @@ or from the Help menu."""
         if not lsf.exists() or not child_key:
             return
         try:
-            data    = _json.loads(lsf.read_text(encoding="utf-8"))
+            data    = _ss_read_json(lsf)               # retries; raises if unreadable (no save)
             changed = False
             for s in data.get("seats", []):
                 if s.get("child_license_key") == child_key or s.get("seat_id") == child_key:
@@ -22706,7 +22761,7 @@ or from the Help menu."""
                     s["assigned_to"] = assigned_to if status == "assigned" else None
                     changed = True
             if changed:
-                lsf.write_text(_json.dumps(data, indent=2), encoding="utf-8")
+                _ss_write_json(lsf, data)              # atomic (safe_save)
         except Exception:
             pass  # non-fatal — Refresh Seats will sync correctly
 
@@ -23982,7 +24037,7 @@ or from the Help menu."""
                     from pathlib import Path as _p3
                     _lsf3 = _p3.home() / ".ai-prowler" / "license_seats.json"
                     if _lsf3.exists():
-                        _lsd3 = _j3.loads(_lsf3.read_text(encoding="utf-8"))
+                        _lsd3 = _ss_read_json(_lsf3)        # retries; raises if unreadable (no save)
                         _chg3 = False
                         for _s3 in _lsd3.get("seats", []):
                             if ((child_key and _s3.get("child_license_key") == child_key)
@@ -23996,8 +24051,7 @@ or from the Help menu."""
 
                                 _chg3 = True
                         if _chg3:
-                            _lsf3.write_text(
-                                _j3.dumps(_lsd3, indent=2), encoding="utf-8")
+                            _ss_write_json(_lsf3, _lsd3)    # atomic (safe_save)
                 except Exception:
                     pass  # non-fatal — Refresh Seats will sync on next open
             # v8.0.0 — owner's explicit choice of which seat to remove. This
@@ -24727,7 +24781,7 @@ or from the Help menu."""
             if TRACKING_DB.exists():
                 import json as _json
                 try:
-                    tracking = _json.loads(TRACKING_DB.read_text(encoding='utf-8'))
+                    tracking = _ss_read_json(TRACKING_DB)      # retries a mid-save read
                     changed = False
                     for dir_key, dir_data in tracking.items():
                         files = dir_data.get('files', {})
@@ -24737,8 +24791,7 @@ or from the Help menu."""
                             del files[fp]
                             changed = True
                     if changed:
-                        TRACKING_DB.write_text(
-                            _json.dumps(tracking, indent=2), encoding='utf-8')
+                        _ss_write_json(TRACKING_DB, tracking)  # atomic (safe_save)
                 except Exception:
                     pass
         except Exception as e:
@@ -24806,6 +24859,67 @@ or from the Help menu."""
             self.status_var.set("⏸ Indexing paused — click Resume to continue")
             self._cancel_index_timer()   # freeze display at current time
 
+    HANG_WATCHDOG_SECONDS = 45
+
+    def _start_hang_watchdog(self, timeout=None, log_dir=None, force=False):
+        """2026-10-19: hang recorder for "AI-Prowler stopped responding".
+
+        Arms faulthandler.dump_traceback_later() and re-arms it from a Tk
+        after() tick every 5 s. While the window's event loop is running the
+        timer never expires. If the loop is blocked for `timeout` seconds (a
+        frozen GUI — e.g. the cold-start hang on "Preparing embedding model…"),
+        faulthandler's own C-level watchdog thread writes EVERY thread's Python
+        stack to ~/.ai-prowler/logs/hang_dump.log. It needs no GIL, so it works
+        even when native code (ChromaDB, torch) is holding it. Nothing is
+        killed (exit=False); the next tick simply re-arms.
+        """
+        import faulthandler as _fh
+        # Test runs build many RAGGui windows without a running event loop —
+        # the timer would fire in every one of them. Off under pytest unless a
+        # test asks for it (force=True, with its own log_dir).
+        if not force and ("pytest" in sys.modules or os.environ.get("AIPROWLER_TEST_STATE_DIR")):
+            return
+        timeout = int(timeout or self.HANG_WATCHDOG_SECONDS)
+        try:
+            log_dir = Path(log_dir) if log_dir else Path.home() / '.ai-prowler' / 'logs'
+            log_dir.mkdir(parents=True, exist_ok=True)
+            path = log_dir / 'hang_dump.log'
+            try:
+                if path.exists() and path.stat().st_size > 1_000_000:
+                    path.unlink()                      # keep it small
+            except OSError:
+                pass
+            f = open(path, 'a', encoding='utf-8')
+            f.write(f"\n=== AI-Prowler {APP_VERSION} started "
+                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} pid {os.getpid()} - "
+                    f"a stack dump below this line means the window stopped "
+                    f"responding for {timeout} s ===\n")
+            f.flush()
+        except Exception:
+            return
+        self._hang_watchdog_file = f
+        self._hang_watchdog_timeout = timeout
+
+        def _tick():
+            try:
+                # Re-arming replaces the previous timer and restarts the clock.
+                _fh.dump_traceback_later(timeout, repeat=False, file=f, exit=False)
+            except Exception:
+                return
+            try:
+                self.root.after(5000, _tick)
+            except Exception:
+                pass
+
+        _tick()
+
+    def _stop_hang_watchdog(self):
+        try:
+            import faulthandler as _fh
+            _fh.cancel_dump_traceback_later()
+        except Exception:
+            pass
+
     def _prewarm_embedding_model(self):
         """
         Download and cache the sentence-transformers embedding model on startup.
@@ -24852,8 +24966,10 @@ or from the Help menu."""
             pass
 
         self.status_var.set("⬇ Preparing embedding model…")
+        _slog.step("prewarm: preparing embedding model (background thread)...")
 
         def _worker():
+            _t_pw = time.time()
             try:
                 # get_chroma_client() initialises ChromaDB AND downloads/loads
                 # the embedding model.  This is the exact same call that
@@ -24865,6 +24981,7 @@ or from the Help menu."""
                 # The user guide will be indexed on the user's first Update All.
                 from rag_preprocessor import get_chroma_client
                 get_chroma_client()
+                _slog.step(f"prewarm: embedding model ready ({time.time() - _t_pw:.1f}s total)")
                 self.output_queue.put(('embedding_ready', None))
                 # R-056: surface an interrupted reindex as a warning (non-fatal).
                 try:
@@ -24876,6 +24993,7 @@ or from the Help menu."""
                 except Exception:
                     pass
             except Exception as e:
+                _slog.warn(f"prewarm: failed after {time.time() - _t_pw:.1f}s - {e}")
                 # R-056: a corrupt on-disk index gets a distinct, actionable
                 # message instead of a generic load failure.
                 try:
@@ -26141,9 +26259,7 @@ or from the Help menu."""
             f = self._writable_dirs_file
             if not f.exists():
                 return []
-            import json as _json
-            with open(f, "r", encoding="utf-8") as fh:
-                data = _json.load(fh)
+            data = _ss_read_json(f)                          # retries a mid-save read
             if isinstance(data, list):
                 return [str(p) for p in data if isinstance(p, str)]
             return []
@@ -26155,9 +26271,11 @@ or from the Help menu."""
         try:
             f = self._writable_dirs_file
             f.parent.mkdir(parents=True, exist_ok=True)
-            import json as _json
-            with open(f, "w", encoding="utf-8") as fh:
-                _json.dump(sorted(set(paths)), fh, indent=2)
+            # Callers load -> change -> save; _load_writable_paths() returns []
+            # when the file can't be read, so never save over a file that
+            # exists but is unreadable (that wiped every approval).
+            _ss_read_list_for_update(f)
+            _ss_write_json(f, sorted(set(paths)))            # atomic (safe_save)
             return True
         except Exception as e:
             messagebox.showerror(
@@ -26254,9 +26372,7 @@ or from the Help menu."""
             f = self._access_only_dirs_file
             if not f.exists():
                 return []
-            import json as _json
-            with open(f, "r", encoding="utf-8") as fh:
-                data = _json.load(fh)
+            data = _ss_read_json(f)                          # retries a mid-save read
             if isinstance(data, list):
                 return [str(p) for p in data if isinstance(p, str)]
             return []
@@ -26268,9 +26384,8 @@ or from the Help menu."""
         try:
             f = self._access_only_dirs_file
             f.parent.mkdir(parents=True, exist_ok=True)
-            import json as _json
-            with open(f, "w", encoding="utf-8") as fh:
-                _json.dump(sorted(set(paths)), fh, indent=2)
+            _ss_read_list_for_update(f)      # exists but unreadable -> error, never saved over
+            _ss_write_json(f, sorted(set(paths)))            # atomic (safe_save)
             return True
         except Exception as e:
             messagebox.showerror(
@@ -28497,7 +28612,7 @@ or from the Help menu."""
             try:
                 if RAG_AVAILABLE and TRACKING_DB.exists():
                     import json as _json
-                    TRACKING_DB.write_text('{}', encoding='utf-8')
+                    _ss_write_text(TRACKING_DB, '{}')   # atomic (safe_save)
             except Exception as e:
                 errors.append(f"Tracking DB: {e}")
 
@@ -28534,6 +28649,23 @@ or from the Help menu."""
                 pass
         threading.Thread(target=_worker, daemon=True).start()
 
+    def _apply_startup_integrity_result(self):
+        """2026-10-19 startup-hang fix: set the Settings "Index healthy"
+        button from the integrity check the embedding prewarm already ran
+        (get_chroma_client -> check_chroma_db_integrity), instead of starting
+        a second full scan of the index at the same time as the prewarm. Falls
+        back to a normal background check when no result is cached (e.g. a
+        fresh install with no index yet, or the prewarm failed before it)."""
+        try:
+            from rag_preprocessor import last_quick_check_result
+            res = last_quick_check_result()
+        except Exception:
+            res = None
+        if res is not None:
+            self._set_corrupt_btn_state(not res[0])
+        else:
+            self._check_index_integrity_async()
+
     def _set_corrupt_btn_state(self, is_corrupt):
         """Update the corruption button: RED when corrupt, GREEN when healthy."""
         btn = getattr(self, '_corrupt_btn', None)
@@ -28567,7 +28699,7 @@ or from the Help menu."""
                     clear_database_only(confirm=True)
                     invalidate_chroma_cache()
                     if RAG_AVAILABLE and TRACKING_DB.exists():
-                        TRACKING_DB.write_text('{}', encoding='utf-8')
+                        _ss_write_text(TRACKING_DB, '{}')   # atomic (safe_save)
                     from rag_preprocessor import get_chroma_client
                     get_chroma_client()
                     self.root.after(0, self._after_corrupt_cleared)
@@ -28637,7 +28769,7 @@ or from the Help menu."""
             try:
                 if RAG_AVAILABLE and TRACKING_DB.exists():
                     import json as _json
-                    TRACKING_DB.write_text('{}', encoding='utf-8')
+                    _ss_write_text(TRACKING_DB, '{}')   # atomic (safe_save)
             except Exception as e:
                 errors.append(f"Tracking DB: {e}")
 
@@ -28825,7 +28957,14 @@ or from the Help menu."""
                         self.update_all_btn.configure(state='normal')
                     except Exception:
                         pass
-                    self.status_var.set("\u2705 Embedding model ready")
+                    self.status_var.set("✅ Embedding model ready")
+                    # 2026-10-19: Settings -> "Index healthy" button. The
+                    # prewarm already ran the integrity check - reuse that
+                    # result instead of scanning the 1-2 GB index again.
+                    try:
+                        self._apply_startup_integrity_result()
+                    except Exception:
+                        pass
 
                 elif msg_type == 'embedding_ready_error':
                     # Model download failed — re-enable buttons so user can
@@ -28846,6 +28985,10 @@ or from the Help menu."""
                     try:
                         if 'corrupt' in str(msg_data).lower():
                             self._set_corrupt_btn_state(True)
+                        else:
+                            # 2026-10-19: the Settings check now waits for the
+                            # prewarm — give the button its result either way.
+                            self._apply_startup_integrity_result()
                     except Exception:
                         pass
 
@@ -29218,6 +29361,10 @@ def main():
     app = RAGGui(root)
     _slog.step("RAGGui initialized — entering mainloop ✅")
     root.mainloop()
+    try:
+        app._stop_hang_watchdog()      # shutdown work after the loop isn't a hang
+    except Exception:
+        pass
     _slog.step("mainloop() exited — clean shutdown")
 
 if __name__ == "__main__":

@@ -67,7 +67,9 @@ for r, refs in held:
 
 if APPLY:
     moved = 0
-    for r in [b[0] for b in bak if b[1] == "original present"] + [s[0] for s in scratch]:
+    # --bak-only (2026-10-19): move just the .bakN backups, leave scratch files
+    _scratch = [] if "--bak-only" in sys.argv else [s[0] for s in scratch]
+    for r in [b[0] for b in bak if b[1] == "original present"] + _scratch:
         src = ROOT / r
         dst = DEST / r
         n = 2

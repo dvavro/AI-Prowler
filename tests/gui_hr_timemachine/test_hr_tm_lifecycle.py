@@ -37,6 +37,19 @@ S = {}                                   # the story's shared state
 OPEN = ("Not Started", "In Progress", "Awaiting Document", "Overdue")
 
 
+@pytest.fixture(autouse=True)
+def _story_needs_the_hire(request):
+    """Every step after 01 builds on the employee 01 hires. If 01 didn't run
+    (skipped because Playwright's Chromium is missing, deselected with -k, or
+    failed), skip with the reason instead of a bare KeyError: 'emp_id'
+    (2026-10-19 regression run: 03/05 crashed that way after a Playwright upgrade
+    removed the old Chromium, so 01 skipped but the browserless 03/05 still ran)."""
+    if not request.node.name.startswith("test_01") and "emp_id" not in S:
+        pytest.skip("test_01 (the hire) didn't run in this session - the rest of the HR story builds on it")
+    if request.node.name.startswith("test_05") and "done_in_portal" not in S:
+        pytest.skip("test_04 (task marked done in the Portal) didn't run - test_05 checks against it")
+
+
 def _emp(tm):
     return tm.api("GET", f"/employees/{S['emp_id']}")[1]
 
@@ -47,9 +60,9 @@ def _tasks(tm):
 
 
 # ── 01 ──────────────────────────────────────────────────────────────────────
-def test_01_hr_hires_through_the_new_employee_form(browser, tm):
+def test_01_hr_hires_through_the_new_employee_form(hr_browser, tm):
     tm.clock(HIRE_DAY, "09:00")
-    ctx, page, watch = new_page(browser, "admin")
+    ctx, page, watch = new_page(hr_browser, "admin")
     sign_in_admin(page, tm)                                   # loads the list -> placeholders for server users
     st, j = tm.api("GET", "/employees")
     ph = [e for e in j["employees"] if e["last_name"] == "Newhire"]
@@ -85,8 +98,8 @@ def test_01_hr_hires_through_the_new_employee_form(browser, tm):
 
 
 # ── 02 ──────────────────────────────────────────────────────────────────────
-def test_02_new_hire_sees_their_tasks_in_the_portal(browser, tm):
-    ctx, page, watch = new_page(browser, "newhire")
+def test_02_new_hire_sees_their_tasks_in_the_portal(hr_browser, tm):
+    ctx, page, watch = new_page(hr_browser, "newhire")
     assert sign_in_portal(page, tm, "newhire") == ""
     page.locator('.nav-item[data-page="tasks"]').first.evaluate("e => e.click()")
     page.wait_for_timeout(1500)
@@ -109,8 +122,8 @@ def test_03_walk_to_the_first_day(tm):
 
 
 # ── 04 ──────────────────────────────────────────────────────────────────────
-def test_04_new_hire_marks_a_task_done_in_the_portal(browser, tm):
-    ctx, page, watch = new_page(browser, "newhire-day1")
+def test_04_new_hire_marks_a_task_done_in_the_portal(hr_browser, tm):
+    ctx, page, watch = new_page(hr_browser, "newhire-day1")
     assert sign_in_portal(page, tm, "newhire") == ""
     page.locator('.nav-item[data-page="tasks"]').first.evaluate("e => e.click()")
     page.wait_for_timeout(1500)
@@ -169,7 +182,7 @@ def test_05_reminders_notices_escalations_follow_the_calendar(tm):
 
 
 # ── 06 ──────────────────────────────────────────────────────────────────────
-def test_06_onboarding_finished_makes_them_active(browser, tm):
+def test_06_onboarding_finished_makes_them_active(hr_browser, tm):
     day = START_DAY + D(days=10)
     tm.clock(day - D(days=1), "15:00")
     for t in _tasks(tm):
@@ -179,7 +192,7 @@ def test_06_onboarding_finished_makes_them_active(browser, tm):
     assert _emp(tm)["status"] == "Onboarding"                  # changes with the next morning's run
     tm.run_day(day)
     assert _emp(tm)["status"] == "Active"
-    ctx, page, watch = new_page(browser, "admin-active")
+    ctx, page, watch = new_page(hr_browser, "admin-active")
     sign_in_admin(page, tm)
     page.evaluate(f"openEmpSheet('{S['emp_id']}')")
     page.wait_for_timeout(1500)
@@ -189,9 +202,9 @@ def test_06_onboarding_finished_makes_them_active(browser, tm):
 
 
 # ── 07 ──────────────────────────────────────────────────────────────────────
-def test_07_hr_terminates_through_hr_admin(browser, tm):
+def test_07_hr_terminates_through_hr_admin(hr_browser, tm):
     tm.clock(TERM_NOTICE_DAY, "10:00")
-    ctx, page, watch = new_page(browser, "admin-term")
+    ctx, page, watch = new_page(hr_browser, "admin-term")
     sign_in_admin(page, tm)
     page.evaluate(f"openEmpSheet('{S['emp_id']}')")
     page.wait_for_timeout(1200)
@@ -218,16 +231,16 @@ def test_07_hr_terminates_through_hr_admin(browser, tm):
 
 
 # ── 08 ──────────────────────────────────────────────────────────────────────
-def test_08_portal_still_works_during_the_notice_period(browser, tm):
+def test_08_portal_still_works_during_the_notice_period(hr_browser, tm):
     tm.clock(TERM_NOTICE_DAY + D(days=3), "09:00")
-    ctx, page, watch = new_page(browser, "newhire-notice")
+    ctx, page, watch = new_page(hr_browser, "newhire-notice")
     assert sign_in_portal(page, tm, "newhire") == ""
     assert not watch.errors, watch.errors
     ctx.close()
 
 
 # ── 09 ──────────────────────────────────────────────────────────────────────
-def test_09_walk_past_the_last_day(browser, tm):
+def test_09_walk_past_the_last_day(hr_browser, tm):
     tm.walk(TERM_NOTICE_DAY + D(days=1), TERM_DAY)
     assert _emp(tm)["status"] == "Offboarding"                 # still working their last day
     end = TERM_DAY + D(days=5)
@@ -250,7 +263,7 @@ def test_09_walk_past_the_last_day(browser, tm):
     cobra = [t for t in _tasks(tm) if t.get("template_id") == "TMPL-TERM-004"]
     assert cobra and cobra[0]["due_date"] == (TERM_DAY + D(days=30)).isoformat(), cobra
     # HR Admin: Termination Records lists them
-    ctx, page, watch = new_page(browser, "admin-after")
+    ctx, page, watch = new_page(hr_browser, "admin-after")
     sign_in_admin(page, tm)
     page.click("#btn-hamburger"); page.wait_for_timeout(400)
     page.click('#sidebar-nav [data-tab="terminations"]'); page.wait_for_timeout(1500)
@@ -258,7 +271,7 @@ def test_09_walk_past_the_last_day(browser, tm):
     assert not watch.errors, watch.errors
     ctx.close()
     # the Portal turns them away now
-    ctx, page, watch = new_page(browser, "newhire-after")
+    ctx, page, watch = new_page(hr_browser, "newhire-after")
     err = sign_in_portal(page, tm, "newhire")
     assert err and "closed" in err.lower(), err
     ctx.close()

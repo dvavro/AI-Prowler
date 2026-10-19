@@ -861,6 +861,124 @@ _TEST_STATE_DIR = os.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
 if _TEST_STATE_DIR:
     CHROMA_DB_PATH = str(Path(_TEST_STATE_DIR) / 'rag_database')
 
+# -- Safe-save helpers (2026-10-19) - defined BEFORE load_config(), which runs at import --
+try:
+    import safe_save as _safe_save          # shared crash-safe saves (2026-10-19)
+except Exception:                            # partial update without safe_save.py
+    _safe_save = None
+
+
+def _atomic_write_text(path, text, retries=40, delay=0.05):
+    """Atomic text save (see _atomic_write_json). UTF-8, '\\n' -> os.linesep
+    like open(path, 'w')."""
+    if _safe_save is not None:
+        return _safe_save.atomic_write_text(path, text, retries=retries, delay=delay)
+    path = Path(path)
+    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}-{threading.get_ident()}")
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        for attempt in range(retries):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == retries - 1:
+                    raise
+                time.sleep(delay)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
+def _read_json_retry(path, default=None):
+    """json.load with a few quick retries (an empty / half-written / locked read
+    is retried before giving up). Returns `default` if missing or still
+    unreadable."""
+    if _safe_save is not None:
+        return _safe_save.read_json_retry(path, default)
+    path = Path(path)
+    for attempt in range(5):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return default
+        except (ValueError, OSError):
+            if attempt < 4:
+                time.sleep(0.05)
+    return default
+
+
+def _read_json_for_update(path):
+    """Read a JSON settings dict that is about to be CHANGED AND SAVED BACK
+    (save_config & co.: load -> set one key -> save the whole dict).
+
+    The old code did `except: config = {}` - so if the read hit a half-written
+    or damaged file, the save that followed wrote back ONLY the one key being
+    changed, wiping every other setting (API keys, model, tokens...). Now: retry
+    the read, and if the file exists but still can't be read, keep a copy as
+    <name>.unreadable-<timestamp> and RAISE, so the caller's save fails instead
+    of writing over the user's settings. Missing file -> {} (first save)."""
+    path = Path(path)
+    if not path.exists():
+        return {}
+    _bad = object()
+    data = _read_json_retry(path, _bad)
+    if isinstance(data, dict):
+        return data
+    try:
+        import shutil as _sh
+        _sh.copy2(path, path.with_name(f"{path.name}.unreadable-{datetime.now().strftime('%Y%m%d-%H%M%S')}"))
+    except Exception:
+        pass
+    raise ValueError(f"{path.name} exists but can't be read - not saving over it")
+
+
+def _atomic_write_json(path, data, retries=40, delay=0.05):
+    """Safe-save (2026-10-19, David): write `data` as JSON to a temp file in the
+    same folder, flush it to disk, then swap it over `path` with os.replace().
+
+    The old way - open(path, 'w') then json.dump - truncates the file first, so
+    for a moment it is EMPTY. Anything reading it then (the MCP read allowlist
+    check, the GUI, the file watcher, another process) got an empty list - and
+    load_auto_update_list() returns [] on a bad read, so a caller that then
+    added a folder and saved could WIPE the whole tracked list. os.replace() is
+    atomic: a reader sees the old file or the new one, never a half-written one.
+
+    On Windows os.replace() is refused (PermissionError) while another process
+    has the target open for reading, so retry briefly (default ~2 s total).
+    Raises on final failure; the temp file is always cleaned up."""
+    if _safe_save is not None:
+        return _safe_save.atomic_write_json(path, data, retries=retries, delay=delay)
+    path = Path(path)
+    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}-{threading.get_ident()}")
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        for attempt in range(retries):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == retries - 1:
+                    raise
+                time.sleep(delay)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
 def load_config():
     """Load configuration from file"""
     global OLLAMA_MODEL, OLLAMA_URL, CHUNK_SIZE, CHUNK_OVERLAP, SHOW_SOURCES, GPU_LAYERS, DEBUG_OUTPUT
@@ -870,8 +988,10 @@ def load_config():
     config = {}
     if CONFIG_FILE.exists():
         try:
-            with open(CONFIG_FILE, 'r') as f:
-                config = json.load(f)
+            config = _read_json_retry(CONFIG_FILE, {})     # retries a mid-save read
+            if not isinstance(config, dict):
+                config = {}
+            if config:
                 OLLAMA_MODEL     = config.get('model',           OLLAMA_MODEL)
                 OLLAMA_URL       = config.get('url',             OLLAMA_URL)
                 CHUNK_SIZE       = config.get('chunk_size',      CHUNK_SIZE)
@@ -959,14 +1079,12 @@ def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
                 ocr_debug=None, owner_name=None, owner_street=None,
                 owner_city=None, owner_state=None, owner_zip=None):
     """Save configuration to file"""
-    config = {}
-
-    if CONFIG_FILE.exists():
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                config = json.load(f)
-        except:
-            pass
+    # Load -> change -> save the whole dict, so an unreadable read must NOT
+    # become {} silently (that saved back only this one key and wiped the rest).
+    try:
+        config = _read_json_for_update(CONFIG_FILE)
+    except Exception:
+        return False
 
     if model              is not None: config['model']              = model
     if url                is not None: config['url']                = url
@@ -984,9 +1102,8 @@ def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
     if ocr_debug          is not None: config['ocr_debug']          = ocr_debug
 
     try:
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(config, f, indent=2)
-    except:
+        _atomic_write_json(CONFIG_FILE, config)
+    except Exception:
         return False
 
     # owner_name/owner_street/owner_city/owner_state/owner_zip are stored in
@@ -1001,13 +1118,7 @@ def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
         try:
             _ai_cfg_path = Path.home() / '.ai-prowler' / 'config.json'
             _ai_cfg_path.parent.mkdir(parents=True, exist_ok=True)
-            _ai_cfg = {}
-            if _ai_cfg_path.exists():
-                try:
-                    with open(_ai_cfg_path, 'r', encoding='utf-8') as f:
-                        _ai_cfg = json.load(f)
-                except Exception:
-                    pass
+            _ai_cfg = _read_json_for_update(_ai_cfg_path)
             if owner_name is not None:
                 _ai_cfg['owner_name'] = owner_name.strip()
             if owner_street is not None:
@@ -1018,8 +1129,7 @@ def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
                 _ai_cfg['owner_state'] = owner_state.strip()
             if owner_zip is not None:
                 _ai_cfg['owner_zip'] = owner_zip.strip()
-            with open(_ai_cfg_path, 'w', encoding='utf-8') as f:
-                json.dump(_ai_cfg, f, indent=2)
+            _atomic_write_json(_ai_cfg_path, _ai_cfg)
         except Exception:
             return False
 
@@ -1068,21 +1178,17 @@ def save_extension_config(supported_extensions: set, skipped_extensions: set,
     import importlib, types
 
     # We store the full current sets — simplest and most reliable approach
-    config = {}
-    if CONFIG_FILE.exists():
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                config = json.load(f)
-        except Exception:
-            pass
+    try:
+        config = _read_json_for_update(CONFIG_FILE)   # never silently {} (see save_config)
+    except Exception:
+        return False
 
     config['ext_supported_current']  = sorted(supported_extensions)
     config['ext_skipped_current']    = sorted(skipped_extensions)
     config['dir_skipped_current']    = sorted(skipped_directories)
 
     try:
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(config, f, indent=2)
+        _atomic_write_json(CONFIG_FILE, config)
         return True
     except Exception:
         return False
@@ -1468,10 +1574,9 @@ def validate_license_key(license_key):
 def save_license_key(license_key):
     """Save validated license key"""
     try:
-        with open(LICENSE_FILE, 'w') as f:
-            f.write(license_key)
+        _atomic_write_text(LICENSE_FILE, license_key)   # never left empty mid-save
         return True
-    except:
+    except Exception:
         return False
 
 def load_license_key():
@@ -3543,27 +3648,72 @@ class IndexCorruptError(Exception):
 # lets tests force a re-check.
 _chroma_integrity_check_done = False
 
+# ── Startup-hang fix (2026-10-19, David) ─────────────────────────────────────
+# On a cold start (Windows file cache empty, Defender scanning) a quick_check
+# of a large chroma.sqlite3 (1.86 GB here) can take a long time. The GUI used
+# to run TWO of them at once — the Settings tab's "Index healthy" check and the
+# embedding prewarm's integrity gate — while the prewarm also opened ChromaDB
+# on the same file. The DB uses a rollback journal, so a reader's SHARED lock
+# blocks ChromaDB's startup writes; if ChromaDB's native code waits for that
+# lock while holding Python's GIL, the reader can never finish and release it
+# -> the whole GUI froze on "Preparing embedding model…" and the 6 s HTTP-server
+# auto-start never ran. Now: one quick_check at a time per process, its result
+# is remembered (the Settings button reuses it instead of re-scanning), and
+# get_chroma_client() runs the check BEFORE opening ChromaDB.
+_QUICK_CHECK_LOCK = threading.Lock()
+_last_quick_check = {}      # normalised sqlite path -> (ok, finished_at, seconds)
+_INIT_STEP_HOOK = None      # rag_gui sets this to startup_log.step (timed init steps)
+_CHROMA_INIT_LOCK = threading.Lock()   # get_chroma_client(): one cold init at a time
+
+
+def _init_step(msg):
+    """Report one timed ChromaDB-init step to the GUI's startup log, if wired."""
+    hook = _INIT_STEP_HOOK
+    if hook is not None:
+        try:
+            hook(msg)
+        except Exception:
+            pass
+
+
+def _qc_key(sqlite_path):
+    return os.path.normcase(os.path.abspath(str(sqlite_path)))
+
+
+def last_quick_check_result(sqlite_path=None):
+    """(ok, finished_at, seconds) of the last COMPLETED quick_check of this file
+    in this process, or None if it hasn't been checked yet."""
+    p = sqlite_path or os.path.join(CHROMA_DB_PATH, "chroma.sqlite3")
+    return _last_quick_check.get(_qc_key(p))
+
 
 def sqlite_quick_check_ok(sqlite_path):
     """Run PRAGMA quick_check on a SQLite file, read-only. Never raises.
 
     Returns True when the file is healthy — or when it doesn't exist (fresh
     install: nothing to check). Returns False on any failure.
+
+    Only one quick_check runs at a time in this process (_QUICK_CHECK_LOCK): a
+    second caller waits for the first instead of scanning the file in parallel.
     """
-    try:
-        if not os.path.exists(sqlite_path):
-            return True
-        import sqlite3 as _sqlite3_qc
-        # Forward slashes: the URI form needs them on Windows ("C:/...").
-        uri = "file:" + str(sqlite_path).replace("\\", "/") + "?mode=ro"
-        conn = _sqlite3_qc.connect(uri, uri=True, timeout=5.0)
+    with _QUICK_CHECK_LOCK:
+        t0 = time.time()
         try:
-            row = conn.execute("PRAGMA quick_check").fetchone()
-        finally:
-            conn.close()
-        return bool(row) and str(row[0]).strip().lower() == "ok"
-    except Exception:
-        return False
+            if not os.path.exists(sqlite_path):
+                return True
+            import sqlite3 as _sqlite3_qc
+            # Forward slashes: the URI form needs them on Windows ("C:/...").
+            uri = "file:" + str(sqlite_path).replace("\\", "/") + "?mode=ro"
+            conn = _sqlite3_qc.connect(uri, uri=True, timeout=5.0)
+            try:
+                row = conn.execute("PRAGMA quick_check").fetchone()
+            finally:
+                conn.close()
+            ok = bool(row) and str(row[0]).strip().lower() == "ok"
+        except Exception:
+            ok = False
+        _last_quick_check[_qc_key(sqlite_path)] = (ok, time.time(), round(time.time() - t0, 2))
+        return ok
 
 
 def check_chroma_db_integrity(db_path=None):
@@ -3677,31 +3827,48 @@ def get_chroma_client():
     if _chroma_client_cache is not None and _embedding_func_cache is not None:
         return _chroma_client_cache, _embedding_func_cache
 
-    # First call — load everything and cache it
-    if not GUI_MODE:
-        print(f"🔧 Initializing ChromaDB at {CHROMA_DB_PATH}...")
+    # 2026-10-19 startup-hang fix: one initialisation at a time per process
+    # (the GUI prewarm, the reconcile and an early Update could otherwise
+    # each open ChromaDB / load the model in parallel).
+    with _CHROMA_INIT_LOCK:
+        if _chroma_client_cache is not None and _embedding_func_cache is not None:
+            return _chroma_client_cache, _embedding_func_cache
 
-    client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        # First call — load everything and cache it
+        if not GUI_MODE:
+            print(f"🔧 Initializing ChromaDB at {CHROMA_DB_PATH}...")
 
-    # R-056: integrity gate — refuse to serve a client backed by a corrupt
-    # SQLite store. Raises IndexCorruptError (never swallowed here — see
-    # check_ai_prowler_status's dedicated handler). Once per process.
-    check_chroma_db_integrity()
+        # R-056: integrity gate — refuse to serve a client backed by a corrupt
+        # SQLite store. Raises IndexCorruptError (never swallowed here — see
+        # check_ai_prowler_status's dedicated handler). Once per process.
+        # 2026-10-19: runs BEFORE ChromaDB opens the file (it used to run
+        # after), so the read-only scan never holds the file while ChromaDB
+        # is writing to it during its own startup.
+        _t = time.time()
+        _init_step("index init: integrity check (PRAGMA quick_check)...")
+        check_chroma_db_integrity()
+        _init_step(f"index init: integrity check OK ({time.time() - _t:.1f}s)")
 
+        _t = time.time()
+        client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        _init_step(f"index init: ChromaDB opened ({time.time() - _t:.1f}s)")
 
-    device = get_best_embedding_device()
+        device = get_best_embedding_device()
 
-    if not GUI_MODE:
-        print(f"🔧 Loading embedding model: {EMBEDDING_MODEL} (device: {device})")
+        if not GUI_MODE:
+            print(f"🔧 Loading embedding model: {EMBEDDING_MODEL} (device: {device})")
 
-    embedding_func = _SentenceTransformerEmbedding(EMBEDDING_MODEL, device=device)
+        _t = time.time()
+        embedding_func = _SentenceTransformerEmbedding(EMBEDDING_MODEL, device=device)
+        _init_step(f"index init: embedding model {EMBEDDING_MODEL} loaded on {device} "
+                   f"({time.time() - _t:.1f}s)")
 
-    if _CHROMA_COLD_INIT_SETTLE_SECONDS > 0:
-        time.sleep(_CHROMA_COLD_INIT_SETTLE_SECONDS)
+        if _CHROMA_COLD_INIT_SETTLE_SECONDS > 0:
+            time.sleep(_CHROMA_COLD_INIT_SETTLE_SECONDS)
 
-    _chroma_client_cache = client
-    _embedding_func_cache = embedding_func
-    return client, embedding_func
+        _chroma_client_cache = client
+        _embedding_func_cache = embedding_func
+        return client, embedding_func
 
 def create_or_get_collection(client, embedding_func):
     """Create or retrieve the document collection.
@@ -5729,18 +5896,14 @@ def _make_message_uid(msg_id_header: str, fallback_parts: tuple) -> str:
 def load_email_index() -> dict:
     """Load the per-email incremental tracking DB.  Returns {} on missing/corrupt."""
     if EMAIL_INDEX_DB.exists():
-        try:
-            with open(EMAIL_INDEX_DB, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
+        data = _read_json_retry(EMAIL_INDEX_DB, {})      # retries a mid-save read
+        return data if isinstance(data, dict) else {}
     return {}
 
 def save_email_index(db: dict) -> bool:
-    """Persist the per-email incremental tracking DB."""
+    """Persist the per-email incremental tracking DB (atomic - see safe_save.py)."""
     try:
-        with open(EMAIL_INDEX_DB, "w", encoding="utf-8") as f:
-            json.dump(db, f, indent=2)
+        _atomic_write_json(EMAIL_INDEX_DB, db)
         return True
     except Exception as e:
         print(f"⚠️  Could not save email index: {e}")
@@ -5769,10 +5932,10 @@ def load_tracking_database():
     import sys as _sys
     raw = {}
     if TRACKING_DB.exists():
-        try:
-            with open(TRACKING_DB, 'r') as f:
-                raw = json.load(f)
-        except:
+        # The indexer / file watcher / GUI all rewrite this file; retry a read
+        # that lands mid-save instead of reporting "nothing is indexed".
+        raw = _read_json_retry(TRACKING_DB, {})
+        if not isinstance(raw, dict):
             return {}
 
     if _sys.platform != 'win32' or not raw:
@@ -5802,18 +5965,16 @@ def load_tracking_database():
     if len(healed) != len(raw):
         # Write the healed DB back immediately so future loads are clean
         try:
-            with open(TRACKING_DB, 'w') as f:
-                json.dump(healed, f, indent=2)
+            _atomic_write_json(TRACKING_DB, healed)
         except Exception:
             pass
 
     return healed
 
 def save_tracking_database(db):
-    """Save file tracking database"""
+    """Save file tracking database (atomic - see safe_save.py)"""
     try:
-        with open(TRACKING_DB, 'w') as f:
-            json.dump(db, f, indent=2)
+        _atomic_write_json(TRACKING_DB, db)
         return True
     except Exception as e:
         print(f"⚠️  Warning: Could not save tracking database: {e}")
@@ -6728,11 +6889,27 @@ def load_auto_update_list():
     so a list corrupted by pre-fix adds is self-healed on first load."""
     import sys as _sys
     if AUTO_UPDATE_LIST.exists():
+        # Saves are atomic now (_atomic_write_json), but an older AI-Prowler
+        # process (or a hand edit) may still be rewriting it in place, and on
+        # Windows a read can collide with the moment of the swap. Retry a few
+        # times before treating it as unreadable, so a passing glitch never
+        # reads as "nothing is tracked".
+        data = None
+        for attempt in range(5):
+            try:
+                with open(AUTO_UPDATE_LIST, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                break
+            except (ValueError, OSError):
+                if attempt < 4:
+                    time.sleep(0.05)
+            except Exception:
+                break
+        if not isinstance(data, dict):
+            return []
         try:
-            with open(AUTO_UPDATE_LIST, 'r') as f:
-                data = json.load(f)
             dirs = [normalise_path(d) for d in data.get('directories', [])]
-        except:
+        except Exception:
             return []
     else:
         return []
@@ -6754,8 +6931,7 @@ def load_auto_update_list():
         try:
             data = {'directories': deduped,
                     'last_updated': datetime.now().isoformat()}
-            with open(AUTO_UPDATE_LIST, 'w') as f:
-                json.dump(data, f, indent=2)
+            _atomic_write_json(AUTO_UPDATE_LIST, data)
         except Exception:
             pass
 
@@ -6769,8 +6945,7 @@ def save_auto_update_list(directories):
             'directories': [normalise_path(d) for d in directories],
             'last_updated': datetime.now().isoformat()
         }
-        with open(AUTO_UPDATE_LIST, 'w') as f:
-            json.dump(data, f, indent=2)
+        _atomic_write_json(AUTO_UPDATE_LIST, data)
         return True
     except Exception as e:
         print(f"⚠️  Warning: Could not save auto-update list: {e}")

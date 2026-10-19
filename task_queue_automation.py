@@ -37,6 +37,23 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+# Crash-safe / reader-safe saves (2026-10-19) - see safe_save.py. Used for the
+# queue config, last-run status, saved API keys and OAuth tokens: temp file +
+# atomic swap, so the GUI / scheduled run never reads them empty or cut short.
+try:
+    from safe_save import atomic_write_text as _ss_write_text, read_json_retry as _ss_read_json
+except Exception:                                    # safe_save.py missing (partial update): plain writes
+    def _ss_write_text(path, text, encoding="utf-8", **_k):
+        Path(path).write_text(text, encoding=encoding)
+
+    def _ss_read_json(path, default=None, **_k):
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        except Exception:
+            if default is None:
+                raise
+            return default
+
 AI_PROWLER_HOME = Path.home() / ".ai-prowler"
 CONFIG_PATH = AI_PROWLER_HOME / "task_automation_config.json"
 STATUS_PATH = AI_PROWLER_HOME / "task_automation_last_run.json"
@@ -295,7 +312,7 @@ def load_config() -> dict:
     if not CONFIG_PATH.exists():
         return dict(DEFAULT_CONFIG)
     try:
-        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
+        data = _ss_read_json(CONFIG_PATH)            # retries a mid-save read
         merged = dict(DEFAULT_CONFIG)
         merged.update(data or {})
         return merged
@@ -307,7 +324,7 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    _ss_write_text(CONFIG_PATH, json.dumps(cfg, indent=2))      # atomic (safe_save)
 
 
 def load_last_run() -> dict | None:
@@ -321,12 +338,12 @@ def load_last_run() -> dict | None:
 
 def _write_last_run(status: str, detail: str, task_count: int | None = None) -> None:
     AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
-    STATUS_PATH.write_text(json.dumps({
+    _ss_write_text(STATUS_PATH, json.dumps({                   # atomic (safe_save)
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "status": status,          # "success" | "failure" | "dry_run_ok" | "dry_run_failed"
         "detail": detail,
         "task_count": task_count,
-    }, indent=2), encoding="utf-8")
+    }, indent=2))
 
 
 # ── Wrapper script generation (Phase 1) ─────────────────────────────────
@@ -977,8 +994,8 @@ def _generate_local_mcp_config() -> tuple[bool, str]:
 
     try:
         AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
-        GENERATED_MCP_CONFIG_PATH.write_text(
-            json.dumps(mcp_config, indent=2), encoding="utf-8")
+        _ss_write_text(GENERATED_MCP_CONFIG_PATH,                  # atomic (safe_save)
+                       json.dumps(mcp_config, indent=2))
     except Exception as e:
         return False, f"Could not write MCP config: {e}"
 
@@ -1048,8 +1065,8 @@ def _generate_localhost_mcp_config() -> tuple[bool, str]:
     now_config_path = AI_PROWLER_HOME / "claude_mcp_config_now.json"
     try:
         AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
-        now_config_path.write_text(json.dumps(mcp_config, indent=2),
-                                    encoding="utf-8")
+        _ss_write_text(now_config_path,                            # atomic (safe_save)
+                       json.dumps(mcp_config, indent=2))
     except Exception as e:
         return False, f"Could not write NOW-button MCP config: {e}"
 
@@ -1136,8 +1153,8 @@ def _generate_remote_mcp_config() -> tuple[bool, str]:
 
     try:
         AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
-        GENERATED_MCP_CONFIG_PATH.write_text(
-            json.dumps(mcp_config, indent=2), encoding="utf-8")
+        _ss_write_text(GENERATED_MCP_CONFIG_PATH,                  # atomic (safe_save)
+                       json.dumps(mcp_config, indent=2))
     except Exception as e:
         return False, f"Could not write MCP config: {e}"
 
@@ -1220,7 +1237,7 @@ def _ensure_hook_uses_absolute_python() -> None:
             return
 
         data["hooks"]["PostToolUse"][0]["hooks"][0]["command"] = new_cmd
-        settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        _ss_write_text(settings_path, json.dumps(data, indent=2))   # atomic (safe_save)
     except Exception:
         pass  # self-heal is best-effort — never let this block MCP config generation
 
@@ -1389,7 +1406,7 @@ def api_key_path(provider: str = "anthropic") -> Path:
 def save_api_key(key: str, provider: str = "anthropic") -> None:
     _p = api_key_path(provider)
     _p.parent.mkdir(parents=True, exist_ok=True)      # the key file's own folder
-    _p.write_text(key.strip(), encoding="utf-8")
+    _ss_write_text(_p, key.strip())                   # atomic (safe_save) - never an empty key file
 
 
 def load_api_key(provider: str = "anthropic") -> str | None:
@@ -1813,10 +1830,10 @@ def save_oauth_token(token: str, issued_at: datetime | None = None) -> None:
     AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
     issued = issued_at or datetime.now(timezone.utc)
     clean = token.strip()
-    OAUTH_TOKEN_PATH.write_text(json.dumps({
+    _ss_write_text(OAUTH_TOKEN_PATH, json.dumps({     # atomic (safe_save)
         "token": clean,
         "issued_at": issued.isoformat(),
-    }), encoding="utf-8")
+    }))
     # v8.1.6 second fix: build_wrapper_script_content() originally parsed
     # this JSON at runtime via a PowerShell one-liner invoked through
     # `for /f` + backticks — that combination of nested quoting turned
@@ -1826,7 +1843,7 @@ def save_oauth_token(token: str, issued_at: datetime | None = None) -> None:
     # even though the JSON itself was completely valid. A plain-text
     # mirror lets the .bat just `set /p` it, identical to how
     # API_KEY_PATH already works — no external process, no quoting.
-    OAUTH_TOKEN_PLAIN_PATH.write_text(clean, encoding="utf-8")
+    _ss_write_text(OAUTH_TOKEN_PLAIN_PATH, clean)    # atomic (safe_save)
 
 
 def load_oauth_token() -> str | None:
@@ -1892,7 +1909,7 @@ def save_user_oauth_token(user_id, token: str) -> Path:
         raise ValueError("That doesn't look like a Claude Code token — it should "
                          "start with sk-ant-oat (the value `claude setup-token` prints).")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(clean, encoding="utf-8")
+    _ss_write_text(path, clean)                      # atomic (safe_save)
     # Best effort: restrict the file to the current Windows user. Failure here
     # (non-Windows, no icacls) must never block saving.
     try:
@@ -2842,7 +2859,7 @@ def check_token_expiry() -> dict:
         # flow just because of an internal storage-format change.
         if not OAUTH_TOKEN_PLAIN_PATH.exists():
             try:
-                OAUTH_TOKEN_PLAIN_PATH.write_text(data["token"].strip(), encoding="utf-8")
+                _ss_write_text(OAUTH_TOKEN_PLAIN_PATH, data["token"].strip())  # atomic (safe_save)
             except Exception:
                 pass  # best-effort; wrapper script will surface a clear error if this failed
         issued_dt = datetime.fromisoformat(data["issued_at"])

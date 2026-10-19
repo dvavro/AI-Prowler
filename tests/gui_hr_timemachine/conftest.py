@@ -131,7 +131,7 @@ def tm(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def browser(tm):
+def hr_browser(tm):
     # module scope: Playwright's sync API keeps an asyncio loop running while started
     from playwright.sync_api import sync_playwright
     pw = sync_playwright().start()

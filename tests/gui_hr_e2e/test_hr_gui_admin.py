@@ -14,8 +14,8 @@ ADMIN_TABS = ["employees", "messages", "tasks", "documents", "recruiting", "onbo
 
 
 @pytest.fixture(scope="module")
-def admin(browser, hr_sandbox):
-    ctx, page, watch = new_page(browser, "admin")
+def admin(hr_browser, hr_sandbox):
+    ctx, page, watch = new_page(hr_browser, "admin")
     sign_in_admin(page, hr_sandbox, "manager")
     yield page, watch
     ctx.close()
@@ -44,12 +44,12 @@ def test_admin_signs_in_with_the_real_form(admin):
     assert not watch.errors, watch.errors
 
 
-def test_owner_can_sign_in_too_and_staff_cannot(browser, hr_sandbox):
-    ctx, page, _ = new_page(browser, "owner")
+def test_owner_can_sign_in_too_and_staff_cannot(hr_browser, hr_sandbox):
+    ctx, page, _ = new_page(hr_browser, "owner")
     sign_in_admin(page, hr_sandbox, "owner")
     assert page.is_visible("#app")
     ctx.close()
-    ctx, page, _ = new_page(browser, "staff-at-admin")
+    ctx, page, _ = new_page(hr_browser, "staff-at-admin")
     page.goto(f"{hr_sandbox.base}/hr_admin/")
     page.fill("#auth-name", USERS["anna"][0])
     page.fill("#auth-token", USERS["anna"][1])

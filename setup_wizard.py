@@ -552,7 +552,11 @@ def _set_job_skip(section: str, value: bool) -> None:
     d = _jobs_skips()
     d[section] = bool(value)
     JOBS_SKIPS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    JOBS_SKIPS_PATH.write_text(json.dumps(d), encoding="utf-8")
+    try:
+        from safe_save import atomic_write_text as _ss_write_text   # atomic (safe_save)
+        _ss_write_text(JOBS_SKIPS_PATH, json.dumps(d))
+    except ImportError:  # pragma: no cover - partial update without safe_save.py
+        JOBS_SKIPS_PATH.write_text(json.dumps(d), encoding="utf-8")
 
 
 def _jobs_biz_ok() -> bool:

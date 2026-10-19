@@ -176,7 +176,13 @@ def test_G_UPD_04_remove_actually_removes_when_confirmed(gui, isolated_env):
     # Wait for worker to finish — we know it's done when the auto-update
     # list no longer contains our folder.
     def removal_complete():
-        auto = json.loads(isolated_env.auto_update.read_text(encoding="utf-8"))
+        # The worker rewrites this file in place (open 'w' -> truncate -> dump), so a
+        # poll can land on it empty or half-written (2026-10-19 regression run:
+        # JSONDecodeError at char 0). That just means "not finished yet" - poll again.
+        try:
+            auto = json.loads(isolated_env.auto_update.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            return False
         return not _path_in_list(str(folder.resolve()), auto["directories"])
 
     gui.wait_until(removal_complete, timeout_s=30.0)

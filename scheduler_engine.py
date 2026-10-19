@@ -44,6 +44,21 @@ LOG_PATH    = Path.home() / ".ai-prowler" / "scheduler_log.txt"
 _LOCK       = threading.Lock()
 _last_run: dict[str, str] = {}   # job_id -> "YYYY-MM-DD HH:MM" of last run
 
+# Safe-save: write to a temp file then swap it in, so a reader (or a crash)
+# never sees a half-written / empty scheduler file. Falls back to a plain
+# write if safe_save.py is missing (partial update).
+try:
+    from safe_save import atomic_write_text as _ss_write_text, read_json_retry as _ss_read_json
+except Exception:  # pragma: no cover
+    def _ss_write_text(path, text, encoding="utf-8", **_k):
+        Path(path).write_text(text, encoding=encoding)
+
+    def _ss_read_json(path, default=None, **_k):
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return default
+
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -61,7 +76,7 @@ def load_config() -> dict:
     }
     try:
         if CONFIG_PATH.exists():
-            saved = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) or {}
+            saved = _ss_read_json(CONFIG_PATH) or {}   # retries a mid-save read
             defaults.update(saved)
     except Exception:
         pass
@@ -72,8 +87,8 @@ def save_config(cfg: dict) -> None:
     """Persist scheduler config to disk."""
     try:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.write_text(
-            json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+        _ss_write_text(CONFIG_PATH,                        # atomic (safe_save)
+                       json.dumps(cfg, indent=2, ensure_ascii=False))
     except Exception:
         pass
 
@@ -223,15 +238,14 @@ def _load_last_run() -> None:
     global _last_run
     try:
         if _LAST_RUN_PATH.exists():
-            _last_run = json.loads(_LAST_RUN_PATH.read_text(encoding="utf-8")) or {}
+            _last_run = _ss_read_json(_LAST_RUN_PATH) or {}   # retries a mid-save read
     except Exception:
         _last_run = {}
 
 
 def _save_last_run() -> None:
     try:
-        _LAST_RUN_PATH.write_text(
-            json.dumps(_last_run, indent=2), encoding="utf-8")
+        _ss_write_text(_LAST_RUN_PATH, json.dumps(_last_run, indent=2))   # atomic (safe_save)
     except Exception:
         pass
 

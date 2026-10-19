@@ -19,6 +19,7 @@ Author: AI-Prowler project
 
 import json
 import os
+import time
 import uuid
 import logging
 import traceback
@@ -91,22 +92,56 @@ def _ensure_dir():
     LEARNINGS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+try:
+    import safe_save as _safe_save          # shared crash-safe saves (2026-10-19)
+except Exception:                            # partial update without safe_save.py
+    _safe_save = None
+
+
 def _load_db() -> dict:
-    """Load the learnings JSON file.  Returns empty structure if missing."""
+    """Load the learnings JSON file.  Returns empty structure if missing.
+
+    2026-10-19: a read that lands while another process is saving (or a
+    passing Windows lock) is RETRIED - it used to be treated as "corrupt,
+    starting fresh", and the next save then replaced every learning with just
+    the new one. A file that stays unreadable is copied aside as
+    learnings.json.unreadable-<timestamp> before starting fresh, so it can be
+    recovered."""
     _ensure_dir()
     if LEARNINGS_FILE.exists():
+        last = None
+        for attempt in range(5):
+            try:
+                if _safe_save is not None:
+                    data = _safe_save.read_json_retry(LEARNINGS_FILE, attempts=1)
+                else:
+                    data = json.loads(LEARNINGS_FILE.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and "learnings" in data:
+                    return data
+                last = ValueError("not a learnings file")
+                break
+            except Exception as e:
+                last = e
+                time.sleep(0.05)
         try:
-            data = json.loads(LEARNINGS_FILE.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and "learnings" in data:
-                return data
-        except Exception as e:
-            _log.warning("Corrupt learnings file, starting fresh: %s", e)
+            import shutil as _sh
+            _keep = LEARNINGS_FILE.with_name(
+                f"{LEARNINGS_FILE.name}.unreadable-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+            _sh.copy2(str(LEARNINGS_FILE), str(_keep))
+            _log.warning("Unreadable learnings file (%s) - kept a copy at %s, starting fresh", last, _keep)
+        except Exception:
+            _log.warning("Corrupt learnings file, starting fresh: %s", last)
     return {"version": SCHEMA_VERSION, "learnings": []}
 
 
 def _save_db(data: dict):
-    """Atomically write the learnings JSON file."""
+    """Atomically write the learnings JSON file (safe_save: unique temp file +
+    os.replace with a Windows retry; the old fixed '.tmp' name could collide
+    between the GUI and the MCP server saving at the same time)."""
     _ensure_dir()
+    if _safe_save is not None:
+        _safe_save.atomic_write_json(LEARNINGS_FILE, data, ensure_ascii=False)
+        return
     tmp = LEARNINGS_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False),
                    encoding="utf-8")

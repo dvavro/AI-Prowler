@@ -57,6 +57,44 @@ html,body{height:100%;background:var(--bg);color:#ffffff;font-family:'Inter',-ap
 #screen-route.active{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
 #screen-route.active>:not(#routeStopsList){flex:none}
 #routeStopsList{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}
+/* Route action buttons — Route / AI Route / Email side by side (2026-10-18). */
+.route-actions .btn{flex:1 1 0;min-width:0;display:flex;align-items:center;justify-content:center;gap:5px;padding:10px 6px;font-size:12px;font-weight:600;white-space:normal;line-height:1.2;text-align:center}
+.route-actions .lbl-short{display:none}
+/* Map full-screen view (2026-10-18, David): ⛶ on the map, ✕ / phone Back returns. */
+.route-map-fs-btn{width:34px;height:34px;display:flex;align-items:center;justify-content:center;background:#fff;color:#111;border-radius:4px;border:2px solid rgba(0,0,0,.25);font-size:18px;line-height:1;cursor:pointer;padding:0}
+#routeMap.route-map-full{position:fixed!important;left:0;right:0;top:0;bottom:0;height:auto!important;z-index:4000;border-radius:0!important;margin:0}
+#routeMapFullStrip{display:none;position:fixed;left:0;right:0;bottom:0;z-index:4001;background:rgba(10,12,20,.94);border-top:1px solid #2a2f45;padding:8px 8px calc(8px + var(--safe-bot));gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap}
+#routeMapFullStrip.on{display:flex}
+/* Full screen on a real phone (2026-10-19 fix): the page uses viewport-fit=cover, so
+   the map's top edge sits UNDER the status bar / notch and the corner ✕ was hidden.
+   Push Leaflet's top/right controls inside the safe area and make ✕ a big target;
+   the strip also starts with an always-visible "✕ Exit" button by the thumb. */
+#routeMap.route-map-full .leaflet-top{top:calc(var(--safe-top) + 6px)}
+#routeMap.route-map-full .leaflet-right{right:env(safe-area-inset-right,0px)}
+#routeMap.route-map-full .route-map-fs-btn{width:44px;height:44px;font-size:22px;background:#ff4455;color:#fff;border-color:#fff}
+#routeMapFullStrip .fs-chip.fs-exit{position:sticky;left:0;z-index:1;background:#ff4455;border-color:#fff;color:#fff;font-weight:700;min-width:72px;justify-content:center;box-shadow:6px 0 8px rgba(10,12,20,.9)}
+#routeMapFullStrip .fs-chip{flex:none;display:flex;align-items:center;gap:6px;min-height:40px;padding:6px 10px;border-radius:20px;border:1px solid #2a2f45;background:#141624;color:#e5e7eb;font-size:12px;cursor:pointer}
+#routeMapFullStrip .fs-chip b{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#7c3aed;color:#fff;font-size:11px}
+#routeMapFullStrip .fs-chip.hard b{background:#ff4455}
+#routeMapFullStrip .fs-chip.sel{border-color:#fff700}
+#routeMapFullStrip .fs-nav{background:#0b3b5c;border-color:#00d4ff;color:#00d4ff;font-weight:700;text-decoration:none}
+/* Phone layout for the Route screen (2026-10-18, David): the screen fit the
+   phone exactly (stop list the only scroller, Approve row pinned), which left
+   the map squeezed. On phones the PAGE scrolls again: bigger map, compact
+   button row, smaller Approve / Un-approve at the end of the page. PC layout
+   (wider than 700px) is unchanged. */
+@media (max-width:700px){
+  #screen-route.active{display:block}
+  #screen-route{padding-bottom:calc(90px + var(--safe-bot))}
+  #routeStopsList{overflow:visible}
+  #screen-route .section-sub{display:none}
+  .route-actions{gap:6px!important}
+  .route-actions .btn{padding:6px 4px;min-height:44px;font-size:12px}
+  .route-actions .lbl-long{display:none}
+  .route-actions .lbl-short{display:inline}
+  #routeMapResize{height:28px!important;font-size:12px!important;letter-spacing:1px!important}
+  #routeApproveRow .btn{padding:8px 10px;font-size:13px;min-height:42px}
+}
 /* Calendar screen flex contract (2026-10-06): same pattern as the Route
    screen. Previously .main was BOTH a column flex container AND the page
    scroll container, and its flex item #screen-calendar (plain display:block,
@@ -553,25 +591,33 @@ textarea::placeholder{color:#c0c6d8}
              too — Run AI Route was the only one of the two that respected the date
              picker, so routing another day always cost AI credits even for a plain
              deterministic build). -->
-        <div class="row" style="gap:8px;margin-bottom:10px">
-          <button class="btn btn-ghost route-today-btn" id="routeTodayBtnRoute" onclick="routeToday(false)" title="Build the selected date's route — free, no AI credits used"
-            style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 8px;white-space:normal;line-height:1.25">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;flex-shrink:0"><circle cx="12" cy="10" r="3"/><path d="M12 21s-7-6.5-7-11a7 7 0 0114 0c0 4.5-7 11-7 11z"/></svg>
-            <span style="font-size:12px;font-weight:600">Route Selected Date (No AI Credits Needed)</span>
+        <!-- (2026-10-18, David) Route / AI Route / Email on ONE row. On a phone they
+             show short labels ("📍 Route · free", "🧠 AI Route", "📧 Email") so the
+             map gets the room; each keeps its full name as aria-label + tooltip.
+             "Email Approved Route Now" emails the route for the date/crew picked
+             above — ONLY if the route is approved (server warns otherwise). -->
+        <div class="row route-actions" style="gap:8px;margin-bottom:10px">
+          <button class="btn btn-ghost route-today-btn" id="routeTodayBtnRoute" onclick="routeToday(false)"
+            aria-label="Route Selected Date (No AI Credits Needed)" title="Build the selected date's route — free, no AI credits used">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;flex-shrink:0"><circle cx="12" cy="10" r="3"/><path d="M12 21s-7-6.5-7-11a7 7 0 0114 0c0 4.5-7 11-7 11z"/></svg>
+            <span class="lbl-long">Route Selected Date (No AI Credits Needed)</span><span class="lbl-short">Route · free</span>
           </button>
-          <button class="btn btn-ghost route-ai-btn" id="routeAiSuggestBtn" onclick="runAiRouting()" title="Full AI route planning — uses AI credits"
-            style="flex:1;padding:10px 8px;font-size:12px;font-weight:600;white-space:normal;line-height:1.25">🧠 Run AI Route Jobs (Uses AI Credits)</button>
+          <button class="btn btn-ghost route-ai-btn" id="routeAiSuggestBtn" onclick="runAiRouting()"
+            aria-label="Run AI Route Jobs (Uses AI Credits)" title="Full AI route planning — uses AI credits">
+            <span class="lbl-long">🧠 Run AI Route Jobs (Uses AI Credits)</span><span class="lbl-short">🧠 AI Route</span>
+          </button>
+          <button class="btn btn-ghost email-route-btn" id="routeEmailRouteBtn" onclick="emailRouteNow(false)"
+            aria-label="Email Approved Route Now" title="Email the approved route for this date">
+            <span class="lbl-long">📧 Email Approved Route Now</span><span class="lbl-short">📧 Email</span>
+          </button>
         </div>
-          <!-- "Email Approved Route Now" — Route page only (the Jobs-page copy was
-               removed 2026-10-05). Emails the route for the date/crew picked above —
-               ONLY if the route is approved (server warns otherwise). -->
-        <button class="btn btn-ghost email-route-btn" id="routeEmailRouteBtn" onclick="emailRouteNow(false)"
-          style="width:100%;padding:10px 8px;font-size:12px;font-weight:600;margin-bottom:10px">📧 Email Approved Route Now</button>
       <div id="routeMap" style="height:360px;border-radius:12px 12px 0 0;overflow:hidden;background:#12141f"></div>
       <!-- Map resize handle (2026-10-06, David's request): drag up/down to
            resize the map; the stop list (flex:1) absorbs the difference.
            Double-click resets to 360px. See _initRouteMapResize(). -->
-      <div id="routeMapResize" title="Drag to resize the map — double-click to reset" style="height:16px;margin:0 0 10px;border-radius:0 0 12px 12px;background:#141624;border:1px solid #2a2f45;border-top:1px dashed #3a4058;display:flex;align-items:center;justify-content:center;cursor:ns-resize;touch-action:none;user-select:none;-webkit-user-select:none;color:#6a7090;font-size:11px;letter-spacing:6px;line-height:1">···</div>
+      <div id="routeMapResize" title="Drag to resize the map — double-click to reset" style="height:16px;margin:0 0 10px;border-radius:0 0 12px 12px;background:#141624;border:1px solid #2a2f45;border-top:1px dashed #3a4058;display:flex;align-items:center;justify-content:center;cursor:ns-resize;touch-action:none;user-select:none;-webkit-user-select:none;color:#6a7090;font-size:11px;letter-spacing:1px;line-height:1">⇕ drag to resize</div>
+      <!-- Full-screen map stop strip (2026-10-18) — shown only while the map is full screen. -->
+      <div id="routeMapFullStrip" data-testid="route-map-full-strip"></div>
       <!-- Route prescreen (2026-09-25): job problems found before routing.
            Scrolls on its own, like the stop list below; tap an item to
            highlight the job(s) it's about. See _prescreenRoute(). -->
@@ -582,6 +628,8 @@ textarea::placeholder{color:#c0c6d8}
       <details class="route-help">
         <summary data-testid="route-help-toggle">ⓘ What do these buttons do?</summary>
         <div class="route-help-body">
+          <div><b>⛶ Full screen</b> (map corner) — shows the map on the whole screen with every stop along the bottom; tap a stop to zoom to it. <b>✕</b> or your phone's Back returns. <b>⇕</b> under the map drags it taller or shorter.</div>
+          <div><b>🔒</b> = a committed (hard) time · <b>☁️</b> = a flexible (soft) time slot.</div>
           <div><b>▲ ▼ Move up / down</b> — moves the stop one place earlier or later.</div>
             <div><b>✋ Drag</b> — hold and drag to move a stop several places at once.</div>
             <div><b>📌 Fix stop #</b> — pins the job to its current stop number. A pinned job <b>always</b> stays that stop # in every future route build (Route, AI Route, reorder) until unpinned — tap again to unpin. Moving a pinned stop with ▲ ▼ or drag moves its pin along with it. Pins survive re-routing (unlike approval, which a rebuild clears).</div>
@@ -606,7 +654,7 @@ textarea::placeholder{color:#c0c6d8}
            what guarantees reachability at any card height or stop count.
            The Approve/Un-approve row stays OUTSIDE this list (flex:none). -->
       <div id="routeStopsList" style="padding:8px;border:1px solid #2a2f45;border-radius:8px"><div class="loader"><div class="spinner"></div> Loading route…</div></div>
-      <div class="row" style="gap:8px;margin-top:10px">
+      <div class="row" id="routeApproveRow" style="gap:8px;margin-top:10px">
           <!-- "Run AI Route Jobs" moved up beside "Route Today Jobs" (button row above the map). -->
 
           <button class="btn btn-success" id="routeApproveBtn" onclick="approveRouteSchedule()" style="flex:1;display:none">✅ Approve — Allows Email &amp; Link Viewing</button>
@@ -10578,6 +10626,7 @@ function _renderRouteLeaflet(stops, skipFitBounds) {
   if (!state.route.leafletMap) {
     state.route.leafletMap = L.map(mapEl, { attributionControl: false }).setView([29.03, -80.9], 11);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(state.route.leafletMap);
+    _routeMapAddFullscreenControl(state.route.leafletMap);   // ⛶ full-screen map (2026-10-18)
   }
   var map = state.route.leafletMap;
   // Real iPhone/Safari bug caught in manual QA: map tiles rendered in a
@@ -10756,7 +10805,160 @@ function _renderRouteLeaflet(stops, skipFitBounds) {
   if (pts.length && !skipFitBounds) {
     map.fitBounds(pts.length > 1 ? pts : [pts[0]], { padding: [30,30], maxZoom: 15 });
   }
+  state.route.leafletFitPts = pts;                         // for the full-screen view's "fit all"
+  if (_routeMapFull) _routeMapFullRenderStrip();           // keep its stop strip current
 
+}
+
+// ── Full-screen route map (2026-10-18, David) ────────────────────────────────
+// On a phone the map sits between the buttons and the stop list, so it's
+// small. ⛶ (top-right corner of the map) opens it over the whole screen with
+// every stop as a tappable chip along the bottom (tap = select that stop and
+// zoom to it) plus "🧭 Open in Maps" when the day has a navigation link.
+// ✕, the phone's Back gesture, or Esc returns to the normal view; nothing about
+// the route changes. Same Leaflet map object — it's just restyled to fill the
+// screen, then re-measured (invalidateSize) and fitted to the stops.
+var _routeMapFull = false, _routeMapFullHist = false;
+
+function _routeMapAddFullscreenControl(map) {
+  var Ctl = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd: function () {
+      var b = L.DomUtil.create('button', 'route-map-fs-btn');
+      b.type = 'button';
+      b.id = 'routeMapFsBtn';
+      b.setAttribute('data-testid', 'route-map-fullscreen');
+      b.title = 'Full screen map';
+      b.setAttribute('aria-label', 'Full screen map');
+      b.textContent = '⛶';
+      L.DomEvent.disableClickPropagation(b);
+      L.DomEvent.on(b, 'click', function (e) { L.DomEvent.preventDefault(e); routeMapToggleFull(); });
+      return b;
+    }
+  });
+  map.addControl(new Ctl());
+}
+
+function _routeMapFitAll() {
+  var m = state.route && state.route.leafletMap, pts = (state.route && state.route.leafletFitPts) || [];
+  if (!m || !pts.length) return;
+  m.fitBounds(pts.length > 1 ? pts : [pts[0]],
+    { paddingTopLeft: [30, 50], paddingBottomRight: [30, _routeMapFull ? 90 : 30], maxZoom: 15 });
+}
+
+var _routeMapHome = null;   // {ph: placeholder div, stripParent, stripNext}
+function _routeMapPortal(mapEl, strip, on) {
+  try {
+    if (on) {
+      if (_routeMapHome) return;
+      var ph = document.createElement('div');
+      ph.id = 'routeMapPlaceholder';
+      ph.style.height = mapEl.offsetHeight + 'px';
+      ph.style.margin = getComputedStyle(mapEl).margin;
+      mapEl.parentNode.insertBefore(ph, mapEl);
+      _routeMapHome = { ph: ph,
+        stripParent: strip ? strip.parentNode : null,
+        stripNext: strip ? strip.nextSibling : null };
+      document.body.appendChild(mapEl);
+      if (strip) document.body.appendChild(strip);
+    } else {
+      var h = _routeMapHome;
+      if (!h) return;
+      _routeMapHome = null;
+      if (h.ph.parentNode) { h.ph.parentNode.insertBefore(mapEl, h.ph); h.ph.parentNode.removeChild(h.ph); }
+      if (strip && h.stripParent) h.stripParent.insertBefore(strip, h.stripNext && h.stripNext.parentNode === h.stripParent ? h.stripNext : null);
+    }
+  } catch (e) { console.warn('route map full-screen move failed', e); }
+}
+
+function routeMapToggleFull(on) {
+  if (on === undefined) on = !_routeMapFull;
+  if (on === _routeMapFull) return;
+  var mapEl = document.getElementById('routeMap'),
+      strip = document.getElementById('routeMapFullStrip'),
+      btn = document.getElementById('routeMapFsBtn');
+  if (!mapEl) return;
+  _routeMapFull = on;
+  // 2026-10-19 (David, real phone): the map lives inside .main, a touch-scroll
+  // container (overflow:auto + -webkit-overflow-scrolling:touch). Phone browsers
+  // (iOS Safari especially) CLIP a position:fixed child to that container and keep
+  // it under the top bar / bottom nav, so "full screen" showed half the zoom
+  // buttons and the stop strip (with ✕ Exit) sat hidden behind the bottom nav.
+  // Desktop and emulators don't do that. Fix: while full screen, move the map and
+  // the strip to <body> (a placeholder holds the map's spot), then put them back.
+  _routeMapPortal(mapEl, strip, on);
+  mapEl.classList.toggle('route-map-full', on);
+  if (strip) strip.classList.toggle('on', on);
+  document.body.style.overflow = on ? 'hidden' : '';
+  if (btn) {
+    btn.textContent = on ? '✕' : '⛶';
+    btn.title = on ? 'Close full screen' : 'Full screen map';
+    btn.setAttribute('aria-label', btn.title);
+  }
+  if (on) {
+    _routeMapFullRenderStrip();
+    try { history.pushState({ routeMapFull: 1 }, ''); _routeMapFullHist = true; } catch (e) {}
+  } else if (_routeMapFullHist) {
+    _routeMapFullHist = false;
+    try { if (history.state && history.state.routeMapFull) history.back(); } catch (e) {}
+  }
+  setTimeout(function () {
+    var m = state.route && state.route.leafletMap;
+    if (!m) return;
+    m.invalidateSize();
+    _routeMapFitAll();
+  }, 60);
+}
+
+// Phone Back gesture / browser Back closes the full-screen map instead of leaving the app.
+window.addEventListener('popstate', function () {
+  if (_routeMapFull) { _routeMapFullHist = false; routeMapToggleFull(false); }
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && _routeMapFull) routeMapToggleFull(false);
+});
+
+function _routeMapNavUrl() {
+  // Every job on a routed day carries the same tap-to-navigate link (routeMapUrl).
+  var d = (document.getElementById('routeDatePicker') || {}).value || '';
+  if (!d || !Array.isArray(state.jobs)) return '';
+  var want = parseJobDate(d);
+  if (!want) return '';
+  var j = state.jobs.find(function (x) {
+    var jd = x.routeMapUrl ? parseJobDate(x.date) : null;
+    return jd && jd.getTime() === want.getTime();
+  });
+  return j ? j.routeMapUrl : '';
+}
+
+function _routeMapFullRenderStrip() {
+  var strip = document.getElementById('routeMapFullStrip');
+  if (!strip) return;
+  var stops = (state.route && (state.route.visibleStops || state.route.stops)) || [];
+  // Always-visible exit by the thumb (iPhone home-screen apps have no Back button,
+  // and the corner ✕ can sit under the status bar on some phones).
+  var html = '<button type="button" class="fs-chip fs-exit" id="routeMapFullExit" data-testid="route-map-full-exit"' +
+    ' onclick="routeMapToggleFull(false)" aria-label="Exit full screen">✕ Exit</button>';
+  stops.forEach(function (s, i) {
+    var name = s._custName || s['Address'] || s._jobId || ('Stop ' + (i + 1));
+    var sel = state.route.selectedStopId && state.route.selectedStopId === s['ID'];
+    html += '<button type="button" class="fs-chip' + (s._hard ? ' hard' : '') + (sel ? ' sel' : '') +
+      '" data-testid="route-map-full-stop" onclick="routeMapFullGo(' + i + ')"><b>' + (i + 1) + '</b>' +
+      escapeHtml(String(name).slice(0, 30)) + '</button>';
+  });
+  var url = _routeMapNavUrl();
+  if (url) html += '<a class="fs-chip fs-nav" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">🧭 Open in Maps</a>';
+  if (!stops.length) html += '<span style="color:#9aa0b8;font-size:12px;padding:10px 6px">No stops on this route yet.</span>';
+  strip.innerHTML = html;
+}
+
+function routeMapFullGo(i) {
+  var stops = (state.route && (state.route.visibleStops || state.route.stops)) || [], s = stops[i];
+  if (!s) return;
+  if (state.route.selectedStopId !== s['ID']) routeSelectStop(s['ID']);   // highlights it on the map + list
+  var m = state.route.leafletMap, lat = parseFloat(s['Latitude']), lon = parseFloat(s['Longitude']);
+  if (m && !isNaN(lat) && !isNaN(lon)) m.setView([lat, lon], Math.max(m.getZoom(), 14));
+  _routeMapFullRenderStrip();
 }
 
 // Route map vertical resize (2026-10-06, David's request): drag the handle
@@ -10767,7 +10969,13 @@ function _renderRouteLeaflet(stops, skipFitBounds) {
 // Clamp: 80px min .. 70% of viewport max; the list is never squeezed below
 // 120px (the map backs off instead). Double-click the handle resets 360px.
 (function _initRouteMapResize(){
-  var KEY='routeMapHeight', DEF_H=360, MIN_H=80, LIST_MIN=120;
+  // (2026-10-18, David) Phones (<=700px wide) scroll the whole Route page, so
+  // the map isn't squeezed by the stop list there: it may grow to 85% of the
+  // screen, starts at 55% of it, and remembers its own height (a separate key,
+  // so the old squeezed phone height isn't carried over). PC is unchanged.
+  function _isPhone(){ try{ return window.matchMedia('(max-width:700px)').matches; }catch(e){ return false; } }
+  var KEY=_isPhone()?'routeMapHeightPhone':'routeMapHeight',
+      DEF_H=_isPhone()?Math.round(window.innerHeight*0.55):360, MIN_H=80, LIST_MIN=120;
   var mapEl=document.getElementById('routeMap'),
       handle=document.getElementById('routeMapResize'),
       listEl=document.getElementById('routeStopsList');
@@ -10777,7 +10985,7 @@ function _renderRouteLeaflet(stops, skipFitBounds) {
   }
   function _clampH(h){
     if(isNaN(h)||!isFinite(h)) h=DEF_H;
-    return Math.max(MIN_H, Math.min(h, Math.floor(window.innerHeight*0.7)));
+    return Math.max(MIN_H, Math.min(h, Math.floor(window.innerHeight*(_isPhone()?0.85:0.7))));
   }
   function _save(h){ try{localStorage.setItem(KEY,String(Math.round(h)));}catch(e){} }
   // Tallest map height that still leaves LIST_MIN px for the stop list,
@@ -10802,8 +11010,8 @@ function _renderRouteLeaflet(stops, skipFitBounds) {
     return contentH-fixedH-handleH-LIST_MIN;
   }
   function _applyH(h, save){
-    h=_clampH(h);            // 80 .. 70% viewport
-    h=Math.min(h,_maxMapH()); // ...and always leave LIST_MIN for the list
+    h=_clampH(h);            // 80 .. 70% viewport (85% on a phone)
+    if(!_isPhone()) h=Math.min(h,_maxMapH()); // PC: always leave LIST_MIN for the list (phones scroll the page)
     h=Math.max(h,MIN_H);      // degenerate tiny viewport: page scroll is the fallback
     mapEl.style.height=h+'px';
     _invalidate();
@@ -10816,6 +11024,8 @@ function _renderRouteLeaflet(stops, skipFitBounds) {
     if(sv!==null&&sv!==''){
       var pv=parseFloat(sv);
       if(!isNaN(pv)&&isFinite(pv)) _applyH(pv,false);
+    } else if(_isPhone()){
+      _applyH(DEF_H,false);   // phone first visit: a roomy map, not the PC's 360px
     }
   }catch(e){}
   var dragging=false, startY=0, startH=0, rafId=0;

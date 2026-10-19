@@ -13,12 +13,17 @@ MOB-03  Route on a phone (smoke of RB-03 / RE-01 / RE-11): build, ▲ moves a st
 MOB-04  PS-11 on a phone: tapping a prescreen item highlights that job
 MOB-05  touch drag (✋) reorders a stop — a REAL touch gesture (Chromium touch
         events), not a mouse drag
+MOB-06  Route Selected Date / AI Route / Email in ONE row; the Route page scrolls
+        and Approve / Un-approve sit below the map (scroll down to reach them)
+MOB-07  ⛶ full-screen map + stop strip; a stop chip selects; Back and ✕ return
 
 (The fixture is called `phone`, not `device`: pytest-playwright already has a
 session-scoped `device` fixture, and shadowing it broke every test's setup.)
 
 Run: run_tests_gui_jobs_e2e.bat --human --mobile
 """
+import re
+
 import pytest
 from playwright.sync_api import expect
 
@@ -166,6 +171,109 @@ def test_mobile_MOB_05_touch_drag_reorders(clean_slate, route, page, data, app, 
     route.pick_date(SANDBOX_DATE)
     assert route.stop(3).job_id() == first, \
         f"[{phone}] after dragging stop 1 below stop 3 it isn't 3rd: {[s.job_id() for s in route.stops()]}"
+
+
+# ── MOB-06 ───────────────────────────────────────────────────────────────────
+def test_mobile_MOB_06_route_buttons_one_row_page_scrolls(clean_slate, route, page, data, app, phone):
+    """David 2026-10-18: on a phone the 2 route buttons + Email sit in ONE row
+    (short labels), and the page scrolls so Approve / Un-approve sit at the
+    bottom (scroll down to reach them) instead of being pinned under the map."""
+    _four_routed(data, route)
+    btns = [page.locator(f"#{i}") for i in ("routeTodayBtnRoute", "routeAiSuggestBtn", "routeEmailRouteBtn")]
+    boxes = [b.bounding_box() for b in btns]
+    assert all(boxes), f"[{phone}] a route action button isn't on the page"
+    tops = [round(b["y"]) for b in boxes]
+    assert max(tops) - min(tops) <= 2, f"[{phone}] route/AI/Email buttons aren't in one row (tops {tops})"
+    for b, bx in zip(btns, boxes):
+        assert bx["height"] >= MIN_TAP, f"[{phone}] {b} is only {bx['height']:.0f}px tall"
+    assert page.evaluate("() => getComputedStyle(document.getElementById('screen-route')).display") == "block", \
+        f"[{phone}] Route screen isn't in page-scroll mode"
+    approve = page.locator("#routeApproveRow")
+    approve.scroll_into_view_if_needed()
+    expect(approve).to_be_visible()
+    ab = approve.bounding_box()
+    mb = page.locator("#routeMap").bounding_box()
+    assert ab["y"] > mb["y"] + mb["height"], f"[{phone}] Approve row isn't below the map"
+    assert _sideways_overflow(page) <= 1, f"[{phone}] Route screen scrolls sideways"
+
+
+# ── MOB-07 ───────────────────────────────────────────────────────────────────
+def test_mobile_MOB_07_map_full_screen_and_back(clean_slate, route, page, data, app, phone):
+    """⛶ opens the route map full screen with a stop strip; tapping a stop chip
+    selects it; the phone's Back (history) and ✕ both return to the normal view."""
+    _four_routed(data, route)
+    fs = page.locator("#routeMapFsBtn")
+    fs.scroll_into_view_if_needed()
+    app.log("tap ⛶ full-screen map")
+    fs.click()
+    m = page.locator("#routeMap")
+    expect(m).to_have_class(re.compile(r"\broute-map-full\b"))
+    page.wait_for_timeout(400)
+    vp, mb = page.viewport_size, m.bounding_box()
+    assert mb["width"] >= vp["width"] - 2 and mb["height"] >= vp["height"] - 2, \
+        f"[{phone}] map isn't full screen: {mb} vs {vp}"
+    strip = page.get_by_test_id("route-map-full-strip")
+    expect(strip).to_be_visible()
+    chips = page.get_by_test_id("route-map-full-stop")
+    assert chips.count() >= 4, f"[{phone}] full-screen strip shows {chips.count()} stops, expected 4"
+    app.log("tap stop chip 2")
+    chips.nth(1).click()
+    expect(page.get_by_test_id("route-map-full-stop").nth(1)).to_have_class(re.compile(r"\bsel\b"))
+    app.log("phone Back closes full screen")
+    page.go_back()
+    expect(strip).to_be_hidden()
+    page.wait_for_timeout(300)
+    assert m.bounding_box()["height"] < vp["height"] - 40, f"[{phone}] Back didn't shrink the map"
+    expect(m).not_to_have_class(re.compile(r"\broute-map-full\b"))
+    expect(page.locator("#screen-route")).to_be_visible()      # Back didn't leave the Route screen
+    app.log("⛶ again, then ✕ closes it")
+    fs.click()
+    expect(strip).to_be_visible()
+    page.locator("#routeMapFsBtn").click()
+    expect(strip).to_be_hidden()
+    expect(page.locator("#screen-route")).to_be_visible()
+
+    # David 2026-10-19, real phone: the corner ✕ was hidden under the status bar /
+    # notch (the page uses viewport-fit=cover) and an iPhone home-screen app has no
+    # Back, so he was stuck. Emulators report a 0px safe area, so fake a 47px notch.
+    NOTCH = 47
+    page.evaluate(f"() => document.documentElement.style.setProperty('--safe-top', '{NOTCH}px')")
+    app.log(f"fake a {NOTCH}px notch; ⛶ again")
+    fs.click()
+    expect(strip).to_be_visible()
+    xb = page.locator("#routeMapFsBtn").bounding_box()
+    assert xb["y"] >= NOTCH, f"[{phone}] full-screen ✕ is under the notch (top {xb['y']:.0f}px < {NOTCH}px)"
+    assert xb["height"] >= MIN_TAP, f"[{phone}] full-screen ✕ is only {xb['height']:.0f}px tall"
+    # Real phones clip a fixed element to its touch-scroll container (.main), hiding
+    # the map's top under the top bar and the strip under the bottom nav. Emulators
+    # don't, so check the cause directly: the full-screen map and strip must be
+    # children of <body>, and the zoom buttons / ✕ Exit must be the topmost thing
+    # where a finger would land.
+    assert page.evaluate("""() => document.getElementById('routeMap').parentElement === document.body
+        && document.getElementById('routeMapFullStrip').parentElement === document.body"""), \
+        f"[{phone}] full-screen map/strip are still inside the scrolling page (real phones clip them)"
+    for sel in (".leaflet-control-zoom-in", "#routeMapFsBtn", "#routeMapFullExit"):
+        hit = page.evaluate("""s => { const el = document.querySelector(s); if (!el) return 'missing';
+            const r = el.getBoundingClientRect();
+            const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+            return top && (top === el || el.contains(top)) ? 'ok' : (top ? (top.id || top.className || top.tagName) : 'nothing'); }""", sel)
+        assert hit == "ok", f"[{phone}] {sel} in full screen is covered by: {hit}"
+    ex = page.get_by_test_id("route-map-full-exit")
+    expect(ex).to_be_visible()
+    eb, vp = ex.bounding_box(), page.viewport_size
+    assert eb["height"] >= MIN_TAP - 4 and 0 <= eb["x"] and eb["y"] + eb["height"] <= vp["height"] + 1, \
+        f"[{phone}] '✕ Exit' in the stop strip isn't fully on screen: {eb}"
+    app.log("tap '✕ Exit' in the stop strip")
+    ex.click()
+    expect(strip).to_be_hidden()
+    expect(m).not_to_have_class(re.compile(r"\broute-map-full\b"))
+    expect(page.locator("#screen-route")).to_be_visible()
+    assert page.evaluate("""() => !!document.getElementById('routeMap').closest('#screen-route')
+        && !!document.getElementById('routeMapFullStrip').closest('#screen-route')
+        && !document.getElementById('routeMapPlaceholder')"""), \
+        f"[{phone}] after exit the map/strip didn't go back into the Route screen"
+    page.evaluate("() => document.documentElement.style.removeProperty('--safe-top')")
+    assert _sideways_overflow(page) <= 1, f"[{phone}] page scrolls sideways after full screen"
 
 
 def test_mobile_screens_list_is_current():
