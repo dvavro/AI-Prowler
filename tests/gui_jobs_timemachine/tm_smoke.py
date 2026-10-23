@@ -40,7 +40,7 @@ def main():
     token = secrets.token_urlsafe(24)
     log = open(pathlib.Path(home) / "tm_server.out", "w", encoding="utf-8")
     p = subprocess.Popen([sys.executable, str(HERE / "tm_server.py"), "--home", home, "--port", str(PORT),
-                          "--control-port", str(CTL), "--token", token, "--date", "2026-10-05"],
+                          "--control-port", str(CTL), f"--token={token}", "--date", "2026-10-05"],
                          stdout=log, stderr=subprocess.STDOUT)
     try:
         t0 = time.time()

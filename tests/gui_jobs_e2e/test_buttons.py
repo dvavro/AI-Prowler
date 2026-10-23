@@ -93,7 +93,7 @@ KNOWN = {
              "jobsViewDateBtn": "SAFE", "jobsViewStatusBtn": "SAFE", "jobsViewBillingBtn": "SAFE",
              "job-pause": "WRITE"},
     "route": {"refreshRouteBtn": "SAFE", "routeTodayBtnRoute": "WRITE",
-              "routeAiSuggestBtn": "GUARDED", "routeEmailRouteBtn": "GUARDED",
+              "routeEmailRouteBtn": "GUARDED",   # 🧠 routeAiSuggestBtn removed 2026-10-22
               # found by the coverage check in --human mode (2026-09-26), once
               # the map and the job list had finished loading:
               "+": "SAFE", "−": "SAFE",            # map zoom in / out
@@ -101,7 +101,13 @@ KNOWN = {
               "unrouted-edit": "SAFE",              # ✏️ on a job that isn't a stop yet
               "unrouted-pause": "WRITE",            # ⏸️ on a job that isn't a stop yet
               # 2026-10-18: ⛶ full-screen map (phone layout tested in MOB-07)
-              "routeMapFsBtn": "SAFE"},
+               "routeMapFsBtn": "SAFE",
+               # 2026-10-22: 📋 Copy AI Route for Any AI — builds a prompt only
+               # (no route written, no AI credits); see test_copy_ai_route_e2e.py
+               "routeCopyAiBtn": "SAFE",
+               # 2026-10-22: 🗓️ Plan Week with Any AI — opens a sheet; jobs move
+               # only on Approve (test_week_plan_e2e.py, ZTEST jobs only)
+               "routeWeekPlanBtn": "SAFE"},
 }
 
 
@@ -235,6 +241,21 @@ def test_BTN_ROUTE_unrouted_pause_pauses_the_job(app, page, two_jobs):
         m.get_by_role("button", name="Skip").click()
 
 
+def test_BTN_ROUTE_copy_ai_opens_the_prompt(app, page, two_jobs):
+    """2026-10-22: 📋 Copy AI Route for Any AI — opens the prompt sheet (route
+    code + prompt), writes no route and spends no AI credits."""
+    from app import RouteScreen
+    app.goto("route")
+    RouteScreen(page, app.log).pick_date(SANDBOX_DATE)
+    with _api_request(page, "get_ai_route_prompt"):
+        page.locator("#routeCopyAiBtn").click()
+    sheet = page.locator("#aiRouteOverlay")
+    expect(sheet.get_by_test_id("ai-route-prompt-code")).to_have_text(re.compile(r"^RT-[A-Z0-9]{6}$"),
+                                                                      timeout=30_000)
+    sheet.locator("#acpClose").click()
+    expect(sheet).to_have_count(0)
+
+
 def _click_guarded(app, page, guard, button_sel: str, tool: str):
     """Click a GUARDED button (AI credits / outbound email) and wait for the
     app's request for `tool` to actually go out — the guard answers it with a
@@ -289,12 +310,26 @@ def test_BTN_ROUTE_route_selected_date_builds(app, page, two_jobs):
     expect(page.locator("[data-testid='route-stop'][data-jobid]")).to_have_count(len(two_jobs), timeout=30_000)
 
 
-def test_BTN_ROUTE_ai_route_is_guarded(app, page, two_jobs, guard):
-    from app import RouteScreen
+def test_BTN_ROUTE_plan_week_opens_the_sheet(app, page, two_jobs):
+    """2026-10-22: 🗓️ Plan Week with Any AI — opens the week sheet (week
+    picker, Copy, Check); moves nothing by itself."""
     app.goto("route")
-    RouteScreen(page, app.log).pick_date(SANDBOX_DATE)
-    call = _click_guarded(app, page, guard, "#routeAiSuggestBtn", "start_ai_routing")
-    assert call["args"].get("route_date") == SANDBOX_DATE
+    page.locator("#routeWeekPlanBtn").click()
+    sheet = page.locator("#aiRouteOverlay")
+    expect(sheet.get_by_test_id("wp-week-label")).to_have_text(re.compile(r"^Mon .+ – Sun "), timeout=15_000)
+    expect(sheet.get_by_test_id("wp-copy")).to_be_visible()
+    expect(sheet.get_by_test_id("wp-check")).to_be_visible()
+    sheet.locator("#wpClose").click()
+    expect(sheet).to_have_count(0)
+
+
+def test_BTN_ROUTE_no_cli_ai_route_button(app, page, two_jobs):
+    """2026-10-22: the 🧠 Run AI Route (Claude CLI) button was removed —
+    📋 Copy AI Route for Any AI replaces it (tested above)."""
+    app.goto("route")
+    expect(page.locator("#routeAiSuggestBtn")).to_have_count(0)
+    expect(page.locator("#routeCopyAiBtn")).to_be_visible()
+
 
 
 def test_BTN_ROUTE_email_route_is_guarded(app, page, two_jobs, guard):

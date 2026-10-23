@@ -48,6 +48,16 @@ PROTECTED = tuple(REAL_STATE_DIR / n for n in PROTECTED_NAMES)
 SANDBOX_ONLY_NAMES = ("notifications_cache.json", "dismissed_notifications.json",
                       "welcome_ad_cache.json", "welcome_config.json")
 SANDBOX_ONLY = tuple(REAL_STATE_DIR / n for n in SANDBOX_ONLY_NAMES)
+# Whole folders no test may write into (2026-10-21). On 2026-10-21 David's real
+# learnings (~/.ai-prowler/learnings/self_learning_data.json) were found wiped:
+# tests/gui/test_learnings_auto_refresh.py "backed up" the real file, wrote a
+# placeholder over it, and an interrupted run left the placeholder — every
+# later run then "restored" the placeholder. Any in-process write, replace,
+# rename or delete inside these folders is now refused and fails the test.
+# Not byte-checked/restored after each test like PROTECTED: the RUNNING
+# install legitimately adds learnings while tests run, and putting an old
+# snapshot back would lose those.
+PROTECTED_DIRS = (REAL_STATE_DIR / "learnings",)
 BACKUP_DIR = REAL_STATE_DIR / "test_guard_backups"
 KEEP_BACKUPS = 10
 
@@ -75,6 +85,17 @@ def _key(p) -> str | None:
 
 
 _PROTECTED_KEYS = {_key(p): p for p in PROTECTED}
+_PROTECTED_DIR_KEYS = tuple(_key(d) + os.sep for d in PROTECTED_DIRS)
+
+
+def _in_protected_dir(p) -> str | None:
+    k = _key(p)
+    if k is None:
+        return None
+    for d in _PROTECTED_DIR_KEYS:
+        if k.startswith(d) or k + os.sep == d:
+            return k
+    return None
 
 
 def _map(p):
@@ -88,6 +109,13 @@ def _map(p):
 
 
 def _refuse(p, what: str):
+    hit = _in_protected_dir(p)
+    if hit is not None:
+        msg = (f"{what} {hit} -- tests must never change the real learnings folder "
+               f"(test: {_current_test['id']})")
+        with _lock:
+            _violations.append(msg)
+        raise PermissionError("TEST GUARD refused to " + msg)
     # cheap pre-check: every protected file is named like one of these
     try:
         if os.path.basename(os.fspath(p)).lower() not in PROTECTED_NAMES:

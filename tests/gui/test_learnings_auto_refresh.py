@@ -28,10 +28,11 @@ create_learnings_tab() runs (Path.home() / '.ai-prowler' / 'learnings' /
 documented for LOG_PATH in test_scheduler.py's
 test_TC_SCHED_008_get_log_tail_returns_string. Neither the `gui` nor
 `isolated_env` fixture patches Path.home(), so patching it inside a test
-would have NO effect on the already-built GUI's _learnings_file. Instead,
-following that same established pattern: back up the REAL
-~/.ai-prowler/learnings/self_learning_data.json (if any), run the test
-against it directly, then restore/delete in a finally block.
+would have NO effect on the already-built GUI's _learnings_file.
+2026-10-21: the old answer — write the REAL file and restore it afterwards —
+wiped David's learnings after an interrupted run. The GUI now keeps the path
+in app._learnings_file_path and every helper reads it live, so the fixture
+below points it at a temp file; the real file is never written.
 
 Also, following test_quick_links_custom_tasks_live_refresh.py's approach:
 the shared GUI test fixture cancels all pending after() callbacks for
@@ -47,22 +48,34 @@ from pathlib import Path
 import pytest
 
 
+REAL_LEARNINGS = Path.home() / ".ai-prowler" / "learnings" / "self_learning_data.json"
+
+
 @pytest.fixture
-def real_learnings_file():
-    """Back up ~/.ai-prowler/learnings/self_learning_data.json (if it
-    exists), yield the real path, then restore/delete on teardown."""
-    fp = Path.home() / ".ai-prowler" / "learnings" / "self_learning_data.json"
-    backup = None
-    if fp.exists():
-        backup = fp.read_text(encoding="utf-8")
+def real_learnings_file(gui, tmp_path):
+    """A TEMP learnings file the GUI reads instead of the real one.
+
+    2026-10-21: this fixture used to write the REAL
+    ~/.ai-prowler/learnings/self_learning_data.json and restore a backup
+    afterwards. One interrupted run left the test's placeholder in the real
+    file, and every later run then "restored" that placeholder — David's
+    Local learnings were wiped. The GUI now keeps the path in
+    app._learnings_file_path (read live), so we point it at tmp_path and the
+    real file is never opened. (Name kept so the tests below are unchanged.)
+    """
+    fp = tmp_path / "learnings" / "self_learning_data.json"
     fp.parent.mkdir(parents=True, exist_ok=True)
+    before = (REAL_LEARNINGS.stat().st_mtime, REAL_LEARNINGS.stat().st_size) \
+        if REAL_LEARNINGS.exists() else None
+    old = gui.app._learnings_file_path
+    gui.app._learnings_file_path = fp
     try:
         yield fp
     finally:
-        if backup is not None:
-            fp.write_text(backup, encoding="utf-8")
-        elif fp.exists():
-            fp.unlink()
+        gui.app._learnings_file_path = old
+        after = (REAL_LEARNINGS.stat().st_mtime, REAL_LEARNINGS.stat().st_size) \
+            if REAL_LEARNINGS.exists() else None
+        assert after == before, "a Learnings test touched the REAL learnings file"
 
 
 def _write_learnings(fp: Path, learnings: list):

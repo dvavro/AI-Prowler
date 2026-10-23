@@ -407,3 +407,53 @@ def test_lead_time_setting_key_matches_what_the_reader_expects():
     import inspect
     src = inspect.getsource(db_read_settings_recurring_job_lead_days)
     assert "'Recurring Job Lead Time (days)'" in src
+
+
+# ── Preferred Day(s) (2026-10-21, David) ───────────────────────────────────
+# "each projected date should land on one of the days in the customer's
+# Preferred Days" — the sweep moves next-due FORWARD to the next preferred
+# weekday (never earlier), the same rule as the Jobs app's 🔮 projections.
+
+@pytest.mark.parametrize("text, days", [
+    ("Thursday", {3}), ("Monday/Friday", {0, 4}), ("Mon, Wed", {0, 2}), ("Tue Thu", {1, 3}),
+    ("Mon-Wed", {0, 1, 2}), ("Fri-Mon", {4, 5, 6, 0}), ("Weekdays", {0, 1, 2, 3, 4}),
+    ("", set()), (None, set()), ("Thurzday", set()),        # blank / not understood = no constraint
+])
+def test_parse_preferred_days(text, days):
+    assert set(write_ops.parse_preferred_days(text)) == days
+
+
+def test_snap_to_preferred_day_moves_forward_only():
+    thu = frozenset({3})
+    d = datetime.date(2026, 10, 22)                          # a Thursday
+    assert write_ops.snap_to_preferred_day(d, thu) == d
+    assert write_ops.snap_to_preferred_day(d + datetime.timedelta(days=1), thu) == datetime.date(2026, 10, 29)
+    assert write_ops.snap_to_preferred_day(d, frozenset()) == d
+
+
+def test_sweep_creates_the_job_on_the_preferred_day(db_path):
+    _set_lead_days(db_path, 14)
+    # last serviced 3 days ago; whatever weekday +7 lands on, prefer the day after it
+    last = TODAY - datetime.timedelta(days=3)
+    raw_due = last + datetime.timedelta(weeks=1)
+    pref_wd = (raw_due.weekday() + 1) % 7
+    pref_name = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][pref_wd]
+    _create_customer(db_path, "CUST-0021", "Thursday Diner", "Weekly")
+    _sql(db_path, "UPDATE customers SET preferred_days = ? WHERE customer_id = ?", (pref_name, "CUST-0021"))
+    _create_past_job(db_path, "CUST-0021", "Thursday Diner", last.isoformat())
+
+    res = db_generate_upcoming_recurring_jobs(db_path)
+    assert "1 new job(s)" in res, res
+    job = _generated_jobs_for(db_path, "CUST-0021")[0]
+    assert job["service_date"] == (raw_due + datetime.timedelta(days=1)).isoformat()
+    assert datetime.date.fromisoformat(job["service_date"]).weekday() == pref_wd
+
+
+def test_sweep_without_preferred_days_is_unchanged(db_path):
+    _set_lead_days(db_path, 14)
+    last = TODAY - datetime.timedelta(days=3)
+    _create_customer(db_path, "CUST-0022", "Any Day Cafe", "Weekly")
+    _create_past_job(db_path, "CUST-0022", "Any Day Cafe", last.isoformat())
+    db_generate_upcoming_recurring_jobs(db_path)
+    job = _generated_jobs_for(db_path, "CUST-0022")[0]
+    assert job["service_date"] == (last + datetime.timedelta(weeks=1)).isoformat()

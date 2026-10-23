@@ -77,7 +77,8 @@ def test_REP_01_charts_table_and_weeks_selector(app, page):
     _open(app, page)
     expect(page.locator("#reportsContent")).to_contain_text("Weekly Revenue")
     expect(page.locator("#reportsContent")).to_contain_text("Weekly Scheduled Hours")
-    expect(page.locator("#reportsContent svg")).to_have_count(3)  # revenue + tax + hours
+    # yearly net revenue (2026-10-21) + weekly revenue + tax + hours
+    expect(page.locator("#reportsContent svg")).to_have_count(4)
     expect(page.locator("#reportsContent")).to_contain_text("Weekly Tax Collected")
     rows = page.locator("#reportsContent table tbody tr")
     expect(rows).to_have_count(17)                       # 8 back + this week + 8 ahead

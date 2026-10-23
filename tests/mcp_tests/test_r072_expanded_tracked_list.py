@@ -1,6 +1,12 @@
 """Test expanded list_tracked_directories (R-072)."""
 import sys
-sys.path.insert(0, r"C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler")
+from pathlib import Path as _Path
+# 2026-10-21: this used to insert a hard-coded OLD work folder at the front of
+# sys.path at collection time, so every test collected after it imported that
+# folder's setup_wizard.py etc. instead of this repo's. Use this repo's root.
+_ROOT = str(_Path(__file__).resolve().parents[2])
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 # We test the formatting logic in isolation (not the full MCP tool,
 # which needs server context). Import the helpers.

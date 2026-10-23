@@ -50,6 +50,7 @@ def _readers(path):
         dwo.db_read_settings_customer_reminder_email_enabled(path),
         dwo.db_read_settings_customer_reminder_sms_enabled(path),
         dwo.working_days(path),                    # Working Days (2026-10-02)
+        __import__("week_plan").read_week_plan_miles(path),   # Week Plan Distance (2026-10-22)
     )
 
 
@@ -62,22 +63,24 @@ def db(tmp_path):
 
 def test_the_16_editable_settings_are_listed():
     # 17 since 2026-10-02: "Working Days" (Vicki) joined the 16 R-052 rows.
-    assert len(KEYS) == 17 and len(set(KEYS)) == 17
+    # 18 since 2026-10-22: "Week Plan Distance (miles)" (🗓️ Plan Week, default 5).
+    assert len(KEYS) == 18 and len(set(KEYS)) == 18
     for k in ("Route Origin Mode", "Start/End Street Address", "Start/End ZIP",
               "Email Route On Build", "Workday Start Time", "Lunch Break Duration (min)",
               "Hard Time Tolerance (min)", "Recurring Job Lead Time (days)",
-              "Customer Reminder SMS Enabled", "Working Days"):
+              "Customer Reminder SMS Enabled", "Working Days", "Week Plan Distance (miles)"):
         assert k in KEYS
 
 
 def test_seeding_a_fresh_db_adds_every_row(db):
-    assert dwo.db_seed_default_settings(db) == 17
+    assert dwo.db_seed_default_settings(db) == 18
     s = _settings(db)
     for k in KEYS:
         assert k in s
     assert s["Route Origin Mode"] == "Jobs Only"
     assert s["Email Route On Build"] == "Disabled"
     assert s["Working Days"] == "Mon,Tue,Wed,Thu,Fri"
+    assert s["Week Plan Distance (miles)"] == "5"
 
 
 def test_seeding_changes_no_behaviour(db):
@@ -97,7 +100,7 @@ def test_existing_values_are_never_overwritten(db):
     conn.execute("INSERT INTO settings (key, value) VALUES ('Workday Start Time', '06:30')")
     conn.commit()
     conn.close()
-    assert dwo.db_seed_default_settings(db) == 15
+    assert dwo.db_seed_default_settings(db) == 16
     s = _settings(db)
     assert s["Route Origin Mode"] == "Company Location"
     assert s["Workday Start Time"] == "06:30"

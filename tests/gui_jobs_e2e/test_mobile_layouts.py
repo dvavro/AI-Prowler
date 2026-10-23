@@ -179,11 +179,17 @@ def test_mobile_MOB_06_route_buttons_one_row_page_scrolls(clean_slate, route, pa
     (short labels), and the page scrolls so Approve / Un-approve sit at the
     bottom (scroll down to reach them) instead of being pinned under the map."""
     _four_routed(data, route)
-    btns = [page.locator(f"#{i}") for i in ("routeTodayBtnRoute", "routeAiSuggestBtn", "routeEmailRouteBtn")]
+    # 2026-10-22: 🧠 AI Route (routeAiSuggestBtn) was replaced by 📋 Any AI (routeCopyAiBtn)
+    # 2026-10-22: + 🗓️ Week (routeWeekPlanBtn) — four buttons, still one row
+    btns = [page.locator(f"#{i}") for i in ("routeTodayBtnRoute", "routeCopyAiBtn", "routeWeekPlanBtn",
+                                            "routeEmailRouteBtn")]
     boxes = [b.bounding_box() for b in btns]
     assert all(boxes), f"[{phone}] a route action button isn't on the page"
     tops = [round(b["y"]) for b in boxes]
-    assert max(tops) - min(tops) <= 2, f"[{phone}] route/AI/Email buttons aren't in one row (tops {tops})"
+    assert max(tops) - min(tops) <= 2, f"[{phone}] route/Any AI/Week/Email buttons aren't in one row (tops {tops})"
+    vw = page.viewport_size["width"]
+    for b, bx in zip(btns, boxes):
+        assert bx["x"] >= 0 and bx["x"] + bx["width"] <= vw + 1, f"[{phone}] {b} runs off the screen"
     for b, bx in zip(btns, boxes):
         assert bx["height"] >= MIN_TAP, f"[{phone}] {b} is only {bx['height']:.0f}px tall"
     assert page.evaluate("() => getComputedStyle(document.getElementById('screen-route')).display") == "block", \

@@ -397,6 +397,14 @@ def test_merge_adds_dates_with_no_real_jobs():
 
 # ── The REAL JS agrees with this mirror (runs index.html's code in node) ──
 
+def _PREF_DAY_HELPERS(src: str) -> list:
+    """2026-10-21: _calRecurringProjections snaps each date to the customer's
+    Preferred Day(s). These fixtures have no Preferred Day, so the snap is a
+    no-op and the mirror below still matches 1:1."""
+    return [_js_function(src, n) for n in
+            ("_prefDaySet", "_snapToPreferredDay", "_custPreferredDaysText")]
+
+
 def _js_function(src: str, name: str) -> str:
     start = src.index(f"function {name}(")
     i = src.index("{", start)
@@ -433,6 +441,7 @@ def test_index_html_js_matches_the_mirror(freq, last):
         " FD.now = () => new FD().getTime(); globalThis.Date = FD;",
         _js_function(src, "parseJobDate"),
         _js_function(src, "_dkey"),
+        *_PREF_DAY_HELPERS(src),
         _js_function(src, "_calRecurringProjections"),
         f"process.stdout.write(JSON.stringify(_calRecurringProjections([{json.dumps(cust)}])"
         ".map(p => p.date)));",
@@ -468,6 +477,7 @@ def test_index_html_js_knows_every_server_frequency_word():
         f" if (a.length) super(...a); else super({TODAY.year}, {TODAY.month - 1}, {TODAY.day}); }} }}"
         " globalThis.Date = FD;",
         _js_function(src, "parseJobDate"), _js_function(src, "_dkey"),
+        *_PREF_DAY_HELPERS(src),
         _js_function(src, "_calRecurringProjections"),
         f"process.stdout.write(JSON.stringify(_calRecurringProjections({json.dumps(custs)})"
         ".map(p => [p.custId, p.date])));",

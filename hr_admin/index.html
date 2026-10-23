@@ -1304,6 +1304,82 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
 </script>
 </head>
 <body>
+<!-- ── PWA version badge (2026-10-21, David) ─────────────────────────────
+     Top-right "v9.3.2 · a1b2c3" so support can confirm at a glance which
+     build a phone is really running. The server stamps the value in at serve
+     time (ai_prowler_mcp.py _stamp_pwa_build: VERSION file + a hash of this
+     app's files), so there is nothing to bump by hand — any change to the
+     app gives a new hash. Tap it: it asks the server for the current build
+     and turns green (latest) or red (newer one waiting — tap again to load). -->
+<style id="apPwaVerCss">
+#apPwaVer{position:fixed;top:calc(env(safe-area-inset-top,0px) + 2px);right:4px;z-index:2147483000;
+  font:600 10px/1.2 -apple-system,Segoe UI,Roboto,Arial,sans-serif;letter-spacing:.2px;
+  padding:2px 6px;border-radius:9px;background:rgba(20,24,40,.72);color:#cfd6e6;
+  border:1px solid rgba(255,255,255,.18);cursor:pointer;user-select:none;-webkit-user-select:none;
+  white-space:nowrap;opacity:.9;-webkit-tap-highlight-color:transparent}
+#apPwaVer.ok{background:#1b5e20;color:#fff;border-color:#2e7d32}
+#apPwaVer.old{background:#b71c1c;color:#fff;border-color:#e53935}
+#apPwaVer.busy{opacity:.55}
+@media print{#apPwaVer{display:none}}
+</style>
+<div id="apPwaVer" title="App version — tap to check for a newer one" data-app="HR Admin"></div>
+<script id="apPwaVerJs">
+(function () {
+  var BUILD = /*AP_PWA_BUILD*/'__AIPROWLER_PWA_BUILD__'/*AP_PWA_BUILD_END*/;
+  var APP_ROOT = '/hr_admin/';
+  var el = document.getElementById('apPwaVer');
+  if (!el) return;
+  var stamped = BUILD.indexOf('__AIPROWLER') !== 0;      // false = file opened without the server
+  var label = stamped ? 'v' + BUILD : 'dev build';
+  el.textContent = label;
+  el.setAttribute('aria-label', el.getAttribute('data-app') + ' app version ' + label);
+  window.AIPROWLER_PWA_BUILD = stamped ? BUILD : '';
+  var newer = null;
+  function serverBuild() {
+    return fetch(APP_ROOT + 'index.html?v=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+      .then(function (t) {
+        var m = t.match(/\/\*AP_PWA_BUILD\*\/'([^']*)'\/\*AP_PWA_BUILD_END\*\//);
+        if (!m) throw new Error('no build stamp');
+        return m[1];
+      });
+  }
+  el.addEventListener('click', function (ev) {
+    ev.stopPropagation();
+    if (newer) {                                        // second tap: load the newer build
+      el.textContent = 'updating…';
+      var go = function () { location.reload(); };
+      try {
+        if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) {
+          navigator.serviceWorker.getRegistration().then(function (reg) {
+            return reg ? reg.update() : null;
+          }).then(go, go);
+          return;
+        }
+      } catch (e) {}
+      go();
+      return;
+    }
+    el.className = 'busy';
+    el.textContent = label + ' · checking…';
+    serverBuild().then(function (srv) {
+      if (srv === BUILD) {
+        el.className = 'ok';
+        el.textContent = label + ' ✓ latest';
+      } else {
+        newer = srv;
+        el.className = 'old';
+        el.textContent = label + ' → v' + srv + ' — tap to update';
+      }
+    }).catch(function () {
+      el.className = '';
+      el.textContent = label + ' · can\'t reach server';
+    }).then(function () {
+      if (!newer) setTimeout(function () { el.className = ''; el.textContent = label; }, 6000);
+    });
+  });
+})();
+</script>
 
 <!-- ── Update Available Banner ──────────────────────────────────────── -->
 <div id="update-banner" class="hidden">

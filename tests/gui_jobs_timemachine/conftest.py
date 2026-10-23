@@ -161,7 +161,9 @@ class TimeMachine:
         self.home.mkdir(parents=True, exist_ok=False)
         out = open(RUN_DIR / "tm_server.out", "w", encoding="utf-8")
         cmd = [sys.executable, str(HERE / "tm_server.py"), "--home", str(self.home), "--port", str(self.port),
-               "--control-port", str(self.ctl), "--token", self.token, "--date", self.start_day.isoformat(),
+               # --token=… (one argument): a random token can start with "-", which
+               # argparse would take for an option and refuse to start (seen 2026-10-22).
+               "--control-port", str(self.ctl), f"--token={self.token}", "--date", self.start_day.isoformat(),
                "--time", "07:00", "--mode", self.mode]
         if self.mode == "server":
             uf = RUN_DIR / "tm_users.json"          # outside the sandbox; only made-up users

@@ -165,7 +165,6 @@ def _patch_app(mcp):
         mcp._outlook_is_available = lambda *a, **k: False
     except Exception:
         pass
-    mcp.start_ai_routing = lambda *a, **k: "❌ AI Routing is switched off in the time machine (uses Claude credits)."
     mcp.get_weather = lambda *a, **k: "☀️ Sunny, 80°F (time machine — no real weather lookup)"
     try:
         import db_write_ops

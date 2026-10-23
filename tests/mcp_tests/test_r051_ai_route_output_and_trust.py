@@ -60,12 +60,8 @@ def test_unrelated_json_object_is_not_taken_as_result():
     assert tqa.parse_claude_json_output('warn {"a": 1}') is None
 
 
-def test_worker_uses_tolerant_parser():
-    src = (_SRC / "ai_prowler_mcp.py").read_text(encoding="utf-8")
-    i = src.index("AI_ROUTING_LAST_RUN_PATH.read_text")
-    window = src[i:i + 800]
-    assert "parse_claude_json_output(raw)" in window
-    assert "json.loads(raw)" not in window
+# (test_worker_uses_tolerant_parser removed 2026-10-22: the Claude CLI AI
+# Route worker it checked was removed with the Jobs app's 🧠 AI Route.)
 
 
 # ── workspace trust ─────────────────────────────────────────────────────────

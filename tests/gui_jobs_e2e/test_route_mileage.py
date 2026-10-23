@@ -21,14 +21,9 @@ shorter than the crow flies). The per-leg table is written to the run log.
                          different visit order — no credits
   MILES-03 [both modes]  Route tab (human mode): the total the person sees
                          equals the sum of the legs
-  MILES-04 [both modes]  REAL AI Routing (start_ai_routing → the Claude worker
-                         → apply_route_order). Uses Claude credits: only with
-                         --tier full, skipped otherwise. Email Route On Build
-                         is switched off for it (the worker would email the
-                         route) and put back after.
+  MILES-04  removed 2026-10-22 with the Jobs app's 🧠 AI Route (Claude CLI) button
 
-Run: run_tests_gui_jobs_e2e.bat --human -k test_route_mileage
-     run_tests_gui_jobs_e2e.bat --human --tier full -k MILES_04   (AI Routing, credits)
+Run: run_tests.bat jobs-sandbox --human -k test_route_mileage
 """
 import math
 import os
@@ -232,29 +227,9 @@ def test_MILES_03_route_tab_total(mode, three_jobs, route, page, api, quiet_rout
     assert m and float(m.group(1)) > 0, f"the first job shows no drive to get there: {first!r}"
 
 
-# ── MILES-04: real AI Routing (credits, --tier full) ─────────────────────────
-@pytest.mark.skipif(TIER != "full", reason="real AI Routing uses Claude credits — run with --tier full")
-@pytest.mark.parametrize("mode", MODES)
-def test_MILES_04_real_ai_routing(mode, three_jobs, api, route, page, quiet_route_email, street, log):
-    quiet_route_email.set(MODE, mode)
-    started = api.call("start_ai_routing", {"route_date": SANDBOX_DATE}, expect_ok=False)
-    m = re.search(r"job_id=([\w\-]+)", str(started))
-    assert m, f"AI Routing didn't start: {str(started)[:300]!r}"
-    job_id, deadline, status = m.group(1), time.time() + 15 * 60, ""
-    while time.time() < deadline:
-        status = str(api.call("poll_ai_routing", {"job_id": job_id}, expect_ok=False))
-        if not status.startswith("⏳"):
-            break
-        time.sleep(10)
-    log(f"AI Routing [{mode}] finished: {status[:600]}")
-    if re.search(r"hit your (session|usage|weekly) limit|usage limit|resets \d", status, re.I):
-        pytest.skip(f"Claude usage limit — AI Routing couldn't run: {status[:200]}")
-    assert status.startswith("✅"), f"AI Routing didn't finish OK: {status[:400]!r}"
-    assert _rows(api), f"AI Routing said DONE but wrote no route (R-065): {status[:300]!r}"
-    rows = _rows(api)
-    check_route_miles(rows, mode, street, log, want_jobs=three_jobs)
-    route.pick_date(SANDBOX_DATE)                 # show it (human mode) and check the shown total
-    route.wait_quiet()
-    shown = _shown_total(page, mode)
-    total = sum(_mi(r) or 0 for r in rows)
-    assert abs(shown - total) <= 0.1, f"Route tab shows {shown} mi after AI Routing, legs add up to {total:.2f}"
+# ── MILES-04: removed 2026-10-22 ─────────────────────────────────────────────
+# It ran the real background AI Routing (start_ai_routing → Claude CLI worker)
+# through the Jobs app's API. The Jobs app's 🧠 AI Route button and those tools
+# were removed from the app (David, 2026-10-22) — routing with AI is now
+# "📋 Copy AI Route", pasted into any AI chat; its writer, apply_route_order,
+# is still covered by MILES-02 here and by tests/mcp_tests/test_copy_ai_route_prompt.py.

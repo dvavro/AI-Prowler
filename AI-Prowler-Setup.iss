@@ -240,6 +240,10 @@ Type: files; Name: "{app}\claude_desktop_config_snippet.json"
 Type: files; Name: "{app}\AI-Prowler_Job_Tracker.xlsx"
 Type: files; Name: "{app}\migrate_spreadsheet.py"
 Type: files; Name: "{app}\README.md"
+; 2026-10-22: the Jobs app's Claude CLI AI Route (and its per-user Claude
+; sign-in) was removed — AI routing is done in any AI chat now.
+Type: files; Name: "{app}\cli_signin_relay.py"
+Type: files; Name: "{app}\console_inject.py"
 
 [Files]
 ; --- Application files ---
@@ -286,6 +290,8 @@ Source: "db_schema.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "db_read_ops.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "db_write_ops.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "db_route_ops.py"; DestDir: "{app}"; Flags: ignoreversion
+; 2026-10-22: Route tab "🗓️ Plan Week" — suggests moving soft jobs so nearby jobs share a day
+Source: "week_plan.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "db_backup_ops.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "db_export_ops.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "scope_resolver.py"; DestDir: "{app}"; Flags: ignoreversion
@@ -428,23 +434,6 @@ Source: ".claude\settings.json"; DestDir: "{%USERPROFILE}\.ai-prowler\.claude"; 
 Source: ".claude\hooks\log_tool_call.py"; DestDir: "{%USERPROFILE}\.ai-prowler\.claude\hooks"; Flags: ignoreversion
 Source: ".claude\skills\ai-prowler-tasks\SKILL.md"; DestDir: "{%USERPROFILE}\.ai-prowler\.claude\skills\ai-prowler-tasks"; Flags: ignoreversion
 
-; --- AI Routing: per-user Claude connection (Business Server mode) ---
-; cli_signin_relay.py : Phone sign-in relay. Runs `claude setup-token` in a hidden
-;                       console for one server user, hands the sign-in link to the
-;                       Jobs app, and captures the resulting token once the user
-;                       pastes back the code Claude shows. Imported by
-;                       ai_prowler_mcp.py (start_cli_signin / submit_cli_signin_code
-;                       / cancel_cli_signin) the first time a user taps AI Route
-;                       without a saved token.
-; console_inject.py   : Tiny helper cli_signin_relay.py launches as its own process
-;                       to type the pasted code into that hidden console
-;                       (AttachConsole + WriteConsoleInput, Windows only).
-;                       Never imported — always run as a script by path, so it MUST
-;                       sit next to cli_signin_relay.py in {app}.
-; Both are needed together: without console_inject.py the sign-in link appears but
-; the pasted code can never be delivered.
-Source: "cli_signin_relay.py"; DestDir: "{app}"; Flags: ignoreversion
-Source: "console_inject.py"; DestDir: "{app}"; Flags: ignoreversion
 ; --- Full Python installer bundled into {app} so Exec() can find it ---
 Source: "python-3.11.8-amd64.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Ollama is downloaded from the internet at install time, not bundled here

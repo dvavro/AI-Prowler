@@ -73,7 +73,11 @@ def _never_touch_real_tqa_credentials(tmp_path, monkeypatch):
                         ("GROK_API_KEY_PATH", "grok_api_key.txt"),
                         ("OAUTH_TOKEN_PATH", "claude_oauth_token.json"),
                         ("OAUTH_TOKEN_PLAIN_PATH", "claude_oauth_token.txt"),
-                        ("AI_ROUTING_USER_TOKEN_DIR", "ai_routing/user_tokens")):
+                        # 2026-10-22: what retire_cli_ai_routing() cleans up / the
+                        # running-server config — never the real ~/.ai-prowler
+                        ("RETIRED_AI_ROUTING_DIR", "ai_routing"),
+                        ("RETIRED_AI_ROUTING_MARKER", "cli_ai_routing_retired.marker"),
+                        ("RUNNING_SERVER_MCP_CONFIG_PATH", "claude_mcp_config_running.json")):
         if hasattr(_tqa_iso, _name):
             monkeypatch.setattr(_tqa_iso, _name, _home / _rel)
     yield

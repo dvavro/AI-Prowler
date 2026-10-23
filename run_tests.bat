@@ -66,6 +66,13 @@ REM Auto-install pytest and pyflakes if missing (gets uninstalled with AI-Prowle
 REM Auto-install Playwright for the GUI E2E suites (separate check: pytest may
 REM already be installed while playwright is not). --quiet keeps the log clean.
 "%PYTHON%" -c "import playwright" 2>nul || "%PYTHON%" -m pip install playwright pytest-playwright --quiet
+REM Auto-install the time-machine plugin (2026-10-21). The HR / Jobs time-machine
+REM tests need its `time_machine` fixture; an AI-Prowler uninstall removes it and
+REM the pytest check above only reinstalls pytest itself, so tests\mcp_tests\
+REM test_hr_timemachine_flow.py ERRORed ("fixture 'time_machine' not found") and
+REM the GUI time-machine suites silently skipped. Same packages as
+REM tests\install_gui_jobs_e2e_deps.bat.
+"%PYTHON%" -c "import time_machine" 2>nul || "%PYTHON%" -m pip install time-machine pytest-html pytest-rerunfailures --quiet
 
 REM ── Personal Jobs app E2E in a throwaway sandbox (2026-10-13, David) ───────
 REM   run_tests.bat jobs-sandbox --human                 watch it, test date = today

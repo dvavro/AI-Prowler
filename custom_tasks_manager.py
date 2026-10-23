@@ -317,7 +317,12 @@ def advance_next_due_for_task(task: dict, today_str: str = None) -> str:
             task.get("daily_end_time", "17:00"),
             task.get("daily_times_per_day", 1),
         )
-    return _advance_date_catchup(anchor, schedule, today_str)
+    # 2026-10-22 fix (found by the time-machine task-queue test): keep the
+    # weekday pin. Without it a monthly task pinned to Tuesday ran on its
+    # first Tuesday, then moved to "same date next month" — e.g. Tue Mar 2 ->
+    # Fri Apr 2 — because completing it from the queue lost the pin.
+    return _advance_date_catchup(anchor, schedule, today_str,
+                                 task.get("schedule_day_of_week"))
 
 
 def _advance_date(from_date_str: str, schedule: str,

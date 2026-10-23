@@ -10,7 +10,7 @@ before it is allowed to reach the live server.
                 sandbox date / a ZTEST- price code); otherwise BLOCKED
   outbound   -> email/SMS/etc.: blocked and recorded (tier "email" lets exactly
                 ONE email_route_now through, to the owner)
-  credits    -> start_ai_routing: blocked unless tier "full"
+  credits    -> (none since 2026-10-22: the Claude CLI AI Route was removed)
   never      -> always blocked
   unknown    -> blocked: every new tool must be classified here on purpose
 """
@@ -65,13 +65,19 @@ ZTEST_CODE_PREFIX = "ZTEST-"
 
 READ = {
     "read_job_spreadsheet", "get_board_updates", "get_sheet_columns", "prescreen_route_jobs",
-    "get_route_start_options", "get_working_days", "list_team_members", "check_ai_prowler_status", "check_sms_configured",
-    "check_email_configured", "check_sms_inbox", "search_learnings", "poll_ai_routing",
+    "get_working_days", "list_team_members", "check_ai_prowler_status", "check_sms_configured",
+    "check_email_configured", "check_sms_inbox", "search_learnings",
     "find_stale_customers", "get_ar_aging_report", "get_home_address", "get_route_drive_matrix",
     "get_daily_mileage", "get_file_download_url", "get_file_upload_url", "list_sms_consents",
     "list_sms_contacts_with_replies", "get_sms_thread", "whoami", "geocode_address",
     # 2026-10-06: Jobs/Board cards read the approved schedule (read-only tool)
     "get_approved_route_stops",
+    # 2026-10-22: "📋 Copy AI Route" — builds a prompt (saves only its route code)
+    "get_ai_route_prompt", "confirm_route_code",
+    # 2026-10-22: 🗓️ Plan Week — these only read, or save/close a SUGGESTION
+    # (no job changes); apply_week_moves (which moves dates) is SCOPED below.
+    "get_week_plan_prompt", "get_week_plan_data", "propose_week_moves",
+    "get_week_proposal", "dismiss_week_proposal",
 }
 CREATE = {"create_job", "create_customer", "create_quote", "create_service_pricing", "create_setting",
           "create_invoice"}
@@ -88,13 +94,16 @@ SCOPED = {
     # visit" on a test job (job_identifier) creates the follow-up for the same
     # ZTEST customer — cleanup removes it with the customer.
     "schedule_next_recurring_job",
+    # 2026-10-22: 🗓️ Plan Week "Approve selected" — allowed only when EVERY
+    # job it would move was created by this test run.
+    "apply_week_moves",
 }
 OUTBOUND = {
     "email_route_now", "send_email", "send_alert", "send_sms", "send_whatsapp", "email_invoice",
     "text_invoice", "email_receipt", "text_receipt", "send_customer_reminders", "send_file",
     "send_learnings_report",
 }
-CREDITS = {"start_ai_routing"}
+CREDITS: frozenset = frozenset()   # start_ai_routing removed 2026-10-22
 # Route builds that email the route automatically when Settings → "Email Route
 # On Build" is Enabled, and the argument that switches that off for one call
 # (R-059). The server reports a sent one with ROUTE_EMAILED_MARK.
@@ -309,6 +318,11 @@ class Guard:
             return (False, f"route stop={ident} (route {rd or 'unknown'})")
         if tool == "backup_job_database":
             return (True, "backup")
+        if tool == "apply_week_moves":
+            ids = [x.strip().upper() for x in str(a.get("job_ids", "") or "").split(",") if x.strip()]
+            bad = [j for j in ids if j not in self.created]
+            return (bool(ids) and not bad, f"jobs={','.join(ids) or '(none)'}"
+                    + (f" (not test data: {','.join(bad)})" if bad else ""))
         if tool == "log_time_entry":
             j = str(a.get("job_id", a.get("job_identifier", "")) or "")
             return (j in self.created, f"job={j}")

@@ -634,15 +634,11 @@ MANIFEST_FILES = [
     "db_route_ops.py",
     "db_backup_ops.py",
     "db_export_ops.py",
-    # Added with AI Routing's per-user Claude connection (Business Server mode):
-    # cli_signin_relay.py is imported by ai_prowler_mcp.py the first time a user
-    # taps AI Route without a saved Claude token; console_inject.py is the helper
-    # it launches BY PATH as a separate process to type the pasted sign-in code
-    # into a hidden console. Both must ship together — an auto-updated client
-    # that got ai_prowler_mcp.py but not these would fail the moment the Connect
-    # screen calls start_cli_signin. Also listed in AI-Prowler-Setup.iss [Files].
-    "cli_signin_relay.py",
-    "console_inject.py",
+    # Added 2026-10-22: 🗓️ Plan Week — ai_prowler_mcp.py imports it for the
+    # week-plan tools. Also listed in AI-Prowler-Setup.iss [Files].
+    "week_plan.py",
+    # (cli_signin_relay.py / console_inject.py were removed 2026-10-22 with the
+    # Jobs app's Claude CLI AI Route.)
     # Added v9.1.0: Jobs PWA — field crew job management interface served at
     # /jobs/ by the HTTP MCP server. All six files are needed for the PWA to
     # work as a home-screen installable app on iPhone and Android.

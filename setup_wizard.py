@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -654,9 +655,13 @@ def make_test_payment_link(provider: str) -> str:
     return ""
 
 
-# ── Phase 6: Crew routes (AI Route Optimizer) ──────────────────────────────
+# ── Phase 6: Crew routes ────────────────────────────────────────────────────
+# (2026-10-22: AI routing is done in any AI chat — Jobs app → Route →
+# 📋 Copy AI Route / 🗓️ Plan Week — so this step no longer installs the Claude
+# Code CLI or checks a Claude token; it sets the Plan Week distance instead.)
+WEEK_PLAN_KEY = "Week Plan Distance (miles)"
 ROUTE_KEYS = ["Route Origin Mode", "Start/End Street Address", "Start/End City", "Start/End State",
-              "Start/End ZIP", "Email Route On Build"]
+              "Start/End ZIP", "Email Route On Build", WEEK_PLAN_KEY]
 ROUTE_MODES = ("Jobs Only", "Company Location")
 
 
@@ -678,7 +683,20 @@ def route_settings() -> dict:
     s = read_settings(ROUTE_KEYS)
     s["Route Origin Mode"] = s["Route Origin Mode"] or "Jobs Only"
     s["Email Route On Build"] = s["Email Route On Build"] or "Disabled"
+    s[WEEK_PLAN_KEY] = s[WEEK_PLAN_KEY] or "5"
     return s
+
+
+def week_plan_miles_ok(value: str) -> tuple[bool, str]:
+    """(ok, cleaned value or message) for the Plan Week distance: a number of
+    miles from 0.1 to 100 (week_plan.read_week_plan_miles clamps the same way)."""
+    try:
+        miles = float(str(value).strip())
+    except ValueError:
+        return False, "Plan Week distance must be a number of miles, like 5"
+    if not 0.1 <= miles <= 100:
+        return False, "Plan Week distance must be between 0.1 and 100 miles"
+    return True, (str(int(miles)) if miles == int(miles) else str(round(miles, 1)))
 
 
 def route_origin_ok(s: dict | None = None) -> tuple[bool, str]:
@@ -787,7 +805,8 @@ AI_APPS = [
     {"id": "claude", "name": "Claude", "icon": "🟠",
      "connect_url": "https://claude.ai/customize/connectors?modal=add-custom-connector",
      "get_url": "https://claude.ai",
-     "apps": "Claude app: App Store / Google Play (optional) · Claude Desktop for Windows (optional)",
+     "apps": "Claude on the web (claude.ai) and the Claude phone app (App Store / Google Play). "
+             "Using Claude Desktop on this PC instead? That's the first tab — free, no subscription.",
      "steps": ["Paste the URL into “Remote MCP server URL”",
                f"Name it “{CONNECTOR_NAME}”",
                "Leave the OAuth fields blank → Add",
@@ -816,6 +835,53 @@ AI_APPS = [
                 "Muse, change the token on the Settings tab."},
 ]
 AI_BY_ID = {a["id"]: a for a in AI_APPS}
+
+# Connect your AI — the two ways (David 2026-10-21)
+SUBSCRIPTION_PRICE = "$10/month"
+FREE_TEXT = "free, no subscription"
+CLAUDE_SIGNUP_URL = "https://claude.ai/login"          # "Sign up" is on this page
+CLAUDE_DOWNLOAD_URL = "https://claude.ai/download"
+SUBSCRIBE_INFO_URL = "https://www.ai-prowler.com"
+CLAUDE_UPGRADE_URL = "https://claude.ai/upgrade"
+
+# Scheduled AI analyses — what they need (David 2026-10-21)
+CLI_NEEDS_TEXT = (
+    "Scheduled analyses run by themselves on this PC, so they use the Claude Code CLI "
+    "(Anthropic's command-line Claude), not the Claude app.\n"
+    "• Step 1 — Install the Claude Code CLI (free; AI-Prowler installs it for you).\n"
+    "• Step 2 — Sign it in. The sign-in token (the CLI's password) is only available on a PAID "
+    "Claude plan — Claude Pro or higher. A free Claude account can't run scheduled analyses.\n"
+    "No Claude Pro? Click ⏭ Skip for now — everything else in AI-Prowler works without it, and "
+    "you can come back to this step any time.")
+
+
+def _open_web(url: str) -> None:
+    import webbrowser
+    webbrowser.open(url)
+
+
+def claude_desktop_config_path() -> Optional[Path]:
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA", "")
+        return Path(appdata) / "Claude" / "claude_desktop_config.json" if appdata else None
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+    return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
+
+
+def claude_desktop_connected(path: Optional[Path] = None) -> bool:
+    """True when Claude Desktop's config has a working local (stdio) AI-Prowler
+    entry — the same test as the Settings tab's MCP status (no URL entry,
+    never pythonw.exe)."""
+    p = path or claude_desktop_config_path()
+    if p is None:
+        return False
+    try:
+        entry = (json.loads(Path(p).read_text(encoding="utf-8-sig")).get("mcpServers") or {}).get("AI-Prowler")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return (isinstance(entry, dict) and "url" not in entry and bool(entry.get("command"))
+            and "pythonw" not in str(entry.get("command", "")).lower())
 
 
 def muse_message(url: str) -> str:
@@ -960,7 +1026,9 @@ MODULES: list[Module] = [
            tab="📚 Index Docs", detect=detect_indexed),
     Module("connect_ai", "Connect your AI (Claude, Grok, Muse)", 5,
            "AI-Prowler is the memory; your AI app is the brain that reads it. "
-           "Connect the AI you use — on your computer and your phone.",
+           "Claude Desktop on this PC is free (a free Claude account, no subscription). "
+           "Claude on the web or phone, Grok and Muse need an AI-Prowler subscription "
+           "($10/month) for their connector URL.",
            tab="⚙️ Settings"),
     Module("auto_index", "Keep your index up to date", 1,
            "New and changed files are picked up automatically — right away while AI-Prowler runs "
@@ -968,7 +1036,8 @@ MODULES: list[Module] = [
            tab="⏰ Schedule", requires=("index",), detect=detect_auto_index),
     Module("links", "Scheduled AI analyses (Links & Analysis)", 5,
            "Your AI can review things for you on a schedule — overdue invoices, a weekly summary — "
-           "and save or email the result.", tab="🔗 Links & Analysis", requires=("index",),
+           "and save or email the result. Needs the Claude Code CLI signed in with a Claude Pro "
+           "(paid) account — you can skip this step.", tab="🔗 Links & Analysis", requires=("index",),
            detect=detect_links),
     Module("learnings", "Teach AI-Prowler (Learnings)", 2,
            "Learnings are facts and preferences your AI should always remember.",
@@ -988,9 +1057,10 @@ MODULES: list[Module] = [
     Module("payments", "Payment links", 5,
            "Customers pay invoices by card from a link in the email or text.",
            tab="🏢 Small Business", requires=("jobs", "email"), detect=detect_payments),
-    Module("routes", "Crew routes (AI Route Optimizer)", 5,
-           "AI plans the day's route across jobs — respecting fixed appointment times — and sends the "
-           "crew a tap-to-navigate link.", tab="🏢 Small Business", requires=("jobs",),
+    Module("routes", "Crew routes", 5,
+           "Plan each day's route — free and instant, or with any AI chat that respects fixed "
+           "appointment times — and send the crew a tap-to-navigate link.", tab="🏢 Small Business",
+           requires=("jobs",),
            detect=detect_routes),
     Module("server_info", "About AI-Prowler Server (for teams)", 1,
            "One shared AI-Prowler for a whole company — shared knowledge, one job list for every "
@@ -1002,7 +1072,7 @@ BY_ID = {m.id: m for m in MODULES}
 # "What do you want AI-Prowler to do?" → modules (dependencies are added on top)
 SERVICES: list[tuple[str, str, tuple]] = [
     ("files",    "🔎 Ask questions about my own files",            ("connect_ai", "index", "auto_index", "learnings")),
-    ("analyses", "🤖 Have AI review things for me on a schedule",  ("links",)),
+    ("analyses", "🤖 Have AI review things for me on a schedule  (needs Claude Pro)",  ("links",)),
     ("email",    "✉️ Send emails and reports",                     ("email",)),
     ("phone",    "📱 Use AI-Prowler from my phone",                ("remote", "remote_pwa")),
     ("business", "🧰 Run my service business (jobs, invoices)",    ("jobs", "payments")),
@@ -1084,6 +1154,11 @@ class Progress:
     states: dict = field(default_factory=dict)       # module id -> state
     picked: bool = False                             # has the user answered the picker?
     collapsed: Optional[bool] = None                 # panel folded? None = not chosen yet
+    # New-user nudge (David 2026-10-21): None = not a new install (never
+    # blinks) · "picker" = "Add a service" blinks red until the picker has
+    # been opened and closed · "setup" = it's green, "Set up AI-Prowler"
+    # blinks red until clicked · "done".
+    onboarding: Optional[str] = None
     path: Path = PROGRESS_PATH
 
     @classmethod
@@ -1096,17 +1171,25 @@ class Progress:
         states = {k: v for k, v in (d.get("states") or {}).items()
                   if k in BY_ID and v in (NOT_STARTED, IN_PROGRESS, DONE, SKIPPED)}
         col = d.get("collapsed")
+        ob = d.get("onboarding")
         return cls(services=services, states=states, picked=bool(d.get("picked")),
-                   collapsed=col if isinstance(col, bool) else None, path=Path(path))
+                   collapsed=col if isinstance(col, bool) else None,
+                   onboarding=ob if ob in ONBOARDING_STAGES else None, path=Path(path))
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps({"version": PROGRESS_VERSION, "services": self.services,
                                    "states": self.states, "picked": self.picked,
-                                   "collapsed": self.collapsed}, indent=2),
+                                   "collapsed": self.collapsed,
+                                   "onboarding": self.onboarding}, indent=2),
                        encoding="utf-8")
         os.replace(tmp, self.path)
+
+    def set_onboarding(self, stage: Optional[str]) -> None:
+        if stage != self.onboarding:
+            self.onboarding = stage
+            self.save()
 
     # ── lights ──────────────────────────────────────────────────────────────
     def light(self, m: "Module") -> str:
@@ -1193,6 +1276,15 @@ def is_first_launch(progress: Progress) -> bool:
     return not progress.picked and not _tracked_paths()
 
 
+# New-user nudge (David 2026-10-21) — which button blinks red, in order.
+ONB_PICKER, ONB_SETUP, ONB_DONE = "picker", "setup", "done"
+ONBOARDING_STAGES = (ONB_PICKER, ONB_SETUP, ONB_DONE)
+BLINK_MS = 550
+BLINK_RED = ("#d32f2f", "white")          # bg, fg
+BLINK_OFF = ("#ffcdd2", "#b71c1c")        # the "off" half of the blink: pale red
+GO_GREEN = ("#2e7d32", "white")
+
+
 # ── the Home-page panel (Tk) ────────────────────────────────────────────────
 STATE_ICON = {DONE: "✅", SKIPPED: "⏭", IN_PROGRESS: "🟡", NOT_STARTED: "⬜"}
 
@@ -1210,8 +1302,12 @@ class SetupCenterPanel:
         # arrow and the overall light (David 2026-10-01: collapsible).
         self.frame = ttk.LabelFrame(parent, text="", padding=(14, 8))
         self.frame.pack(fill="x", pady=(0, 12))
+        self._blink_job = None
+        first = is_first_launch(self.progress)
+        if first and self.progress.onboarding is None:
+            self.progress.set_onboarding(ONB_PICKER)     # new install: start the red-button nudge
         self.render()
-        if is_first_launch(self.progress):
+        if first:
             self.frame.after(600, self.open_picker)
 
     @property
@@ -1241,21 +1337,45 @@ class SetupCenterPanel:
         overall = self.progress.overall_light()
         open_ = self.expanded
 
+        self._stop_blink()
+        stage = self.progress.onboarding
         # header — always visible: fold arrow · title · light · count
         head = ttk.Frame(self.frame)
         head.pack(fill="x")
-        self.toggle_btn = ttk.Button(head, text=("▾" if open_ else "▸") + " 🧭 Set up AI-Prowler",
-                                     command=lambda: self._toggle(not self.expanded))
+        _setup_text = ("▾" if open_ else "▸") + " 🧭 Set up AI-Prowler"
+        if stage == ONB_SETUP:
+            # tk.Button (not ttk) so it can be coloured; blinks red until clicked
+            self.toggle_btn = tk.Button(head, text=_setup_text + "  ← click here next",
+                                        command=self._setup_clicked, relief="raised", bd=2,
+                                        font=("Arial", 10, "bold"), padx=8, cursor="hand2")
+        else:
+            self.toggle_btn = ttk.Button(head, text=_setup_text,
+                                         command=lambda: self._toggle(not self.expanded))
         self.toggle_btn.pack(side="left")
         self.light_lbl = self._dot(head, overall, size=16)
         self.light_lbl.pack(side="left", padx=(8, 2))
         self.count_lbl = ttk.Label(head, text=f"{done} of {total} done  ({LIGHT_WORD[overall]})"
                                    if overall != GREEN else f"{done} of {total} done — all set")
         self.count_lbl.pack(side="left", padx=(2, 0))
+        # "Add a service" — the picker. Blinks red for a new user until they've
+        # been in and out of it, then stays green (David 2026-10-21).
+        if stage in ONBOARDING_STAGES:
+            self.add_btn = tk.Button(head, text="➕ Add a service" + ("  ← start here" if stage == ONB_PICKER else ""),
+                                     command=self.open_picker, relief="raised", bd=2,
+                                     font=("Arial", 10, "bold"), padx=8, cursor="hand2")
+            if stage != ONB_PICKER:                    # been in and out of it: green from now on
+                self.add_btn.configure(bg=GO_GREEN[0], fg=GO_GREEN[1],
+                                       activebackground=GO_GREEN[0], activeforeground=GO_GREEN[1])
+        else:
+            self.add_btn = ttk.Button(head, text="➕ Add a service" if not open_ else "Change my choices",
+                                      command=self.open_picker)
+        self.add_btn.pack(side="right")
+        if stage == ONB_PICKER:
+            self._start_blink(self.add_btn)
+        elif stage == ONB_SETUP:
+            self._start_blink(self.toggle_btn)
         if not open_:
-            ttk.Button(head, text="➕ Add a service", command=self.open_picker).pack(side="right")
             return
-        ttk.Button(head, text="Change my choices", command=self.open_picker).pack(side="right")
 
         leg = ttk.Frame(self.frame)
         leg.pack(anchor="w", pady=(4, 0))
@@ -1308,6 +1428,53 @@ class SetupCenterPanel:
             ttk.Button(r, text="Skip", command=lambda: self._set(m, SKIPPED)).pack(side="right", padx=(4, 0))
             ttk.Button(r, text="Continue" if st == IN_PROGRESS else "Start",
                        command=lambda: self.start(m)).pack(side="right")
+
+    # ── new-user nudge: blinking red buttons (David 2026-10-21) ────────────
+    def _start_blink(self, btn):
+        """Alternate btn between strong red and pale red until _stop_blink()
+        (every render() stops it first, so only the current button blinks)."""
+        state = {"on": True}
+
+        def tick():
+            self._blink_job = None
+            try:
+                if not btn.winfo_exists():
+                    return
+                bg, fg = BLINK_RED if state["on"] else BLINK_OFF
+                btn.configure(bg=bg, fg=fg, activebackground=BLINK_RED[0],
+                              activeforeground=BLINK_RED[1])
+                state["on"] = not state["on"]
+                self._blink_job = btn.after(BLINK_MS, tick)
+            except Exception:
+                self._blink_job = None
+        self._blinking = btn
+        tick()
+
+    def _stop_blink(self):
+        job, self._blink_job = getattr(self, "_blink_job", None), None
+        self._blinking = None
+        if job is not None:
+            try:
+                self.frame.after_cancel(job)
+            except Exception:
+                pass
+
+    def _picker_closed(self):
+        """Picker opened and closed (Save, Cancel or X): "Add a service" turns
+        green and "Set up AI-Prowler" starts blinking."""
+        if self.progress.onboarding == ONB_PICKER:
+            self.progress.set_onboarding(ONB_SETUP)
+
+    def _setup_clicked(self):
+        """The blinking "Set up AI-Prowler": open the panel (never fold it shut
+        on this first click) and start the first step that isn't finished."""
+        self.progress.set_onboarding(ONB_DONE)
+        self.progress.set_collapsed(False)
+        self.render()
+        nxt = next((m for m in self.progress.plan()
+                    if not m.info_only and self.progress.state(m) in (NOT_STARTED, IN_PROGRESS)), None)
+        if nxt is not None:
+            self.start(nxt)
 
     # ── actions ─────────────────────────────────────────────────────────────
     def _toggle(self, expanded: bool):
@@ -1397,11 +1564,21 @@ class SetupCenterPanel:
             chosen = [s for s, v in vars_.items() if v.get()] or list(DEFAULT_SERVICES)
             self.progress.choose(chosen)
             self.progress.set_collapsed(False)              # show what they just chose
+            self._picker_closed()
+            win.destroy()
+            self.render()
+
+        def cancel():
+            self._picker_closed()                           # in and out counts too
             win.destroy()
             self.render()
         ttk.Button(btns, text="Save", command=save).pack(side="right")
-        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right", padx=6)
-        win.grab_set()
+        ttk.Button(btns, text="Cancel", command=cancel).pack(side="right", padx=6)
+        win.protocol("WM_DELETE_WINDOW", cancel)
+        try:
+            win.grab_set()
+        except Exception:
+            pass                                            # another window holds the grab
 
 
 class IndexFirstFolderFlow:
@@ -1614,10 +1791,20 @@ class ConnectAIFlow:
     ever copied to THIS desktop's clipboard on request — never put in a URL,
     an email, a QR code or the phone page."""
 
-    def __init__(self, master, app, panel: "SetupCenterPanel | None" = None):
+    # 2026-10-21 (David): the old window led with the phone link and read as if
+    # every AI needed it. Now two clearly separate ways, one tab each:
+    #   1. Claude Desktop on this PC — FREE Claude account, no subscription,
+    #      no phone link; we walk them through account → install → connect.
+    #   2. Claude web/phone, Grok, Muse — no desktop app, so they reach
+    #      AI-Prowler over the internet: needs the AI-Prowler subscription
+    #      ($10/month) → activation code → connector URL; we walk them through
+    #      subscribe → paste code → connect each AI.
+    TAB_DESKTOP, TAB_ONLINE = 0, 1
+
+    def __init__(self, master, app, panel: "SetupCenterPanel | None" = None, tab: int | None = None):
         import tkinter as tk
         from tkinter import ttk
-        self.tk, self.ttk, self.app, self.panel = tk, ttk, app, panel
+        self.tk, self.ttk, self.app, self.panel, self.master = tk, ttk, app, panel, master
         self.domain = tunnel_domain()
         self.url = mcp_url(self.domain)
         self.win = tk.Toplevel(master)
@@ -1625,31 +1812,175 @@ class ConnectAIFlow:
         self.win.transient(master.winfo_toplevel())
         body = ttk.Frame(self.win, padding=16)
         body.pack(fill="both", expand=True)
-        ttk.Label(body, text="Connect your AI — Claude · Grok · Muse", font=("Arial", 12, "bold")
-                  ).pack(anchor="w")
-        ttk.Label(body, text=BY_ID["connect_ai"].why + " Nothing needs to be installed on this PC for "
-                  "Grok or Muse — just an account (their phone apps are optional).",
-                  wraplength=560, justify="left", foreground="#555").pack(anchor="w", pady=(2, 10))
+        ttk.Label(body, text="Connect your AI to AI-Prowler", font=("Arial", 12, "bold")).pack(anchor="w")
+        ttk.Label(body, text="AI-Prowler is the memory; your AI app is the brain that reads it. "
+                  "There are two ways to connect — use either one, or both:",
+                  wraplength=600, justify="left", foreground="#555").pack(anchor="w", pady=(2, 8))
 
-        if not self.url:
-            warn = ttk.LabelFrame(body, text=" Phone access isn't set up yet ", padding=10)
-            warn.pack(fill="x", pady=(0, 10))
-            ttk.Label(warn, text="Claude (web and phone), Grok and Muse reach AI-Prowler over the internet, "
-                      "through your secure link. Set up phone access first (Settings → activate your "
-                      "subscription → ⚡ Configure Mobile Access). Claude Desktop on this PC works without it.",
-                      wraplength=520, justify="left").pack(anchor="w")
-            ttk.Button(warn, text="Open the Settings tab", command=self._open_settings).pack(anchor="w", pady=(6, 0))
-        else:
-            self._url_block(body)
-
-        for a in AI_APPS:
-            self._card(body, a)
+        self.tabs = ttk.Notebook(body)
+        self.tabs.pack(fill="both", expand=True)
+        desk = ttk.Frame(self.tabs, padding=12)
+        online = ttk.Frame(self.tabs, padding=12)
+        self.tabs.add(desk, text=f" 🖥️ Claude Desktop on this PC — {FREE_TEXT} ")
+        self.tabs.add(online, text=f" 📱 Phone / web — Claude, Grok, Muse — {SUBSCRIPTION_PRICE} ")
+        self._desktop_tab(desk)
+        self._online_tab(online)
+        if tab is None:
+            tab = self.TAB_ONLINE if (self.url and not claude_desktop_connected()) else self.TAB_DESKTOP
+        self.tabs.select(tab)
 
         btns = ttk.Frame(body)
         btns.pack(fill="x", pady=(12, 0))
         ttk.Button(btns, text="Close", command=self.win.destroy).pack(side="right")
         if panel is not None:
             ttk.Button(btns, text="✓ I've connected my AI", command=self._done).pack(side="right", padx=6)
+
+    # ── tab 1: Claude Desktop (free) ────────────────────────────────────────
+    def _desktop_tab(self, f):
+        ttk = self.ttk
+        ttk.Label(f, text="Claude Desktop runs on this computer and talks to AI-Prowler directly.",
+                  font=("Arial", 10, "bold")).pack(anchor="w")
+        ttk.Label(f, text="• Works with a FREE Claude account — no AI-Prowler subscription needed.\n"
+                          "• No phone link / mobile connection needed — nothing goes over the internet "
+                          "to reach AI-Prowler.\n"
+                          "• Only on this PC. To use AI-Prowler from your phone or the web, see the "
+                          "other tab.",
+                  wraplength=600, justify="left").pack(anchor="w", pady=(4, 10))
+        self.desk_status = ttk.Label(f, text="", font=("Arial", 10, "bold"))
+        self.desk_status.pack(anchor="w", pady=(0, 8))
+        steps = [
+            ("1. Create a free Claude account (skip if you have one)",
+             "🌐 Sign up free at claude.ai", lambda: self._open_url(CLAUDE_SIGNUP_URL)),
+            ("2. Install Claude Desktop for Windows and sign in with that account",
+             "⬇️ Download Claude Desktop", lambda: self._open_url(CLAUDE_DOWNLOAD_URL)),
+            ("3. Connect AI-Prowler to Claude Desktop (AI-Prowler does this for you)",
+             "🔌 Connect automatically", self._connect_desktop),
+        ]
+        for text, btn, cmd in steps:
+            r = ttk.Frame(f)
+            r.pack(fill="x", pady=3)
+            ttk.Label(r, text=text, wraplength=400, justify="left").pack(side="left")
+            ttk.Button(r, text=btn, command=cmd).pack(side="right")
+        ttk.Label(f, text="4. Restart Claude Desktop, then ask it something like:\n"
+                          "     “Search AI-Prowler for my notes on …”",
+                  justify="left").pack(anchor="w", pady=(6, 0))
+        self._refresh_desktop_status()
+
+    def _refresh_desktop_status(self):
+        ok = claude_desktop_connected()
+        try:
+            self.desk_status.config(
+                text="✅ Claude Desktop is connected to AI-Prowler" if ok
+                else "⬜ Not connected yet — follow the steps below",
+                foreground="#2e7d32" if ok else "#b35900")
+        except Exception:
+            pass
+        return ok
+
+    def _connect_desktop(self):
+        from tkinter import messagebox
+        fn = getattr(self.app, "_sw_auto_configure_claude_desktop", None)
+        if fn is None:
+            messagebox.showinfo("Connect Claude Desktop",
+                                "Use “Auto-configure Claude Desktop” on the Settings tab "
+                                "(MCP Tool Configuration).", parent=self.win)
+            self._open_settings()
+            return
+        fn()
+        self._refresh_desktop_status()
+
+    # ── tab 2: phone / web (subscription) ──────────────────────────────────
+    def _online_tab(self, f):
+        ttk = self.ttk
+        ttk.Label(f, text=f"Needs an AI-Prowler subscription ({SUBSCRIPTION_PRICE}).",
+                  font=("Arial", 10, "bold")).pack(anchor="w")
+        ttk.Label(f, text="Grok and Muse have no desktop app, and Claude's website and phone app can't "
+                          "see this PC — they all reach AI-Prowler over the internet, through your own "
+                          "secure link (your connector URL). That link comes with the subscription: "
+                          "subscribing emails you an activation code, and activating it creates your link.",
+                  wraplength=600, justify="left").pack(anchor="w", pady=(4, 10))
+        if self.url:
+            ttk.Label(f, text="✅ Subscription active — your secure link is ready.",
+                      foreground="#2e7d32", font=("Arial", 10, "bold")).pack(anchor="w", pady=(0, 6))
+            self._url_block(f)
+        else:
+            self._subscribe_steps(f)
+        for a in AI_APPS:
+            self._card(f, a)
+
+    def _subscribe_steps(self, f):
+        tk, ttk = self.tk, self.ttk
+        box = ttk.LabelFrame(f, text=" Get your secure link — 2 steps ", padding=10)
+        box.pack(fill="x", pady=(0, 8))
+        r1 = ttk.Frame(box)
+        r1.pack(fill="x", pady=2)
+        ttk.Label(r1, text=f"1. Subscribe to AI-Prowler Personal ({SUBSCRIPTION_PRICE}) — "
+                           "your activation code arrives by email").pack(side="left")
+        ttk.Button(r1, text="🛒 Subscribe", command=self._subscribe).pack(side="right")
+        r2 = ttk.Frame(box)
+        r2.pack(fill="x", pady=(6, 2))
+        ttk.Label(r2, text="2. Paste the activation code:").pack(side="left")
+        self.code_var = tk.StringVar(master=self.win, value="APRO-")
+        ttk.Entry(r2, textvariable=self.code_var, width=30, font=("Courier New", 10)
+                  ).pack(side="left", padx=6)
+        self.act_btn = ttk.Button(r2, text="⚡ Activate", command=self._activate)
+        self.act_btn.pack(side="right")
+        self.act_note = ttk.Label(box, text="Already subscribed? Just paste the code from your email.",
+                                  foreground="#777", font=("Arial", 8))
+        self.act_note.pack(anchor="w", pady=(4, 0))
+        ttk.Label(f, text="3. Then connect your AI below (these buttons work once step 2 is done):",
+                  font=("Arial", 9, "bold")).pack(anchor="w", pady=(2, 2))
+
+    def _subscribe(self):
+        fn = getattr(self.app, "_sw_open_subscribe", None)
+        if fn is not None:
+            fn("personal")
+        else:
+            self._open_url(SUBSCRIBE_INFO_URL)
+
+    def _activate(self):
+        from tkinter import messagebox
+        code = (self.code_var.get() or "").strip()
+        fn = getattr(self.app, "_sw_activate_with_code", None)
+        if fn is None:
+            messagebox.showinfo("Activate", "Paste the code on the Settings tab (Subscription) and "
+                                "click ⚡ Configure Mobile Access.", parent=self.win)
+            self._open_settings()
+            return
+        if not code or code.upper() == "APRO-":
+            messagebox.showwarning("Activation code", "Paste the activation code from the email you "
+                                   "got after subscribing (APRO-XXXXXX-XXXXXX-XXXXXX).", parent=self.win)
+            return
+        fn(code)                                   # same as Settings → ⚡ Configure Mobile Access
+        self.act_note.config(text="⏳ Activating — this can take a minute or two…", foreground="#b35900")
+        self._wait_for_link(tries=60)
+
+    def _wait_for_link(self, tries):
+        """Poll until activation has written the secure link, then reopen this
+        window on the same tab so the connector URL and buttons appear."""
+        if tunnel_domain():
+            master, app, panel = self.master, self.app, self.panel
+            try:
+                self.win.destroy()
+            except Exception:
+                pass
+            ConnectAIFlow(master, app, panel, tab=self.TAB_ONLINE)
+            return
+        if tries <= 0:
+            try:
+                self.act_note.config(text="Not active yet — check the Settings tab for the activation "
+                                          "status, then reopen this window.", foreground="#b71c1c")
+            except Exception:
+                pass
+            return
+        try:
+            self.win.after(3000, lambda: self._wait_for_link(tries - 1))
+        except Exception:
+            pass
+
+    def _open_url(self, url):
+        import webbrowser
+        webbrowser.open(url)
 
     @classmethod
     def open_from(cls, app):
@@ -1864,6 +2195,7 @@ class _SimpleFlow:
         self.msg.pack(anchor="w", pady=(8, 0))
         b = ttk.Frame(self.body)
         b.pack(fill="x", pady=(10, 0))
+        self._footer_bar = b
         ttk.Button(b, text="Close", command=self.win.destroy).pack(side="right")
         ttk.Button(b, text="Open this tab",
                    command=lambda: self.panel.open_tab(BY_ID[self.module_id])).pack(side="right", padx=6)
@@ -1884,6 +2216,9 @@ class LinksFlow(_SimpleFlow):
     def __init__(self, panel: "SetupCenterPanel"):
         super().__init__(panel, "Scheduled AI analyses", "links")
         tk, ttk = self.tk, self.ttk
+        self._cli_box()                                # what it needs: Claude Code + a Claude Pro sign-in
+        ttk.Label(self.body, text="Pick the analyses to schedule:", font=("Arial", 10, "bold")
+                  ).pack(anchor="w", pady=(10, 2))
         business = "business" in panel.progress.services
         self.templates = [t for t in ANALYSIS_TEMPLATES if t["needs"] is None or business]
         self.vars = {}
@@ -1904,6 +2239,115 @@ class LinksFlow(_SimpleFlow):
                   "Autonomous AI Task Queue on the Links & Analysis tab (it's off unless you turn it on).",
                   wraplength=500, justify="left", foreground="#666").pack(anchor="w", pady=(8, 0))
         self._footer("✅ Add these", self.add)
+        ttk.Button(self._footer_bar, text="⏭ Skip for now", command=self._skip).pack(side="left")
+
+    # ── what scheduled analyses need (David 2026-10-21) ────────────────────
+    # They run on this PC through the Claude Code CLI, signed in with a token
+    # from `claude setup-token` — which needs a PAID Claude plan (Pro or
+    # higher). Say so up front, help set both up, or let them skip.
+    def _cli_box(self):
+        ttk = self.ttk
+        box = ttk.LabelFrame(self.body, text=" 🔑 What this needs ", padding=10)
+        box.pack(fill="x")
+        ttk.Label(box, text=CLI_NEEDS_TEXT, wraplength=500, justify="left").pack(anchor="w")
+        self.cli_lbl = ttk.Label(box, text="Checking…", font=("Arial", 9, "bold"))
+        self.cli_lbl.pack(anchor="w", pady=(8, 4))
+        self.cli_fix = ttk.Frame(box)
+        self.cli_fix.pack(anchor="w")
+        self.cli_ready = None
+        self.win.after(150, self._check_cli)
+
+    def _check_cli(self):
+        import threading
+        box = {}
+        threading.Thread(target=lambda: box.setdefault("s", ai_routing_status()), daemon=True).start()
+
+        def collect():
+            try:
+                if not self.win.winfo_exists():
+                    return
+            except self.tk.TclError:
+                return
+            if "s" not in box:
+                return self.win.after(200, collect)
+            self._show_cli_status(box["s"])
+        self.win.after(200, collect)
+
+    def _show_cli_status(self, st: dict):
+        ttk = self.ttk
+        cli, tok = bool(st.get("cli")), st.get("token")
+        self.cli_ready = cli and tok in ("ok", "expiring_soon")
+        self.cli_lbl.config(
+            text=("✅ Claude Code CLI installed" if cli else "❌ Step 1: Claude Code CLI not installed")
+            + "   ·   " + ("✅ signed in" if tok in ("ok", "expiring_soon")
+                           else "❌ Step 2: not signed in with Claude Pro yet"),
+            foreground="#2e7d32" if self.cli_ready else "#b35900")
+        for w in self.cli_fix.winfo_children():
+            w.destroy()
+        if self.cli_ready:
+            return
+        if not cli:
+            ttk.Button(self.cli_fix, text="1️⃣ Install Claude Code CLI", command=self._install_cli
+                       ).pack(side="left", padx=(0, 6))
+        else:
+            ttk.Button(self.cli_fix, text="2️⃣ Sign in with Claude Pro", command=self._sign_in
+                       ).pack(side="left", padx=(0, 6))
+        ttk.Button(self.cli_fix, text="💳 Get Claude Pro", command=lambda: _open_web(CLAUDE_UPGRADE_URL)
+                   ).pack(side="left", padx=(0, 6))
+        ttk.Button(self.cli_fix, text="🔄 Check again", command=self._check_cli).pack(side="left")
+
+    def _install_cli(self):
+        import threading
+        self.cli_lbl.config(text="⏳ Installing Claude Code (Anthropic's official installer) — about a minute…",
+                            foreground="#b35900")
+        box = {}
+
+        def work():
+            try:
+                import task_queue_automation as tqa
+                box["r"] = tqa.install_claude_code_cli()
+            except Exception as e:
+                box["r"] = (False, str(e))
+
+        def collect():
+            try:
+                if not self.win.winfo_exists():
+                    return
+            except self.tk.TclError:
+                return
+            if "r" not in box:
+                return self.win.after(500, collect)
+            ok, msg = box["r"]
+            if not ok:
+                self._say("❌ " + str(msg)[:200], ok=False)
+            self._check_cli()
+        threading.Thread(target=work, daemon=True).start()
+        self.win.after(500, collect)
+
+    def _sign_in(self):
+        from tkinter import messagebox
+        if not messagebox.askokcancel(
+                "Sign in with Claude Pro",
+                "A small black window opens and your browser goes to Claude.\n\n"
+                "1. Log in with your Claude Pro (or Max) account and click Authorize.\n"
+                "2. The black window shows a long code — you don't need to copy it; "
+                "AI-Prowler picks it up by itself.\n"
+                "3. Close the black window and click 🔄 Check again here.\n\n"
+                "A free Claude account can't do this step.", parent=self.win):
+            return
+        try:
+            import task_queue_automation as tqa
+            ok, msg = tqa.open_setup_token_terminal()
+        except Exception as e:
+            ok, msg = False, str(e)
+        self._say(("✅ " if ok else "❌ ") + str(msg)[:200], ok=ok)
+
+    def _skip(self):
+        """Skip for now: nothing is added; the step shows ⏭ and can be undone
+        on the Home panel."""
+        self.panel.progress.set_state(self.module_id, SKIPPED)
+        self.panel.render()
+        self.win.destroy()
 
     def add(self):
         import datetime as dt
@@ -1940,7 +2384,10 @@ class LinksFlow(_SimpleFlow):
             parts.append("Added: " + ", ".join(added))
         if skipped:
             parts.append("Already there: " + ", ".join(skipped))
-        self._say(". ".join(parts) + ". See them on the Links & Analysis tab.")
+        note = "" if getattr(self, "cli_ready", None) else (
+            " ⚠️ They won't run until Claude Code is installed and signed in with Claude Pro "
+            "(see “What this needs” above).")
+        self._say(". ".join(parts) + ". See them on the Links & Analysis tab." + note, ok=not note)
         self._done()
 
 
@@ -2506,9 +2953,9 @@ class RoutesFlow(_SimpleFlow):
     """Crew routes: 1. where the day starts/ends (Route Origin Mode + Start/End
     address — job-database Settings, saved with AI-Prowler's own tools; the
     home address belongs to the Settings tab, which this opens), 2. email the
-    route on build, 3. AI routing (optional): Claude Code installed? token ok?
-    — with the free vs AI-usage explanation. Done = the address the chosen
-    mode needs is set."""
+    route on build, 3. AI routing with any AI chat (📋 Copy AI Route /
+    🗓️ Plan Week) + the Plan Week distance. Done = the address the chosen mode
+    needs is set. (2026-10-22: no Claude Code / Claude token step any more.)"""
 
     def __init__(self, panel: "SetupCenterPanel"):
         super().__init__(panel, "Crew routes", "routes")
@@ -2552,21 +2999,24 @@ class RoutesFlow(_SimpleFlow):
         ttk.Label(em, text="Either way, 📧 Email Approved Route Now (Jobs app → Route) sends it on request.",
                   foreground="#666").pack(anchor="w")
 
-        # 3. AI routing
-        ai = ttk.LabelFrame(self.body, text=" 3. AI routing (optional) ", padding=8)
+        # 3. AI routing — any AI chat (2026-10-22)
+        ai = ttk.LabelFrame(self.body, text=" 3. AI routing (optional) — with any AI chat ", padding=8)
         ai.pack(fill="x", pady=(8, 0))
         ttk.Label(ai, wraplength=520, justify="left", foreground="#555", text=(
-            "Route Today is free and instant — it orders your jobs by drive time. Run AI Route reasons "
-            "through fixed appointment times and fills gaps sensibly, but each run uses your Claude plan's "
-            "usage. It needs Claude Code on this PC and a Claude token.")).pack(anchor="w")
-        self.ai_lbl = ttk.Label(ai, text="Checking…", justify="left")
-        self.ai_lbl.pack(anchor="w", pady=(6, 0))
-        self.ai_fix = ttk.Frame(ai)
-        self.ai_fix.pack(anchor="w", pady=(4, 0))
+            "Route Today is free and instant — it orders your jobs by drive time. For a smarter plan, "
+            "the Jobs app's Route tab has 📋 Copy AI Route for Any AI (one day: fixed appointment times, "
+            "gaps filled sensibly) and 🗓️ Plan Week with Any AI (suggests moving soft jobs so nearby jobs "
+            "share a day — you approve every move). Paste the prompt into Claude, Muse, Grok or any AI "
+            "chat that has AI-Prowler connected. Nothing to install here.")).pack(anchor="w")
+        row = ttk.Frame(ai)
+        row.pack(anchor="w", pady=(6, 0))
+        ttk.Label(row, text="Plan Week: jobs count as near each other within").pack(side="left")
+        self.week_miles = tk.StringVar(master=self.body, value=s[WEEK_PLAN_KEY])
+        ttk.Entry(row, textvariable=self.week_miles, width=6).pack(side="left", padx=4)
+        ttk.Label(row, text="miles (default 5)").pack(side="left")
 
         self._footer("💾 Save", self.save)
         self._mode_changed()
-        self._check_ai()
 
     # ── pieces ──────────────────────────────────────────────────────────────
     def _mode_changed(self):
@@ -2602,66 +3052,15 @@ class RoutesFlow(_SimpleFlow):
                 if nb.tab(t, "text").strip() == "⚙️ Settings":
                     nb.select(t)
 
-    def _check_ai(self):
-        import threading
-        box = {}
-        threading.Thread(target=lambda: box.setdefault("s", ai_routing_status()), daemon=True).start()
-
-        def collect():
-            try:
-                if not self.win.winfo_exists():
-                    return
-            except self.tk.TclError:
-                return
-            if "s" not in box:
-                return self.win.after(200, collect)
-            st = box["s"]
-            tok = {"ok": "✅ Claude token ok", "expiring_soon": "⚠️ Claude token expires within 7 days",
-                   "expired": "❌ Claude token expired", "no_credentials": "❌ no Claude token yet",
-                   "unreadable": "❌ Claude token unreadable"}.get(st["token"], "❓ Claude token unknown")
-            self.ai_lbl.config(text=("✅ Claude Code installed" if st["cli"] else "❌ Claude Code not installed")
-                               + "   ·   " + tok)
-            for w in self.ai_fix.winfo_children():
-                w.destroy()
-            if not st["cli"]:
-                self.ttk.Button(self.ai_fix, text="Install Claude Code", command=self._install_cli
-                                ).pack(side="left", padx=(0, 6))
-            if st["token"] != "ok":
-                self.ttk.Button(self.ai_fix, text="🔑 Get / Renew Token (Links & Analysis)",
-                                command=lambda: self.panel.open_tab(BY_ID["links"])).pack(side="left")
-        self.win.after(200, collect)
-
-    def _install_cli(self):
-        import threading
-        self._say("Installing Claude Code (Anthropic's official installer) — this can take a minute…")
-        box = {}
-
-        def work():
-            try:
-                import task_queue_automation as tqa
-                box["r"] = tqa.install_claude_code_cli()
-            except Exception as e:
-                box["r"] = (False, str(e))
-
-        def collect():
-            try:
-                if not self.win.winfo_exists():
-                    return
-            except self.tk.TclError:
-                return
-            if "r" not in box:
-                return self.win.after(500, collect)
-            ok, msg = box["r"]
-            self._say(("✅ " if ok else "❌ ") + str(msg)[:200], ok=ok)
-            self._check_ai()
-        threading.Thread(target=work, daemon=True).start()
-        self.win.after(500, collect)
-
     # ── save ────────────────────────────────────────────────────────────────
     def save(self):
         cur = route_settings()
+        miles_ok, miles = week_plan_miles_ok(self.week_miles.get())
+        if not miles_ok:
+            return self._say("Not saved — " + miles, ok=False)
         want = {"Route Origin Mode": self.mode.get(),
-                "Email Route On Build": "Enabled" if self.email_on.get() else "Disabled"}
+                "Email Route On Build": "Enabled" if self.email_on.get() else "Disabled",
+                WEEK_PLAN_KEY: miles}
         if self.mode.get() == "Company Location":
             want.update({k: v.get().strip() for k, v in self.addr_vars.items()})
         errors, saved = [], 0

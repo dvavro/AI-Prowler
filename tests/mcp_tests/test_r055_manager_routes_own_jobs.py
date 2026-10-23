@@ -106,11 +106,13 @@ def test_email_route_now_blank_crew(role, name, asked, want, db, monkeypatch, mc
 
 
 def test_ai_route_blank_crew_is_manager_own_day():
+    # 2026-10-22: the Claude CLI AI Route was replaced by 📋 Copy AI Route
+    # (get_ai_route_prompt) — same rule: blank crew = the caller's own day.
     src = (_SRC / "ai_prowler_mcp.py").read_text(encoding="utf-8")
-    i = src.index("def start_ai_routing(")
-    body = src[i:i + 12000]
-    j = body.index('if _role == "field_crew":')
-    assert "elif not crew:" in body[j:j + 400] and "_route_default_crew(ctx)" in body[j:j + 400]
+    i = src.index("def get_ai_route_prompt(")
+    body = src[i:i + 4000]
+    assert "if _current_user(ctx) is not None and not crew:" in body
+    assert "crew = _route_default_crew(ctx)" in body and "_route_crew_for_caller(ctx, db_path, crew)" in body
 
 
 def test_app_route_tab_labels_my_jobs_for_manager():

@@ -263,7 +263,9 @@ def _read_reports(app, page) -> dict:
                 actual_tax: num(c[4]), proj_tax: num(c[5]), total_tax: num(c[6]),
                 actual_hrs: num(c[7]), proj_hrs: num(c[8]), total_hrs: num(c[9])};
       });
-      const charts = [...document.querySelectorAll('#reportsContent svg')].map(svg => {
+      // The three WEEKLY charts, in order (2026-10-22: the yearly Net Revenue
+      // card added on 10-21 sits above them and has its own chart).
+      const charts = [...document.querySelectorAll('#reportsContent .card:not([data-testid="reports-year-net"]) svg')].map(svg => {
         const bars = {};
         svg.querySelectorAll('rect > title').forEach(t => {
           const m = t.textContent.match(/^(.+?) \u2014 (actual|projected): (.+)$/);

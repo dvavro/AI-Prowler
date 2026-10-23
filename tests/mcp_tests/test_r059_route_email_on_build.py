@@ -145,13 +145,8 @@ def test_allowed_route_email_is_not_a_violation(guard):
     assert guard.take_violations() == []
 
 
-def test_ai_routing_with_auto_email_on_needs_the_one_email(guard):
-    guard.tier = "full"
-    d, _ = guard.check("start_ai_routing", {"route_date": DAY})
-    assert d == "allow"
-    guard.enforce("start_ai_routing", {"route_date": DAY}, "test")          # uses the one email
-    d, why = guard.check("start_ai_routing", {"route_date": DAY})
-    assert d == "record" and "auto-email" in why
+# (test_ai_routing_with_auto_email_on_needs_the_one_email removed 2026-10-22:
+# start_ai_routing — the Claude CLI AI Route — no longer exists.)
 
 
 def test_preflights_no_longer_stop_on_email_route_on_build():

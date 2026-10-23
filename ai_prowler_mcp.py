@@ -608,10 +608,67 @@ def _compute_pwa_sw_cache_version(pwa_root: str, sw_source_bytes: bytes) -> str:
         _fpath = _pwa_hos.path.join(pwa_root, _fname)
         try:
             with open(_fpath, "rb") as _fh:
-                h.update(_fh.read())
+                _data = _fh.read()
+            if _fname == "index.html":
+                # Hash the page as SERVED (version badge filled in), so the
+                # cache name always matches the bytes the phone receives.
+                _data = _stamp_pwa_build(pwa_root, _data)
+            h.update(_data)
         except Exception:
             pass
     return h.hexdigest()[:12]
+
+
+# ── PWA version badge (2026-10-21, David) ────────────────────────────────────
+# Jobs, Remote, HR Admin and HR Portal each show "v9.3.2 · a1b2c3" top-right so
+# support can confirm which build a phone is really running. The page holds
+# the placeholder below; it is filled in here, at serve time, with the app
+# version (VERSION file) plus a short hash of that app's own files (index.html
+# as on disk, sw.js, manifest) — so any edit to an app changes its badge with
+# nothing to bump by hand. The file on disk is never modified.
+_PWA_BUILD_PLACEHOLDER = b"__AIPROWLER_PWA_BUILD__"
+
+
+def _pwa_app_version() -> str:
+    import os as _pv_os
+    try:
+        with open(_pv_os.path.join(_pv_os.path.dirname(_pv_os.path.abspath(__file__)),
+                                   "VERSION"), encoding="utf-8") as _pv_f:
+            return _pv_f.read().strip() or "0.0.0"
+    except Exception:
+        return "0.0.0"
+
+
+def _compute_pwa_build(pwa_root: str, page_bytes: bytes) -> str:
+    """'9.3.2 · a1b2c3' — app version + 6-char hash over the page (as on
+    disk, placeholder and all) and the app's sw.js / manifest files."""
+    import hashlib as _pb_hl
+    import os as _pb_os
+    h = _pb_hl.sha256(page_bytes)
+    try:
+        _extra = sorted(f for f in _pb_os.listdir(pwa_root)
+                        if f == "sw.js" or f.endswith("manifest.json"))
+    except Exception:
+        _extra = []
+    for _fname in _extra:
+        try:
+            with open(_pb_os.path.join(pwa_root, _fname), "rb") as _fh:
+                h.update(_fh.read())
+        except Exception:
+            pass
+    return f"{_pwa_app_version()} · {h.hexdigest()[:6]}"
+
+
+def _stamp_pwa_build(pwa_root: str, body: bytes) -> bytes:
+    """Fill the version-badge placeholder in a PWA page. Any other file, or
+    any error, returns body unchanged — never a reason for a page to fail."""
+    if _PWA_BUILD_PLACEHOLDER not in body:
+        return body
+    try:
+        _build = _compute_pwa_build(pwa_root, body).replace("'", "")
+        return body.replace(_PWA_BUILD_PLACEHOLDER, _build.encode("utf-8"), 1)
+    except Exception:
+        return body
 
 
 def _patch_sw_cache_version(rel_path: str, pwa_root: str, body: bytes) -> bytes:
@@ -623,7 +680,10 @@ def _patch_sw_cache_version(rel_path: str, pwa_root: str, body: bytes) -> bytes:
     the reason the Jobs or Remote PWA fails to load.
     """
     if rel_path != "sw.js":
-        return body
+        # 2026-10-21: the four PWA pages carry a version-badge placeholder;
+        # fill it in. Keyed on the placeholder, not rel_path, because the
+        # SPA fallback can serve index.html under another path.
+        return _stamp_pwa_build(pwa_root, body)
     try:
         import re as _pwa_re
         _version = _compute_pwa_sw_cache_version(pwa_root, body)
@@ -7872,7 +7932,16 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "    tab's \"Fix stop #\" pin): a pinned stop keeps its number across\n"
         "    every rebuild while unpinned stops are re-optimized around it.\n"
         "    Moving a pinned stop moves its pin with it. AI routing receives\n"
-        "    the pins as hard constraints.\n\n"
+        "    the pins as hard constraints.\n"
+        "    NOTE - pasted Jobs-app prompts (2026-10-22): an \"AI-PROWLER\n"
+        "    ROUTE REQUEST\" (code RT-...) or a Plan Week prompt (code WK-...)\n"
+        "    comes from the Jobs app's 📋 Copy AI Route / 🗓️ Plan Week buttons.\n"
+        "    ALWAYS call confirm_route_code(code) first; with more than one\n"
+        "    AI-Prowler connector, use ONLY the one that answers MATCH. Pass\n"
+        "    route_code to apply_route_order (a code only works for its own\n"
+        "    date/crew). Plan Week: get_week_plan_data(route_code), then\n"
+        "    propose_week_moves - that only SUGGESTS; the user approves in\n"
+        "    the Jobs app (apply_week_moves). Hard jobs never move.\n\n"
 
         "  • Contractor / business workflow:\n"
         "      email_invoice, text_invoice, email_receipt, text_receipt,\n"
@@ -18930,6 +18999,7 @@ def apply_route_order(
     filepath: str = "",
     origin_lat: str = "",
     origin_lon: str = "",
+    route_code: str = "",
     ctx: "Context | None" = None,
 ) -> str:
     """
@@ -18988,6 +19058,12 @@ def apply_route_order(
                     resolution only (Company Location address, else Home
                     Address).
         origin_lon: Optional live device GPS longitude — see origin_lat.
+        route_code: The "RT-XXXXXX" code from a pasted "📋 Copy AI Route"
+                    prompt (see get_ai_route_prompt). When given, the route is
+                    written ONLY if this AI-Prowler made that code for this
+                    same date (and crew) — otherwise nothing is written, so a
+                    chat with two AI-Prowlers connected can't route the wrong
+                    Jobs app. Leave blank for any other use.
         ctx:        MCP context (injected automatically).
 
     Returns:
@@ -19014,6 +19090,27 @@ def apply_route_order(
     crew, _crew_err = _route_crew_for_caller(ctx, db_path, crew)
     if _crew_err:
         return _crew_err
+    # 2026-10-22: pasted "📋 Copy AI Route" prompts carry a route code — refuse
+    # one this AI-Prowler didn't make (wrong connector), or one made for a
+    # different date/crew, BEFORE anything is written.
+    if str(route_code or "").strip():
+        _rc_info = _lookup_route_code(route_code)
+        _rc_label = _route_machine_label()
+        if _rc_info is None:
+            return (f"❌ WRONG AI-PROWLER — route code {str(route_code).strip()} was not made by "
+                    f"{_rc_label} (or it is more than 24 hours old). Nothing was written. Use the "
+                    f"AI-Prowler connector that answers MATCH to confirm_route_code, or copy a "
+                    f"fresh prompt from the Jobs app.")
+        if _rc_info.get("kind") == "week":
+            return (f"❌ {str(route_code).strip().upper()} is a 🗓️ Plan Week code — it can only "
+                    f"propose week moves (propose_week_moves), not save a route. Nothing was written.")
+        if (_rc_info.get("route_date") != route_date
+                or (_rc_info.get("crew") or "").strip().casefold() != (crew or "").strip().casefold()):
+            _rc_crew = _rc_info.get("crew") or ""
+            return (f"❌ Route code {str(route_code).strip().upper()} is for "
+                    f"{_rc_info.get('route_date')}" + (f", crew '{_rc_crew}'" if _rc_crew else "")
+                    + f" — not {route_date}" + (f", crew '{crew}'" if crew else "")
+                    + ". Nothing was written.")
     # Strings in, floats out (or None) — mirrors suggest_route_schedule's
     # own origin_lat/origin_lon handling exactly, since MCP tool args
     # arrive as strings over the wire regardless of the Python type hint.
@@ -19030,8 +19127,8 @@ def apply_route_order(
     # Route engine #2 (AI Routing) commits here.
     # 2026-10-05: the phone link is no longer published here — only an
     # approved route gets a pinned link. No email from here on purpose: the AI
-    # may call this twice in one run (a revised order), so _ai_routing_worker
-    # emails ONCE when the whole run ends.
+    # may call this twice in one run (a revised order). The route is emailed
+    # after the user approves it (📧 Email Route), not by the AI.
     return _with_route_link(_res, db_path, route_date, crew, ctx, actor)
 @mcp.tool()
 def pin_route_stop(
@@ -19325,19 +19422,23 @@ def get_approved_route_stops(
     return _json.dumps(data)
 
 
-# ── run_ai_routing — the Jobs PWA's "Run AI Routing (uses Credits)" button
-# (Job Board Architecture Spec §14.12 follow-up, 2026-09-18) ─────────────────
+# ── AI Route prompt (Job Board Architecture Spec §14.12, 2026-09-18) ──────────
+# The reasoning steps a pasted "📋 Copy AI Route" prompt gives the AI chat
+# (get_ai_route_prompt). Originally written for the Claude CLI "Run AI
+# Routing" button (removed 2026-10-22). Step 2 is normally filled in with the
+# Settings values (_route_settings_step), because a field_crew user's own chat
+# connector can't read the Settings sheet; _AI_ROUTE_SETTINGS_STEP_READ is
+# the read-it-yourself wording.
+_AI_ROUTE_SETTINGS_STEP_READ = (
+    "2. read_job_spreadsheet(sheet_name=\"Settings\") for Workday Start "
+    "Time, Workday End Time, Lunch Break Start, Lunch Break Duration (min), "
+    "Hard Time Tolerance (min).\n"
+)
+
 _RUN_AI_ROUTING_PROMPT_TEMPLATE = (
-    # Deliberately the SAME reasoning steps as the "AI Route Optimizer (full
-    # reasoning)" custom task the Small Business tab's own button creates
-    # (rag_gui.py) — kept as a separate, hardcoded copy here rather than
-    # reading that saved task definition back off disk, per the explicit
-    # design call: the PWA path must work even if the user never pressed
-    # that button, never keeps the task's wording in sync with edits made
-    # on the other side, and isn't affected if the saved task is later
-    # deleted or renamed. The one difference from that task's version:
-    # ROUTE_DATE is a real substituted value here (this runs for one
-    # specific date the PWA passed in), not a runtime-resolved placeholder.
+    # (The old Small Business tab "AI Route Optimizer (full reasoning)" task
+    # used the same steps; that task was retired 2026-10-22.) The route date
+    # is a real substituted value — the prompt is for one specific day.
     "Plan the best possible field-service route for {route_date}{crew_clause}. "
     "Do NOT use suggest_route_schedule (\"Get AI Suggestion\") -- that is a "
     "cheap nearest-neighbor heuristic with no real time-window reasoning. "
@@ -19347,9 +19448,7 @@ _RUN_AI_ROUTING_PROMPT_TEMPLATE = (
     "filter_date=\"{route_date}\") to get every job that day: JobID, "
     "address, lat/lon, Schedule Type (Hard/Soft), Start Time, End Time, "
     "Est. Duration.\n"
-    "2. read_job_spreadsheet(sheet_name=\"Settings\") for Workday Start "
-    "Time, Workday End Time, Lunch Break Start, Lunch Break Duration (min), "
-    "Hard Time Tolerance (min).\n"
+    "{settings_step}"
     "3. get_route_drive_matrix(route_date=\"{route_date}\"{crew_arg}) for "
     "real drive time/distance between every geocoded job. If any job isn't "
     "geocoded, note it as NOT PLACED and leave it out -- do not guess its "
@@ -19404,39 +19503,9 @@ _RUN_AI_ROUTING_PROMPT_TEMPLATE = (
     "person who tapped the button."
 )
 
-# Deliberately NOT cfg.get("allowed_tools") — that shared queue-config
-# setting is a broad wildcard (mcp__ai-prowler__*) meant for the general
-# scheduled queue, which legitimately might need to email/text a report.
-# This on-demand routing run has exactly one job — plan and apply a
-# route — so it gets exactly the tools that job needs, nothing else. This
-# is a real mechanism-level restriction, not just a prompt instruction:
-# even if something in a future prompt edit asked it to email or record a
-# learning, the tool simply would not be there to call.
-_AI_ROUTING_ALLOWED_TOOLS = (
-    "mcp__ai-prowler__read_job_spreadsheet,"
-    "mcp__ai-prowler__get_route_drive_matrix,"
-    "mcp__ai-prowler__apply_route_order"
-)
-
-# In-memory job registry backing start_ai_routing()/poll_ai_routing() — see
-# start_ai_routing's docstring for why this is split into start/poll rather
-# than one long blocking call. Deliberately in-memory only, not persisted
-# to disk: a job that was running when AI-Prowler itself restarts is a rare
-# edge case (the person would have to restart the app mid-run), and
-# poll_ai_routing already reports "Unknown job_id" cleanly for that case —
-# not worth the complexity of a durable queue for what is fundamentally a
-# single interactive person tapping one button and watching it finish.
-_AI_ROUTING_JOBS_LOCK = threading.Lock()
-_AI_ROUTING_JOBS: dict = {}
-_AI_ROUTING_JOBS_MAX = 20
-
-
-# ── AI Routing start/end picker (2026-09-19) ────────────────────────────────
-# The Route tab's "Run AI Routing" button now ALWAYS asks where the day
-# should start and end — Current GPS location, or a home address — instead
-# of silently picking one. Nothing about the choice is remembered between
-# taps (deliberately: the person may be at home one day and on a job site
-# the next). These two helpers resolve the "home address" option:
+# ── Home address for a route's start/end (2026-09-19) ───────────────────────
+# Used when a route starts/ends at someone's home (build_daily_route,
+# optimize_route, ...). These two helpers resolve the "home address":
 #   * Personal mode -> the owner's address from Settings (config.json).
 #   * Server mode   -> the per-user home_address stored in users.json via the
 #                      Admin tab's Add/Edit User dialog. An owner/manager/
@@ -19561,37 +19630,6 @@ def get_working_days(
         return "WORKING_DAYS: Mon,Tue,Wed,Thu,Fri"
 
 
-@mcp.tool()
-def get_route_start_options(
-    crew: str = "",
-    ctx: "Context | None" = None,
-) -> str:
-    """
-    Backs the Jobs PWA Route tab's AI Routing start/end picker: reports the
-    home address that picker should offer next to "Current location (GPS)".
-    Read-only — never geocodes, writes, or spends anything.
-
-    Personal mode: the owner's address from the Settings tab. Server mode:
-    the home_address saved for the relevant user in the Admin tab — the
-    crew member named by `crew` when an owner/manager/staff caller is
-    building that person's route, otherwise the caller's own. A field_crew
-    caller can only ever see their own.
-
-    Args:
-        crew: Optional crew/technician name whose home address to offer
-              (server mode, owner/manager/staff callers only).
-        ctx:  MCP context (injected automatically).
-
-    Returns:
-        Two lines: "HOME_ADDRESS: <address, blank if not set>" and
-        "HOME_LABEL: <whose address that is>".
-
-    Voice examples: (not applicable — PWA-button-only tool)
-    """
-    address, label = _resolve_route_home(ctx, crew)
-    return f"HOME_ADDRESS: {address}\nHOME_LABEL: {label}"
-
-
 def _team_members() -> list:
     """R-056: the active users' names and roles from users.json, sorted by
     name, one entry per distinct name. Nothing else leaves this function —
@@ -19640,705 +19678,543 @@ def list_team_members(ctx: "Context | None" = None) -> str:
     return json.dumps({"members": _team_members()})
 
 
-# ── "Connect your Claude account" (server mode, 2026-09-19) ─────────────────
-# The Jobs app's first-use screen for a user with no (or an expired) Claude
-# Code token: either paste a token they already have from AI-Prowler Personal
-# (save_my_cli_token), or sign in from their phone (start_cli_signin ->
-# submit_cli_signin_code, engine in cli_signin_relay.py). Every tool here
-# acts on the CALLER only — there is no user argument to point at someone else.
-# Personal mode has its own Get / Renew Token button and never uses these.
-
-_CLI_SIGNIN_SERVER_ONLY = (
-    "❌ Connecting a Claude account from the Jobs app is only for multi-user "
-    "servers. In AI-Prowler Personal, use Get / Renew Token on the Links & "
-    "Analysis page."
-)
+# ── 🧠 Run AI Routing (Claude CLI) — REMOVED 2026-10-22 (David) ─────────────
+# start_ai_routing / poll_ai_routing / get_route_start_options and the
+# "Connect your Claude account" tools (start_cli_signin, submit_cli_signin_code,
+# cancel_cli_signin, save_my_cli_token) lived here. They ran a headless
+# Claude Code session through a Windows Scheduled Task and needed a Claude
+# token per user. AI routing now happens in ANY AI chat connected to
+# AI-Prowler: get_ai_route_prompt (one day) and get_week_plan_prompt (a
+# week) below — no Claude CLI, no per-user token, no second AI-Prowler.
 
 
-def _cli_signin_caller(ctx) -> tuple:
-    """(user, user_id) for a server-mode caller; (None, None) in personal mode."""
-    user = _current_user(ctx)
-    if user is None:
-        return None, None
-    return user, (user.get("id") or _make_user_id(user.get("name", "")))
-
-
-def _email_user_cli_token(user: dict, token: str) -> str:
-    """Emails the user their own Claude token (they asked for a copy). Returns
-    a short phrase describing the outcome; never raises. The token is
-    a long-lived credential in plain text — the body says so."""
-    to = (user.get("email") or "").strip()
-    if not to:
-        return "no email address is set for you, so a copy wasn't emailed"
-    body = (
-        f"Hi {user.get('name') or ''},\n\n"
-        "You connected your Claude account to AI-Prowler AI Routing. Here is your "
-        "Claude, Muse, or Grok connection key, in case you need it again:\n\n"
-        f"    {token}\n\n"
-        "Keep it private — anyone with it can use your Claude subscription. It is "
-        "good for about a year.\n\n"
-        "If you also use AI-Prowler Personal on your own computer: creating a new "
-        "key can sign that install out. If that happens, open Links & Analysis in "
-        "AI-Prowler Personal and paste this key in as its token."
-    )
-    try:
-        ok, msg = _send_smtp(to, "Your AI-Prowler Claude, Muse, or Grok connection key", body)
-    except Exception as exc:  # noqa: BLE001
-        return f"the copy couldn't be emailed ({exc})"
-    return "a copy was emailed to you" if ok else f"the copy couldn't be emailed ({msg})"
-
-
-@mcp.tool()
-def start_cli_signin(ctx: "Context | None" = None) -> str:
-    """
-    Step 1 of the Jobs app's "Connect your Claude account" phone sign-in
-    (server mode). Starts a Claude, Muse, or Grok sign-in for the CALLER on the server and
-    returns the link to open on their phone.
-
-    Returns:
-        "SIGNIN_URL: <link>" or a ❌ explaining what went wrong.
-
-    Voice examples: (not applicable — PWA-button-only tool)
-    """
-    user, uid = _cli_signin_caller(ctx)
-    if user is None:
-        return _CLI_SIGNIN_SERVER_ONLY
-    import cli_signin_relay as _relay
-    ok, value = _relay.start_login(uid)
-    return f"SIGNIN_URL: {value}" if ok else f"❌ {value}"
-
-
-@mcp.tool()
-def submit_cli_signin_code(code: str, ctx: "Context | None" = None) -> str:
-    """
-    Step 2: the code Claude, Muse, or Grok showed the user after they signed in on their
-    phone. On success the server saves the token for the caller, emails them a
-    copy, and the Jobs app can carry on with AI Routing. The code is redacted
-    from the audit log.
-
-    Returns:
-        "CONNECTED — <email note>", "INVALID_CODE: <what to do>", or a ❌.
-
-    Voice examples: (not applicable — PWA-button-only tool)
-    """
-    user, uid = _cli_signin_caller(ctx)
-    if user is None:
-        return _CLI_SIGNIN_SERVER_ONLY
-    import cli_signin_relay as _relay
-    res = _relay.submit_code(uid, code)
-    if res["status"] == "connected":
-        note = _email_user_cli_token(user, res.get("token", ""))
-        return f"CONNECTED — {note}."
-    if res["status"] == "invalid_code":
-        return f"INVALID_CODE: {res['message']}"
-    return f"❌ {res['message']}"
-
-
-@mcp.tool()
-def cancel_cli_signin(ctx: "Context | None" = None) -> str:
-    """
-    Abandons the caller's pending phone sign-in (frees the server-side
-    process). Safe to call when nothing is pending.
-
-    Voice examples: (not applicable — PWA-button-only tool)
-    """
-    user, uid = _cli_signin_caller(ctx)
-    if user is None:
-        return _CLI_SIGNIN_SERVER_ONLY
-    import cli_signin_relay as _relay
-    _relay.cancel_login(uid)
-    return "✅ Cancelled."
-
-
-@mcp.tool()
-def save_my_cli_token(token: str, ctx: "Context | None" = None) -> str:
-    """
-    The "I already have a token" path: saves a Claude Code token the user
-    already made (typically copied from AI-Prowler Personal's Links & Analysis
-    page) as the CALLER's AI Routing credential. Nothing new is minted, so a
-    Personal install's token is not invalidated. The token is redacted from
-    the audit log.
-
-    Returns:
-        "CONNECTED" or a ❌ saying why the value was rejected.
-
-    Voice examples: (not applicable — PWA-button-only tool)
-    """
-    user, uid = _cli_signin_caller(ctx)
-    if user is None:
-        return _CLI_SIGNIN_SERVER_ONLY
-    try:
-        import task_queue_automation as _tqa
-        _tqa.save_user_oauth_token(uid, token)
-    except ValueError as ve:
-        return f"❌ {ve}"
-    except Exception as exc:  # noqa: BLE001
-        return f"❌ Couldn't save the token: {exc}"
-    return "CONNECTED"
-
-
-def _ai_routing_worker(job_id: str, prompt: str, route_date: str,
-                       oauth_token_path=None, crew: str = "",
-                       caller_email: str = "") -> None:
-    """Runs on a background daemon thread started by start_ai_routing() —
-    does the actual waiting off the ASGI event loop entirely, so the HTTP
-    request that triggered it already returned long before this finishes.
-
-    v3 (2026-09-18) — uses a DEDICATED, trigger-less Scheduled Task
-    (task_queue_automation.AI_ROUTING_TASK_NAME), never the shared
-    AI-Prowler-QueueRunner: firing that shared one would process EVERY
-    entry in pending_tasks.json that's due right now, not just ours,
-    sweeping up other tasks the user queued for their own next scheduled
-    check and running them early — see AI_ROUTING_TASK_NAME's module-level
-    comment in task_queue_automation.py. This dedicated task never touches
-    pending_tasks.json at all, so it cannot interfere with anything else
-    queued, by construction.
-
-    Also deliberately NOT the old "▶ NOW button" localhost-HTTP-MCP path
-    (run_single_prompt_now / generate_mcp_config_for_now_button) — that was
-    already defeatured before this feature existed, never reliably worked,
-    and testing it live reproduced exactly that (zero working MCP tools,
-    and a raw MCP `initialize` POST to localhost:8000/mcp hung outright).
-
-    What this does:
-      1. Requires the dedicated task to already be registered
-         (task_queue_automation.ai_routing_task_exists()) — that
-         registration needs a one-time UAC prompt only a real GUI button
-         click can satisfy, never something this background thread can do
-         silently.
-      2. Writes a FRESH wrapper script for this one specific request
-         (build_ai_routing_wrapper_content) — same proven stdio MCP config
-         + absolute claude.exe path + OAuth-token-from-file pattern as the
-         actual scheduled queue runner.
-      3. Fires the dedicated task right now via `schtasks /run`.
-      4. Polls for its completion marker file (this task never touches
-         pending_tasks.json, so there's no queue entry to watch disappear)
-         and reads the real captured output once it appears.
-    Writes the outcome into _AI_ROUTING_JOBS[job_id] for poll_ai_routing()
-    to report; never raises back into the thread runner."""
-    import time as _time
-    import subprocess as _sp
-
-    def _finish(status: str, output: str) -> None:
-        with _AI_ROUTING_JOBS_LOCK:
-            job = _AI_ROUTING_JOBS.get(job_id)
-            if job is not None:
-                job["status"] = status
-                job["output"] = output
-                job["finished_at"] = _time.time()
-
-    try:
-        import task_queue_automation as _tqa
-
-        if not _tqa.ai_routing_task_exists():
-            # 2026-09-28: a server's setup is on the Admin tab (the Small Business
-            # tab's AI Route Optimizer section is personal-install only).
-            _finish("error",
-                    ("AI Routing isn't set up on this server yet — ask an admin to open "
-                     "the Admin tab and click “Set Up AI Route Runner” (one-time, "
-                     "needs one Windows confirmation prompt at the server).")
-                    if _IS_SERVER_MODE else
-                    ("The on-demand AI Routing runner isn't set up yet — click "
-                     "“Set Up On-Demand AI Routing” in the Small Business tab "
-                     "(one-time, needs one Windows confirmation prompt), then try again."))
-            return
-
-        cfg = _tqa.load_config()
-        # Never trust a stored mcp_config_path from config.json as-is — it
-        # can be stale (confirmed live: it was still pointing at the old,
-        # broken claude_mcp_config_now.json from the defeatured "NOW
-        # button" the first time this ran for real, leaving the headless
-        # session with zero ai-prowler tools). The proven Apply flow for
-        # the main scheduled queue (rag_gui.py) never trusts it either —
-        # it always calls generate_mcp_config() fresh and overwrites
-        # cfg["mcp_config_path"] with whatever that returns, every single
-        # time, specifically so a stale value can never linger. Do the
-        # same thing here rather than reading the possibly-stale field
-        # directly.
-        mcp_ok, mcp_path = _tqa.generate_mcp_config()
-        if not mcp_ok or not mcp_path:
-            _finish("error", f"Could not generate the MCP config for this run: {mcp_path}")
-            return
-
-        wrapper_content = _tqa.build_ai_routing_wrapper_content(
-            prompt,
-            mcp_path,
-            _AI_ROUTING_ALLOWED_TOOLS,
-            use_api_key=cfg.get("use_api_key", False),
-            api_key_provider=cfg.get("api_key_provider", "anthropic"),
-            oauth_token_path=oauth_token_path,
-        )
-        _tqa.AI_ROUTING_WRAPPER_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _tqa.AI_ROUTING_WRAPPER_PATH.write_text(wrapper_content, encoding="utf-8")
-
-        start_time = _time.time()
-
-        run_result = _sp.run(
-            ["schtasks", "/run", "/tn", _tqa.AI_ROUTING_TASK_NAME],
-            capture_output=True, text=True, timeout=30,
-            creationflags=_sp.CREATE_NO_WINDOW if hasattr(_sp, "CREATE_NO_WINDOW") else 0,
-        )
-        if run_result.returncode != 0:
-            _finish("error",
-                    f"Couldn't trigger the on-demand runner "
-                    f"(schtasks said: {(run_result.stderr or run_result.stdout).strip()}).")
-            return
-
-        # This dedicated task never touches pending_tasks.json, so its
-        # completion marker file (written as the LAST step of the wrapper,
-        # after the claude call returns) is the only completion signal.
-        deadline = _time.time() + 480
-        marker = _tqa.AI_ROUTING_DONE_MARKER_PATH
-        finished = False
-        while _time.time() < deadline:
-            _time.sleep(3)
-            try:
-                if marker.exists() and marker.stat().st_mtime >= start_time:
-                    finished = True
-                    break
-            except Exception:
-                pass
-
-        if not finished:
-            _finish("error",
-                    "Still running after 8 minutes — this is unusual. It may still "
-                    "finish on its own; check the Route tab in a few minutes.")
-            return
-
-        # The wrapper runs claude with --output-format json, so this file is
-        # a JSON object, not plain text — confirmed live (2026-09-18): the
-        # earlier version here just dumped the raw file content verbatim,
-        # which put the ENTIRE JSON payload (usage stats, token counts,
-        # session id, everything) into the Route tab's warnings box instead
-        # of the actual human-readable summary. Parse it and surface just
-        # the "result" field, which is what the headless session actually
-        # said; fall back to the raw text only if parsing fails, so a
-        # malformed/unexpected file still shows SOMETHING rather than going
-        # silent.
-        output_text = ""
-        _run_is_error = False
-        try:
-            raw = _tqa.AI_ROUTING_LAST_RUN_PATH.read_text(encoding="utf-8", errors="replace").strip()
-            # R-051: Claude Code can print warning lines (e.g. "Ignoring 2
-            # permissions.allow entries ... workspace has not been trusted")
-            # into the same file ahead of the JSON — find the JSON anyway.
-            parsed = _tqa.parse_claude_json_output(raw)
-            if parsed is not None:
-                output_text = str(parsed.get("result") or "").strip()
-                _run_is_error = bool(parsed.get("is_error"))
-                if not output_text and parsed.get("is_error"):
-                    # A real API/CLI-level error still comes back as valid
-                    # JSON but with no "result" text — surface *something*
-                    # useful instead of silently falling through to the
-                    # generic "no captured output" message below.
-                    output_text = f"Run reported an error: {parsed.get('subtype') or parsed}"
-            else:
-                # Not valid JSON (a crash before claude even produced
-                # output, a truncated file, etc.) — show the raw text as a
-                # last resort rather than nothing at all.
-                output_text = raw[-3000:]
-        except Exception:
-            pass
-        if not output_text:
-            output_text = f"AI Routing finished for {route_date}, but produced no captured output. Check the Route tab for the result."
-        # Server mode: the run used THIS user's saved Claude token. If Claude
-        # rejected it (expired, revoked, or invalidated by a newer token made
-        # for the same account), discard it so the very next AI Route tap
-        # sends the user back through "Connect your Claude account" instead of
-        # failing the same way forever.
-        import re as _re_auth
-        if oauth_token_path is not None and _re_auth.search(
-                r"API Error: 401|authentication_error|OAuth (access )?token "
-                r"(has expired|is invalid)|Invalid authentication credentials|"
-                r"Please run /login|No Claude token is saved",
-                output_text, _re_auth.IGNORECASE):
-            try:
-                Path(oauth_token_path).unlink()
-            except Exception:
-                pass
-            _finish("error",
-                    "AUTH_EXPIRED — Claude, Muse, or Grok no longer accepts your saved connection "
-                    "(it may have expired, or a newer key was made for your Claude, Muse, or Grok "
-                    "account). Tap AI Route again to reconnect.")
-            return
-        # Email the finished route ONCE, here at the very end (not inside
-        # apply_route_order, which the AI may legitimately call twice in one run
-        # when it revises its order — that would send two emails). Only when
-        # THIS run actually saved a new route link (start_time is when it began),
-        # so a run that failed never re-sends whatever route was already stored.
-        # R-065 (2026-09-29, found by E2E MILES-04): when Claude, Muse, or Grok refused to run
-        # at all ("You've hit your session limit · resets 8:50am") the worker
-        # still reported "✅ DONE" — the Route tab showed success over an
-        # unchanged (or empty) route. A usage-limit / error reply with no route
-        # saved by THIS run is now an error, with Claude/Muse/Grok's own words.
-        _route_saved = _ROUTE_LINK_PUBLISHED_AT.get(route_date, 0) >= start_time
-        if not _route_saved and (_run_is_error or _re_auth.search(
-                r"hit your (session|usage|weekly) limit|usage limit|rate limit|"
-                r"credit balance is too low|overloaded_error|resets \d{1,2}(:\d{2})?\s*[ap]m",
-                output_text, _re_auth.IGNORECASE)):
-            _finish("error",
-                    "AI Routing did not run — Claude replied: "
-                    f"\"{output_text[-500:].strip()}\". No route was changed; "
-                    "try again later or use Route Today.")
-            return
-        final_text = output_text[-3000:]
-        try:
-            if _route_saved:
-                _email_note = _email_route_results(
-                    _resolve_job_db_path(None, ""), route_date, crew, caller_email,
-                    output_text[-3000:], include_stops=True)
-                if _email_note:
-                    final_text = final_text + "\n\n" + _email_note
-        except Exception:
-            pass
-        _finish("done", final_text)
-    except Exception as exc:
-        _finish("error", f"Unexpected error triggering the background run: {exc}")
-
-
-@mcp.tool()
-def start_ai_routing(
-    route_date: str,
-    crew: str = "",
-    origin_lat: str = "",
-    origin_lon: str = "",
-    origin_choice: str = "",
-    ctx: "Context | None" = None,
-) -> str:
-    """
-    The Jobs PWA Route tab's "🧠 Run AI Routing (uses Credits)" button —
-    KICKS OFF a real headless Claude Code session in the background and
-    returns immediately with a job_id; poll_ai_routing(job_id) reports
-    progress and, eventually, the result. Split into start/poll (2026-09-18)
-    instead of one long blocking call specifically because a full agentic
-    run can take several minutes, and a single blocking HTTP request that
-    long risks being cut off by an idle-connection timeout somewhere in the
-    path (a reverse proxy/tunnel, for remote/mobile access) even though the
-    run itself would have kept going and finished fine server-side — the
-    PWA would see nothing but a dead connection. Starting instantly and
-    polling in short bursts has no such ceiling.
-
-    The session reasons through route_date's jobs the way apply_route_order's
-    docstring describes (hard commitments respected with wait-not-early-
-    start, idle gaps filled with well-matched soft jobs, poor fits deferred
-    to open afternoon time) and writes the result via apply_route_order —
-    as opposed to suggest_route_schedule ("Get AI Suggestion"), which is a
-    free, instant, but much cruder nearest-neighbor heuristic with no real
-    time-window reasoning.
-
-    Genuinely spends real Claude, Muse, or Grok usage from whichever auth the Autonomous
-    AI Task Queue's Links & Analysis panel has configured (OAuth
-    subscription allowance by default, or a metered API key if the owner
-    switched to that) — the "(uses Credits)" label on the PWA button exists
-    specifically so tapping it is an informed choice, not a surprise.
-
-    Calling this again for the SAME route_date + crew while a run is still
-    in flight does NOT start a second one — it hands back the existing
-    job_id instead, so a double-tap or a page reload re-triggering the
-    button can't accidentally spend usage twice on the same day.
-
-    The prompt used is a hardcoded duplicate of the reasoning steps in the
-    "AI Route Optimizer (full reasoning)" custom task the Small Business
-    tab's own button creates — deliberately NOT read from that saved task
-    definition, so this keeps working even if that task was never created,
-    was edited, or was deleted.
-
-    Start/end location (2026-09-21): the Jobs app no longer asks. Leaving
-    origin_choice blank does exactly what Route Today does — the run's
-    apply_route_order call gets no coordinates and resolves the day's start/end
-    from Settings by route mode (Jobs Only: the crew member's/owner's home
-    address; Company Location: the Start/End Address), so both routing methods
-    always use the same data. A direct caller (voice/Claude) can still pass an
-    explicit choice: "gps" uses the device coordinates in origin_lat/origin_lon;
-    "home" resolves a home address (Personal mode: the owner's address from
-    Settings; Server mode: the home_address saved in the Admin tab for the crew
-    member being routed, else the caller's own — see _resolve_route_home) and
-    geocodes it here. Any other value is rejected before anything starts.
-
-    Server mode: the run is billed to the CALLER, using the Claude token an
-    admin saved for them in the Admin tab (🔑 Set AI Route Token); a user
-    with none saved is told to ask an admin. A field_crew caller can only
-    route their own day (crew is forced to their name); owner/manager/staff
-    may route any crew. Only one run happens at a time, since every run
-    shares one wrapper/prompt/marker file set.
-
-    Company Location mode: the chosen start/end point is added as a plain
-    bookend AROUND the company Start/End Address stop (see
-    db_route_ops._wrap_with_home_bookends) — Home is not a stop.
-
-    Args:
-        route_date: YYYY-MM-DD to plan the route for.
-        crew:       Optional crew/technician name to scope to. Left blank,
-                    every crew's jobs on this date are included. In server
-                    mode this also picks whose home address "home" means.
-        origin_lat: Live device GPS latitude, captured client-side the
-                    moment the picker's Continue was tapped — required
-                    when origin_choice is "gps", ignored for "home" (the
-                    geocoded home address replaces it). Only meaningful
-                    when Settings -> Route Origin Mode is "Jobs Only";
-                    Company Location mode always anchors on its own
-                    configured address regardless.
-        origin_lon: Live device GPS longitude — see origin_lat.
-        origin_choice: Optional. Leave blank (what the Jobs app does) to use the
-                      route mode's own start/end from Settings; or "gps" /
-                      "home" (case-insensitive) to force one.
-        ctx:        MCP context (injected automatically).
-
-    Returns:
-        "⏳ RUNNING (job_id=...)" once the background run has started (or
-        already was running for this exact date+crew), or a ❌ explaining
-        exactly what is missing (no start/end choice, GPS unavailable, no
-        home address configured, address not found on the map, Claude Code
-        CLI not installed, caller not allowed) — never a silent no-op.
-
-    Voice examples: (not applicable — PWA-button-only tool)
-    """
-    try:
-        import task_queue_automation as _tqa
-    except Exception as exc:
-        return f"❌ task_queue_automation module not available: {exc}"
-
-    # Where the one-time setup lives depends on the mode: Personal uses the
-    # Small Business tab's AI Route Optimizer section (and the Links & Analysis
-    # task queue). A server still shows the Small Business tab, but not that
-    # section (no task queue in server mode) — its setup is the "AI Route
-    # runner" panel on the Admin tab, and only an admin at the server can do it.
-    _server_setup = _current_user(ctx) is not None
-    if not _tqa.claude_code_cli_installed():
-        if _server_setup:
-            return (
-                "❌ AI Routing isn't set up on this server yet — Claude Code isn't "
-                "installed. Ask an admin to open the Admin tab and click \u201c"
-                "Install Claude Code CLI\u201d in the AI Route runner panel."
-            )
-        return (
-            "❌ Claude Code CLI is not installed or not on PATH. Set it up "
-            "from the Links & Analysis tab's Autonomous AI Task Queue panel "
-            "first (⬇ Install Claude Code CLI), then try again."
-        )
-    if not _tqa.ai_routing_task_exists():
-        if _server_setup:
-            return (
-                "❌ AI Routing isn't set up on this server yet — the on-demand "
-                "runner hasn't been registered. Ask an admin to open the Admin tab "
-                "and click \u201cSet Up AI Route Runner\u201d (one-time, needs one "
-                "Windows confirmation prompt at the server)."
-            )
-        return (
-            "❌ The on-demand AI Routing runner isn't set up yet — click "
-            "\u201cSet Up On-Demand AI Routing\u201d in the Small Business tab "
-            "(one-time, needs one Windows confirmation prompt), then try again. This is "
-            "a separate, dedicated runner from the main scheduled queue, specifically so "
-            "an on-demand routing request never sweeps up and runs your other queued "
-            "tasks early."
-        )
-
-    crew = (crew or "").strip()
-
-    # Server mode: the run is billed to the CALLER, using the Claude token an
-    # admin saved for them in the Admin tab — so a user with no token saved
-    # can't run it, and nobody spends anyone else's usage. (No user on ctx ==
-    # personal mode: the owner's own shared token, unchanged.)
-    _caller = _current_user(ctx)
-    _user_token_path = None
-    if _caller is not None:
-        _role = (_caller.get("role") or "").strip().lower()
-        _uid = _caller.get("id") or _make_user_id(_caller.get("name", ""))
-        if not _tqa.has_user_oauth_token(_uid):
-            return (
-                "🔑 NO_CLI_TOKEN — your Claude account isn't connected to AI "
-                "Routing yet. Connect it (or ask an admin to add your token in "
-                "the Admin tab), then try again. Nothing was started."
-            )
-        _user_token_path = _tqa.user_oauth_token_path(_uid)
-        # A crew account can only ever route its OWN day — whatever `crew` the
-        # client sent. (Owner/manager/staff may route any crew.)
-        if _role == "field_crew":
-            crew = (_caller.get("name") or "").strip()
-        elif not crew:
-            # R-055: a manager/staff member's AI Route with no crew picked is
-            # THEIR day (the jobs assigned to them), not every crew's.
-            crew = _route_default_crew(ctx)
-
-    # Start/end location (2026-09-21): the PWA no longer asks — a BLANK
-    # origin_choice means "do what Route Today does": pass no coordinates, and
-    # apply_route_order resolves the day's start/end from Settings by mode (Jobs
-    # Only -> the crew member's/owner's home address; Company Location -> the
-    # Start/End Address), so both routing methods always use the same data.
-    # An explicit "gps" or "home" is still honored for a direct caller who
-    # really wants one; anything ELSE is rejected before anything starts, so a
-    # typo costs nothing. Validated (and, for "home", geocoded) BEFORE anything
-    # is started.
-    _choice = (origin_choice or "").strip().lower()
-    if _choice not in ("", "gps", "home"):
-        return (
-            "❌ Unknown start/end choice — use \"gps\", \"home\", or leave it "
-            "blank to use the route mode's own start/end from Settings. "
-            "Nothing was started."
-        )
-    if _choice == "":
-        origin_lat, origin_lon = "", ""
-    elif _choice == "gps":
-        try:
-            _glat = float(str(origin_lat).strip())
-            _glon = float(str(origin_lon).strip())
-        except (TypeError, ValueError):
-            _glat = _glon = float("nan")
-        # NaN fails both range checks, so a garbage pair is rejected here too.
-        if not (-90.0 <= _glat <= 90.0 and -180.0 <= _glon <= 180.0):
-            return (
-                "❌ Current location isn't available from this device (location "
-                "permission denied, or no fix yet). Choose your home address "
-                "instead, or allow location access and try again. Nothing was started."
-            )
-        origin_lat, origin_lon = repr(_glat), repr(_glon)
-    else:
-        _home_addr, _home_label = _resolve_route_home(ctx, crew)
-        _where = ("in the Settings tab (owner address)" if _caller is None
-                  else "in the Admin tab (Edit User → Home address)")
-        if not _home_addr:
-            return (
-                f"❌ {_home_label} isn't set yet — add it {_where}, or choose "
-                f"Current location instead. Nothing was started."
-            )
-        from db_route_ops import _geocode as _route_geocode
-        _coords = _route_geocode(_home_addr)
-        if not _coords:
-            return (
-                f"❌ Couldn't find {_home_label} (\u201c{_home_addr}\u201d) on the map — "
-                f"fix the address {_where}, or choose Current location instead. "
-                f"Nothing was started."
-            )
-        origin_lat, origin_lon = repr(float(_coords[0])), repr(float(_coords[1]))
-
-    with _AI_ROUTING_JOBS_LOCK:
-        for _jid, _j in _AI_ROUTING_JOBS.items():
-            if _j["status"] == "running" and _j["route_date"] == route_date and _j["crew"] == crew:
-                return f"⏳ RUNNING (job_id={_jid}) — already in flight for this date, not starting a second run."
-        # Every run rewrites the SAME wrapper, prompt, last-run and marker files
-        # (the dedicated Scheduled Task's Action is one fixed path), so two runs
-        # at once — different dates, different crews, or different USERS in
-        # server mode — would overwrite each other's inputs and outputs. One at
-        # a time, whoever asks second is told to retry.
-        for _jid, _j in _AI_ROUTING_JOBS.items():
-            if _j["status"] == "running":
-                _busy_for = f"{_j['route_date']}" + (f" ({_j['crew']})" if _j["crew"] else "")
-                return (
-                    f"❌ Another AI Routing run is already in progress ({_busy_for}) — "
-                    f"the on-demand runner handles one at a time. Try again in a few "
-                    f"minutes. Nothing was started."
-                )
-    # 2026-10-05 "Fix stop #" pins: passed to the AI as hard constraints, and
-    # db_apply_route_order re-enforces them server-side even if the AI ignores
-    # this instruction. Empty string when nothing is pinned (the template's
-    # {pin_clause} then vanishes).
-    _pin_clause = ""
+# ── AI Route pins (used by the copy-and-paste AI Route prompt) ────────────────
+def _ai_route_pin_clause(ctx, route_date: str) -> str:
+    """2026-10-05 "Fix stop #" pins, worded as hard constraints for the AI.
+    db_apply_route_order re-enforces them server-side even if the AI ignores
+    this. "" when nothing is pinned (the template's {pin_clause} vanishes)."""
     try:
         from db_route_ops import _read_route_pins as _pins_for_ai
         _ai_db_path = _resolve_job_db_path(ctx, "")
-        if _ai_db_path:
-            _ai_pins = _pins_for_ai(_ai_db_path, route_date, None)
-            if _ai_pins:
-                _pin_lines = [
-                    f"   - {jid} MUST be stop #{pos} (owner-pinned -- do not move it)"
-                    for jid, pos in sorted(_ai_pins.items(), key=lambda kv: kv[1])
-                ]
-                _pin_clause = (
-                    "\nFIXED STOP CONSTRAINTS (owner-pinned, non-negotiable):\n"
-                    + "\n".join(_pin_lines) + "\n"
-                    + "Every pinned job above MUST appear at exactly its pinned stop number "
-                    + "in the stop_order you pass to apply_route_order. Plan the unfixed "
-                    + "jobs around them.\n"
-                )
+        if not _ai_db_path:
+            return ""
+        _ai_pins = _pins_for_ai(_ai_db_path, route_date, None)
+        if not _ai_pins:
+            return ""
+        _pin_lines = [
+            f"   - {jid} MUST be stop #{pos} (owner-pinned -- do not move it)"
+            for jid, pos in sorted(_ai_pins.items(), key=lambda kv: kv[1])
+        ]
+        return (
+            "\nFIXED STOP CONSTRAINTS (owner-pinned, non-negotiable):\n"
+            + "\n".join(_pin_lines) + "\n"
+            + "Every pinned job above MUST appear at exactly its pinned stop number "
+            + "in the stop_order you pass to apply_route_order. Plan the unfixed "
+            + "jobs around them.\n"
+        )
     except Exception:
-        pass
+        return ""
 
-    prompt = _RUN_AI_ROUTING_PROMPT_TEMPLATE.format(
-        route_date=route_date,
-        crew_clause=f" for crew '{crew}'" if crew else "",
-        crew_arg=f", crew=\"{crew}\"" if crew else "",
-        origin_arg=(f", origin_lat=\"{origin_lat}\", origin_lon=\"{origin_lon}\""
-                    if str(origin_lat).strip() and str(origin_lon).strip() else ""),
-        pin_clause=_pin_clause,
+
+# ── Copy AI Route prompt — route with ANY AI chat (2026-10-22, David) ─────────
+# The Jobs app's "📋 Copy AI Route" button: instead of a background Claude CLI
+# run (needs Claude Pro + a CLI token, shows nothing for minutes), the user
+# pastes a ready-made prompt into Claude, Muse, Grok or any chat that has this
+# AI-Prowler connected, and watches it plan the route live. The chat uses the
+# AI-Prowler that is ALREADY running — no second copy is started.
+#
+# Which AI-Prowler? A person may have two connected (their Personal PC and the
+# company Server), each with its own Jobs app. Every prompt carries a one-time
+# ROUTE CODE made by the machine that built it:
+#   * confirm_route_code(code) answers MATCH only on that machine, so the AI
+#     can find the right connector before doing anything;
+#   * apply_route_order(route_code=...) REFUSES a code it didn't make (or one
+#     for a different date/crew), so even an AI that picks the wrong connector
+#     cannot write a route into the wrong Jobs app.
+# Codes are kept in <state dir>/ai_routing/route_codes.json (survive a restart)
+# and expire after _ROUTE_CODE_TTL_S.
+_ROUTE_CODES_LOCK = threading.Lock()
+_ROUTE_CODE_TTL_S = 24 * 3600
+_ROUTE_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O/1/I
+
+
+def _route_codes_path() -> Path:
+    return _state_dir() / "ai_routing" / "route_codes.json"
+
+
+def _route_codes_load() -> dict:
+    import json as _rcj, time as _rct
+    try:
+        data = _rcj.loads(_route_codes_path().read_text(encoding="utf-8")) or {}
+    except Exception:
+        data = {}
+    now = _rct.time()
+    return {c: v for c, v in data.items()
+            if isinstance(v, dict) and now - float(v.get("made_at") or 0) < _ROUTE_CODE_TTL_S}
+
+
+def _route_codes_save(codes: dict) -> None:
+    import json as _rcj, os as _rco
+    p = _route_codes_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(_rcj.dumps(codes, indent=1), encoding="utf-8")
+    _rco.replace(tmp, p)
+
+
+def _route_machine_label() -> str:
+    """'AI-Prowler Server on SHOP-PC (shop.example.com)' — says which machine
+    (and which Jobs app) a route code belongs to."""
+    import socket as _rms
+    kind = "AI-Prowler Server" if _IS_SERVER_MODE else "AI-Prowler Personal"
+    try:
+        host = _rms.gethostname() or "this computer"
+    except Exception:
+        host = "this computer"
+    dom = ""
+    try:
+        import json as _rmj
+        if _CONFIG_PATH.exists():
+            _cfg = _rmj.loads(_CONFIG_PATH.read_text(encoding="utf-8-sig")) or {}
+            dom = (str(_cfg.get("tunnel_domain") or "").strip()
+                   .replace("https://", "").replace("http://", "").rstrip("/"))
+    except Exception:
+        dom = ""
+    return f"{kind} on {host}" + (f" ({dom})" if dom else "")
+
+
+def _new_route_code(route_date: str, crew: str, kind: str = "route") -> str:
+    """kind "route" (📋 Copy AI Route, one day) or "week" (🗓️ Plan Week —
+    route_date is then that week's Monday). A code only works for its kind."""
+    import secrets as _rcs, time as _rct
+    with _ROUTE_CODES_LOCK:
+        codes = _route_codes_load()
+        while True:
+            code = ("WK-" if kind == "week" else "RT-") + "".join(
+                _rcs.choice(_ROUTE_CODE_ALPHABET) for _ in range(6))
+            if code not in codes:
+                break
+        codes[code] = {"route_date": route_date, "crew": crew, "made_at": _rct.time(), "kind": kind}
+        _route_codes_save(codes)
+    return code
+
+
+def _lookup_route_code(code: str) -> "dict | None":
+    code = (code or "").strip().upper()
+    if not code:
+        return None
+    with _ROUTE_CODES_LOCK:
+        return _route_codes_load().get(code)
+
+
+def _route_settings_step(db_path: str) -> str:
+    """Step 2 for the copy-and-paste prompt: the day's settings, already
+    looked up, so no Settings read is needed (field_crew can't read it)."""
+    from db_write_ops import (
+        db_read_settings_workday_start, db_read_settings_workday_end,
+        db_read_settings_lunch_break_start, db_read_settings_lunch_break_duration_min,
+        db_read_settings_hard_time_tolerance_min)
+    return (
+        "2. Settings (already looked up for you -- do NOT read the Settings sheet): "
+        f"Workday Start Time {db_read_settings_workday_start(db_path)}, "
+        f"Workday End Time {db_read_settings_workday_end(db_path)}, "
+        f"Lunch Break Start {db_read_settings_lunch_break_start(db_path)}, "
+        f"Lunch Break Duration {db_read_settings_lunch_break_duration_min(db_path)} min, "
+        f"Hard Time Tolerance {db_read_settings_hard_time_tolerance_min(db_path)} min.\n"
     )
 
 
-    import uuid, time
-    job_id = uuid.uuid4().hex[:12]
-
-    with _AI_ROUTING_JOBS_LOCK:
-        _AI_ROUTING_JOBS[job_id] = {
-            "status": "running", "route_date": route_date, "crew": crew,
-            "started_at": time.time(), "finished_at": None, "output": "",
-        }
-        # Trim finished (not running) jobs beyond the cap so this dict
-        # never grows unbounded across a long-running AI-Prowler session —
-        # a running job is never trimmed regardless of age.
-        if len(_AI_ROUTING_JOBS) > _AI_ROUTING_JOBS_MAX:
-            _finished = sorted(
-                ((jid, j) for jid, j in _AI_ROUTING_JOBS.items() if j["status"] != "running"),
-                key=lambda kv: kv[1]["started_at"],
-            )
-            for _jid, _ in _finished[: len(_AI_ROUTING_JOBS) - _AI_ROUTING_JOBS_MAX]:
-                _AI_ROUTING_JOBS.pop(_jid, None)
-
-    # The worker emails the finished route (link + the AI's own summary) once, at
-    # the very end, when Settings -> "Email Route On Build" is Enabled. Server
-    # mode sends it to the person who tapped the button; personal mode falls
-    # back to the SMTP config's default recipient.
-    _caller_email = (_caller.get("email") or "").strip() if _caller else ""
-    threading.Thread(
-        target=_ai_routing_worker,
-        args=(job_id, prompt, route_date, _user_token_path, crew, _caller_email),
-        daemon=True,
-    ).start()
-
-    return f"⏳ RUNNING (job_id={job_id})"
-
-
 @mcp.tool()
-def poll_ai_routing(
-    job_id: str,
+def get_ai_route_prompt(
+    route_date: str,
+    crew: str = "",
     ctx: "Context | None" = None,
 ) -> str:
     """
-    Checks progress on a background AI Routing run started by
-    start_ai_routing(job_id=...) — the Jobs PWA Route tab polls this every
-    few seconds while its "🧠 Thinking…" banner is showing.
+    The Jobs app's "📋 Copy AI Route" button: builds a ready-to-paste prompt
+    that plans route_date's route in ANY AI chat (Claude, Muse, Grok, ...)
+    that has this AI-Prowler connected — visible as it happens, with no
+    Claude CLI or Claude Pro needed (it replaced the Claude CLI "🧠 AI Route"
+    button, removed 2026-10-22). Nothing is planned or written here.
+
+    The prompt carries a one-time route code (see confirm_route_code) so the
+    chat uses THIS AI-Prowler even if the person has more than one connected.
+
+    Crew rules: in server mode a field_crew caller always gets their own
+    day; a blank crew means the caller's own day.
 
     Args:
-        job_id: The id returned by start_ai_routing's "⏳ RUNNING (job_id=…)"
-                response.
-        ctx:    MCP context (injected automatically).
+        route_date: YYYY-MM-DD to plan.
+        crew:       Optional crew/technician name (server mode).
+        ctx:        MCP context (injected automatically).
 
     Returns:
-        "⏳ RUNNING (job_id=…, elapsed=Ns)" while still going, "✅ DONE
-        (job_id=…)" followed by the session's own final summary once it
-        finishes successfully, "❌ ERROR (job_id=…)" followed by what went
-        wrong if it failed or timed out, or "❌ Unknown job_id: …" if the
-        id doesn't exist — including because AI-Prowler restarted since the
-        job started (job state is in-memory only, not persisted across a
-        restart); the PWA treats this the same as any other failure and
-        lets the person start a fresh run.
+        "ROUTE_CODE: RT-XXXXXX" and "MADE_BY: <machine>" lines, a blank line,
+        then the prompt text — or a ❌ message.
 
     Voice examples: (not applicable — PWA-button-only tool)
     """
-    with _AI_ROUTING_JOBS_LOCK:
-        job = _AI_ROUTING_JOBS.get(job_id)
-        job = dict(job) if job is not None else None
+    import datetime as _gdt
+    route_date = (route_date or "").strip()
+    try:
+        _gdt.date.fromisoformat(route_date)
+    except ValueError:
+        return "❌ route_date must be a date like 2026-10-22."
+    db_path = _resolve_job_db_path(ctx, "")
+    if not db_path:
+        return "❌ No job database is configured on this AI-Prowler."
+    crew = (crew or "").strip()
+    if _current_user(ctx) is not None and not crew:
+        crew = _route_default_crew(ctx)
+    crew, _crew_err = _route_crew_for_caller(ctx, db_path, crew)
+    if _crew_err:
+        return _crew_err
 
-    if job is None:
-        return f"❌ Unknown job_id: {job_id}"
+    code = _new_route_code(route_date, crew)
+    label = _route_machine_label()
+    body = _RUN_AI_ROUTING_PROMPT_TEMPLATE.format(
+        route_date=route_date,
+        crew_clause=f" for crew '{crew}'" if crew else "",
+        crew_arg=f", crew=\"{crew}\"" if crew else "",
+        origin_arg=f", route_code=\"{code}\"",
+        pin_clause=_ai_route_pin_clause(ctx, route_date),
+        settings_step=_route_settings_step(db_path),
+    )
+    header = (
+        f"AI-PROWLER ROUTE REQUEST -- made by {label} for {route_date}"
+        + (f", crew '{crew}'" if crew else "") + f". Route code: {code}\n\n"
+        "BEFORE ANYTHING ELSE: find the right AI-Prowler. Call "
+        f"confirm_route_code(code=\"{code}\"). If you have more than one "
+        "AI-Prowler connector (for example a personal one and a server one), "
+        "call it on each until one answers MATCH, then use ONLY that connector "
+        "for every step below -- never another AI-Prowler. If none answers "
+        f"MATCH, stop and tell me to paste this into a chat connected to {label}.\n\n"
+    )
+    footer = ("\n\nWhen you're done, tell me to open the Route tab in the Jobs "
+              "app (or tap Refresh) to review and Approve the route.")
+    return f"ROUTE_CODE: {code}\nMADE_BY: {label}\n\n{header}{body}{footer}"
 
-    if job["status"] == "running":
-        import time
-        elapsed = int(time.time() - job["started_at"])
-        return f"⏳ RUNNING (job_id={job_id}, elapsed={elapsed}s)"
 
-    if job["status"] == "done":
-        return f"✅ DONE (job_id={job_id})\n\n{job['output']}"
+@mcp.tool()
+def confirm_route_code(code: str, ctx: "Context | None" = None) -> str:
+    """
+    Step 1 of a pasted AI Route prompt (see get_ai_route_prompt): checks
+    whether THIS AI-Prowler made the route code. Read-only.
 
-    return f"❌ ERROR (job_id={job_id})\n\n{job['output']}"
+    Args:
+        code: The route code from the prompt, e.g. "RT-7K3QX9".
+        ctx:  MCP context (injected automatically).
+
+    Returns:
+        "MATCH — ..." (use this AI-Prowler for the whole route) or
+        "NO MATCH — ..." (try the other AI-Prowler connector).
+
+    Voice examples: (not applicable — used by pasted AI Route prompts)
+    """
+    label = _route_machine_label()
+    info = _lookup_route_code(code)
+    if info is None:
+        return (f"NO MATCH — {label} did not make route code {(code or '').strip()} "
+                f"(or it is more than 24 hours old). Try your other AI-Prowler "
+                f"connector, or copy a fresh prompt from the Jobs app.")
+    crew = info.get("crew") or ""
+    what = ("the week of " if info.get("kind") == "week" else "") + str(info.get("route_date"))
+    return (f"MATCH — this is {label}, which made code {code.strip().upper()} "
+            f"for {what}" + (f", crew '{crew}'" if crew else "")
+            + ". Use this AI-Prowler connector for every step.")
+
+
+# ── 🗓️ Plan Week (2026-10-22, David) ──────────────────────────────────────────
+# Same copy-to-any-AI pattern as 📋 Copy AI Route, for a whole week: the AI
+# looks at the week's jobs and PROPOSES moving SOFT jobs so jobs within the
+# 'Week Plan Distance (miles)' setting land on the same day. week_plan.py holds
+# the rules (hard jobs never move; working days, Preferred Day(s), not in the
+# past; date only). Nothing changes until the user approves in the Jobs app.
+def _week_proposals_path() -> Path:
+    return _state_dir() / "ai_routing" / "week_proposals.json"
+
+
+def _week_crew(ctx, db_path: str, crew: str) -> tuple:
+    """(crew, error) — the same crew rules as routing: field_crew always their
+    own; blank = the caller's own (server mode) or every job (personal)."""
+    crew = (crew or "").strip()
+    if _current_user(ctx) is not None and not crew:
+        crew = _route_default_crew(ctx)
+    return _route_crew_for_caller(ctx, db_path, crew)
+
+
+def _week_code_info(ctx, route_code: str):
+    """(info, db_path, crew, error) for a 🗓️ Plan Week code made here."""
+    info = _lookup_route_code(route_code)
+    if info is None:
+        return None, "", "", (f"❌ WRONG AI-PROWLER — {_route_machine_label()} did not make code "
+                              f"{str(route_code or '').strip()} (or it is more than 24 hours old). Use the "
+                              f"connector that answers MATCH to confirm_route_code.")
+    if info.get("kind") != "week":
+        return None, "", "", "❌ That is a 📋 Copy AI Route code, not a 🗓️ Plan Week code."
+    db_path = _resolve_job_db_path(ctx, "")
+    crew, err = _week_crew(ctx, db_path, info.get("crew") or "")
+    if err:
+        return None, "", "", err
+    if crew.casefold() != (info.get("crew") or "").casefold():
+        return None, "", "", "❌ This week plan was made for another crew."
+    return info, db_path, crew, ""
+
+
+def _today_local():
+    import datetime as _wdt
+    return _wdt.date.today()
+
+
+@mcp.tool()
+def get_week_plan_prompt(
+    week_start: str,
+    crew: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    The Jobs app's "🗓️ Plan Week" button: builds a ready-to-paste prompt that
+    asks ANY AI chat with this AI-Prowler connected to suggest moving SOFT jobs
+    so jobs near each other (Settings → Week Plan Distance (miles), default 5)
+    are done on the same day of the week. Nothing is planned or changed here —
+    the AI only proposes (propose_week_moves) and the user approves in the app.
+
+    Args:
+        week_start: Any YYYY-MM-DD date in the week to plan (its Monday is used).
+        crew:       Optional crew name (server mode; field crew get their own).
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        "ROUTE_CODE: WK-XXXXXX" and "MADE_BY: <machine>" lines, a blank line,
+        then the prompt — or a ❌ message.
+
+    Voice examples: (not applicable — PWA-button-only tool)
+    """
+    import week_plan as _wp
+    d = _wp.parse_iso(week_start)
+    if d is None:
+        return "❌ week_start must be a date like 2026-10-19."
+    monday = _wp.monday_of(d)
+    sunday = monday + __import__("datetime").timedelta(days=6)
+    db_path = _resolve_job_db_path(ctx, "")
+    if not db_path:
+        return "❌ No job database is configured on this AI-Prowler."
+    crew, err = _week_crew(ctx, db_path, crew)
+    if err:
+        return err
+    code = _new_route_code(monday.isoformat(), crew, kind="week")
+    label = _route_machine_label()
+    miles = _wp.read_week_plan_miles(db_path)
+    who = f", crew '{crew}'" if crew else ""
+    prompt = (
+        f"AI-PROWLER WEEK PLAN REQUEST -- made by {label} for the week {monday.isoformat()} to "
+        f"{sunday.isoformat()}{who}. Code: {code}\n\n"
+        "BEFORE ANYTHING ELSE: find the right AI-Prowler. Call "
+        f"confirm_route_code(code=\"{code}\"). If you have more than one AI-Prowler connector "
+        "(for example a personal one and a server one), call it on each until one answers "
+        "MATCH, then use ONLY that connector for every step below. If none answers MATCH, stop "
+        f"and tell me to paste this into a chat connected to {label}.\n\n"
+        "Goal: fewer trips to the same area this week. When jobs within "
+        f"{miles:g} miles of each other are booked on DIFFERENT days, suggest moving SOFT jobs "
+        "so they're done on the same day. Steps:\n\n"
+        f"1. get_week_plan_data(route_code=\"{code}\") -- the week's jobs with their location, "
+        "date, time window, duration and Schedule Type; which jobs may move and the exact days "
+        "each may move to (already checked against Working Days, Preferred Day(s) and today); "
+        "each day's booked job minutes; the workday; and nearby_pairs (jobs on different days "
+        f"within {miles:g} miles).\n"
+        "2. Reason through it BEFORE proposing anything:\n"
+        "   - Never move a HARD job or any job whose movable is false. Only move a job to a "
+        "date in its may_move_to list. Change the DATE only -- each job keeps its own time window.\n"
+        "   - Prefer moving the job so the nearby jobs end up together on a day that already has "
+        "a hard job or other work in that area, and keep moves as close to the original date as "
+        "possible.\n"
+        "   - Keep each day's job minutes plus a fair allowance for driving within "
+        "job_minutes_available. Don't overload a day to save a short drive.\n"
+        "   - Only suggest a move that clearly saves driving. Suggesting nothing is fine.\n"
+        f"3. propose_week_moves(route_code=\"{code}\", moves='[{{\"job_id\": \"JOB-####\", "
+        "\"to\": \"YYYY-MM-DD\", \"reason\": \"short reason, e.g. 0.4 mi from JOB-#### on Thu\"}]') "
+        "-- send an empty list [] if nothing is worth moving. This only SUGGESTS: nothing "
+        "changes until I approve it in the Jobs app. Read its reply; if it rejected a move, fix "
+        "or drop it and call it again (each call replaces your earlier suggestions).\n"
+        "4. Do not change jobs any other way, and do not route, email, text or record any "
+        "learning.\n\n"
+        "Finish with a short plain-language summary of what you suggested and why, then tell "
+        "me to open the Jobs app → Route tab → 🗓️ Plan Week → Check for suggestions to approve "
+        "them. After that I'll route each day."
+    )
+    return f"ROUTE_CODE: {code}\nMADE_BY: {label}\n\n{prompt}"
+
+
+@mcp.tool()
+def get_week_plan_data(route_code: str, ctx: "Context | None" = None) -> str:
+    """
+    Step 1 of a pasted 🗓️ Plan Week prompt: the week's jobs and what may move
+    where, as JSON. Read-only. Only works with a "WK-" code made by THIS
+    AI-Prowler (see get_week_plan_prompt / confirm_route_code).
+
+    Args:
+        route_code: The "WK-XXXXXX" code from the prompt.
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        JSON: week, today, working_days, workday, nearby_miles,
+        booked_job_minutes_by_day, jobs (with movable / may_move_to), and
+        nearby_pairs — or a ❌ message.
+
+    Voice examples: (not applicable — used by pasted Plan Week prompts)
+    """
+    import json as _wj
+    import week_plan as _wp
+    info, db_path, crew, err = _week_code_info(ctx, route_code)
+    if err:
+        return err
+    data = _wp.week_data(db_path, _wp.parse_iso(info["route_date"]), crew, _today_local())
+    return _wj.dumps(data, indent=1)
+
+
+@mcp.tool()
+def propose_week_moves(route_code: str, moves: str, ctx: "Context | None" = None) -> str:
+    """
+    Step 3 of a pasted 🗓️ Plan Week prompt: SUGGESTS moving soft jobs to other
+    days of the week. Every move is checked (soft only, a day in its
+    may_move_to list, ...); accepted ones are saved as a suggestion that the
+    user approves or dismisses in the Jobs app. No job is changed here. Each
+    call replaces this code's earlier suggestion.
+
+    Args:
+        route_code: The "WK-XXXXXX" code from the prompt.
+        moves:      JSON list: [{"job_id": "JOB-0101", "to": "2026-10-23",
+                    "reason": "0.4 mi from JOB-0107 on Thu"}]. [] = nothing to move.
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        What was accepted and rejected (with why), any day-length warnings,
+        and a reminder that nothing changes until the user approves.
+
+    Voice examples: (not applicable — used by pasted Plan Week prompts)
+    """
+    import week_plan as _wp
+    info, db_path, crew, err = _week_code_info(ctx, route_code)
+    if err:
+        return err
+    try:
+        parsed = _wp.parse_moves(moves)
+    except Exception as exc:
+        return (f"❌ Couldn't read moves ({exc}). Send a JSON list like "
+                '[{"job_id": "JOB-0101", "to": "2026-10-23", "reason": "..."}].')
+    monday = _wp.parse_iso(info["route_date"])
+    accepted, rejected, warnings = _wp.validate_moves(db_path, monday, crew, parsed, _today_local())
+    code = str(route_code).strip().upper()
+    summary = "; ".join(f"{a['job_id']} {a['from']} → {a['to']}" for a in accepted)
+    _wp.save_proposal(_week_proposals_path(), code, monday.isoformat(), crew, accepted, warnings, summary)
+    lines = [f"✅ Saved {len(accepted)} suggested move(s) for the week of {monday.isoformat()}"
+             + (f" (crew '{crew}')" if crew else "") + ". NOTHING has changed yet — the user "
+             "approves or dismisses them in the Jobs app (Route tab → 🗓️ Plan Week → Check for suggestions)."]
+    lines += [f"  • {a['job_id']} ({a['customer']}): {a['from']} → {a['to']}" + (f" — {a['reason']}" if a['reason'] else "")
+              for a in accepted]
+    if rejected:
+        lines.append(f"❌ Not accepted ({len(rejected)}):")
+        lines += [f"  • {jid}: {why}" for jid, why in rejected]
+    lines += [f"⚠️ {w}" for w in warnings]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_week_proposal(week_start: str, crew: str = "", ctx: "Context | None" = None) -> str:
+    """
+    The Jobs app's 🗓️ Plan Week → "Check for suggestions": the newest
+    suggestion waiting for approval for that week (and crew), as JSON.
+    Read-only.
+
+    Args:
+        week_start: Any YYYY-MM-DD date in the week.
+        crew:       Optional crew (server mode; field crew get their own).
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        JSON {"ok": true, "proposal": {...} | null} or {"ok": false, "error": "..."}.
+
+    Voice examples: (not applicable — PWA-button-only tool)
+    """
+    import json as _wj
+    import week_plan as _wp
+    d = _wp.parse_iso(week_start)
+    if d is None:
+        return _wj.dumps({"ok": False, "error": "week_start must be a date like 2026-10-19."})
+    db_path = _resolve_job_db_path(ctx, "")
+    crew, err = _week_crew(ctx, db_path, crew)
+    if err:
+        return _wj.dumps({"ok": False, "error": err})
+    p = _wp.latest_pending(_week_proposals_path(), _wp.monday_of(d).isoformat(), crew)
+    return _wj.dumps({"ok": True, "proposal": p})
+
+
+@mcp.tool()
+def apply_week_moves(proposal_code: str, job_ids: str, ctx: "Context | None" = None) -> str:
+    """
+    The Jobs app's 🗓️ Plan Week → "Approve selected": moves the chosen jobs of
+    a suggestion to their suggested dates (date only). Every move is checked
+    again first — a job that changed since the AI looked is skipped, never
+    forced. The suggestion is then closed.
+
+    Args:
+        proposal_code: The suggestion's "WK-XXXXXX" code.
+        job_ids:       Comma-separated JobIDs to move (the ones ticked).
+        ctx:           MCP context (injected automatically).
+
+    Returns:
+        One ✅/❌ line per job.
+
+    Voice examples: (not applicable — PWA-button-only tool)
+    """
+    import week_plan as _wp
+    p = _wp.get_proposal(_week_proposals_path(), proposal_code)
+    if p is None or p.get("status") != "pending":
+        return "❌ That suggestion is no longer waiting for approval (already approved or dismissed)."
+    db_path = _resolve_job_db_path(ctx, "")
+    crew, err = _week_crew(ctx, db_path, p.get("crew") or "")
+    if err:
+        return err
+    if crew.casefold() != (p.get("crew") or "").casefold():
+        return "❌ This suggestion is for another crew."
+    ids = [x.strip().upper() for x in str(job_ids or "").split(",") if x.strip()]
+    if not ids:
+        return "❌ No jobs were selected."
+    restrict, crew_name = _job_crew_scope(ctx, db_path)
+    results = _wp.apply_moves(db_path, p, ids, _actor_display_name(ctx), _today_local(),
+                              restrict=restrict, crew_name=crew_name)
+    _wp.set_status(_week_proposals_path(), p["code"], "approved",
+                   applied=[jid for jid, ok, _ in results if ok])
+    moved = sum(1 for _, ok, _ in results if ok)
+    lines = [f"✅ Moved {moved} of {len(results)} job(s). Route each day as usual."]
+    lines += [f"{'✅' if ok else '❌'} {jid}: {msg}" for jid, ok, msg in results]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def dismiss_week_proposal(proposal_code: str, ctx: "Context | None" = None) -> str:
+    """
+    The Jobs app's 🗓️ Plan Week → "Dismiss": closes a suggestion without
+    moving anything.
+
+    Args:
+        proposal_code: The suggestion's "WK-XXXXXX" code.
+        ctx:           MCP context (injected automatically).
+
+    Voice examples: (not applicable — PWA-button-only tool)
+    """
+    import week_plan as _wp
+    p = _wp.get_proposal(_week_proposals_path(), proposal_code)
+    if p is None or p.get("status") != "pending":
+        return "❌ That suggestion is no longer waiting for approval."
+    db_path = _resolve_job_db_path(ctx, "")
+    crew, err = _week_crew(ctx, db_path, p.get("crew") or "")
+    if err:
+        return err
+    if crew.casefold() != (p.get("crew") or "").casefold():
+        return "❌ This suggestion is for another crew."
+    _wp.set_status(_week_proposals_path(), p["code"], "dismissed")
+    return "✅ Suggestion dismissed — no jobs were moved."
 
 
 # ── Import the self-learning engine ──────────────────────────────────────────
@@ -28059,6 +27935,10 @@ def complete_analysis_task(task_id: str,
                 "daily_start_time": _daily_source.get("daily_start_time", "09:00"),
                 "daily_end_time": _daily_source.get("daily_end_time", "17:00"),
                 "daily_times_per_day": _daily_source.get("daily_times_per_day", 1),
+                # 2026-10-22: keep a weekly/biweekly/monthly weekday pin (a
+                # monthly "Tuesday" task used to drift to the same date next
+                # month, whatever weekday that was).
+                "schedule_day_of_week": _daily_source.get("schedule_day_of_week"),
             }, today_str)
             if new_next_due:
                 # Stamp schedule + next_due directly onto the entry too
@@ -31598,18 +31478,29 @@ def _run_server_mode(port: int, token: str,
                         # (address, geocoding via a direct MCP call) being
                         # correct.
                         "geocode_address",
-                        # AI Routing (2026-09-19) — the Route tab's "🧠 Run AI
-                        # Routing" button and its start/end picker, now
-                        # available in server mode too. Same gate-is-separate-
-                        # from-tool-existing gap as every entry above. NOT a
-                        # blanket grant: start_ai_routing itself requires the
-                        # caller to have their own Claude token saved in the
-                        # Admin tab (the run is billed to them) and forces a
-                        # field_crew caller's crew to their own name;
-                        # get_route_start_options only ever returns another
-                        # user's home address to owner/manager/staff callers.
-                        "start_ai_routing", "poll_ai_routing",
-                          "get_route_start_options",
+                         # AI Routing: start_ai_routing / poll_ai_routing /
+                         # get_route_start_options were here for the Route tab's
+                         # "🧠 Run AI Route" (Claude CLI) button — REMOVED 2026-10-22
+                         # (David): one Claude CLI token per Jobs app clashed when a
+                         # person runs two Jobs apps, and the background run gave
+                         # minutes with nothing on screen. "📋 Copy AI Route" below
+                         # replaces it. The tools still exist; the Jobs app just
+                         # can't start a background CLI run any more.
+                           # get_ai_route_prompt (2026-10-22) -- "📋 Copy AI Route"
+                           # button: a paste-into-any-AI prompt (read-only apart
+                           # from saving its one-time route code).
+                           "get_ai_route_prompt",
+                           # 🗓️ Plan Week (2026-10-22): the Route tab button copies a
+                           # prompt (get_week_plan_prompt), shows the AI's suggestion
+                           # (get_week_proposal) and approves / dismisses it. The two
+                           # AI-side tools (get_week_plan_data, propose_week_moves)
+                           # are here too: both are code-checked and change no job,
+                           # and they let the Jobs E2E suite stand in for the AI.
+                           # apply_week_moves re-checks every move and the caller's
+                           # crew rights before changing a date.
+                           "get_week_plan_prompt", "get_week_proposal",
+                           "apply_week_moves", "dismiss_week_proposal",
+                           "get_week_plan_data", "propose_week_moves",
                           # get_approved_route_stops (2026-10-06) -- Jobs/Board
                           # job cards show the approved scheduled time +
                           # drive info from this read-only tool via pwa-api.
@@ -31620,11 +31511,9 @@ def _run_server_mode(port: int, token: str,
                         "get_working_days",
                         # R-056: Crew / Technician picker (names + roles only).
                         "list_team_members",
-                        # "Connect your Claude account" screen (2026-09-19) —
-                        # each acts on the CALLER only (no user argument), and
-                        # all four refuse in personal mode.
-                        "start_cli_signin", "submit_cli_signin_code",
-                        "cancel_cli_signin", "save_my_cli_token",
+                         # "Connect your Claude account" screen tools (start_cli_signin,
+                         # submit_cli_signin_code, cancel_cli_signin, save_my_cli_token)
+                         # REMOVED 2026-10-22 with the 🧠 AI Route button they served.
                         # cancel_indexing / indexing_status (R-069, 2026-10-08) -- the
                         # Jobs app's Reindex screen Stop button and its progress readout
                         # call these via pwa-api; must be in this allow-list, not just
@@ -33433,27 +33322,22 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                         # geocode_address (2026-09-17) — see the matching
                         # comment on _srv_pa_allowed above.
                         "geocode_address",
-                        # start_ai_routing / poll_ai_routing (2026-09-18) —
-                        # back the Route tab's "🧠 Run AI Routing (uses
-                        # Credits)" button (renamed from "✨ Get AI
-                        # Suggestion"), split into a kick-off call and a
-                        # short poll call rather than one long blocking
-                        # run_ai_routing call, since a full agentic session
-                        # can take minutes and a single that-long blocking
-                        # request risks a reverse-proxy/tunnel idle timeout
-                        # even though the run itself would finish fine.
-                        # Personal-mode only by design, same as every other
-                        # agentic-task-queue tool (create_analysis_task
-                        # etc.) — this IS the personal-mode allowlist, so
-                          "get_route_start_options",
-                          # get_approved_route_stops (2026-10-06) -- Jobs/Board
-                          # job cards show the approved scheduled time +
-                          # drive info from this read-only tool via pwa-api.
-                          "get_approved_route_stops",
-                        "start_ai_routing", "poll_ai_routing",
-                        # get_route_start_options (2026-09-19) — feeds the AI
-                        # Route start/end picker's "home address" option.
-                        "get_route_start_options",
+                         # start_ai_routing / poll_ai_routing / get_route_start_options
+                         # REMOVED 2026-10-22 (David): the Jobs app's "🧠 Run AI Route"
+                         # (Claude CLI) button is gone — replaced by "📋 Copy AI Route",
+                         # which pastes into any AI chat. The tools still exist; the Jobs
+                         # app just can't start a background CLI run any more.
+                           # get_approved_route_stops (2026-10-06) -- Jobs/Board
+                           # job cards show the approved scheduled time +
+                           # drive info from this read-only tool via pwa-api.
+                           "get_approved_route_stops",
+                          # get_ai_route_prompt (2026-10-22) — "📋 Copy AI Route".
+                          "get_ai_route_prompt",
+                          # 🗓️ Plan Week (2026-10-22) — see the matching comment on
+                          # _srv_pa_allowed above.
+                          "get_week_plan_prompt", "get_week_proposal",
+                          "apply_week_moves", "dismiss_week_proposal",
+                          "get_week_plan_data", "propose_week_moves",
                         # Working Days setting (2026-10-02) — the Calendar's
                         # working days (multi-day jobs, overrun carry-over).
                         "get_working_days",

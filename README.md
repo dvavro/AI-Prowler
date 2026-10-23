@@ -112,7 +112,8 @@ A complete contractor workflow that Claude, Muse, or Grok reads and writes in pl
 
 - 👥 **Customers, jobs, quotes, invoices, time logs and pricing** in a local database (`ai_prowler_jobs.db`) — created automatically, nothing to set up
 - 📋 **Job Board** — a live board of the day's jobs; drag a card to change its status, with updates from the crew appearing within a minute
-- 🗺️ **Route planning** — real street routing (OSRM), a quick suggestion, or full AI route reasoning; tap-to-navigate links for Google/Apple Maps
+- 🗺️ **Route planning** — real street routing (OSRM) in one tap, or **📋 Copy AI Route** to have any AI chat (Claude, Muse, Grok) reason through the day in front of you; tap-to-navigate links for Google/Apple Maps
+- 🗓️ **Plan Week** — any AI chat suggests moving soft jobs so nearby jobs share a day (hard appointments never move); you approve each move
 - 📆 **Working Days** — set which days your crews work (Settings → *Working Days*); add Saturday or Sunday when a project is running late
 - 💵 **Invoices, receipts and payment links** by email or text; **AR aging** report
 - 📤 **Data portability** — export to Excel, CSV or QuickBooks-ready CSV; full backup and restore for moving to a new PC
@@ -239,7 +240,16 @@ Found a bug? Open an **[Issue](https://github.com/dvavro/AI-Prowler/issues)** an
 
 ## 📝 Changelog
 
-### v9.2.0 (current)
+### v9.3.0 (current — October 21–22, 2026 updates)
+- 📋 **Copy AI Route for Any AI** — the Jobs app makes a ready-to-paste prompt that plans the day's route in any AI chat connected to AI-Prowler; a one-time code makes sure it uses the right AI-Prowler
+- 🗓️ **Plan Week with Any AI** — suggests moving soft jobs so nearby jobs share a day (new setting **Week Plan Distance (miles)**, default 5); nothing moves until you approve
+- 🧹 **Claude CLI AI Route removed** (personal and server) — no Claude Code or per-person Claude tokens needed for routing; admins no longer manage AI passwords; old leftovers are cleaned up automatically
+- 🤖 **AI analyses** (task queue, Claude or Grok) always use the AI-Prowler that's already running and never start a second copy (needs remote access / a Bearer Token)
+- 📱 **Jobs app** — version badge (tap to check for a newer app), PC map pull-down bar fixed, "Settings aren't filled out" warning, yearly Net Revenue (after sales tax) report, recurring jobs and projections land on Preferred Day(s)
+- 🔄 **Updates** — "downloaded, NOT installed yet" with **Restart Now**, and a reminder until it's installed
+- 🧭 **Setup Center** — blinking first-steps nudge on new installs; Connect your AI split into Claude Desktop (free) and phone/web
+
+### v9.2.0
 - 📆 **Working Days setting** — choose which days crews work; multi-day jobs, routes, the calendar and overrun carry-over all follow it, and a change applies immediately
 - 📋 **Job Board** — changes made from another device in the same second are no longer missed; a card dragged while the board is refreshing no longer jumps back to its old column
 - 🧩 **MCP Tool Configuration** — collapsible panel; Save changes only the tool choices and protects all other settings

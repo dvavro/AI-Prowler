@@ -430,7 +430,9 @@ def test_connect_window_draws(tmp_path, monkeypatch, tkroot, cfg, with_domain):
     if with_domain:
         assert "Copy URL" in joined and "Email it to me" in joined
     else:
-        assert "Phone access isn't set up yet" in joined
+        # 2026-10-21: no secure link yet -> the phone/web tab walks through
+        # subscribe ($10/month) -> activation code, instead of a bare warning
+        assert "Needs an AI-Prowler subscription" in joined and "Activate" in joined
     assert TOKEN not in joined
     flow._done()
     assert prog.states.get("connect_ai") == sw.DONE
@@ -1096,17 +1098,60 @@ def test_routes_jobs_only_done_with_home_address(jobdb, tkroot, tmp_path, monkey
     flow.win.destroy()
 
 
-@pytest.mark.parametrize("ai,buttons", [
-    ({"cli": True, "token": "ok", "detail": ""}, []),
-    ({"cli": False, "token": "no_credentials", "detail": ""},
-     ["Install Claude Code", "🔑 Get / Renew Token (Links & Analysis)"]),
-    ({"cli": True, "token": "expiring_soon", "detail": ""}, ["🔑 Get / Renew Token (Links & Analysis)"]),
-])
-def test_routes_ai_status_and_fixes(jobdb, tkroot, tmp_path, monkeypatch, ai, buttons):
-    flow, prog = _routes_flow(tkroot, tmp_path, monkeypatch, ai=ai)
-    _pump(tkroot, lambda: "Checking" not in flow.ai_lbl.cget("text"), 3)
-    assert [w.cget("text") for w in flow.ai_fix.winfo_children()] == buttons
+def _texts(widget):
+    out = []
+    for w in widget.winfo_children():
+        try:
+            out.append(str(w.cget("text")))
+        except Exception:
+            pass
+        out += _texts(w)
+    return out
+
+
+def test_routes_ai_step_needs_no_claude_code(jobdb, tkroot, tmp_path, monkeypatch):
+    """2026-10-22: AI routing is any-AI-chat (Jobs app → 📋 Copy AI Route /
+    🗓️ Plan Week) — the Crew routes step no longer checks or installs the
+    Claude Code CLI or a Claude token."""
+    flow, prog = _routes_flow(tkroot, tmp_path, monkeypatch,
+                              ai={"cli": False, "token": "no_credentials", "detail": ""})
+    texts = " ".join(_texts(flow.body))
+    assert "Copy AI Route for Any AI" in texts and "Plan Week with Any AI" in texts
+    assert "Install Claude Code" not in texts and "Get / Renew Token" not in texts
+    assert not hasattr(flow, "ai_lbl") and not hasattr(flow, "_check_ai")
+    assert flow.week_miles.get() == "5"                        # default shown
     flow.win.destroy()
+
+
+def test_routes_saves_the_plan_week_distance(jobdb, tkroot, tmp_path, monkeypatch):
+    p, calls = jobdb
+    flow, prog = _routes_flow(tkroot, tmp_path, monkeypatch, home="12 Ocean Ave, NSB, FL 32168")
+    flow.week_miles.set("2.5")
+    flow.save()
+    saved = [(c[1].get("job_identifier") or c[1]["updates"].get("Setting"), c[1]["updates"].get("Value"))
+             for c in calls]
+    assert (sw.WEEK_PLAN_KEY, "2.5") in saved, calls
+    assert sw.read_settings([sw.WEEK_PLAN_KEY])[sw.WEEK_PLAN_KEY] == "2.5"
+    flow.win.destroy()
+
+
+@pytest.mark.parametrize("bad", ["", "abc", "0", "150"])
+def test_routes_refuses_a_bad_plan_week_distance(jobdb, tkroot, tmp_path, monkeypatch, bad):
+    p, calls = jobdb
+    flow, prog = _routes_flow(tkroot, tmp_path, monkeypatch, home="12 Ocean Ave, NSB, FL 32168")
+    flow.week_miles.set(bad)
+    flow.save()
+    assert calls == [] and "Not saved" in flow.msg.cget("text")
+    assert prog.states.get("routes") != sw.DONE
+    flow.win.destroy()
+
+
+@pytest.mark.parametrize("value,ok,clean", [("5", True, "5"), (" 2.5 ", True, "2.5"), ("10.0", True, "10"),
+                                            ("0.1", True, "0.1"), ("100", True, "100"), ("0.05", False, None),
+                                            ("101", False, None), ("x", False, None)])
+def test_week_plan_miles_ok(value, ok, clean):
+    got_ok, got = sw.week_plan_miles_ok(value)
+    assert got_ok is ok and (got == clean if ok else "miles" in got)
 
 
 # ── Collapsible panel + colour lights (David 2026-10-01) ────────────────────

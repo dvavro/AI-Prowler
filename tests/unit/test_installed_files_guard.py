@@ -68,6 +68,50 @@ def test_every_write_route_is_refused(how, stand_in, tmp_path):
     assert stand_in.read_bytes() == before, "the protected file changed"
 
 
+REAL_LEARNINGS = g.REAL_STATE_DIR / "learnings" / "self_learning_data.json"
+
+
+def test_the_real_learnings_folder_is_protected():
+    """2026-10-21: a test once left a placeholder over David's real learnings."""
+    for p in (REAL_LEARNINGS, g.REAL_STATE_DIR / "learnings" / "anything_else.json"):
+        with pytest.raises(PermissionError, match="learnings"):
+            g._refuse(p, "write")                     # decision only — no file is opened
+        assert g.take_violations()
+    # the folder's neighbours are not caught by the folder rule
+    g._refuse(g.REAL_STATE_DIR / "learnings_other" / "x.json", "write")
+    assert not g.take_violations()
+
+
+@pytest.fixture
+def stand_in_dir(tmp_path, monkeypatch):
+    """A folder in tmp_path the guard treats as the real learnings folder."""
+    d = tmp_path / "learnings"
+    d.mkdir()
+    f = d / "self_learning_data.json"
+    f.write_text('{"learnings": [{"id": 1}]}', encoding="utf-8")
+    monkeypatch.setattr(g, "_PROTECTED_DIR_KEYS", g._PROTECTED_DIR_KEYS + (g._key(d) + os.sep,))
+    return f
+
+
+@pytest.mark.parametrize("how", ["open_w", "path_write_text", "os_replace", "path_unlink",
+                                 "new_file_in_folder"])
+def test_writes_into_the_learnings_folder_are_refused(how, stand_in_dir, tmp_path):
+    before = stand_in_dir.read_bytes()
+    src = tmp_path / "placeholder.json"
+    src.write_text('{"learnings": []}', encoding="utf-8")
+    actions = {
+        "open_w": lambda: open(stand_in_dir, "w"),
+        "path_write_text": lambda: stand_in_dir.write_text('{"learnings": []}'),
+        "os_replace": lambda: os.replace(src, stand_in_dir),
+        "path_unlink": lambda: stand_in_dir.unlink(),
+        "new_file_in_folder": lambda: (stand_in_dir.parent / "backup.json").write_text("x"),
+    }
+    with pytest.raises(PermissionError, match="TEST GUARD"):
+        actions[how]()
+    assert g.take_violations()
+    assert stand_in_dir.read_bytes() == before, "the learnings file changed"
+
+
 def test_reading_a_protected_file_is_allowed(stand_in):
     assert json.loads(stand_in.read_text(encoding="utf-8"))["mode"] == "personal"
     assert not g.take_violations()

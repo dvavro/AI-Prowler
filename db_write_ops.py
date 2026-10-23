@@ -699,6 +699,31 @@ def parse_working_days(text):
     return frozenset(days), ""
 
 
+def parse_preferred_days(text) -> frozenset:
+    """A customer's Preferred Day(s) as weekday numbers (Mon=0 … Sun=6), read
+    with the same words as Working Days ("Monday/Friday", "Mon, Wed",
+    "Mon-Fri", "Weekdays", …). Unlike Working Days, blank or anything not
+    understood means NO constraint: an empty set (2026-10-21, David)."""
+    if not str(text or "").strip():
+        return frozenset()
+    days, problem = parse_working_days(text)
+    return frozenset() if problem else days
+
+
+def snap_to_preferred_day(d, days) -> "datetime.date":
+    """d moved FORWARD (0–6 days) to the first weekday in `days`; d itself
+    when `days` is empty. Forward only, so a recurring visit is never earlier
+    than its interval says (2026-10-21, David). The Jobs app's 🔮 projections
+    use the same rule (jobs/index.html _snapToPreferredDay)."""
+    if not days:
+        return d
+    for _ in range(7):
+        if d.weekday() in days:
+            return d
+        d = d + datetime.timedelta(days=1)
+    return d
+
+
 def format_working_days(days) -> str:
     """Canonical text for a set of weekday numbers, e.g. 'Mon,Tue,Wed,Thu,Fri,Sat'."""
     return ",".join(_DAY_NAMES[i] for i in sorted(days))
@@ -4212,7 +4237,9 @@ def db_generate_upcoming_recurring_jobs(db_path: str, actor: str = "system") -> 
             skipped_bad_freq += 1
             continue
 
-        next_due = delta_fn(base_date)
+        # (2026-10-21, David) land on one of the customer's Preferred Day(s)
+        next_due = snap_to_preferred_day(delta_fn(base_date),
+                                         parse_preferred_days(cust["preferred_days"]))
 
         # Lead-time gate: not yet due enough to surface. (next_due - today)
         # is negative for overdue customers — those always qualify.
@@ -4519,6 +4546,11 @@ DEFAULT_SETTINGS = [
      "How many days BEFORE a recurring customer's next-due date (Last Service Date + their "
      "Frequency) their next job is auto-created, unscheduled. Runs at most once a day, the first "
      "time anyone opens the Jobs tab or the Board that day. 0 = only once actually due."),
+    ("Week Plan Distance (miles)", "5",
+     "Route tab → 🗓️ Plan Week (2026-10-22). Jobs within this many miles of each other count "
+     "as 'the same area': when they're booked on different days of a week, the AI suggests "
+     "moving SOFT jobs so they're done the same day. Smaller = only very close jobs; larger = "
+     "more suggestions. Hard jobs are never moved, and nothing changes until you approve."),
     ("Stale Customer Reminder Days", "60",
      "How many days since a customer's last COMPLETED job before they show up in Reports → "
      "Customer Reminders as due for a check-in. Also the threshold the daily digest uses."),

@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 9.3.0
+## Version 9.3.0 — updated October 22, 2026
 
 ---
 
@@ -65,6 +65,29 @@ Beyond core document search, AI-Prowler includes:
 - **Remote Access & mobile apps** — reach AI-Prowler from Claude.ai on any phone or browser, plus two dedicated PWAs: the **Jobs App** for field crew (Section 25) and the **Remote PWA** for managing AI-Prowler itself remotely (Section 26).
 - **Agentic analysis task queue** — schedule recurring or one-off AI analysis tasks (e.g. "check overdue invoices every Monday") that run autonomously and record their findings as learnings. See **Section 10** and **Section 26**.
 - **Proactive email alerts** — background jobs (morning briefing, overdue invoices, weather watch, etc.) with independent per-job scheduling. See **Section 17**.
+
+### What's New — October 21–22, 2026
+
+**AI routing with any AI chat (Jobs app → Route tab)**
+- **📋 Copy AI Route for Any AI** — one tap makes a ready-to-paste prompt that plans the day's route (fixed appointment times respected, soft jobs fill the gaps, real drive times). Paste it into Claude, Muse, Grok — any AI chat that has AI-Prowler connected — and watch it work; the route is saved back to the Route tab for you to review and Approve. See **Section 25 → Route**.
+- **🗓️ Plan Week with Any AI** — for any week, the AI suggests moving **soft** jobs so jobs near each other are done on the same day. Hard (committed) jobs never move, moves stay on working days and the customer's Preferred Day(s), and **nothing changes until you approve** the moves you want. See **Section 25 → Route**.
+- **New setting: Week Plan Distance (miles)** — how close two jobs must be to count as "near each other" for Plan Week (default 5). See **Section 10 → Week Plan Distance (miles)**.
+- Each prompt carries a one-time code, so if you have more than one AI-Prowler connected (personal and company server), the chat uses only the one that made it.
+
+**Removed: the Claude CLI "🧠 Run AI Route"** — in personal and server mode. It needed the Claude Code CLI and a Claude token per person (a new token could cancel another computer's), ran in the background for minutes with nothing to watch, and could start a second copy of AI-Prowler. Gone with it: the Jobs app's "Connect your Claude account" screens, the Small Business tab's **🧭 AI Route Optimizer Task** / **Set Up On-Demand AI Routing**, and on servers the Admin tab's **🧠 AI Route runner** panel, **🤖 AI Route Token** button and **AI Route** column — **an admin no longer manages any Claude passwords.** AI-Prowler removes the old "AI Route Optimizer (full reasoning)" custom analysis, its Windows task and the saved per-person tokens automatically the first time the new version starts.
+
+**AI analyses always use the AI-Prowler that's already running** — every Autonomous AI Task Queue run (Claude or Grok, scheduled or ▶ NOW) talks to this PC's running AI-Prowler and never starts a second copy. It needs remote access (a Bearer Token); if AI-Prowler isn't running when a scheduled run fires, the run starts the normal app and waits, or skips and says why (see **Section 12 → Autonomous AI Task Queue**).
+
+**Jobs app**
+- **Version badge** (top-right of the Jobs, Remote, HR Admin and HR Portal apps) — tap it to see whether your phone has the latest app (green) or a newer one is waiting (red — tap again to load it).
+- **Route map pull-down bar** now works on a PC: drag it down to make the map bigger, up to make it smaller.
+- **"Settings aren't filled out" warning** lists exactly which business settings invoices still need, with a button that opens the Settings card; it disappears once they're saved.
+- **Reports → 📅 Net Revenue (after sales tax)** — a calendar-year card: actual + projected net revenue, with sales tax taken off invoiced jobs once and pre-tax estimates left as they are.
+- **Recurring jobs and 🔮 projections land on the customer's Preferred Day(s)** — a Weekly "Thursday" customer's next job and every projected visit fall on a Thursday.
+
+**Desktop app**
+- **Update downloaded — NOT installed yet**: after Download Update, AI-Prowler offers **🔄 Restart Now** (or Later) and keeps a reminder on the status bar and Home/Server tab until the update is really installed.
+- **Setup Center**: new installs get a blinking nudge — first **➕ Add a service**, then **🧭 Set up AI-Prowler**. **Connect your AI** now has two tabs: **Claude Desktop** (free) and **phone / web** (Claude, Grok or Muse via the mobile subscription). The **Scheduled analyses** step says up front that it needs the Claude Code CLI signed in with Claude Pro. The **Crew routes** step no longer installs Claude Code — it explains the any-AI buttons and sets the Plan Week distance.
 
 ---
 
@@ -685,24 +708,26 @@ Everything the Jobs PWA's **Route** tab buttons call — building, reordering, r
 | `approve_route_schedule` | The Route tab's "Approve — Allows Email & Link Viewing" button — records the route as approved. Approval is a pure flag: it allows emailing the route and pins its tap-to-navigate link so it is viewable on the Jobs and Calendar pages. It NEVER changes any job's Start Time / End Time — a job's window always stays as the customer settings. | Personal + Server |
 | `unapprove_route_schedule` | The exact inverse of `approve_route_schedule` — fully undoes approval: clears the approval flag, unpins the route link (Jobs/Calendar stop showing it), and revokes email eligibility. Rebuilding a route also clears its approval — a rebuilt route is experimental until re-approved. | Personal + Server |
 | `email_route_now` | Emails the currently-approved route (stop order + arrival times + tap-to-navigate link) for a date/crew right now, on request — the manual counterpart to Settings → "Email Route On Approve", and it works even when that setting is Disabled. Only an approved route can ever be emailed: an unapproved route reports "Email is only allowed for approved routes — approve the route first" instead of sending. **Server mode:** a field_crew caller can only email their own route; owner/manager/staff may email any crew's. | Personal + Server, crew-scoped |
-| `get_route_start_options` | Backs the Jobs PWA's AI Routing start/end picker: reports which home address to offer next to "Current location (GPS)." Read-only — never geocodes, writes, or spends anything. **Server mode:** the home address saved for the relevant user in the Admin tab (a field_crew caller can only see their own); this is the per-user, server-mode equivalent of `get_home_address` (§6.2, Personal-only). | Personal + Server |
 
 ---
 
-#### AI Routing — Autonomous Claude Code Sessions
+#### AI Routing with Any AI Chat — 📋 Copy AI Route & 🗓️ Plan Week
 
-The Jobs PWA's **"🧠 Run AI Routing (uses Credits)"** button: a real headless Claude Code session that reasons through a day's jobs the way `apply_route_order` describes, then writes the result via `apply_route_order` itself — genuinely spending Claude usage, as opposed to `suggest_route_schedule`'s free heuristic. Split into start/poll so a multi-minute agentic run can't be cut off by an idle-connection timeout.
+*(New 2026-10-22.)* The Jobs app's **📋 Copy AI Route for Any AI** and **🗓️ Plan Week with Any AI** buttons build a ready-made prompt that you paste into **any AI chat that has AI-Prowler connected** — Claude, Muse, Grok — on your phone or computer. The chat does the reasoning *in front of you* and saves the result back through these tools. No Claude Code CLI, no per-user Claude token, no background run, and nothing to set up on a server. (These replaced the old Claude CLI **🧠 Run AI Routing** button and its tools — `start_ai_routing`, `poll_ai_routing`, `get_route_start_options`, `start_cli_signin`, `submit_cli_signin_code`, `cancel_cli_signin`, `save_my_cli_token` — which were removed on 2026-10-22.)
+
+Every prompt carries a one-time **code** (`RT-XXXXXX` for a day's route, `WK-XXXXXX` for a week; good for 24 hours). If you have more than one AI-Prowler connected — for example your personal one and your company server — the chat checks the code against each one and uses **only** the AI-Prowler that made it, so a route can never land on the wrong computer.
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `start_ai_routing` | Kicks off the background Claude Code session and returns immediately with a `job_id`. Calling it again for the same date+crew while a run is in flight hands back the existing `job_id` instead of starting a second one, so a double-tap can't spend usage twice. **Server mode:** billed to the caller using the Claude token an admin saved for them in the Admin tab; a field_crew caller can only route their own day. | Personal + Server |
-| `poll_ai_routing` | Checks progress on a run started by `start_ai_routing` — running / done / error, with the session's final summary once finished. | Personal + Server |
-| `start_cli_signin` | Step 1 of the Jobs app's "Connect your Claude account" phone sign-in flow (server mode): starts a Claude, Muse, or Grok sign-in for the caller and returns the link to open on their phone. | Server |
-| `submit_cli_signin_code` | Step 2: the code shown after signing in on the phone. On success, the server saves the token for the caller and emails them a copy. | Server |
-| `cancel_cli_signin` | Abandons the caller's pending phone sign-in. Safe to call when nothing is pending. | Server |
-| `save_my_cli_token` | The "I already have a token" path — saves a Claude Code token the user already made (typically copied from AI-Prowler Personal's Links & Analysis page) as the caller's AI Routing credential, without minting a new one or invalidating a Personal install's own token. | Personal + Server |
-
----
+| `get_ai_route_prompt` | The **📋 Copy AI Route** button: builds the prompt that plans one day's route (same reasoning steps as before — hard appointment times respected, soft jobs fill the gaps, real drive times) with a new `RT-` code. The Settings values the plan needs are written into the prompt, so it also works for field crew. Nothing is planned or written here. **Server mode:** a field_crew caller always gets their own day; a blank crew means the caller's own day. | Personal + Server |
+| `confirm_route_code` | Step 1 of a pasted prompt: answers **MATCH** (this AI-Prowler made the code — use it for every step) or **NO MATCH** (try your other AI-Prowler connector). Read-only. | Personal + Server |
+| `apply_route_order` *(with `route_code`)* | When a pasted prompt saves the route it passes its code, and AI-Prowler **refuses** a code that is unknown, expired, for another date or crew, or a week code — so a prompt can only change the day it was made for. | Personal + Server |
+| `get_week_plan_prompt` | The **🗓️ Plan Week** button: builds the prompt for any week (pick any day in it) with a new `WK-` code. | Personal + Server |
+| `get_week_plan_data` | Everything the chat needs for that week: each job, whether it may move and to which days, the booked minutes per day, and the **nearby pairs** — jobs on different days within the *Week Plan Distance (miles)* setting of each other. | Personal + Server |
+| `propose_week_moves` | Saves the chat's **suggested** moves. Every move is checked: soft jobs only (hard/committed times never move), not closed / in progress / paused / multi-day, never into the past, only onto a working day and one of the job's (or customer's) **Preferred Day(s)**, date only (the time window is kept). Moves that break a rule are rejected with the reason. **No job changes here.** | Personal + Server |
+| `get_week_proposal` | The Jobs app's **📥 Check for suggestions**: the newest suggestion waiting for approval for that week (and crew). Read-only. | Personal + Server |
+| `apply_week_moves` | **✅ Approve selected**: moves the ticked jobs to their suggested dates. Each move is checked again first — a job that changed since the AI looked is skipped, never forced. Then route each day as usual. | Personal + Server |
+| `dismiss_week_proposal` | **Dismiss**: closes the suggestion without moving anything. | Personal + Server |
 
 #### Agentic Analysis Tools (Personal Only)
 
@@ -1174,6 +1199,7 @@ The Admin tab appears only when `edition = business` AND `mode = server`. Authen
 | Scopes | The data-access scopes assigned to this user, from the catalog |
 | Manages Users | ✓ if this user has delegated admin rights |
 | Private Coll. | ✓ if a private knowledge-base scope is enabled for this user |
+| Home Addr. | ✓ if a home address is saved for this user (used when their route starts/ends at home) — the address itself is never shown in the table |
 | Seat (key) | The masked child license key assigned to this user |
 | Status | active or suspended |
 | Token | ●●●●●●●● (always masked — use Regenerate Token to issue a new one) |
@@ -1189,6 +1215,8 @@ The Admin tab appears only when `edition = business` AND `mode = server`. Authen
 | 🗑 Remove | Permanently deletes the user and frees their seat |
 | 🏷️ Manage Scopes | Add or remove entries in the shared scope catalog (up to 15) — see the Scopes section above |
 | ↻ Refresh | Reloads users.json and repaints the table |
+
+> **No AI passwords to manage (2026-10-22).** AI routing in the Jobs app is done with each person's own AI chat (📋 Copy AI Route / 🗓️ Plan Week — Section 25), so there is nothing to set up for it here. The old **🤖 AI Route Token** button, **AI Route** column and **🧠 AI Route runner** panel (Claude Code CLI install, on-demand runner, per-user Claude tokens) were removed; tokens saved by an older version are deleted automatically.
 
 **Adding a User (Step by Step)**
 1. Click ➕ Add User
@@ -1423,6 +1451,7 @@ Two advisory warnings watch these preferences — they flag the issue, never blo
 Once a customer has a **Last Service Date**, the next visit schedules itself:
 
 - The next job is created automatically with **Service Date = last service + the customer's Frequency interval**: Weekly +7 days, Biweekly +14, Monthly +1 month, Bi-Monthly +2, Quarterly +3, Semi-Annually +6, Annually +12.
+- **Preferred Day(s) (2026-10-21):** if the customer has Preferred Day(s), that date moves **forward** to the next preferred weekday (never earlier) — a Weekly "Thursday" customer always gets a Thursday job, and a monthly rhythm doesn't creep. The Calendar's 🔮 projections follow the same rule. Blank or unreadable Preferred Day(s) = no change.
 - It appears on the **Calendar** at its calculated date, and the customer's **Next Sched. Date** reflects it.
 - The generated job carries the customer's scheduling preferences (schedule type, time window, duration, service type, preferred days) and is fully editable afterward — adjust or reschedule it like any job.
 - One-time customers (blank or one-time Frequency) are skipped — nothing is generated for them.
@@ -1490,6 +1519,10 @@ The state part of the start/end address (see **Start/End Street Address** above)
 #### Start/End ZIP
 
 The ZIP part of the start/end address (see **Start/End Street Address** above). A plain Settings-sheet row, not a toggle — only used when **Route Origin Mode** is **Company Location**, and re-saved automatically by the Route Origin Mode form in that mode.
+
+#### Week Plan Distance (miles)
+
+*(New 2026-10-22.)* How close two jobs must be — straight-line miles — to count as "near each other" for the Jobs app's **🗓️ Plan Week with Any AI** (Section 25 → Route). Default **5**. Make it smaller (e.g. `2`) to only pair jobs on the same few streets, or larger (e.g. `10`) for a spread-out service area. Any number from 0.1 to 100; anything outside that is clamped, and a blank or unreadable value means 5. Change it in the Jobs app's Database → Settings, the Setup Center's **Crew routes** step, or by asking Claude, Muse, or Grok. It only decides which jobs are suggested as pairs — it never moves anything by itself.
 
 ### Job Tracker Database — File Layout Reference
 
@@ -2006,10 +2039,18 @@ Below the toggle, a live status line shows the *actual* Windows-reported state �
 | **Credit-usage warning** | Appears automatically next to the times/day field once it's set above 1 — a reminder that each automatic check draws from your Claude subscription's usage pool (or metered API billing, if configured that way). Not shown at 1×/day, since a single daily check barely costs anything. |
 | **Text me when a run finishes** | Optional SMS/WhatsApp notification, sent to whichever method is selected. |
 | **Auth** | **Subscription (OAuth)** — uses your Claude Pro/Max plan; click **🔑 Get / Renew Token** to sign in. **Anthropic API Key (metered billing)** — Claude only; a separate pay-as-you-go account; paste a key from console.anthropic.com and click **Save Key** (and **Clear Key** to remove one). **Grok API Key (xAI)** — Grok only; paste a key from console.x.ai and click **Save Key**. Muse has no API key released yet. |
-| **🧪 Test Setup (Dry Run)** | Runs a checklist (Claude Code CLI installed, MCP config current, token/key valid) without actually running any tasks, so you can confirm everything is wired up before turning it on. |
+| **🧪 Test Setup (Dry Run)** | Runs a checklist (Claude Code CLI installed, **Remote access (Bearer Token)** set up, **Running AI-Prowler (local connection)** answering, MCP config current, token/key valid) without actually running any tasks, so you can confirm everything is wired up before turning it on. It never starts anything. |
 | **📄 View Audit Log** | Read-only history of past autonomous runs. |
 
 Turning automation on for the first time (off → on) automatically resyncs any overdue custom-task backlog to start from today, rather than firing every accumulated overdue occurrence at once.
+
+**Always uses the AI-Prowler that's already running (2026-10-22).** Every queue run — scheduled or **▶ NOW**, Claude or Grok — talks to this computer's running AI-Prowler over its local connection (`localhost:8000`, never the internet), signed in with this install's Bearer Token so AI-Prowler knows the run is yours. A run **never starts a second copy of AI-Prowler** (two copies on the same database used to make runs slow or hang). What that means for you:
+
+- **Remote access must be set up.** The local connection only exists when there's a Bearer Token (**Settings → Remote Access**). Without one, the queue can't be turned on and **🧪 Test Setup** says so.
+- **AI-Prowler starts with your PC.** The installer sets AI-Prowler to start when you sign in to Windows, so it's normally already running when a scheduled run fires.
+- **If it isn't running** when a scheduled run fires, the run starts the normal AI-Prowler app (the same way signing in does — on your desktop, never a hidden copy), waits up to **5 minutes** for it, then runs. If it still doesn't answer, the run is **skipped** and says why in the status line, the run log and the audit log — nothing is lost: the tasks stay due and the next run does them. Windows only starts the app while you're signed in. **▶ NOW** never starts anything — the app with the button is the running AI-Prowler.
+- The run uses **only** AI-Prowler's own connection, never other MCP servers set up in your Claude account (which might include a second AI-Prowler).
+- **Missed runs don't pile up.** If the PC was off for a day, each overdue task runs **once** at the next run and its next due time moves to the next slot after now.
 
 ---
 
@@ -2128,6 +2169,8 @@ The collapsible **▶ Show Queue** panel (below the analysis buttons) lets you s
 These user custom-defined tasks are AI-assisted tasks that can be queued and stored for repeated and/or future execution. In addition to manual configuration here, Claude, Muse, or Grok can also create and add these via AI-Prowler MCP tools remotely.
 
 > **Not available in server mode.** Hidden automatically when `mode=server` is detected.
+
+> **AI Route Optimizer task retired (2026-10-22).** The Small Business tab used to create an **"AI Route Optimizer (full reasoning)"** custom analysis here. Route planning is now done from the Jobs app with **📋 Copy AI Route** (Section 25), so that button is gone and the task is removed automatically (with any queued run of it) the first time the new version starts. Your other custom analyses are not touched — and a copy you renamed yourself is kept.
 
 #### Creating a Custom Task
 
@@ -2742,6 +2785,8 @@ The Welcome tab is the first screen when AI-Prowler launches. It shows version i
 
 AI-Prowler checks for updates on launch by reading a version file from the public GitHub repository. If a newer version is available, a notification banner appears with a download link. No automatic updating occurs — you must download and run the new installer manually.
 
+**Downloaded but not installed yet (2026-10-21).** **Download Update** only *stages* the new files — they are installed the next time AI-Prowler starts. When the download finishes, AI-Prowler now says so plainly (**"Update downloaded — NOT installed yet"**) and offers **🔄 Restart Now** or **Later**. Restart Now closes AI-Prowler cleanly (same as File → Exit) and starts it again, which installs the update. If you choose Later, a reminder with its own Restart Now button stays on the status bar and on the Home tab (the Server tab in server mode) until the update is really installed — so a server left running can no longer sit on the old version without anyone noticing.
+
 ### Footer Text
 
 The footer at the bottom of the Welcome tab can be customized by the AI-Prowler admin via a push to the public GitHub `welcome_ad.json` file. The default text is shown until the network fetch completes.
@@ -2770,6 +2815,14 @@ The overall light follows one simple rule: **red is reserved for the core steps 
 Everything else shows yellow until it’s done — requirements pulled into your plan automatically (Phone access, the Jobs app, Email), and other steps you chose yourself that aren’t core (crew routes, scheduled analyses). The overall light turns green when every step in your plan is finished.
 
 Two things that never happen: a skipped step never shows red — it counts as decided. And steps you never chose are invisible to the light — they can never turn anything red.
+
+**New installs get a nudge (2026-10-21).** On a brand-new install, **➕ Add a service** blinks red until you've opened (and closed) the service picker, then turns green; next, **🧭 Set up AI-Prowler** blinks red until clicked, and opens straight to the first unfinished step. Existing users never see the blinking.
+
+**Connect your AI** has two tabs: **Claude Desktop** — free, no subscription, nothing to link on your phone — and **Phone / web** for Claude, Grok or Muse on any device (needs the $10/month mobile subscription → activation code → your personal connector URL).
+
+**Scheduled analyses** says up front what it needs: the Claude Code CLI on this PC, signed in with a Claude Pro (or higher) account — with buttons to install it, sign in, or skip for now.
+
+**Crew routes** (2026-10-22): where routes start and end, whether to email a route when it's built, and — new — the **Plan Week distance** (Section 10 → Week Plan Distance (miles)). It explains the Jobs app's any-AI buttons instead of installing Claude Code: there is nothing to install for AI routing any more.
 
 ---
 
@@ -2822,6 +2875,10 @@ The Jobs App is a mobile-friendly web app for field crew and business owners to 
 - **Server mode** — each employee enters their **name** and their own personal token, set up for them in the Admin tab. What they then see depends on their role: **field crew** see only their own assigned jobs (schedule, board, calendar, route, database rows); **owner, manager and staff** see every crew's jobs. See **Server Mode — Roles and What Each User Sees** below.
 5. **Login persists on the device** — not tied to the browser tab or the app staying open. Closing or restarting the app never signs you out. To switch users or sign out, use **Sign Out / Change Device** on the Profile tab.
 
+**Which version is my phone running? (2026-10-21)** A small badge in the top-right corner shows the app's version, e.g. `v9.3.0 · a1b2c3`. Tap it: it checks with AI-Prowler and turns **green ✓ latest**, or **red → v… — tap to update** when a newer app is waiting; tap again to load it. The Remote, HR Admin and HR Portal apps have the same badge. Support may ask you to read it out.
+
+**"Settings aren't filled out" (2026-10-21).** If the business details invoices and receipts need (Tax Rate, Business Name, Address, Phone, Email) aren't all saved yet, a warning lists exactly which ones are missing, and its button opens the Settings card. It disappears as soon as the last one is saved. Field crew, who can't open Settings, never see it.
+
 ### Jobs Setup Popup — Skipping What You Don’t Need Yet
 
 When you set up the Jobs app from the Setup Center on AI-Prowler’s Home page, a setup popup walks you through three sections:
@@ -2843,11 +2900,29 @@ The app has ten bottom-nav tabs: **Jobs**, **Board**, **Route**, **Calendar**, *
 **Board** — the live kanban/grid Job Board described in **Section 10 → Job Board**: Scheduled / In Progress / Completed columns, drag-and-drop to reschedule or reassign, polling `get_board_updates()` roughly every 60 seconds so it reflects crew activity without a manual refresh. The exact same markup renders for every role — owner, manager, staff, field_crew — in both Personal and Server mode; what actually differs is only which rows come back from the server (the same crew-scoping every other job-tracker tool applies), never anything role-specific on the client side.
 
 **Calendar** — a rolling 2-week day-by-day agenda, followed by a scrollable 12-month overview grid. Tapping any day, past or future, in either view opens a modal listing that day's jobs.
-- The 12-month overview also shows 🔮 dashed **projected** entries for recurring customers' future visits across the full year — view-only planning aids synthesized from each customer's frequency + last service date. They are not real jobs: they can't be tapped, scheduled, or edited, they never create database rows, and a real job on the same date suppresses its projection. A legend at the top of the overview explains this.
+- The 12-month overview also shows 🔮 dashed **projected** entries for recurring customers' future visits across the full year — view-only planning aids synthesized from each customer's frequency + last service date, landing on the customer's **Preferred Day(s)** when set (2026-10-21). They are not real jobs: they can't be tapped, scheduled, or edited, they never create database rows, and a real job on the same date suppresses its projection. A legend at the top of the overview explains this.
 - Any day whose route has been **approved** shows a small tappable **📍** icon — next to the date header in the 2-week agenda, next to the day number in the 12-month grid, and as a full "Route for this day — tap to navigate" banner inside the day-tap modal. Unapproved routes show no icon. This works for *any* date with an approved route, not just today, which is what makes it practical to build and approve routes for several days ahead of time and still have each one reachable later from the Calendar.
 - Auto-refreshes every time you navigate to this tab.
 
 **Route** — pick a day, check it for problems (prescreen), build the day's route, adjust the stop order (▲▼, drag ✋, edit ✏️, remove 🗑️), pin stops with 📌 "Fix stop #", approve it, and send the route or a phone link to the crew. Approving (**Approve — Allows Email & Link Viewing**) allows emailing the route and makes its link viewable on the Jobs and Calendar pages — it never changes any job's time window, and un-approving fully undoes it. Where each route starts and ends is set by **Route Origin Mode** (see #### Route Origin Mode). Whether approving a route also emails it automatically is set by **Email Route On Approve** — the **📧 Email Approved Route Now** button sends an approved route on request either way (see #### Email Route On Approve). In server mode field crew work only with their own route.
+- **Map size:** drag the bar under the map **down** to make the map bigger, **up** to make it smaller — on a phone and, since 2026-10-21, on a PC too. When map and stop list no longer fit, the Route screen scrolls.
+- **The route buttons** (one row, short labels on a phone): **Route Selected Date** (free and instant — orders the jobs by real drive time), **📋 Copy AI Route for Any AI** (📋 Any AI), **🗓️ Plan Week with Any AI** (🗓️ Week) and **📧 Email Approved Route Now**.
+
+**📋 Copy AI Route for Any AI (2026-10-22).** For a smarter plan than Route Selected Date — fixed appointment times respected, soft jobs fitted into the gaps, real drive times — without any Claude CLI or setup:
+1. Pick the day (and, in server mode, the crew) and tap **📋 Copy AI Route for Any AI**. The day is pre-checked first (the same prescreen as building a route); if it finds problems you can fix them first or carry on.
+2. A sheet shows the prompt, its **route code** (`RT-…`, good for 24 hours) and which AI-Prowler made it. It's already copied (if your phone refuses, tap **📋 Copy**).
+3. Paste it into **Claude, Muse, Grok — any AI chat that has AI-Prowler connected** — on your phone or computer, and send. You can watch the AI read the jobs, get the drive times, reason through the order and save the route.
+4. When it says it's done, tap **Refresh route** (or reopen the Route tab), review the stops, and **Approve** as usual.
+
+*If you have more than one AI-Prowler connected* (for example your personal one and your company's server), the AI first checks the route code against each and then uses **only** the AI-Prowler that made it — so a route can never be saved to the wrong computer. A code can only change the day (and crew) it was made for. In server mode, field crew always plan their own day.
+
+**🗓️ Plan Week with Any AI (2026-10-22).** Groups nearby work onto the same day:
+1. Tap **🗓️ Plan Week with Any AI** and pick the week (any day in it — it starts on the Route tab's week). Tap **📋 Copy week prompt** (`WK-…` code) and paste it into your AI chat.
+2. The AI looks at the week and **suggests** moving soft jobs so jobs within the **Week Plan Distance** of each other (Section 10, default 5 miles) share a day. AI-Prowler checks every suggestion: only **soft** jobs move — hard/committed jobs never do — and never onto a past day, a non-working day, or a day outside the job's (or customer's) **Preferred Day(s)**. Only the date changes; the job's time window stays. Closed, in-progress, paused and multi-day jobs stay put. Suggestions that break a rule are turned down with the reason.
+3. Back in the app, tap **📥 Check for suggestions**. Each suggested move is listed (job, customer, from → to, and why). **Untick** any you don't want, then **✅ Approve selected** — only the ticked jobs move (each is checked again first; a job that changed in the meantime is skipped). Or **Dismiss** to close the suggestion without moving anything. Nothing changes until you approve.
+4. Then route each day as usual (Route Selected Date or 📋 Copy AI Route).
+
+> **The old 🧠 Run AI Route button is gone (2026-10-22).** It ran the Claude Code CLI in the background with each person's own Claude token. 📋 Copy AI Route replaces it: no CLI, no token, nothing to wait on blindly — and it works with any AI chat.
 
 **Clock** — shows active clock-in status and a simple manual clock in/out control, the same underlying action as asking Claude, Muse, or Grok to clock you in or out.
 
@@ -2868,6 +2943,7 @@ The app has ten bottom-nav tabs: **Jobs**, **Board**, **Route**, **Calendar**, *
   - The table under it has four columns: **Week**, **Actual Tax**, **Proj Tax**, **Total Tax**.
   - **The math:** collected = invoice tax × (amount_paid ÷ total_due) — a half-paid invoice with $100 of tax counts as $50 collected. Projected = tax − collected. Tax-exempt jobs (`No Sales Tax`) contribute $0.
   - Tax is frozen when the invoice is created — tax = (quote − discount) × rate — so the chart never shifts under you after the fact.
+- The **📅 Net Revenue (after sales tax)** card (2026-10-21) shows the calendar year month by month: **actual** plus **projected** net revenue, with the year's total. Sales tax is taken off invoiced jobs once; a job that isn't invoiced yet is an estimate before tax, so nothing is taken off it.
 
 **Profile** — the logged-in user's info (in server mode: name and role) and **Sign Out / Change Device**.
 
@@ -2911,6 +2987,8 @@ The Remote PWA is a standalone, human-facing dashboard for managing your own per
 2. **Open the app URL** — `https://your-tunnel-domain.ai-prowler.com/remote/`. It shows as **AI-Prowler Remote** in the browser tab.
 3. **Install to the home screen (recommended)** — an install banner appears at the top of the page the first time you open it in the phone's browser. On **Android/Chrome** it shows a one-tap **Install** button (via the browser's install prompt); on **iPhone** there's one manual step — Apple allows no automatic install: (1) open the page in **Safari** (if the QR opened in another browser, copy the link into Safari first), (2) tap **Share → Add to Home Screen**. Once installed, it opens full-screen like a native app — no browser chrome, no app store needed. The banner never appears when the app is already installed (running standalone), and tapping **Later** dismisses it; that choice is remembered on the device, so it won't nag you again.
 4. **Log in with your Bearer Token** — the same token from Settings → Remote Access. The session persists on the device.
+
+The top-right **version badge** works like the Jobs app's (Section 25): tap it to check for a newer app.
 
 ### What It Can Do — Tab by Tab
 

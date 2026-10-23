@@ -822,6 +822,20 @@ class RAGGui:
         self.root = root
         self.root.title(f"AI-Prowler — Agentic RAG Knowledge Base v{APP_VERSION}")
 
+        # 2026-10-22 (David): the Claude CLI AI routing was removed — clean up
+        # what an older version left (the "AI Route Optimizer" custom task, its
+        # Windows task, ~/.ai-prowler/ai_routing). Runs BEFORE the tabs are
+        # built so the My Custom AI Analyses list never shows the retired task.
+        # Once clean it's a marker-file check. Never during tests: they must not
+        # touch this computer's real ~/.ai-prowler.
+        if not (os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("AIPROWLER_TEST_STATE_DIR")):
+            try:
+                import task_queue_automation as _tqa_retire
+                for _msg in _tqa_retire.retire_cli_ai_routing():
+                    print(f"[AI routing cleanup] {_msg}")
+            except Exception as _e_retire:
+                print(f"[AI routing cleanup] skipped: {_e_retire}")
+
         # ── Hide window during construction to prevent the small-then-resize flicker ──
         # Tk creates the window at a default small size before geometry() is called.
         # Withdrawing it immediately keeps it invisible until we have calculated the
@@ -1942,6 +1956,18 @@ class RAGGui:
         def _render_update_buttons():
             for w in update_action_frame.winfo_children():
                 w.destroy()
+            # 2026-10-21: already downloaded, waiting for a restart → say so
+            # and offer Restart Now instead of the same download again.
+            _pend = self._pending_update_version()
+            if _pend and (not _update_state['is_newer'] or
+                          self._version_tuple(_pend) >= self._version_tuple(_update_state['version'])):
+                tk.Label(update_action_frame,
+                         text=f"⚠️ Update v{_pend} downloaded — NOT installed yet",
+                         fg='#b35900', font=('Arial', 10, 'bold')).pack(side='left')
+                ttk.Button(update_action_frame, text="🔄 Restart Now to Install",
+                           command=self._restart_to_install_update
+                           ).pack(side='right', padx=(6, 0))
+                return
             if not _update_state['is_newer']:
                 return
             tk.Label(update_action_frame,
@@ -3874,6 +3900,12 @@ or from the Help menu."""
         self.root.after(150, self._refresh_welcome_ad)
         self._schedule_ad_refresh()
 
+        # 2026-10-21: VISIBLE host for the "Update downloaded — NOT installed
+        # yet / Restart Now" banner. _notif_frame above is never packed in
+        # server mode, so a banner there would never show — this one does.
+        self._upd_banner_host = ttk.Frame(server_frame, padding=(12, 8, 12, 0))
+        self._upd_banner_host.pack(side='top', fill='x')
+
         # ── Layout ────────────────────────────────────────────────────────────
         container = ttk.Frame(server_frame, padding=(40, 30))
         container.pack(fill='both', expand=True)
@@ -4962,6 +4994,185 @@ or from the Help menu."""
                 pass
             self._update_banner_widget = None
 
+    # ── Update downloaded but NOT installed yet (2026-10-21, David) ─────────
+    # Download Update only STAGES the files; RAG_RUN.bat installs them the next
+    # time AI-Prowler starts. A server left running (Samuel, Oct 20) kept the
+    # old version for a day with nothing saying the update wasn't installed.
+    # Now: a Restart Now / Later choice when the download finishes, and a
+    # reminder (status bar + Welcome tab, each with Restart Now) that stays
+    # until the update is really installed.
+    @staticmethod
+    def _update_paths():
+        _local = os.environ.get('LOCALAPPDATA', str(Path.home() / 'AppData' / 'Local'))
+        base = Path(_local) / 'AI-Prowler'
+        return base / 'pending_update', base / 'update_ready.txt'
+
+    @staticmethod
+    def _version_tuple(v):
+        try:
+            return tuple(int(x) for x in str(v).strip().lstrip('vV').split('.'))
+        except (ValueError, AttributeError):
+            return ()
+
+    def _pending_update_version(self):
+        """Version of an update that is downloaded and staged but NOT
+        installed yet, else None. Pending = the flag file RAG_RUN.bat looks
+        for exists, the staging folder exists, and the staged version is newer
+        than the one running (a leftover flag for an older or the same version
+        is not a pending update)."""
+        import re as _re_pu
+        staging, flag = self._update_paths()
+        try:
+            if not flag.exists() or not staging.is_dir():
+                return None
+            first = (flag.read_text(encoding='utf-8', errors='replace').splitlines() or [''])[0]
+        except Exception:
+            return None
+        m = _re_pu.search(r'v(\d+(?:\.\d+)+)', first)
+        if not m:
+            return None
+        ver = m.group(1)
+        if self._version_tuple(ver) <= self._version_tuple(APP_VERSION):
+            return None
+        return ver
+
+    def _refresh_update_pending_ui(self):
+        """Show or hide the 'downloaded, NOT installed yet' reminders (status
+        bar + Welcome tab) to match what is actually staged on disk."""
+        ver = self._pending_update_version()
+        self._update_pending_ver = ver
+        msg = (f"⚠️ Update v{ver} downloaded — NOT installed yet. "
+               f"Restart AI-Prowler to install it." if ver else "")
+        # status bar (its own label — the general status text is overwritten
+        # all the time, this one stays until the update is installed)
+        try:
+            fr = getattr(self, '_upd_pending_frame', None)
+            if fr is not None:
+                if ver:
+                    self._upd_pending_var.set(msg)
+                    if not fr.winfo_manager():
+                        # packed ahead of the status text so a long status
+                        # message can never squeeze the reminder off-screen
+                        _sl = getattr(self, '_status_label', None)
+                        if _sl is not None:
+                            fr.pack(side='right', padx=(4, 6), before=_sl)
+                        else:
+                            fr.pack(side='right', padx=(4, 6))
+                else:
+                    fr.pack_forget()
+        except Exception:
+            pass
+        # Welcome tab banner
+        try:
+            old = getattr(self, '_update_pending_banner', None)
+            if old is not None:
+                old.destroy()
+            self._update_pending_banner = None
+            # Server tab: its own visible host; Home tab: the notification area
+            parent = getattr(self, '_upd_banner_host', None)
+            if parent is None:
+                parent = getattr(self, '_notif_frame', None)
+            if ver and parent is not None:
+                if getattr(self, '_update_banner_widget', None) is not None:
+                    self._clear_update_banner()      # the "available" banner is moot now
+                b = tk.Frame(parent, bg='#fff3cd', relief='ridge', bd=2)
+                kids = [w for w in parent.pack_slaves()]
+                if kids:
+                    b.pack(side='top', fill='x', pady=(0, 4), before=kids[0])
+                else:
+                    b.pack(side='top', fill='x', pady=(0, 4))
+                tk.Label(b, text=f"⚠️ Update v{ver} downloaded — NOT installed yet",
+                         bg='#fff3cd', fg='#856404',
+                         font=('Arial', 10, 'bold')).pack(side='left', padx=(10, 6), pady=6)
+                tk.Label(b, text=f"You are still running v{APP_VERSION}. "
+                                 f"Restart AI-Prowler to install it.",
+                         bg='#fff3cd', fg='#856404',
+                         font=('Arial', 9)).pack(side='left', padx=(0, 10), pady=6)
+                ttk.Button(b, text="🔄 Restart Now to Install",
+                           command=self._restart_to_install_update
+                           ).pack(side='right', padx=(6, 10), pady=4)
+                self._update_pending_banner = b
+        except Exception:
+            pass
+        return ver
+
+    def _on_update_downloaded(self, version, count):
+        """Download finished and verified: the update is STAGED, not installed.
+        Say so plainly and offer Restart Now / Later."""
+        self._refresh_update_pending_ui()
+        self.status_var.set(f"⚠️ Update v{version} downloaded — NOT installed yet. "
+                            f"Restart AI-Prowler to install it.")
+        restart = messagebox.askyesno(
+            f"Update v{version} downloaded — NOT installed yet",
+            f"AI-Prowler™ v{version} has been downloaded and verified "
+            f"({count} file(s)), but it is NOT installed yet.\n\n"
+            f"It installs when AI-Prowler restarts. Until then you are still "
+            f"running v{APP_VERSION}.\n\n"
+            f"Restart AI-Prowler now to install it?\n\n"
+            f"•  Yes — AI-Prowler closes, Windows asks for permission to change "
+            f"AI-Prowler (click Yes), the update installs and AI-Prowler opens "
+            f"again (about 30 seconds). The Jobs app, crew phones and Claude lose "
+            f"the connection for that time, then reconnect.\n\n"
+            f"•  No — keep working. A reminder with a Restart Now button stays "
+            f"on the status bar and the Welcome tab until you restart.",
+            icon='warning')
+        if restart:
+            self._restart_to_install_update(ask=False)
+
+    def _restart_to_install_update(self, ask=True):
+        """Restart Now: clean shutdown (same as File -> Exit: stops the HTTP
+        server, tunnel and Ollama), then RAG_RUN.bat installs the staged update
+        (Windows asks for permission) and reopens AI-Prowler."""
+        ver = self._pending_update_version() or getattr(self, '_update_pending_ver', None) or ''
+        bat = Path(__file__).resolve().parent / 'RAG_RUN.bat'
+        if not bat.exists():
+            messagebox.showwarning(
+                "Restart AI-Prowler to install the update",
+                "AI-Prowler can't restart itself from here (RAG_RUN.bat was not "
+                "found next to it).\n\nClose AI-Prowler (File → Exit AI-Prowler) "
+                "and start it again from the AI-Prowler shortcut — the update "
+                "installs as it starts.")
+            return False
+        if ask and not messagebox.askyesno(
+                "Restart AI-Prowler to install the update",
+                f"AI-Prowler will close, install v{ver} and open again "
+                f"(about 30 seconds).\n\n"
+                f"•  Windows will ask for permission to change AI-Prowler — click Yes.\n"
+                f"•  The Jobs app, crew phones and Claude lose the connection while "
+                f"it restarts, then reconnect.\n\nRestart now?",
+                icon='warning'):
+            return False
+        try:
+            self.status_var.set("🔄 Restarting AI-Prowler to install the update…")
+            self.root.update_idletasks()
+        except Exception:
+            pass
+        self._on_window_close(relaunch=self._update_relaunch_command(bat))
+        return True
+
+    @staticmethod
+    def _update_relaunch_command(bat):
+        """cmd line that waits ~4 s (so this process and its children have
+        fully exited and released their files), then runs RAG_RUN.bat, which
+        installs the staged update and starts AI-Prowler. `cmd /c "a & "b""` —
+        cmd strips the outer quotes, keeping the bat path quoted."""
+        return f'cmd.exe /c "ping -n 5 127.0.0.1 >nul & "{bat}""'
+
+    def _launch_detached(self, cmdline, cwd=None):
+        """Start `cmdline` fully detached from this process (own console, own
+        process group, out of any job object) so it survives os._exit()."""
+        flags = 0
+        if sys.platform == 'win32':
+            flags = (getattr(subprocess, 'CREATE_NEW_CONSOLE', 0x10)
+                     | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x200))
+            try:
+                return subprocess.Popen(cmdline, cwd=cwd, close_fds=True,
+                                        creationflags=flags | 0x01000000)  # CREATE_BREAKAWAY_FROM_JOB
+            except OSError:
+                pass        # the job doesn't allow breakaway — start it normally
+        return subprocess.Popen(cmdline, cwd=cwd, close_fds=True, creationflags=flags,
+                                shell=(sys.platform != 'win32'))
+
     def _show_update_banner(self, version, url, notes):
         """Display an update available banner at the top of notifications.
 
@@ -4971,6 +5182,13 @@ or from the Help menu."""
         shown update banner is destroyed first, so repeated refreshes don't
         stack duplicate banners.
         """
+        # 2026-10-21: this version (or a newer one) is already downloaded and
+        # waiting for a restart — show the "NOT installed yet" banner instead
+        # of offering the same download again.
+        _pend = self._pending_update_version()
+        if _pend and self._version_tuple(_pend) >= self._version_tuple(version):
+            self._refresh_update_pending_ui()
+            return
         # Remove a prior update banner if one exists (idempotent refresh)
         if getattr(self, '_update_banner_widget', None) is not None:
             try:
@@ -5024,8 +5242,10 @@ or from the Help menu."""
         answer = messagebox.askyesno(
             "Download Update",
             f"AI-Prowler™ v{version} is available.\n\n"
-            f"Download now? The update will be applied\n"
-            f"automatically the next time you start AI-Prowler."
+            f"Download it now?\n\n"
+            f"Downloading does not install it yet. When the download "
+            f"finishes you'll be asked to restart AI-Prowler — the update "
+            f"installs during that restart."
         )
         if not answer:
             return
@@ -5084,6 +5304,10 @@ or from the Help menu."""
         def _show_final_dialog(kind, title, message, status_text):
             # Runs in the main thread (called from the queue poller).
             _close_progress_dialog()
+            if kind == "update_ready":
+                # title=version, message=file count (see _do_download)
+                self._on_update_downloaded(title, message)
+                return
             if kind == "error":
                 messagebox.showerror(title, message)
             elif kind == "warning":
@@ -5302,11 +5526,6 @@ or from the Help menu."""
                     'subscription_client.py',
                     'mobile_activator.py',
                     'cloudflared_service_helper.py',
-                    # AI Routing per-user Claude connection (server mode):
-                    # console_inject.py is run BY PATH by cli_signin_relay.py,
-                    # so both files must be current together.
-                    'cli_signin_relay.py',
-                    'console_inject.py',
                 ]
 
                 _files = _fallback_files
@@ -5679,15 +5898,10 @@ or from the Help menu."""
                         f"Date: {datetime.now().isoformat()}\n",
                         encoding='utf-8'
                     )
-                    _prog_queue.put(("done", "info",
-                        "Update Downloaded",
-                        f"AI-Prowler™ v{version} downloaded and verified "
-                        f"successfully.\n\n"
-                        f"{downloaded} file(s) staged for install.\n\n"
-                        f"The update will be applied automatically\n"
-                        f"the next time you start AI-Prowler.\n\n"
-                        f"Go to File → Exit to restart now.",
-                        f"✅ Update v{version} ready — restart to apply"))
+                    # 2026-10-21: "update_ready" — downloaded, NOT installed.
+                    # The poller hands this to _on_update_downloaded, which
+                    # offers Restart Now / Later and posts the reminders.
+                    _prog_queue.put(("done", "update_ready", version, downloaded, None))
                 else:
                     _prog_queue.put(("done", "warning",
                         "Download Failed",
@@ -14960,6 +15174,9 @@ or from the Help menu."""
                     messagebox.showinfo("Manual Restart Needed",
                                        "Please close and reopen Claude Desktop manually.")
 
+        # 2026-10-21: reachable from Setup → Connect your AI (setup_wizard.py)
+        self._sw_auto_configure_claude_desktop = _auto_configure_claude_desktop
+
         def _open_claude_config():
             """Open Claude Desktop config in Notepad (or default editor)."""
             info = self._check_mcp_status()
@@ -15230,6 +15447,16 @@ or from the Help menu."""
 
             def _open_subscribe_business():
                 _open_subscribe("business")
+
+            # 2026-10-21: Setup → Connect your AI reuses these (setup_wizard.py)
+            self._sw_open_subscribe = _open_subscribe
+
+            def _sw_activate_with_code(code):
+                """Same as typing the code here and clicking ⚡ Configure
+                Mobile Access (_activate_mobile is defined just below)."""
+                _act_code_var.set(code)
+                _activate_mobile()
+            self._sw_activate_with_code = _sw_activate_with_code
 
             ttk.Button(sub_top_row,
                        text="🛒 Subscribe — Personal",
@@ -19323,258 +19550,19 @@ or from the Help menu."""
 
         ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
 
-        # ── 4. AI ROUTE OPTIMIZER TASK ────────────────────────────────────────
-        # 2026-09-18 (Job Board Architecture Spec §14.12 follow-up): one-click
-        # way to create (or recreate) the "AI Route Optimizer (full reasoning)"
-        # custom analysis task in the Links & Analysis tab's My Custom
-        # Analyses queue — calls custom_tasks_manager directly (same module
-        # create_analysis_task()/list_analysis_tasks() already use), so the
-        # task this button makes is indistinguishable from one Claude, Muse, or Grok creates
-        # via create_analysis_task() in a conversation — same file, same
-        # queue, same Run/Queue controls over there.
-        #
-        # Deliberately narrow scope: this button ONLY creates/replaces the
-        # task DEFINITION, always with schedule="none" (one-off, manual run).
-        # It never queues it and never sets a recurring schedule — that
-        # decision, and choosing when the Autonomous AI Task Queue's checker
-        # should pick it up, is the user's to make from the Links & Analysis
-        # tab, not something this button should do on their behalf.
-        _ROUTE_AI_TASK_LABEL = "AI Route Optimizer (full reasoning)"
-        _ROUTE_AI_TASK_PROMPT = (
-            "Plan the best possible field-service route for a given ROUTE_DATE "
-            "(default: today's date if not otherwise specified when this task "
-            "is queued/run). Do NOT use suggest_route_schedule (\"Get AI "
-            "Suggestion\") -- that is a cheap nearest-neighbor heuristic with "
-            "no real time-window reasoning. Instead, do the actual reasoning "
-            "yourself, then commit it with apply_route_order. Steps:\n\n"
-            "1. read_job_spreadsheet(sheet_name=\"Jobs_Schedule\", "
-            "filter_date=ROUTE_DATE) to get every job that day: JobID, "
-            "address, lat/lon, Schedule Type (Hard/Soft), Start Time, End "
-            "Time, Est. Duration.\n"
-            "2. read_job_spreadsheet(sheet_name=\"Settings\") for Workday "
-            "Start Time, Workday End Time, Lunch Break Start, Lunch Break "
-            "Duration (min), Hard Time Tolerance (min).\n"
-            "3. get_route_drive_matrix(route_date=ROUTE_DATE) for real drive "
-            "time/distance between every geocoded job. If any job isn't "
-            "geocoded, note it as NOT PLACED and leave it out -- do not "
-            "guess its location.\n"
-            "4. Reason through the day BEFORE writing anything:\n"
-            "   - Hard jobs (Schedule Type = hard) have a committed Start "
-            "Time that must be respected. Arriving early is fine (the crew "
-            "waits) -- arriving so late it exceeds Hard Time Tolerance is a "
-            "real problem to avoid if any better order exists.\n"
-            "   - Soft jobs (Schedule Type = soft) have only a duration and, "
-            "sometimes, their own Start Time/End Time as a preferred window "
-            "-- they are flexible filler, not fixed appointments.\n"
-            "   - Look for idle gaps: time between Workday Start and the "
-            "first hard job's committed start, and time between consecutive "
-            "hard jobs. For each gap, check whether a soft job's duration + "
-            "the real drive times to/from it actually fit inside that gap "
-            "without pushing a later hard job's arrival past its own "
-            "tolerance. Prefer filling a gap with a soft job that is "
-            "geographically close to the jobs on either side of it (per the "
-            "drive matrix) over one that is far away.\n"
-            "   - A soft job whose duration and location don't fit cleanly "
-            "into any gap should be deferred to open time after the last "
-            "hard commitment of the day, rather than forced into a tight "
-            "morning slot that risks a hard violation.\n"
-            "   - The lunch break (extends whichever job is in progress when "
-            "Lunch Break Start is crossed, or the gap before the next stop) "
-            "is handled automatically by apply_route_order's own timeline "
-            "engine -- you do not need to reason about it yourself, just be "
-            "aware total elapsed time includes it.\n"
-            "   - The goal is: zero avoidable HARD TIME VIOLATION / SOFT "
-            "WINDOW VIOLATION warnings, every job placed (or a clear, "
-            "justified reason why one is deferred), and the day finishing "
-            "at or before Workday End Time.\n"
-            "5. Once you have a final visit order, call "
-            "apply_route_order(route_date=ROUTE_DATE, "
-            "stop_order=\"JOB-####,JOB-####,...\") with every geocoded job "
-            "for that date included exactly once, in your reasoned order.\n"
-            "6. Read back the tool's own response -- it will repeat any HARD "
-            "TIME VIOLATION / SOFT WINDOW VIOLATION / DRIVE TIME UNKNOWN / "
-            "DAY DOES NOT FIT warnings using the same real timeline engine "
-            "\"Get AI Suggestion\" uses, so you can verify your reasoning "
-            "actually worked. If a warning fired that you believe a "
-            "different order would have avoided, try once more with a "
-            "revised order before finishing.\n\n"
-            "Do not modify Jobs_Schedule directly and do not click/simulate "
-            "\"Approve\" -- leave the Route tab's own Approve button for the "
-            "owner to press after reviewing. Do not send any text/SMS or "
-            "record any learning -- the only side effects for this task "
-            "are planning/applying the route and the completion email."
-        )
-
-        route_ai_lf = ttk.LabelFrame(f, text="🧭 AI Route Optimizer Task", padding=(12, 8))
-        # Server mode (David, 2026-09-28): the Small Business tab stays — server
-        # mode is built for small businesses — but this section does not. Its
-        # task half feeds the Links & Analysis task queue, which doesn't exist in
-        # server mode, and its runner half duplicates the Admin tab's "AI Route
-        # runner" panel (the server's real setup, with the per-user Claude, Muse, or Grok
-        # accounts). Built but never packed, so nothing below needs changing.
-        if self._is_business_server_mode():
-            ttk.Label(f, justify='left', font=('Arial', 8), foreground='gray', wraplength=620,
-                      text=("🧭 AI Routing on this server is set up on the Admin tab "
-                            "(🧠 AI Route runner), where each user's own Claude account is "
-                            "connected.")
-                      ).pack(anchor='w', padx=16, pady=(0, 6))
-        else:
-            route_ai_lf.pack(fill='x', padx=16, pady=(0, 6))
-
-        ttk.Label(route_ai_lf, justify='left', font=('Arial', 8), foreground='gray',
-                  text=("Creates a one-time custom AI analysis task that reasons through a day's\n"
-                        "jobs — real drive times, hard/soft commitments, idle-gap filling — instead\n"
-                        "of the quick \u2728 Get AI Suggestion heuristic. Lands in the Links & Analysis\n"
-                        "tab's My Custom Analyses queue once created.")
-                  ).pack(anchor='w', pady=(0, 6))
-
-        _route_ai_status_row = ttk.Frame(route_ai_lf)
-        _route_ai_status_row.pack(fill='x', pady=(0, 6))
-        _route_ai_led = tk.Label(_route_ai_status_row, text="\u25cf", font=('Arial', 12), fg='gray')
-        _route_ai_led.pack(side='left')
-        _route_ai_status_var = tk.StringVar(value="Not created yet")
-        ttk.Label(_route_ai_status_row, textvariable=_route_ai_status_var,
-                  font=('Arial', 9)).pack(side='left', padx=(4, 0))
-
-        def _refresh_route_ai_led():
-            try:
-                import custom_tasks_manager as _ctm
-                _exists = any(t.get('label') == _ROUTE_AI_TASK_LABEL
-                              for t in _ctm.load_custom_tasks())
-            except Exception:
-                _exists = False
-            if _exists:
-                _route_ai_led.config(fg='#2ecc71')
-                _route_ai_status_var.set("Created — queue/schedule it from Links & Analysis")
-            else:
-                _route_ai_led.config(fg='gray')
-                _route_ai_status_var.set("Not created yet")
-
-        def _build_route_ai_task_gui():
-            try:
-                import custom_tasks_manager as _ctm
-            except Exception as _exc:
-                messagebox.showerror("Unavailable", f"Could not load the task manager: {_exc}")
-                return
-            try:
-                # Recreate cleanly: remove any existing task under this exact
-                # label FIRST and persist that removal before creating the
-                # replacement, so pressing this button again never piles up
-                # duplicates and never trips the 25-task cap on its own account.
-                _tasks = _ctm.load_custom_tasks()
-                _dupe_ids = [t['task_id'] for t in _tasks if t.get('label') == _ROUTE_AI_TASK_LABEL]
-                if _dupe_ids:
-                    for _tid in _dupe_ids:
-                        _ctm.delete_task(_tasks, _tid)
-                    _ctm.save_custom_tasks(_tasks)
-                _new_task = _ctm.create_task(
-                    label=_ROUTE_AI_TASK_LABEL,
-                    prompt=_ROUTE_AI_TASK_PROMPT,
-                    schedule="none",
-                    # Defaults to emailing a completion summary (David,
-                    # 2026-09-18) — also conveniently satisfies
-                    # create_task()'s own validation, which rejects a task
-                    # with all three outputs (Learnings/Document/Email)
-                    # off ("At least one output must be selected"). Learnings
-                    # and Document stay off (this task's real output is the
-                    # apply_route_order() database write, not a learning or
-                    # a report) — the person can flip Email off too from
-                    # the Links & Analysis tab's task editor if they decide
-                    # they don't want it after all.
-                    output_learnings=False,
-                    output_email=True,
-                )
-                _tasks = _ctm.load_custom_tasks()
-                _tasks.append(_new_task)
-                _ctm.save_custom_tasks(_tasks)
-            except ValueError as _ve:
-                messagebox.showerror("Could Not Create Task", str(_ve))
-                return
-            except Exception as _exc:
-                messagebox.showerror("Failed", f"Could not create the task:\n\n{_exc}")
-                return
-            _refresh_route_ai_led()
-            self.status_var.set("✅  AI Route Optimizer task created")
-            self.root.after(3000, lambda: self.status_var.set("Ready"))
-
-        ttk.Button(route_ai_lf, text="🧭 Build / Recreate AI Route Optimizer Task",
-                   command=_build_route_ai_task_gui).pack(anchor='w')
-
-        ttk.Label(route_ai_lf,
-                  text="This only creates the task definition — it does not queue it or set a "
-                       "schedule. Queuing it, and choosing when it actually runs, is up to you "
-                       "from the Links & Analysis tab.",
-                  font=('Arial', 8), foreground='gray', justify='left', wraplength=520
-                  ).pack(anchor='w', pady=(4, 0))
-
-        _refresh_route_ai_led()
-
-        ttk.Separator(route_ai_lf, orient='horizontal').pack(fill='x', pady=8)
-
-        # ── On-demand runner setup ──────────────────────────────────────
-        # 2026-09-18: the Jobs PWA Route tab's "Run AI Routing" button
-        # needs a SEPARATE, dedicated, trigger-less Scheduled Task
-        # (task_queue_automation.AI_ROUTING_TASK_NAME) — never the main
-        # queue runner, since firing that on demand would sweep up and run
-        # every OTHER due queued task early too, not just this one. See
-        # AI_ROUTING_TASK_NAME's module comment for the full reasoning.
-        # Registering a new S4U-principal Scheduled Task genuinely requires
-        # one UAC consent click — there is no way to do this silently from
-        # a background thread, so it has to be a real button here.
-        ttk.Label(route_ai_lf, justify='left', font=('Arial', 8), foreground='gray',
-                  text=("The Jobs PWA's \u201cRun AI Routing\u201d button needs its own dedicated,\n"
-                        "on-demand-only runner (separate from the scheduled queue above, so it\n"
-                        "never sweeps up and runs your other queued tasks early). One-time setup,\n"
-                        "one Windows confirmation prompt.")
-                  ).pack(anchor='w', pady=(0, 6))
-
-        _ai_routing_status_row = ttk.Frame(route_ai_lf)
-        _ai_routing_status_row.pack(fill='x', pady=(0, 6))
-        _ai_routing_led = tk.Label(_ai_routing_status_row, text="\u25cf", font=('Arial', 12), fg='gray')
-        _ai_routing_led.pack(side='left')
-        _ai_routing_status_var = tk.StringVar(value="Checking\u2026")
-        ttk.Label(_ai_routing_status_row, textvariable=_ai_routing_status_var,
-                  font=('Arial', 9)).pack(side='left', padx=(4, 0))
-
-        def _refresh_ai_routing_led():
-            try:
-                import task_queue_automation as _tqa2
-                _exists = _tqa2.ai_routing_task_exists()
-            except Exception:
-                _exists = False
-            if _exists:
-                _ai_routing_led.config(fg='#2ecc71')
-                _ai_routing_status_var.set("Set up \u2014 \u201cRun AI Routing\u201d is ready in the Jobs PWA")
-            else:
-                _ai_routing_led.config(fg='gray')
-                _ai_routing_status_var.set("Not set up yet")
-
-        def _setup_ai_routing_runner_gui():
-            try:
-                import task_queue_automation as _tqa2
-            except Exception as _exc:
-                messagebox.showerror("Unavailable", f"Could not load the task automation module: {_exc}")
-                return
-            self.status_var.set("Requesting Windows confirmation\u2026")
-            self.root.update_idletasks()
-            try:
-                ok, detail = _tqa2.install_ai_routing_task()
-            except Exception as _exc:
-                messagebox.showerror("Setup Failed", f"Could not set up the on-demand runner:\n\n{_exc}")
-                self.status_var.set("Ready")
-                return
-            if not ok:
-                messagebox.showerror("Setup Failed", detail)
-                self.status_var.set("Ready")
-                return
-            _refresh_ai_routing_led()
-            self.status_var.set("✅  On-demand AI Routing runner set up")
-            self.root.after(3000, lambda: self.status_var.set("Ready"))
-
-        ttk.Button(route_ai_lf, text="🔧 Set Up On-Demand AI Routing (one-time)",
-                   command=_setup_ai_routing_runner_gui).pack(anchor='w')
-
-        _refresh_ai_routing_led()
+        # ── 4. AI ROUTING (2026-10-22, David) ────────────────────────────────
+        # The 🧭 AI Route Optimizer Task (a Links & Analysis custom task) and the
+        # "Set Up On-Demand AI Routing" Claude CLI runner were REMOVED. AI routing
+        # now happens in any AI chat connected to AI-Prowler, from the Jobs app's
+        # Route tab — no Claude CLI, token or Windows task, in personal or server
+        # mode. retire_cli_ai_routing() (task_queue_automation.py) cleans up
+        # what an older version left behind.
+        ttk.Label(f, justify='left', font=('Arial', 8), foreground='gray', wraplength=620,
+                  text=("🧭 AI routing: in the Jobs app's Route tab, tap 📋 Copy AI Route for Any AI "
+                        "(one day) or 🗓️ Plan Week with Any AI (group nearby soft jobs onto the same "
+                        "day), then paste the prompt into Claude, Muse, Grok or any AI chat that has "
+                        "AI-Prowler connected.")
+                  ).pack(anchor='w', padx=16, pady=(0, 6))
 
         # ── 5. ONLINE PAYMENT LINKS (real config, not documentation) ────────────
         # v9.1.x: the old "Contractor Workflow Tools" wrapper LabelFrame that
@@ -19716,13 +19704,16 @@ or from the Help menu."""
         self.notebook.add(outer, text="🧠 Learnings")
         f = self._make_scrollable_tab(outer)
 
-        _learnings_file = _Path.home() / '.ai-prowler' / 'learnings' / 'self_learning_data.json'
+        self._learnings_file_path = _Path.home() / '.ai-prowler' / 'learnings' / 'self_learning_data.json'
+        # 2026-10-21: one attribute, read live by every helper below, so a test
+        # can point it at a temp file. A captured local made the Learnings
+        # auto-refresh test write the REAL learnings file (it was wiped).
 
         # ── Helper: load learnings from JSON ─────────────────────────────────
         def _load_learnings() -> list:
             try:
-                if _learnings_file.exists():
-                    data = _json.loads(_learnings_file.read_text(encoding='utf-8'))
+                if self._learnings_file_path.exists():
+                    data = _json.loads(self._learnings_file_path.read_text(encoding='utf-8'))
                     if isinstance(data, dict) and 'learnings' in data:
                         return data['learnings']
             except Exception as exc:
@@ -20000,7 +19991,7 @@ or from the Help menu."""
         ttk.Button(btn_row3, text="📥  Import Pack",
                    command=lambda: _import_pack()).pack(side='left')
 
-        ttk.Label(actions_frame, text=f"Storage: {_learnings_file}",
+        ttk.Label(actions_frame, text=f"Storage: {self._learnings_file_path}",
                   font=('Arial', 7), foreground='#999999').pack(anchor='w', pady=(6, 0))
 
         # ── Internal functions ───────────────────────────────────────────────
@@ -20375,23 +20366,23 @@ or from the Help menu."""
                 messagebox.showerror("Export Failed", str(exc))
 
         def _open_json_file():
-            if _learnings_file.exists():
+            if self._learnings_file_path.exists():
                 import subprocess as _sp
                 import platform as _pf
                 if _pf.system() == 'Windows':
-                    os.startfile(str(_learnings_file))
+                    os.startfile(str(self._learnings_file_path))
                 elif _pf.system() == 'Darwin':
-                    _sp.Popen(['open', str(_learnings_file)])
+                    _sp.Popen(['open', str(self._learnings_file_path)])
                 else:
-                    _sp.Popen(['xdg-open', str(_learnings_file)])
+                    _sp.Popen(['xdg-open', str(self._learnings_file_path)])
             else:
                 messagebox.showinfo(
                     "Not Found",
-                    f"Learnings file does not exist yet:\n{_learnings_file}\n\n"
+                    f"Learnings file does not exist yet:\n{self._learnings_file_path}\n\n"
                     "It will be created the first time Claude, Muse, or Grok records a learning.")
 
         def _open_folder():
-            folder = _learnings_file.parent
+            folder = self._learnings_file_path.parent
             folder.mkdir(parents=True, exist_ok=True)
             import subprocess as _sp
             import platform as _pf
@@ -21135,8 +21126,8 @@ or from the Help menu."""
         def _sync_learnings_mtime():
             try:
                 _learnings_mtime["last"] = (
-                    _learnings_file.stat().st_mtime
-                    if _learnings_file.exists() else None)
+                    self._learnings_file_path.stat().st_mtime
+                    if self._learnings_file_path.exists() else None)
             except Exception:
                 pass
 
@@ -21144,8 +21135,8 @@ or from the Help menu."""
             try:
                 if str(outer) == self.notebook.select() \
                         and not self._sl_semantic_search.get():
-                    mtime = (_learnings_file.stat().st_mtime
-                             if _learnings_file.exists() else None)
+                    mtime = (self._learnings_file_path.stat().st_mtime
+                             if self._learnings_file_path.exists() else None)
                     if mtime != _learnings_mtime["last"]:
                         _learnings_mtime["last"] = mtime
                         _refresh_all()
@@ -21243,6 +21234,36 @@ or from the Help menu."""
         status_label = ttk.Label(status_frame, textvariable=self.status_var,
                                  anchor='w')
         status_label.pack(side='left', fill='x', expand=True, padx=5)
+        self._status_label = status_label
+
+        # ── "Update downloaded — NOT installed yet" reminder (2026-10-21) ────
+        # Its own label + Restart Now button, separate from status_var (which
+        # other messages overwrite constantly). Packed only while an update is
+        # staged; _refresh_update_pending_ui() shows/hides it.
+        self._upd_pending_var = tk.StringVar(value="")
+        self._upd_pending_frame = tk.Frame(status_frame, bg='#fff3cd')
+        tk.Label(self._upd_pending_frame, textvariable=self._upd_pending_var,
+                 bg='#fff3cd', fg='#b35900',
+                 font=('Arial', 9, 'bold')).pack(side='left', padx=(6, 4))
+        ttk.Button(self._upd_pending_frame, text="🔄 Restart Now",
+                   command=self._restart_to_install_update
+                   ).pack(side='left', padx=(0, 4), pady=1)
+        self._update_pending_ver = None
+        self._update_pending_banner = None
+        try:
+            # first check once the window is up; recheck every 10 min so the
+            # reminder also appears/disappears if the flag changes underneath
+            def _upd_pending_tick():
+                try:
+                    self._refresh_update_pending_ui()
+                finally:
+                    try:
+                        self.root.after(600000, _upd_pending_tick)
+                    except Exception:
+                        pass
+            self.root.after(2000, _upd_pending_tick)
+        except Exception:
+            pass
 
         # ── MCP status indicator (right side of status bar) ───────────────────
         mcp_sep = ttk.Separator(status_frame, orient='vertical')
@@ -22483,7 +22504,7 @@ or from the Help menu."""
         table_frame = ttk.Frame(f)
         table_frame.pack(fill='both', expand=True, pady=(0, 6))
 
-        columns = ('name', 'email', 'phone', 'role', 'scopes', 'admin', 'private', 'home', 'airoute', 'seat', 'status', 'token')
+        columns = ('name', 'email', 'phone', 'role', 'scopes', 'admin', 'private', 'home', 'seat', 'status', 'token')
         tree_scroll = ttk.Scrollbar(table_frame, orient='vertical')
         self._admin_tree = ttk.Treeview(table_frame, columns=columns,
                                         show='headings', height=12,
@@ -22500,7 +22521,6 @@ or from the Help menu."""
             ('admin',   'Manages Users',  90, 'center'),
             ('private', 'Private Coll.',  80, 'center'),
             ('home',    'Home Addr.',     75, 'center'),
-            ('airoute', 'AI Route',        65, 'center'),
             ('seat',    'Seat (key)',     220, 'w'),
             ('status',  'Status',         70, 'center'),
             ('token',   'Token',         120, 'w'),   # always masked — use name/email to identify
@@ -22530,45 +22550,15 @@ or from the Help menu."""
                    command=self._admin_send_token_via_sms).pack(side='left', padx=4)
         ttk.Button(btn_row, text="🏷️ Manage Scopes",
                    command=self._admin_manage_scope_catalog_dialog).pack(side='left', padx=4)
-        ttk.Button(btn_row, text="🤖 AI Route Token",
-                   command=self._admin_set_ai_route_token).pack(side='left', padx=4)
         ttk.Button(btn_row, text="↻ Refresh",
                    command=self._admin_refresh_table).pack(side='right')
         ttk.Button(btn_row, text="☁ Refresh Seats",
                    command=self._admin_sync_seats_from_worker).pack(side='right', padx=(0, 4))
 
-        # ── AI Route runner (one-time server setup) ───────────────────────
-        # The Jobs app's 🧠 AI Routing runs a headless Claude Code session
-        # through its own dedicated Windows Scheduled Task. The Small Business
-        # tab IS shown in server mode (server mode is built for small
-        # businesses), but its AI Route Optimizer section is personal-install
-        # only — it feeds the Links & Analysis task queue, which server mode
-        # doesn't have — so the server's one-time runner setup lives here,
-        # next to the users it's set up for. Each USER then connects
-        # their own Claude account from the Jobs app the first time they tap
-        # AI Route (or an admin pastes their token via 🤖 AI Route Token).
-        ai_lf = ttk.LabelFrame(f, text=" 🧠 AI Route runner (one-time server setup) ", padding=8)
-        ai_lf.pack(fill='x', pady=(0, 6))
-        self._admin_ai_route_var = tk.StringVar(value="Checking…")
-        ttk.Label(ai_lf, textvariable=self._admin_ai_route_var, font=('Segoe UI', 9),
-                  justify='left', wraplength=720).pack(anchor='w')
-        ai_btns = ttk.Frame(ai_lf)
-        ai_btns.pack(fill='x', pady=(6, 0))
-        self._admin_ai_cli_btn = ttk.Button(ai_btns, text="⬇ Install Claude Code CLI",
-                                            command=self._admin_ai_route_install_cli)
-        self._admin_ai_cli_btn.pack(side='left', padx=(0, 6))
-        self._admin_ai_runner_btn = ttk.Button(ai_btns, text="🔧 Set Up AI Route Runner",
-                                               command=self._admin_ai_route_setup_runner)
-        self._admin_ai_runner_btn.pack(side='left', padx=(0, 6))
-        ttk.Button(ai_btns, text="↻ Re-check",
-                   command=self._admin_ai_route_refresh_status).pack(side='left')
-        ttk.Label(ai_lf, font=('Segoe UI', 8), foreground='gray', wraplength=720, justify='left',
-                  text=("Do these once, on this server. Setting up the runner needs one Windows "
-                        "confirmation prompt. After that, each user connects their own Claude, Muse, or Grok "
-                        "account from the Jobs app the first time they tap AI Route — or use "
-                        "🤖 AI Route Token above to paste one for them.")
-                  ).pack(anchor='w', pady=(6, 0))
-
+        # (2026-10-22) The 🧠 AI Route runner panel (Claude Code CLI install,
+        # on-demand runner, per-user Claude tokens) was removed with the Jobs
+        # app's Claude CLI AI Route — users route in any AI chat instead, so
+        # there are no AI passwords for an admin to manage.
 
         self._admin_refresh_table()
 
@@ -22647,24 +22637,14 @@ or from the Help menu."""
             phone  = u.get("cell_phone", "")
             # Bearer token stays masked — it's the employee's password
             tok_display = "●" * 8
-            # Home address / AI Route token: only whether each is SET is shown
-            # — never the address text or (obviously) the token itself.
+            # Home address: only whether it is SET is shown, never the text.
             home_flag = "✓" if (u.get("home_address") or "").strip() else ""
-            try:
-                import task_queue_automation as _tqa_admin
-                ai_flag = "✓" if _tqa_admin.has_user_oauth_token(
-                    self._admin_ai_token_key(u)) else ""
-            except Exception:
-                ai_flag = ""
 
             self._admin_tree.insert(
                 '', 'end', iid=token,
                 values=(u.get("name", "(unnamed)"), u.get("email", ""), phone,
-                        role, scopes, admin_flag, private, home_flag, ai_flag,
+                        role, scopes, admin_flag, private, home_flag,
                         seat, status, tok_display))
-        # AI Route runner panel: keeps "users connected" current after any
-        # add / edit / token change that refreshes this table.
-        self._admin_ai_route_refresh_status()
         # Seat summary strip — v8.0.0 aware
         if hasattr(self, "_admin_seat_label"):
             v8_seats = seats.get("_v8_seats") or []
@@ -23256,102 +23236,6 @@ or from the Help menu."""
         return False
 
 
-    def _admin_ai_route_refresh_status(self):
-        """Updates the AI Route runner panel: is the Claude Code CLI installed,
-        is the on-demand runner registered, and how many active users have
-        connected their Claude account. Cheap and read-only."""
-        if not hasattr(self, "_admin_ai_route_var"):
-            return
-        try:
-            import task_queue_automation as _tqa
-            cli = bool(_tqa.claude_code_cli_installed())
-            runner = bool(_tqa.ai_routing_task_exists())
-            users = [u for u in (self._admin_load_users().get("users") or {}).values()
-                     if isinstance(u, dict) and u.get("status", "active") == "active"]
-            connected = sum(1 for u in users if _tqa.has_user_oauth_token(
-                self._admin_ai_token_key(u)))
-        except Exception as e:
-            self._admin_ai_route_var.set(f"Could not check AI Route setup: {e}")
-            return
-        lines = [
-            f"{'✅' if cli else '❌'} Claude Code CLI: {'installed' if cli else 'not installed'}",
-            f"{'✅' if runner else '❌'} On-demand runner: {'set up' if runner else 'not set up yet'}",
-            f"👤 Users connected to Claude, Muse, or Grok: {connected} of {len(users)}",
-        ]
-        if cli and runner:
-            lines.append("AI Routing is ready — users connect their own Claude account "
-                         "the first time they tap AI Route.")
-        self._admin_ai_route_var.set("\n".join(lines))
-        # Nothing to install once it's there; the runner button stays enabled
-        # (registering is idempotent, so it doubles as a repair).
-        self._admin_ai_cli_btn.state(['disabled'] if cli else ['!disabled'])
-
-    def _admin_ai_route_install_cli(self):
-        """Installs the Claude Code CLI on this server (Anthropic's official
-        installer, same one Links & Analysis uses in Personal). Runs on a
-        background thread — the installer can take a minute."""
-        import threading
-        from tkinter import messagebox
-        if not self._admin_gate():
-            return
-        self._admin_ai_cli_btn.state(['disabled'])
-        self._admin_ai_route_var.set("Installing Claude Code CLI… this can take a minute.")
-
-        def _work():
-            try:
-                import task_queue_automation as _tqa
-                ok, detail = _tqa.install_claude_code_cli()
-            except Exception as e:  # noqa: BLE001
-                ok, detail = False, str(e)
-
-            def _done():
-                self._admin_ai_route_refresh_status()
-                (messagebox.showinfo if ok else messagebox.showerror)("Claude Code CLI", detail)
-            self.root.after(0, _done)
-        threading.Thread(target=_work, daemon=True).start()
-
-    def _admin_ai_route_setup_runner(self):
-        """Registers the dedicated on-demand AI Routing Scheduled Task on this
-        server. Needs ONE Windows confirmation prompt, which appears on this
-        machine's desktop (so an admin must be at the server). Runs on a
-        background thread so the window doesn't freeze while it waits."""
-        import threading
-        from tkinter import messagebox
-        if not self._admin_gate():
-            return
-        self._admin_ai_runner_btn.state(['disabled'])
-        self._admin_ai_route_var.set("Setting up the runner… approve the Windows "
-                                     "confirmation prompt when it appears.")
-
-        def _work():
-            try:
-                import task_queue_automation as _tqa
-                ok, detail = _tqa.install_ai_routing_task()
-            except Exception as e:  # noqa: BLE001
-                ok, detail = False, str(e)
-
-            def _done():
-                self._admin_ai_runner_btn.state(['!disabled'])
-                self._admin_ai_route_refresh_status()
-                if not ok:
-                    messagebox.showerror("AI Route Runner", f"Setup failed:\n\n{detail}")
-                elif detail and detail != "ok":
-                    messagebox.showwarning("AI Route Runner",
-                                           f"The runner was registered, but:\n\n{detail}")
-                else:
-                    messagebox.showinfo("AI Route Runner", "The AI Route runner is set up.")
-            self.root.after(0, _done)
-        threading.Thread(target=_work, daemon=True).start()
-
-    @classmethod
-    def _admin_ai_token_key(cls, u):
-        """R-048 (2026-09-28): the key a user's AI Route token file is saved
-        and looked up under — their users.json id, exactly what the server uses
-        (start_ai_routing, the Jobs app's connect screen), with the name slug
-        only as a fallback for a record that has no id."""
-        u = u if isinstance(u, dict) else {}
-        return (u.get("id") or "").strip() or cls._admin_user_slug(u.get("name", ""))
-
     @staticmethod
     def _admin_user_slug(name):
         """firstname-lastname slug — must match _make_user_id in
@@ -23373,97 +23257,6 @@ or from the Help menu."""
             return _geocode(address) is not None
         except Exception:
             return False
-
-    def _admin_set_ai_route_token(self):
-        """Save / replace / remove the selected user's Claude Code token, used
-        when THEY run AI Routing from the Jobs app (the run is billed to their
-        own Claude subscription). Stored in its own file, never users.json."""
-        import tkinter as tk
-        from tkinter import ttk, messagebox
-        if not self._admin_gate():
-            return
-        token_key = self._admin_selected_token()
-        if not token_key:
-            messagebox.showinfo("AI Route Token", "Select a user first.")
-            return
-        u = (self._admin_load_users().get("users") or {}).get(token_key)
-        if not isinstance(u, dict):
-            messagebox.showerror("AI Route Token", "User not found (refresh the table).")
-            return
-        name = u.get("name", "")
-        # R-048 (2026-09-28): key the token file by the user's id — exactly what
-        # the server looks it up by (start_ai_routing / the Jobs app's connect
-        # screen use user["id"] first). The name slug is only the fallback for a
-        # record with no id; keying by name alone lost the token when a user was
-        # renamed after being created (the id stays, the name slug changes).
-        slug = self._admin_ai_token_key(u)
-        try:
-            import task_queue_automation as _tqa
-        except Exception as e:
-            messagebox.showerror("AI Route Token", f"Task automation module unavailable: {e}")
-            return
-        already = _tqa.has_user_oauth_token(slug)
-
-        dlg = tk.Toplevel(self.root)
-        dlg.title(f"AI Route Token — {name}")
-        dlg.transient(self.root)
-        dlg.grab_set()
-        dlg.resizable(True, False)
-        dlg.minsize(520, 0)
-        frm = ttk.Frame(dlg, padding=12)
-        frm.pack(fill='both', expand=True)
-
-        ttk.Label(frm, text=f"Claude token for {name}", font=('Segoe UI', 9, 'bold')
-                  ).pack(anchor='w')
-        ttk.Label(
-            frm, justify='left', foreground='#555555', wraplength=490,
-            text=("Lets this user run 🧠 AI Routing from the Jobs app. The run is "
-                  "billed to THEIR Claude subscription, not yours.\n\n"
-                  "To get the token: on a computer signed in to this user's Claude "
-                  "account, run  claude setup-token  and copy the value it prints "
-                  "(it starts with sk-ant-oat). Paste it below.\n\n"
-                  "It is saved in its own file on this server — not in users.json, "
-                  "the job database, or any export.")
-        ).pack(anchor='w', pady=(4, 8))
-        ttk.Label(frm, text=("A token is currently saved for this user." if already
-                             else "No token saved yet."),
-                  font=('Segoe UI', 9, 'italic')).pack(anchor='w', pady=(0, 6))
-
-        tok_var = tk.StringVar()
-        ttk.Entry(frm, textvariable=tok_var, width=52, show='●',
-                  font=('Consolas', 10)).pack(fill='x')
-
-        def _save():
-            try:
-                _tqa.save_user_oauth_token(slug, tok_var.get())
-            except ValueError as ve:
-                messagebox.showerror("AI Route Token", str(ve), parent=dlg)
-                return
-            dlg.destroy()
-            self._admin_refresh_table()
-            messagebox.showinfo("AI Route Token",
-                                f"Saved. {name} can now run AI Routing.")
-
-        def _remove():
-            if not already:
-                return
-            if messagebox.askyesno("Remove token",
-                                   f"Remove the saved Claude token for {name}? "
-                                   f"They will no longer be able to run AI Routing.",
-                                   parent=dlg):
-                _tqa.delete_user_oauth_token(slug)
-                dlg.destroy()
-                self._admin_refresh_table()
-
-        btns = ttk.Frame(frm)
-        btns.pack(pady=(10, 0))
-        ttk.Button(btns, text="Save", command=_save).pack(side='left', padx=4)
-        rm = ttk.Button(btns, text="Remove saved token", command=_remove)
-        rm.pack(side='left', padx=4)
-        if not already:
-            rm.state(['disabled'])
-        ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side='left', padx=4)
-        dlg.wait_window()
 
     def _admin_add_user(self):
         """Add a new user: collect fields, generate a bearer token, write
@@ -29101,8 +28894,13 @@ or from the Help menu."""
             # ES_CONTINUOUS alone clears all previous flags → normal sleep allowed
             ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
 
-    def _on_window_close(self):
-        """Handle window close event - cleanly stop all child processes."""
+    def _on_window_close(self, relaunch=None):
+        """Handle window close event - cleanly stop all child processes.
+
+        relaunch: optional command line started (detached) after everything
+        is stopped and just before exiting — used by Restart Now to run
+        RAG_RUN.bat, which installs a staged update and reopens AI-Prowler.
+        """
 
         def _kill_proc(proc, name="process"):
             """Terminate a subprocess gracefully, then force-kill if needed."""
@@ -29149,6 +28947,24 @@ or from the Help menu."""
 
         # ── cloudflared tunnel ───────────────────────────────────────────────
         _kill_proc(self._cloudflared_proc, "cloudflared tunnel")
+
+        # ── Restart Now (update install): start RAG_RUN.bat detached ─────────
+        # It waits ~2 s so this process has fully exited, then installs the
+        # staged update and starts AI-Prowler again.
+        if relaunch:
+            try:
+                self._launch_detached(relaunch, cwd=str(Path(__file__).resolve().parent))
+                print("Restart scheduled: RAG_RUN.bat will install the update")
+            except Exception as e:
+                print(f"Warning: could not schedule restart: {e}")
+                try:
+                    messagebox.showwarning(
+                        "Restart AI-Prowler",
+                        "AI-Prowler closed but could not reopen itself.\n\n"
+                        "Start it again from the AI-Prowler shortcut — the "
+                        "update installs as it starts.")
+                except Exception:
+                    pass
 
         # ── Close window and exit cleanly ────────────────────────────────────
         # Destroy the Tk root first so all after() callbacks are cancelled.

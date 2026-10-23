@@ -60,7 +60,8 @@ PROBES = (
         ("status", "check_ai_prowler_status", {}, ALL),
         ("SMS configured?", "check_sms_configured", {}, ALL),
         ("email configured?", "check_email_configured", {}, ALL),
-        ("route start options", "get_route_start_options", {}, ALL),
+        # "route start options" (get_route_start_options) left the Jobs app 2026-10-22
+        # with the 🧠 AI Route (Claude CLI) button.
         # R-069 (David 2026-09-29): Customer Reminders list = owner, managers, staff
         ("stale customers (Reports)", "find_stale_customers", {}, CREW_NO),
         # R-068 (David 2026-09-29): AR aging report = owner and managers

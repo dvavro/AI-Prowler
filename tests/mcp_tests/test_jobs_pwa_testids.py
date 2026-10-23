@@ -31,13 +31,15 @@ IDS = [
     "screen-jobs", "screen-board", "screen-route", "screen-calendar", "screen-clock",
     "screen-photos", "screen-messages", "screen-reports", "screen-profile",
     "routeDatePicker", "routeMap", "routePrescreen", "routeWarnings", "routeStopsList",
-    "routeTodayBtnRoute", "routeAiSuggestBtn", "routeEmailRouteBtn",
+    # 2026-10-22: routeAiSuggestBtn (🧠 Run AI Route, Claude CLI) was removed;
+    # routeCopyAiBtn (📋 Copy AI Route for Any AI) took its place.
+    "routeTodayBtnRoute", "routeCopyAiBtn", "routeEmailRouteBtn",
     "routeApproveBtn", "routeUnapproveBtn",
     # 2026-10-08: the old Jobs-page route buttons (routeTodayBtn,
     # jobsAiRouteBtn, jobsEmailRouteBtn) were removed in the Route-page
     # redesign — the Jobs page now has the single "Go to Route Page"
     # button (jobsGoRouteBtn); routing itself lives on the Route tab
-    # (routeTodayBtnRoute / routeAiSuggestBtn / routeEmailRouteBtn above).
+    # (routeTodayBtnRoute / routeCopyAiBtn / routeEmailRouteBtn above).
     "jobsGoRouteBtn", "jobsPrescreen", "jobsRouteStatus",
 ]
 

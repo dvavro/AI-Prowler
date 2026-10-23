@@ -91,6 +91,15 @@ def _isolated_home(tmp_path, monkeypatch):
     # mock subprocess.run directly instead of relying on this default.
     monkeypatch.setattr(tqa, "_unregister_queue_task_elevated",
                          lambda *a, **kw: (True, "mocked — see _isolated_home fixture"))
+    # 2026-10-22 (running-only queue): never talk to the REAL AI-Prowler on
+    # localhost:8000 and never start the real app from a test. Tests that need
+    # a "running" server override these per test.
+    monkeypatch.setattr(tqa, "RUNNING_SERVER_MCP_CONFIG_PATH",
+                        tmp_path / ".ai-prowler" / "claude_mcp_config_running.json")
+    monkeypatch.setattr(tqa, "_server_answers", lambda *a, **kw: False)
+    monkeypatch.setattr(tqa, "_ai_prowler_app_running", lambda: False)
+    monkeypatch.setattr(tqa, "_start_ai_prowler_app",
+                        lambda: (False, "mocked — tests never start AI-Prowler"))
     yield tmp_path
 
 
@@ -132,7 +141,10 @@ def test_wrapper_script_contains_headless_flag():
     content = tqa.build_wrapper_script_content("C:\\fake\\mcp.json", "mcp__ai-prowler__*")
     assert '" -p "' in content  # exe path is quoted; -p flag is always present
     assert "--mcp-config" in content
-    assert "C:\\fake\\mcp.json" in content
+    # Running-only (2026-10-22): the config is picked at run time from the
+    # running AI-Prowler, never a fixed file baked into the script.
+    assert '--mcp-config "%AIP_MCP_CONFIG%"' in content
+    assert "scheduled_run_mcp_config()" in content
     assert "--allowedTools" in content
     assert "mcp__*" in content          # broadened wildcard
     assert "mcp__ai-prowler__*" not in content  # narrow form replaced
@@ -240,21 +252,18 @@ def test_wrapper_bat_active_days_gate_never_uses_pythonw(monkeypatch):
             f"pythonw.exe in active-days gate will break scheduled runs:\n{line}")
 
 
-def test_local_mcp_config_command_is_never_pythonw(_isolated_home, monkeypatch,
-                                                     tmp_path):
-    monkeypatch.setattr(
-        tqa.sys, "executable",
-        r"C:\Users\david\AppData\Local\Programs\Python\Python311\pythonw.exe")
-    monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH",
-                        tmp_path / "ai_prowler_mcp.py")
-    (tmp_path / "ai_prowler_mcp.py").write_text("")
-    ok, path = tqa._generate_local_mcp_config()
-    assert ok
+def test_server_mcp_config_never_launches_a_program(_isolated_home, tmp_path):
+    """Running-only (2026-10-22): the MCP config handed to Claude Code points
+    at the running AI-Prowler over HTTP. It must never carry a 'command'
+    (that would make Claude Code start its own AI-Prowler copy)."""
     import json
-    config = json.loads(Path(path).read_text())
-    cmd = config["mcpServers"]["ai-prowler"]["command"]
-    assert "pythonw" not in cmd.lower()
-    assert cmd.lower().endswith("python.exe")
+    path = tmp_path / "cfg.json"
+    tqa._write_server_config("tok-xyz", path)
+    entry = json.loads(path.read_text())["mcpServers"]["ai-prowler"]
+    assert "command" not in entry and "args" not in entry
+    assert entry["type"] == "http"
+    assert entry["url"] == tqa.LOCAL_SERVER_URL + "/mcp"
+    assert entry["headers"]["Authorization"] == "Bearer tok-xyz"
 
 
 def test_wrapper_script_always_cds_into_ai_prowler_home(_isolated_home):
@@ -2159,7 +2168,12 @@ def test_open_setup_token_terminal_reports_failure_gracefully(monkeypatch):
     assert "cmd.exe not found" in detail
 
 
-# ── AI-Prowler MCP config generation ──────────────────────────────────────
+# ── AI-Prowler MCP config: always the RUNNING AI-Prowler (2026-10-22) ──────
+# David: "The task queue or custom analysis tasks should never open up a new
+# AI-Prowler." The config handed to Claude Code always points at this PC's
+# running AI-Prowler over its local connection (http://localhost:8000/mcp),
+# signed in with the Bearer Token. No stdio copy, no internet tunnel, and no
+# token means the queue can't be used (David chose to require remote access).
 
 def _write_ai_prowler_config(home, **overrides):
     cfg_path = home / ".ai-prowler" / "config.json"
@@ -2173,7 +2187,8 @@ def _write_ai_prowler_config(home, **overrides):
 def test_generate_mcp_config_missing_ai_prowler_config(_isolated_home):
     ok, detail = tqa.generate_mcp_config()
     assert ok is False
-    assert "not found" in detail
+    assert detail == tqa.NO_REMOTE_ACCESS_MSG
+    assert "Bearer Token" in detail and "Remote Access" in detail
 
 
 def test_generate_mcp_config_missing_token(_isolated_home):
@@ -2183,167 +2198,241 @@ def test_generate_mcp_config_missing_token(_isolated_home):
     assert "Bearer Token" in detail
 
 
-def test_generate_mcp_config_missing_domain(_isolated_home):
-    _write_ai_prowler_config(_isolated_home, tunnel_domain="")
-    ok, detail = tqa.generate_mcp_config()
-    assert ok is False
-    assert "tunnel domain" in detail
-
-
-def test_generate_mcp_config_writes_correct_schema(_isolated_home):
-    _write_ai_prowler_config(_isolated_home)
-    ok, path = tqa.generate_mcp_config()
-    assert ok is True
-    written = json.loads(Path(path).read_text(encoding="utf-8"))
-    server = written["mcpServers"]["ai-prowler"]
-    assert server["type"] == "http"
-    assert server["url"] == "https://example-tunnel.ai-prowler.com/mcp"
-    assert server["headers"]["Authorization"] == "Bearer test-token-abc123"
-
-
-def test_generate_mcp_config_strips_protocol_from_domain(_isolated_home):
-    _write_ai_prowler_config(_isolated_home, tunnel_domain="https://example-tunnel.ai-prowler.com/")
-    ok, path = tqa.generate_mcp_config()
-    assert ok is True
-    written = json.loads(Path(path).read_text(encoding="utf-8"))
-    assert written["mcpServers"]["ai-prowler"]["url"] == "https://example-tunnel.ai-prowler.com/mcp"
-
-
 def test_generate_mcp_config_survives_corrupt_ai_prowler_config(_isolated_home):
     cfg_path = _isolated_home / ".ai-prowler" / "config.json"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text("{not valid json", encoding="utf-8")
     ok, detail = tqa.generate_mcp_config()
     assert ok is False
-    assert "Could not read" in detail
+    assert detail == tqa.NO_REMOTE_ACCESS_MSG
 
 
-# ── v8.2.x: local stdio MCP config (fresh-install fix) ─────────────────────
-# Bug report: on a fresh install / fresh machine, clicking Test Setup (Dry
-# Run) never produced an MCP config file even after successfully getting a
-# Claude Code token. Root cause: generate_mcp_config() only ever wrote a
-# REMOTE config, gated on AI-Prowler's own Bearer Token + tunnel domain
-# (Settings -> Remote Access) -- a third, unrelated piece of setup that a
-# fresh machine simply doesn't have yet, regardless of the Claude Code
-# token being valid. These tests cover the local-first fix.
-
-def _make_fake_mcp_script(home) -> Path:
-    """Simulates ai_prowler_mcp.py sitting next to task_queue_automation.py
-    on a real install, without needing the real (large) file."""
-    script = home / "fake_ai_prowler_mcp.py"
-    script.write_text("# fake MCP script for tests\n", encoding="utf-8")
-    return script
-
-
-def test_generate_mcp_config_uses_local_on_fresh_machine(_isolated_home, monkeypatch):
-    """THE bug-report scenario: nothing configured at all -- no AI-Prowler
-    config.json, no Bearer Token, no tunnel -- just a fresh install with
-    the MCP script present. generate_mcp_config() must still succeed."""
-    fake_script = _make_fake_mcp_script(_isolated_home)
-    monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_script)
-    # No AI-Prowler config.json written at all -- confirms this path does
-    # NOT depend on it, unlike the old behavior.
-    assert not tqa.AI_PROWLER_CONFIG_PATH.exists()
-
+def test_generate_mcp_config_writes_local_connection_schema(_isolated_home):
+    _write_ai_prowler_config(_isolated_home)
     ok, path = tqa.generate_mcp_config()
-
     assert ok is True, path
     assert Path(path) == tqa.GENERATED_MCP_CONFIG_PATH
-    assert Path(path).exists()
+    server = json.loads(Path(path).read_text(encoding="utf-8"))["mcpServers"]["ai-prowler"]
+    assert server["type"] == "http"
+    assert server["url"] == "http://localhost:8000/mcp"
+    assert server["headers"]["Authorization"] == "Bearer test-token-abc123"
 
 
-def test_generate_mcp_config_local_schema_is_stdio(_isolated_home, monkeypatch):
-    fake_script = _make_fake_mcp_script(_isolated_home)
+def test_generate_mcp_config_never_uses_the_internet_tunnel(_isolated_home):
+    _write_ai_prowler_config(_isolated_home, tunnel_domain="https://example-tunnel.ai-prowler.com/")
+    ok, path = tqa.generate_mcp_config()
+    assert ok is True
+    assert "example-tunnel" not in Path(path).read_text(encoding="utf-8")
+
+
+def test_generate_mcp_config_never_starts_its_own_copy(_isolated_home, monkeypatch):
+    """No 'command' entry = Claude Code can't launch a second AI-Prowler, even
+    when ai_prowler_mcp.py is sitting right there (the old stdio path)."""
+    fake_script = _isolated_home / "fake_ai_prowler_mcp.py"
+    fake_script.write_text("# fake\n", encoding="utf-8")
     monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_script)
-
-    ok, path = tqa.generate_mcp_config()
-    assert ok is True
-
-    written = json.loads(Path(path).read_text(encoding="utf-8"))
-    server = written["mcpServers"]["ai-prowler"]
-    assert server["command"] == sys.executable
-    assert server["args"] == [str(fake_script)]
-    assert "type" not in server  # stdio, not http -- no "type": "http" key
-    assert server["env"]["PYTHONUNBUFFERED"] == "1"
-
-
-def test_generate_mcp_config_falls_back_to_remote_when_local_script_missing(_isolated_home):
-    # Default fixture already points LOCAL_MCP_SCRIPT_PATH at a
-    # nonexistent file. With a fully valid remote config present, the
-    # overall call must still succeed via the remote fallback.
     _write_ai_prowler_config(_isolated_home)
-    ok, path = tqa.generate_mcp_config()
+    for prefer_remote in (False, True):        # the old switch is ignored now
+        ok, path = tqa.generate_mcp_config(prefer_remote=prefer_remote)
+        assert ok is True
+        server = json.loads(Path(path).read_text(encoding="utf-8"))["mcpServers"]["ai-prowler"]
+        assert "command" not in server and "args" not in server
+        assert server["url"] == "http://localhost:8000/mcp"
+
+
+def test_generate_mcp_config_does_not_need_the_server_up_right_now(_isolated_home, monkeypatch):
+    """Turning the queue on writes the config; each run connects at run time."""
+    _write_ai_prowler_config(_isolated_home)
+
+    def _no_probe(*a, **kw):
+        raise AssertionError("must not probe")
+    monkeypatch.setattr(tqa, "_server_answers", _no_probe)
+    ok, _ = tqa.generate_mcp_config()
     assert ok is True
-    written = json.loads(Path(path).read_text(encoding="utf-8"))
-    assert written["mcpServers"]["ai-prowler"]["type"] == "http"
 
 
-def test_generate_mcp_config_fails_when_neither_local_nor_remote_available(_isolated_home):
-    # Nothing at all -- matches test_generate_mcp_config_missing_ai_prowler_config
-    # but explicit about covering the combined generate_mcp_config() entry
-    # point rather than the remote helper directly.
-    ok, detail = tqa.generate_mcp_config()
+# ── connect_to_running_ai_prowler ───────────────────────────────────────────
+
+class _Clock:
+    """Fake time.time()/time.sleep() so wait loops finish instantly."""
+    def __init__(self):
+        self.t = 1_000_000.0
+        self.sleeps = 0
+
+    def time(self):
+        return self.t
+
+    def sleep(self, s):
+        self.sleeps += 1
+        self.t += s
+
+
+@pytest.fixture
+def _clock(monkeypatch):
+    c = _Clock()
+    monkeypatch.setattr(tqa.time, "time", c.time)
+    monkeypatch.setattr(tqa.time, "sleep", c.sleep)
+    return c
+
+
+def _boom(msg):
+    def _f(*a, **kw):
+        raise AssertionError(msg)
+    return _f
+
+
+def test_connect_no_token_never_probes_or_starts(_isolated_home, monkeypatch, _clock):
+    monkeypatch.setattr(tqa, "_server_answers", _boom("must not probe without a token"))
+    monkeypatch.setattr(tqa, "_start_ai_prowler_app", _boom("must not start without a token"))
+    ok, why = tqa.connect_to_running_ai_prowler()
+    assert ok is False and why == tqa.NO_REMOTE_ACCESS_MSG
+
+
+def test_connect_uses_the_running_server(_isolated_home, monkeypatch, _clock):
+    _write_ai_prowler_config(_isolated_home)
+    seen = []
+    monkeypatch.setattr(tqa, "_server_answers", lambda tok, *a, **kw: seen.append(tok) or True)
+    monkeypatch.setattr(tqa, "_start_ai_prowler_app", _boom("must not start"))
+    target = _isolated_home / "cfg_now.json"
+    ok, path = tqa.connect_to_running_ai_prowler(config_path=target)
+    assert ok is True and Path(path) == target
+    assert seen == ["test-token-abc123"]
+    server = json.loads(target.read_text(encoding="utf-8"))["mcpServers"]["ai-prowler"]
+    assert server["url"] == "http://localhost:8000/mcp"
+
+
+def test_connect_default_path_is_the_running_config(_isolated_home, monkeypatch, _clock):
+    _write_ai_prowler_config(_isolated_home)
+    monkeypatch.setattr(tqa, "_server_answers", lambda *a, **kw: True)
+    ok, path = tqa.connect_to_running_ai_prowler()
+    assert ok is True and Path(path) == tqa.RUNNING_SERVER_MCP_CONFIG_PATH
+
+
+def test_connect_starts_the_normal_app_once_then_waits(_isolated_home, monkeypatch, _clock):
+    """Not answering + app not open: start it ONCE (AutoStart task), then poll
+    until it answers."""
+    _write_ai_prowler_config(_isolated_home)
+    starts = []
+    state = {"probes": 0}
+
+    def _answers(*a, **kw):
+        state["probes"] += 1
+        return bool(starts) and state["probes"] >= 4     # comes up a bit after starting
+
+    monkeypatch.setattr(tqa, "_server_answers", _answers)
+    monkeypatch.setattr(tqa, "_ai_prowler_app_running", lambda: False)
+    monkeypatch.setattr(tqa, "_start_ai_prowler_app", lambda: starts.append(1) or (True, "started"))
+    ok, path = tqa.connect_to_running_ai_prowler(wait_sec=300)
+    assert ok is True, path
+    assert starts == [1]
+    assert _clock.sleeps >= 3
+
+
+def test_connect_never_starts_a_second_app_when_one_is_open(_isolated_home, monkeypatch, _clock):
+    _write_ai_prowler_config(_isolated_home)
+    monkeypatch.setattr(tqa, "_ai_prowler_app_running", lambda: True)
+    monkeypatch.setattr(tqa, "_start_ai_prowler_app", _boom("must not start a second app"))
+    ok, why = tqa.connect_to_running_ai_prowler(wait_sec=30)
     assert ok is False
-    assert "not found" in detail.lower()
+    assert "Remote Access" in why          # app open, connection off -> where to look
 
 
-def test_generate_mcp_config_prefer_remote_true_uses_remote_when_both_available(_isolated_home, monkeypatch):
-    fake_script = _make_fake_mcp_script(_isolated_home)
-    monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_script)
+def test_connect_gives_up_after_the_wait_and_says_why(_isolated_home, monkeypatch, _clock):
     _write_ai_prowler_config(_isolated_home)
-
-    ok, path = tqa.generate_mcp_config(prefer_remote=True)
-    assert ok is True
-    written = json.loads(Path(path).read_text(encoding="utf-8"))
-    assert written["mcpServers"]["ai-prowler"]["type"] == "http"
-
-
-def test_generate_mcp_config_prefer_remote_falls_back_to_local(_isolated_home, monkeypatch):
-    # prefer_remote=True but remote isn't actually configured -- must not
-    # just fail; local is still available and should be used.
-    fake_script = _make_fake_mcp_script(_isolated_home)
-    monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_script)
-
-    ok, path = tqa.generate_mcp_config(prefer_remote=True)
-    assert ok is True
-    written = json.loads(Path(path).read_text(encoding="utf-8"))
-    assert "type" not in written["mcpServers"]["ai-prowler"]
+    monkeypatch.setattr(tqa, "_start_ai_prowler_app", lambda: (True, "AI-Prowler was started"))
+    start = _clock.t
+    ok, why = tqa.connect_to_running_ai_prowler(wait_sec=300)
+    assert ok is False
+    assert "isn't running" in why and "5 minute" in why
+    assert "AI-Prowler was started" in why
+    assert 300 <= _clock.t - start <= 310
+    assert not tqa.RUNNING_SERVER_MCP_CONFIG_PATH.exists()
 
 
-def test_generate_mcp_config_default_prefers_local_over_remote(_isolated_home, monkeypatch):
-    # Both are fully available -- default (prefer_remote=False) must pick
-    # local, since that's the whole point of the fix (zero setup needed).
-    fake_script = _make_fake_mcp_script(_isolated_home)
-    monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_script)
+def test_now_button_never_starts_the_app(_isolated_home, monkeypatch, _clock):
     _write_ai_prowler_config(_isolated_home)
+    monkeypatch.setattr(tqa, "_start_ai_prowler_app", _boom("NOW must not start anything"))
+    ok, why = tqa.generate_mcp_config_for_now_button()
+    assert ok is False
+    assert "isn't running" in why
 
-    ok, path = tqa.generate_mcp_config()
+
+def test_now_button_config_goes_to_its_own_file(_isolated_home, monkeypatch, _clock):
+    _write_ai_prowler_config(_isolated_home)
+    monkeypatch.setattr(tqa, "_server_answers", lambda *a, **kw: True)
+    ok, path = tqa.generate_mcp_config_for_now_button()
     assert ok is True
-    written = json.loads(Path(path).read_text(encoding="utf-8"))
-    assert "type" not in written["mcpServers"]["ai-prowler"]
+    assert Path(path) == tqa.AI_PROWLER_HOME / "claude_mcp_config_now.json"
 
 
-def test_dry_run_check_mcp_config_check_passes_on_fresh_machine_after_local_generate(
-        _isolated_home, monkeypatch):
-    """End-to-end regression test for the exact reported bug: on a fresh
-    machine (nothing configured), call generate_mcp_config() the way the
-    GUI's Test Setup (Dry Run) button does, save the resulting path into
-    the automation config, then confirm dry_run_check()'s 'MCP config
-    file' check reports ok=True."""
-    fake_script = _make_fake_mcp_script(_isolated_home)
-    monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_script)
+# ── scheduled_run_mcp_config (called by the scheduled wrapper .bat) ───────
+
+def test_scheduled_run_mcp_config_returns_path_when_running(_isolated_home, monkeypatch, _clock):
+    _write_ai_prowler_config(_isolated_home)
+    monkeypatch.setattr(tqa, "_server_answers", lambda *a, **kw: True)
+    assert tqa.scheduled_run_mcp_config() == str(tqa.RUNNING_SERVER_MCP_CONFIG_PATH)
+
+
+def test_scheduled_run_skipped_is_recorded_everywhere(_isolated_home, monkeypatch, _clock):
+    _write_ai_prowler_config(_isolated_home)
+    assert tqa.scheduled_run_mcp_config() == "NO_SERVER"
+    last = tqa.load_last_run()
+    assert last["status"] == "failure"
+    assert "Scheduled run skipped" in last["detail"] and "isn't running" in last["detail"]
+    headless = json.loads((tqa.AI_PROWLER_HOME / "last_headless_run.json").read_text(encoding="utf-8"))
+    assert headless["result"].startswith("Skipped")
+    assert "scheduled run skipped" in tqa.AUDIT_LOG_PATH.read_text(encoding="utf-8")
+
+
+def test_scheduled_run_without_token_explains_remote_access(_isolated_home, _clock):
+    assert tqa.scheduled_run_mcp_config() == "NO_SERVER"
+    assert "Bearer Token" in tqa.load_last_run()["detail"]
+
+
+def test_wrapper_skips_cleanly_when_no_server(_isolated_home):
+    content = tqa.build_wrapper_script_content("x.json", "mcp__*")
+    lines = content.splitlines()
+    pick = next(i for i, l in enumerate(lines) if "scheduled_run_mcp_config()" in l)
+    no_srv = next(i for i, l in enumerate(lines) if '"%AIP_MCP_CONFIG%"=="NO_SERVER"' in l)
+    run = next(i for i, l in enumerate(lines) if '--mcp-config "%AIP_MCP_CONFIG%"' in l)
+    assert pick < no_srv < run
+    assert "exit /b 1" in lines[no_srv]
+
+
+# ── Test Setup (dry run) checks ────────────────────────────────────────────
+
+def _checks(report):
+    return {c["name"]: c for c in report["checks"]}
+
+
+def _no_cli(monkeypatch):
     monkeypatch.setattr(tqa.subprocess, "run",
-                         lambda *a, **kw: type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})())
+                        lambda *a, **kw: type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})())
 
+
+def test_dry_run_reports_remote_access_and_running_server(_isolated_home, monkeypatch):
+    _no_cli(monkeypatch)
+    _write_ai_prowler_config(_isolated_home)
+    monkeypatch.setattr(tqa, "_server_answers", lambda *a, **kw: True)
     ok, path = tqa.generate_mcp_config()
     assert ok is True
     cfg = tqa.load_config()
     cfg["mcp_config_path"] = path
     tqa.save_config(cfg)
+    c = _checks(tqa.dry_run_check())
+    assert c["Remote access (Bearer Token)"]["ok"] is True
+    assert "test-token-abc123" not in c["Remote access (Bearer Token)"]["detail"]  # never shown
+    assert c["Running AI-Prowler (local connection)"]["ok"] is True
+    assert c["MCP config file"]["ok"] is True
 
-    report = tqa.dry_run_check()
-    mcp_check = next(c for c in report["checks"] if c["name"] == "MCP config file")
-    assert mcp_check["ok"] is True
+
+def test_dry_run_without_token_flags_it_and_starts_nothing(_isolated_home, monkeypatch):
+    _no_cli(monkeypatch)
+    monkeypatch.setattr(tqa, "_start_ai_prowler_app", _boom("Test Setup must not start anything"))
+    c = _checks(tqa.dry_run_check())
+    assert c["Remote access (Bearer Token)"]["ok"] is False
+    assert c["Remote access (Bearer Token)"]["detail"] == tqa.NO_REMOTE_ACCESS_MSG
+    assert c["Running AI-Prowler (local connection)"]["ok"] is False
 
 
 # ── ANTHROPIC_API_KEY fallback ─────────────────────────────────────────────
@@ -3056,35 +3145,18 @@ class TestAllowedToolsNormalisation:
 class TestPrewarmRemovalRegression:
     """v9.0.0 — prewarm thread removed; MCP config env is minimal."""
 
-    def test_mcp_config_env_has_no_ai_prowler_headless(self, tmp_path,
-                                                         monkeypatch):
-        """AI_PROWLER_HEADLESS no longer needed — prewarm is gone entirely.
-        The MCP server env block must NOT include it so we don't ship dead
-        config to customers."""
-        fake_mcp = tmp_path / "ai_prowler_mcp.py"
-        fake_mcp.write_text("")
-        monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_mcp)
-        ok, path = tqa._generate_local_mcp_config()
-        assert ok
+    def test_mcp_config_has_no_env_block_at_all(self, tmp_path, monkeypatch):
+        """2026-10-22: the config points at the RUNNING AI-Prowler over HTTP,
+        so there is no program to launch and no env block (AI_PROWLER_HEADLESS
+        or otherwise) to ship."""
         import json
-        config = json.loads(Path(path).read_text())
-        env = config["mcpServers"]["ai-prowler"]["env"]
-        assert "AI_PROWLER_HEADLESS" not in env
-
-    def test_mcp_config_env_has_required_python_vars(self, tmp_path,
-                                                       monkeypatch):
-        """Standard Python env vars must still be present."""
-        fake_mcp = tmp_path / "ai_prowler_mcp.py"
-        fake_mcp.write_text("")
-        monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_mcp)
-        ok, path = tqa._generate_local_mcp_config()
+        cfg = tmp_path / ".ai-prowler" / "config.json"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(json.dumps({"remote_token": "t"}), encoding="utf-8")
+        ok, path = tqa.generate_mcp_config()
         assert ok
-        import json
-        config = json.loads(Path(path).read_text())
-        env = config["mcpServers"]["ai-prowler"]["env"]
-        assert env.get("PYTHONNOUSERSITE") == "1"
-        assert env.get("PYTHONIOENCODING") == "utf-8"
-        assert env.get("PYTHONUNBUFFERED") == "1"
+        entry = json.loads(Path(path).read_text())["mcpServers"]["ai-prowler"]
+        assert "env" not in entry and "command" not in entry
 
     def test_queue_runner_prompt_does_not_call_sync_due_tasks_to_queue(self):
         """sync_due_tasks_to_queue must NOT be in the queue runner prompt.

@@ -60,33 +60,15 @@ STATUS_PATH = AI_PROWLER_HOME / "task_automation_last_run.json"
 AUDIT_LOG_PATH = AI_PROWLER_HOME / "autonomous_run_audit.log"
 WRAPPER_SCRIPT_NAME = "run_ai_prowler_queue.bat"
 SCHEDULED_TASK_NAME = "AI-Prowler-QueueRunner"
-# AI Routing on-demand runner (2026-09-18) — a SEPARATE, dedicated Scheduled
-# Task, registered with NO trigger at all, that exists purely to be started
-# on demand via `schtasks /run /tn AI-Prowler-AIRoutingRunner`. Deliberately
-# isolated from SCHEDULED_TASK_NAME: firing SCHEDULED_TASK_NAME on demand
-# would run its QUEUE_RUNNER_PROMPT, which processes EVERY due entry in
-# pending_tasks.json — not just ours — sweeping up other one-shot tasks the
-# user queued for their own next scheduled check and running them early.
-# This dedicated task's wrapper is written fresh with the ONE specific
-# routing prompt each time it's fired and never reads or touches
-# pending_tasks.json at all, so it cannot interfere with anything else
-# queued, by construction rather than by prompt discipline alone.
-AI_ROUTING_TASK_NAME = "AI-Prowler-AIRoutingRunner"
-# Fixed path the task's Action always points at; CONTENT is rewritten fresh
-# before every on-demand trigger (see build_ai_routing_wrapper_content()).
-AI_ROUTING_WRAPPER_PATH = AI_PROWLER_HOME / "ai_routing" / "run_ai_routing_ondemand.bat"
-AI_ROUTING_LAST_RUN_PATH = AI_PROWLER_HOME / "ai_routing" / "last_ai_routing_run.json"
-# Written as the LAST step of every wrapper run, after the claude call
-# returns — _ai_routing_worker (ai_prowler_mcp.py) polls for this file's
-# mtime to advance past its own start time as its completion signal, since
-# this dedicated on-demand task deliberately never touches pending_tasks.json
-# (nothing there to watch for removal, unlike the shared queue runner).
-AI_ROUTING_DONE_MARKER_PATH = AI_PROWLER_HOME / "ai_routing" / "last_run_done.marker"
-# The prompt is written HERE and piped via stdin (`type ... | claude -p`)
-# rather than ever appearing as a quoted argument on the .bat's own command
-# line — see build_ai_routing_wrapper_content()'s docstring for why this
-# replaced the original quoted-argument approach.
-AI_ROUTING_PROMPT_TXT_PATH = AI_PROWLER_HOME / "ai_routing" / "prompt.txt"
+# 2026-10-22 (David): the Jobs app's 🧠 "Run AI Routing" (Claude CLI) and its
+# dedicated on-demand Scheduled Task were REMOVED — AI routing now happens in
+# any AI chat connected to AI-Prowler (📋 Copy AI Route / 🗓️ Plan Week).
+# These names are kept only so retire_cli_ai_routing() can clean up what an
+# older version left on this computer.
+RETIRED_AI_ROUTING_TASK_NAME = "AI-Prowler-AIRoutingRunner"
+RETIRED_AI_ROUTING_DIR = AI_PROWLER_HOME / "ai_routing"   # wrapper, prompt, per-user tokens
+RETIRED_ROUTE_TASK_LABEL = "AI Route Optimizer (full reasoning)"
+RETIRED_AI_ROUTING_MARKER = AI_PROWLER_HOME / "cli_ai_routing_retired.marker"
 # v8.1.13 fix: NEVER rely on bare `python` resolving via PATH inside the
 # generated wrapper's self-gate check. Confirmed live (2026-07-28, David's
 # machine) that Python's own install directory is present on the
@@ -581,9 +563,27 @@ if exist "{OAUTH_TOKEN_PLAIN_PATH}" (
 )
 
 """
+        # 2026-10-22 (David): ONLY the AI-Prowler that's running on this PC —
+        # scheduled_run_mcp_config() connects to it (starting the normal app
+        # and waiting if needed) and prints its config path, or NO_SERVER
+        # after recording why the run was skipped. Never a second copy.
+        _tqa_dir = str(LOCAL_MCP_SCRIPT_PATH.parent)
         _invoke_block = (
+            'set "AIP_MCP_CONFIG="\n'
+            f'for /f "delims=" %%M in (\'{_self_gate_python_invocation()} -c "import sys; '
+            f"sys.path.insert(0, r'{_tqa_dir}'); import task_queue_automation as _t; "
+            "print(_t.scheduled_run_mcp_config())\" 2^>nul') do set \"AIP_MCP_CONFIG=%%M\"\n"
+            'if "%AIP_MCP_CONFIG%"=="" (\n'
+            '    echo {"result": "Skipped - could not check for the running AI-Prowler."} > '
+            '"%USERPROFILE%\\.ai-prowler\\last_headless_run.json"\n'
+            '    exit /b 1\n'
+            ')\n'
+            'if "%AIP_MCP_CONFIG%"=="NO_SERVER" exit /b 1\n'
             f'"{_get_claude_exe()}" -p "{prompt}" ^\n'
-            f'  --mcp-config "{mcp_config_path}" ^\n'
+            '  --mcp-config "%AIP_MCP_CONFIG%" ^\n'
+            # 2026-10-22: ONLY that config — never also the user's own
+            # Claude MCP servers (which may include a second AI-Prowler).
+            "  --strict-mcp-config ^\n"
             f'  --allowedTools "{allowed_tools}" ^\n'
             "  --output-format json ^\n"
             '  --permission-mode bypassPermissions > "%USERPROFILE%\\\\.ai-prowler\\\\last_headless_run.json" 2>&1\n'
@@ -795,24 +795,24 @@ def dry_run_check(auth: str | None = None) -> dict:
             except Exception as e:
                 checks.append({"name": "Claude Code CLI runs", "ok": False, "detail": str(e)})
 
-    # 3. Is AI-Prowler's own HTTP MCP server reachable? (read-only health
-    #    check, same one the LED reconciliation loop uses)
+    # 3. 2026-10-22: AI analyses only ever use the RUNNING AI-Prowler on this
+    #    PC, over its local connection — which needs remote access (a Bearer
+    #    Token). Read-only health check; never starts anything.
     cfg = load_config()
-    port = 8000
-    try:
-        import urllib.request
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2.5) as resp:
-            checks.append({
-                "name": f"AI-Prowler HTTP MCP server (port {port})",
-                "ok": True,
-                "detail": f"responded {resp.status}",
-            })
-    except Exception as e:
-        checks.append({
-            "name": f"AI-Prowler HTTP MCP server (port {port})",
-            "ok": False,
-            "detail": f"not reachable: {e}",
-        })
+    _tok = _bearer_token()
+    checks.append({
+        "name": "Remote access (Bearer Token)",
+        "ok": bool(_tok),
+        "detail": ("set up (value never displayed)" if _tok else NO_REMOTE_ACCESS_MSG),
+    })
+    _up = bool(_tok) and _server_answers(_tok)
+    checks.append({
+        "name": "Running AI-Prowler (local connection)",
+        "ok": _up,
+        "detail": (f"answering on {LOCAL_SERVER_URL}" if _up else
+                   "not answering — start it in Settings → Remote Access (a scheduled run "
+                   "starts the AI-Prowler app itself if it isn't open)"),
+    })
 
     # 4. Does the Skill file exist?
     # v8.1.14: checks under AI_PROWLER_HOME now, not the code install
@@ -966,199 +966,141 @@ def _get_claude_exe() -> str:
     return "claude"
 
 
-def _generate_local_mcp_config() -> tuple[bool, str]:
-    """Writes a stdio --mcp-config pointing headless Claude Code directly
-    at AI-Prowler's own ai_prowler_mcp.py — identical in shape to the
-    Claude Desktop config the installer auto-writes. Requires no Bearer
-    Token, no tunnel, no remote setup of any kind: it's the same machine,
-    so a local subprocess is all that's needed. Returns
-    (success, path_or_error_message)."""
-    if not LOCAL_MCP_SCRIPT_PATH.exists():
-        return False, (f"ai_prowler_mcp.py not found at {LOCAL_MCP_SCRIPT_PATH} "
-                        "— reinstall AI-Prowler.")
+# ── Always the RUNNING AI-Prowler (2026-10-22, David) ────────────────────────
+# "The task queue or custom analysis tasks should never open up a new
+# AI-Prowler — always use the AI-Prowler that's running (it starts with the
+# PC)." Every Claude / Grok run of the Autonomous AI Task Queue (scheduled or
+# ▶ NOW) talks to this PC's running AI-Prowler over its local connection
+# (http://localhost:8000/mcp — never the internet tunnel), signed in with this
+# install's Bearer Token so the server knows the call is the owner's.
+#
+# The old stdio config (Claude starting its own ai_prowler_mcp.py for the run)
+# and the Grok runner's own stdio copy are GONE: two AI-Prowlers on one
+# database is what made runs crawl or hang.
+#
+# The local connection only exists when remote access is set up (a Bearer
+# Token) — David chose to REQUIRE that rather than open one without a token.
+# If AI-Prowler isn't running when a scheduled run fires, the run starts the
+# normal app (the AI-Prowler-AutoStart task the installer registers to start
+# it at sign-in — never a hidden copy), waits for it, then runs; if it still
+# doesn't answer, the run is skipped and says why.
+LOCAL_SERVER_URL = "http://localhost:8000"
+STARTUP_TASK_NAME = "AI-Prowler-AutoStart"
+SERVER_START_WAIT_SEC = 300
+NO_REMOTE_ACCESS_MSG = (
+    "Remote access isn't set up on this PC (no Bearer Token), so there is no running "
+    "AI-Prowler connection for AI analyses to use. Set it up in Settings → Remote Access, "
+    "then try again.")
 
-    mcp_config = {
-        "mcpServers": {
-            "ai-prowler": {
-                "command": _get_python_exe(),
-                "args": [str(LOCAL_MCP_SCRIPT_PATH)],
-                "env": {
-                    "PYTHONNOUSERSITE": "1",
-                    "PYTHONIOENCODING": "utf-8",
-                    "PYTHONUNBUFFERED": "1",
-                    "PYTHONWARNINGS": "ignore",
-                },
-            }
-        }
-    }
 
+def _bearer_token() -> str:
+    """This install's Bearer Token (config.json remote_token); '' if none."""
+    try:
+        cfg = json.loads(AI_PROWLER_CONFIG_PATH.read_text(encoding="utf-8-sig")) \
+            if AI_PROWLER_CONFIG_PATH.exists() else {}
+    except Exception:
+        cfg = {}
+    return str(cfg.get("remote_token") or "").strip()
+
+
+def _server_answers(token: str, timeout: float = 3) -> bool:
+    """True when the running AI-Prowler answers on its local connection."""
+    import urllib.request as _ur
+    try:
+        req = _ur.Request(LOCAL_SERVER_URL + "/health", headers={"Authorization": f"Bearer {token}"})
+        with _ur.urlopen(req, timeout=timeout) as resp:
+            return resp.status in (200, 204)
+    except Exception:
+        return False
+
+
+def _write_server_config(token: str, path) -> tuple[bool, str]:
+    """Writes a Claude Code --mcp-config that points at the running AI-Prowler."""
+    mcp_config = {"mcpServers": {"ai-prowler": {
+        "type": "http",
+        "url": LOCAL_SERVER_URL + "/mcp",
+        "headers": {"Authorization": f"Bearer {token}"},
+    }}}
     try:
         AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
-        _ss_write_text(GENERATED_MCP_CONFIG_PATH,                  # atomic (safe_save)
-                       json.dumps(mcp_config, indent=2))
+        _ss_write_text(Path(path), json.dumps(mcp_config, indent=2))   # atomic (safe_save)
     except Exception as e:
         return False, f"Could not write MCP config: {e}"
+    return True, str(path)
 
-    return True, str(GENERATED_MCP_CONFIG_PATH)
 
-
-def _generate_localhost_mcp_config() -> tuple[bool, str]:
-    """v8.1.18: writes a Claude Code --mcp-config pointing at the
-    already-running AI-Prowler HTTP MCP server via localhost:8000 — the
-    same server the GUI launched at startup, used for remote/mobile access.
-
-    This is specifically for the ▶ NOW button path (run_single_prompt_now /
-    run_queue_now). The stdio path (generate_mcp_config / _generate_local_mcp_config)
-    is correct for the scheduled Task Scheduler wrapper, which runs overnight
-    when the GUI may not be open. But when the GUI IS open, the HTTP server
-    is already running, and using stdio via claude -p spawns a SECOND
-    ai_prowler_mcp.py process, both hitting the same ChromaDB concurrently.
-    Confirmed live (2026-07-29, multiple attempts): this dual-process
-    contention causes claude -p to run extremely slowly or appear to hang
-    for 10+ minutes even on a task that normally completes in ~2 minutes.
-
-    Uses localhost:8000 directly rather than the Cloudflare tunnel URL —
-    same server, avoids the external round-trip, faster and more reliable
-    for a process running on the same machine.
-
-    Returns (True, config_path) if the HTTP server is reachable, or
-    (False, reason) if it's not — callers fall back to stdio in that case.
-    """
-    import urllib.request as _ur
-    import urllib.error as _ue
-
-    # Quick reachability check before writing the config.
-    # /health returns 200 on the AI-Prowler HTTP MCP server.
+def _ai_prowler_app_running() -> bool:
+    """True when the AI-Prowler desktop app (rag_gui.py) is running for this
+    user — then we never start another, we just wait for its connection."""
+    if os.name != "nt":
+        return False
     try:
-        cfg_raw = json.loads(AI_PROWLER_CONFIG_PATH.read_text(
-            encoding="utf-8-sig")) if AI_PROWLER_CONFIG_PATH.exists() else {}
+        r = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command",
+             "(Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | "
+             "Where-Object { $_.CommandLine -like '*rag_gui.py*' } | Measure-Object).Count"],
+            capture_output=True, text=True, timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return int((r.stdout or "0").strip().splitlines()[-1]) > 0
     except Exception:
-        cfg_raw = {}
-    token = (cfg_raw.get("remote_token") or "").strip()
-    if not token:
-        return False, "No Bearer Token configured — HTTP server auth unknown."
+        return False
 
+
+def _start_ai_prowler_app() -> tuple[bool, str]:
+    """Starts the normal AI-Prowler app the same way signing in to Windows
+    does (the installer's AI-Prowler-AutoStart task) — on your own desktop,
+    never a hidden copy. Windows only starts it while you're signed in."""
+    if os.name != "nt":
+        return False, "starting AI-Prowler automatically is Windows-only"
     try:
-        req = _ur.Request(
-            "http://localhost:8000/health",
-            headers={"Authorization": f"Bearer {token}"})
-        with _ur.urlopen(req, timeout=3) as resp:
-            if resp.status not in (200, 204):
-                return False, f"HTTP server returned {resp.status}"
-    except (_ue.URLError, OSError):
-        return False, "HTTP MCP server not reachable on localhost:8000."
-
-    mcp_config = {
-        "mcpServers": {
-            "ai-prowler": {
-                "type": "http",
-                "url": "http://localhost:8000/mcp",
-                "headers": {
-                    "Authorization": f"Bearer {token}",
-                },
-            }
-        }
-    }
-
-    # Write to a SEPARATE config file so the scheduled task's stdio config
-    # (GENERATED_MCP_CONFIG_PATH) is never overwritten mid-run.
-    now_config_path = AI_PROWLER_HOME / "claude_mcp_config_now.json"
-    try:
-        AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
-        _ss_write_text(now_config_path,                            # atomic (safe_save)
-                       json.dumps(mcp_config, indent=2))
+        r = subprocess.run(["schtasks", "/run", "/tn", STARTUP_TASK_NAME],
+                           capture_output=True, text=True, timeout=30,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception as e:
-        return False, f"Could not write NOW-button MCP config: {e}"
+        return False, f"couldn't start AI-Prowler ({e})"
+    if r.returncode != 0:
+        return False, ("couldn't start AI-Prowler (" + ((r.stderr or r.stdout or "").strip()[:200]
+                                                        or f"schtasks exit {r.returncode}") + ")")
+    return True, "AI-Prowler was started"
 
-    return True, str(now_config_path)
+
+def connect_to_running_ai_prowler(wait_sec: int = SERVER_START_WAIT_SEC, start_app: bool = True,
+                                  config_path=None) -> tuple[bool, str]:
+    """(True, mcp-config path) for the running AI-Prowler, or (False, why).
+    Never starts a second copy: needs a Bearer Token (remote access); if the
+    connection doesn't answer and start_app is set, starts the normal app —
+    only when it isn't already open — and waits up to wait_sec."""
+    token = _bearer_token()
+    if not token:
+        return False, NO_REMOTE_ACCESS_MSG
+    target = config_path or RUNNING_SERVER_MCP_CONFIG_PATH
+    deadline = time.time() + max(0, wait_sec)
+    started, tried = "", False
+    while True:
+        if _server_answers(token):
+            return _write_server_config(token, target)
+        if start_app and not tried:
+            tried = True
+            if not _ai_prowler_app_running():
+                _ok, started = _start_ai_prowler_app()
+        if time.time() >= deadline:
+            break
+        time.sleep(5)
+    why = "AI-Prowler isn't running on this PC — its local connection didn't answer"
+    if wait_sec:
+        why += f" within {max(1, wait_sec // 60)} minute(s)"
+    why += "."
+    if started:
+        why += f" ({started}; it starts when you're signed in to Windows.)"
+    elif start_app and tried:
+        why += " (The AI-Prowler app is open but its connection isn't on — check Settings → Remote Access.)"
+    return False, why
 
 
 def generate_mcp_config_for_now_button() -> tuple[bool, str]:
-    """v8.1.18: MCP config for the ▶ NOW button — prefers the
-    already-running localhost:8000 HTTP MCP server over stdio, to avoid
-    spawning a duplicate MCP server process alongside the one the GUI
-    already has running.
-
-    Background: the scheduled task uses stdio (generate_mcp_config /
-    _generate_local_mcp_config) and works fine at 9 AM because it runs
-    alone. The ▶ NOW button always runs while the GUI is already open,
-    which means the GUI's own HTTP MCP server is already running on
-    port 8000. Spawning a SECOND stdio MCP server on top of that causes
-    ChromaDB contention — confirmed live repeatedly (2026-07-29/30):
-    claude -p hangs for the full 600s timeout with 0 bytes of output,
-    every single time, when stdio is used while the GUI is running.
-
-    Using localhost:8000 directly eliminates both the contention AND
-    the duplicate process — claude -p talks to the server that's already
-    there. Falls back to stdio only if the HTTP server isn't reachable
-    (e.g. user hasn't set up remote access / port 8000 isn't running).
-
-    Writes to claude_mcp_config_now.json (separate from the scheduled
-    task's claude_mcp_config.json) so the two never collide.
-    """
-    ok, result = _generate_localhost_mcp_config()
-    if ok:
-        return True, result
-    # Fallback: try remote tunnel config
-    ok, result = _generate_remote_mcp_config()
-    if ok:
-        now_config_path = AI_PROWLER_HOME / "claude_mcp_config_now.json"
-        try:
-            import shutil as _shutil
-            _shutil.copy2(result, str(now_config_path))
-            return True, str(now_config_path)
-        except Exception:
-            return True, result
-    # Last resort: stdio (may hang if GUI is running, but better than nothing)
-    return _generate_local_mcp_config()
-
-
-def _generate_remote_mcp_config() -> tuple[bool, str]:
-    """Reads AI-Prowler's own config.json for remote_token + tunnel_domain
-    and writes a Claude Code-compatible --mcp-config JSON file, in the
-    schema Anthropic's own docs specify for a remote HTTP MCP server with
-    a static auth header. Only relevant for users who've actually set up
-    remote/mobile access — see generate_mcp_config() for why the local
-    stdio path is tried first. Returns (success, path_or_error_message)."""
-    if not AI_PROWLER_CONFIG_PATH.exists():
-        return False, ("AI-Prowler config.json not found — set up the HTTP "
-                        "MCP server and Bearer Token in Settings first.")
-    try:
-        cfg = json.loads(AI_PROWLER_CONFIG_PATH.read_text(encoding="utf-8-sig"))
-    except Exception as e:
-        return False, f"Could not read AI-Prowler config.json: {e}"
-
-    token = (cfg.get("remote_token") or "").strip()
-    domain = (cfg.get("tunnel_domain") or "").strip()
-
-    if not token:
-        return False, "No Bearer Token saved yet — Settings → Remote Access → Save Token."
-    if not domain:
-        return False, "No tunnel domain configured yet — Settings → Remote Access → set up a tunnel."
-
-    domain = domain.replace("https://", "").replace("http://", "").rstrip("/")
-    url = f"https://{domain}/mcp"
-
-    mcp_config = {
-        "mcpServers": {
-            "ai-prowler": {
-                "type": "http",
-                "url": url,
-                "headers": {
-                    "Authorization": f"Bearer {token}",
-                },
-            }
-        }
-    }
-
-    try:
-        AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
-        _ss_write_text(GENERATED_MCP_CONFIG_PATH,                  # atomic (safe_save)
-                       json.dumps(mcp_config, indent=2))
-    except Exception as e:
-        return False, f"Could not write MCP config: {e}"
-
-    return True, str(GENERATED_MCP_CONFIG_PATH)
+    """▶ NOW button: the running AI-Prowler (the GUI that has the button is it)."""
+    return connect_to_running_ai_prowler(wait_sec=10, start_app=False,
+                                         config_path=AI_PROWLER_HOME / "claude_mcp_config_now.json")
 
 
 def _ensure_hook_uses_absolute_python() -> None:
@@ -1322,40 +1264,23 @@ def parse_claude_json_output(raw: str) -> dict | None:
 
 
 def generate_mcp_config(prefer_remote: bool = False) -> tuple[bool, str]:
-    """Writes/refreshes the --mcp-config file headless Claude Code needs to
-    reach AI-Prowler. Tries local stdio first (works out of the box on any
-    install, no user setup required); falls back to the remote HTTP config
-    if the local script can't be found. Pass prefer_remote=True to flip
-    that order — e.g. a Personal-mode user who's already set up remote/
-    mobile access and wants the scheduled task to exercise that same HTTP
-    path (matches what their mobile client actually uses, useful for
-    diagnosing remote-only issues). NOTE: this whole feature is Personal
-    mode only — server mode suppresses Task Queue automation entirely
-    (see dry_run_check() callers / the architecture spec), so there is no
-    server-mode case here at all. Either way, if the preferred path isn't
-    actually usable, the other one is tried automatically rather than
-    failing outright.
+    """Writes/refreshes the --mcp-config file for scheduled runs. 2026-10-22:
+    ALWAYS the running AI-Prowler on this PC (see the section above) — never a
+    stdio copy, never the internet tunnel — so it needs remote access (a
+    Bearer Token): without one this returns (False, NO_REMOTE_ACCESS_MSG) and
+    the task queue can't be turned on. Doesn't need AI-Prowler to be answering
+    right now; each run connects (and starts the app if needed) at run time.
+    prefer_remote is ignored (kept for older callers).
 
-    v8.1.14: also self-heals .claude/settings.json's audit-log hook
-    command to use an absolute python.exe path — see
-    _ensure_hook_uses_absolute_python()'s docstring. This runs here
-    (rather than needing its own separate call site) because every real
-    caller of the MCP config — dry-run checks, the Scheduled Task setup,
-    and every actual run — needs a valid MCP config first, so this piggy-
-    backs on that same guaranteed-to-run-first spot.
-
-    R-051: also marks AI_PROWLER_HOME as a trusted Claude Code workspace —
-    see _ensure_workspace_trusted().
-
+    v8.1.14 / R-051: also self-heals the audit-log hook and marks
+    AI_PROWLER_HOME a trusted Claude Code workspace.
     Returns (success, path_or_error_message)."""
     _ensure_hook_uses_absolute_python()
     _ensure_workspace_trusted()
-    first, second = (_generate_remote_mcp_config, _generate_local_mcp_config) \
-        if prefer_remote else (_generate_local_mcp_config, _generate_remote_mcp_config)
-    ok, result = first()
-    if ok:
-        return ok, result
-    return second()
+    token = _bearer_token()
+    if not token:
+        return False, NO_REMOTE_ACCESS_MSG
+    return _write_server_config(token, GENERATED_MCP_CONFIG_PATH)
 
 
 
@@ -1505,82 +1430,88 @@ GROK_QUEUE_RUNNER_PROMPT = (
 )
 
 
-class _StdioMCPClient:
-    """Minimal JSON-RPC-over-stdio MCP client: initialize, tools/list,
-    tools/call. Spawns AI-Prowler's own server as a subprocess — the same
-    shape the scheduled task's Claude --mcp-config uses, so no port, Bearer
-    token, or tunnel is needed."""
+class _HttpMCPClient:
+    """Minimal MCP client over the running AI-Prowler's local connection
+    (Streamable HTTP, http://localhost:8000/mcp): initialize, tools/list,
+    tools/call. 2026-10-22: replaced _StdioMCPClient, which started its own
+    copy of AI-Prowler for every Grok run."""
 
-    def __init__(self, mcp_script=None, python_exe=None):
-        import queue as _queue
-        import threading as _threading
-        script = str(mcp_script or LOCAL_MCP_SCRIPT_PATH)
-        self._proc = subprocess.Popen(
-            [(python_exe or _get_python_exe()), script],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            env={**os.environ,
-                 "PYTHONIOENCODING": "utf-8",
-                 "PYTHONUNBUFFERED": "1",
-                 "PYTHONWARNINGS": "ignore",
-                 "PYTHONNOUSERSITE": "1"},
-            text=True, bufsize=1,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    def __init__(self, token: str, url: str = None):
+        self._url = url or (LOCAL_SERVER_URL + "/mcp")
+        self._token = token
+        self._sid = None
         self._next_id = 1
-        self._lines = _queue.Queue()
-        self._reader = _threading.Thread(target=self._pump, daemon=True)
-        self._reader.start()
 
-    def _pump(self):
-        try:
-            for line in self._proc.stdout:
-                self._lines.put(line)
-        except Exception:
-            pass
+    def _post(self, payload, timeout):
+        import urllib.request as _ur
+        headers = {"Content-Type": "application/json",
+                   "Accept": "application/json, text/event-stream",
+                   "Authorization": f"Bearer {self._token}"}
+        if self._sid:
+            headers["Mcp-Session-Id"] = self._sid
+        req = _ur.Request(self._url, data=json.dumps(payload).encode("utf-8"),
+                          headers=headers, method="POST")
+        with _ur.urlopen(req, timeout=timeout) as resp:
+            sid = resp.headers.get("Mcp-Session-Id")
+            if sid:
+                self._sid = sid
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            body = resp.read().decode("utf-8", errors="replace")
+        return self._parse(body, ctype)
+
+    @staticmethod
+    def _parse(body: str, ctype: str) -> list:
+        if not body.strip():
+            return []
+        if "text/event-stream" in ctype or body.lstrip().startswith(("event:", "data:")):
+            msgs, data = [], []
+            for line in body.replace("\r\n", "\n").split("\n"):
+                if line.startswith("data:"):
+                    data.append(line[5:].lstrip())
+                elif not line.strip() and data:
+                    msgs.append("\n".join(data))
+                    data = []
+            if data:
+                msgs.append("\n".join(data))
+            out = []
+            for m in msgs:
+                try:
+                    obj = json.loads(m)
+                except Exception:
+                    continue
+                out.extend(obj if isinstance(obj, list) else [obj])
+            return out
+        obj = json.loads(body)
+        return obj if isinstance(obj, list) else [obj]
 
     def _request(self, method, params=None, timeout=180):
         rid = self._next_id
         self._next_id += 1
-        self._proc.stdin.write(json.dumps(
-            {"jsonrpc": "2.0", "id": rid, "method": method,
-             "params": params or {}}) + "\n")
-        self._proc.stdin.flush()
-        deadline = time.time() + timeout
-        while True:
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                raise TimeoutError(f"MCP {method} timed out after {timeout}s")
-            try:
-                line = self._lines.get(timeout=min(remaining, 5))
-            except Exception:
-                continue
-            try:
-                msg = json.loads(line)
-            except Exception:
-                continue
-            if msg.get("id") != rid:
-                continue  # a notification or someone else's response
-            if "error" in msg:
-                raise RuntimeError(f"MCP {method} error: {msg['error']}")
-            return msg.get("result")
+        for msg in self._post({"jsonrpc": "2.0", "id": rid, "method": method,
+                               "params": params or {}}, timeout):
+            if isinstance(msg, dict) and msg.get("id") == rid:
+                if "error" in msg:
+                    raise RuntimeError(f"MCP {method} error: {msg['error']}")
+                return msg.get("result")
+        raise RuntimeError(f"MCP {method}: no reply from AI-Prowler")
 
-    def initialize(self, timeout=300):
+    def initialize(self, timeout=60):
         result = self._request("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {"name": "ai-prowler-grok-runner", "version": "1.0"},
         }, timeout=timeout)
-        self._proc.stdin.write(json.dumps(
-            {"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
-        self._proc.stdin.flush()
+        try:
+            self._post({"jsonrpc": "2.0", "method": "notifications/initialized"}, 30)
+        except Exception:
+            pass
         return result
 
     def list_tools(self):
         return (self._request("tools/list") or {}).get("tools", [])
 
     def call_tool(self, name, arguments=None, timeout=300):
-        res = self._request("tools/call",
-                            {"name": name, "arguments": arguments or {}},
+        res = self._request("tools/call", {"name": name, "arguments": arguments or {}},
                             timeout=timeout) or {}
         parts = [c.get("text", "") for c in res.get("content", [])
                  if isinstance(c, dict) and c.get("type") == "text"]
@@ -1590,13 +1521,12 @@ class _StdioMCPClient:
         return text
 
     def close(self):
+        if not self._sid:
+            return
         try:
-            if self._proc.stdin:
-                self._proc.stdin.close()
-        except Exception:
-            pass
-        try:
-            self._proc.terminate()
+            import urllib.request as _ur
+            _ur.urlopen(_ur.Request(self._url, method="DELETE", headers={
+                "Authorization": f"Bearer {self._token}", "Mcp-Session-Id": self._sid}), timeout=10)
         except Exception:
             pass
 
@@ -1742,26 +1672,29 @@ def _grok_tool_loop(api_key, prompt, xai_tools, mcp_client, model, timeout_sec):
     return False, f"stopped after {GROK_MAX_TOOL_ROUNDS} tool rounds without a final summary"
 
 
-def _run_grok_headless(prompt, timeout_sec, run_label):
-    """Shared machinery for run_grok_queue_headless / run_grok_prompt_headless."""
+def _run_grok_headless(prompt, timeout_sec, run_label, wait_sec=SERVER_START_WAIT_SEC, start_app=True):
+    """Shared machinery for run_grok_queue_headless / run_grok_prompt_headless.
+    2026-10-22: uses the RUNNING AI-Prowler (connect_to_running_ai_prowler) —
+    never starts its own copy."""
     api_key = os.environ.get("XAI_API_KEY", "").strip() or (load_api_key("grok") or "")
     if not api_key:
         detail = "No Grok API key: XAI_API_KEY is not set and no key is saved (Auth section)."
         _write_last_run("failure", f"Grok {run_label}: {detail}")
         return False, detail
-    if not LOCAL_MCP_SCRIPT_PATH.exists():
-        detail = f"ai_prowler_mcp.py not found at {LOCAL_MCP_SCRIPT_PATH} — reinstall AI-Prowler."
-        _write_last_run("failure", f"Grok {run_label}: {detail}")
-        return False, detail
+    ok_conn, conn = connect_to_running_ai_prowler(wait_sec=wait_sec, start_app=start_app,
+                                                  config_path=RUNNING_SERVER_MCP_CONFIG_PATH)
+    if not ok_conn:
+        _write_last_run("failure", f"Grok {run_label}: {conn}")
+        return False, conn
     rotate_audit_log()
     client = None
     try:
         try:
-            client = _StdioMCPClient()
+            client = _HttpMCPClient(_bearer_token())
             client.initialize()
             mcp_tools = client.list_tools()
         except Exception as e:
-            detail = f"Could not start AI-Prowler's MCP server: {e}"
+            detail = f"Could not connect to the running AI-Prowler: {e}"
             _write_last_run("failure", f"Grok {run_label}: {detail}")
             return False, detail
         cfg = load_config()
@@ -1801,7 +1734,7 @@ def run_grok_queue_headless(timeout_sec=GROK_QUEUE_DEADLINE):
 def run_grok_prompt_headless(prompt, timeout_sec=GROK_SINGLE_PROMPT_TIMEOUT):
     """Runs one ad-hoc prompt via the xAI API (Grok) — the Grok equivalent of
     run_single_prompt_now()'s `claude -p` call. Returns (success, detail)."""
-    return _run_grok_headless(prompt, timeout_sec, "single prompt run")
+    return _run_grok_headless(prompt, timeout_sec, "single prompt run", wait_sec=10, start_app=False)
 
 # ── CLAUDE_CODE_OAUTH_TOKEN persistence (v8.1.6 fix) ──────────────────────
 # `claude setup-token` does NOT write ~/.claude/.credentials.json — that
@@ -1866,82 +1799,6 @@ def delete_oauth_token() -> None:
         OAUTH_TOKEN_PATH.unlink()
     if OAUTH_TOKEN_PLAIN_PATH.exists():
         OAUTH_TOKEN_PLAIN_PATH.unlink()
-
-
-# ── Per-user Claude token store (server mode AI Routing, 2026-09-19) ─────
-# In personal mode the single owner's setup-token above is the only
-# credential. A multi-user server has no such thing for its users, so each
-# user who should be able to run AI Routing gets their OWN Claude Code token,
-# saved by an admin in the Admin tab. The run is then billed to that user's
-# own Claude subscription instead of the host owner's.
-#
-# Deliberately NOT stored in users.json: that file is read all over the
-# codebase and its records are mirrored into the job database's users table
-# (which is exported to Excel/CSV and backed up), so a credential there
-# would leak into all of those. One plain file per user under
-# AI_ROUTING_USER_TOKEN_DIR instead — the same plaintext-in-~/.ai-prowler
-# model the shared token above already uses, since the headless wrapper .bat
-# has to `set /p` it back out at runtime.
-AI_ROUTING_USER_TOKEN_DIR = AI_PROWLER_HOME / "ai_routing" / "user_tokens"
-
-
-def _user_token_slug(user_id) -> str | None:
-    """Filename-safe form of a user id (the firstname-lastname slug). Anything
-    outside [a-z0-9-] is stripped, so an id can never escape the token dir."""
-    slug = re.sub(r"[^a-z0-9-]", "", str(user_id or "").strip().lower())
-    return slug or None
-
-
-def user_oauth_token_path(user_id) -> "Path | None":
-    slug = _user_token_slug(user_id)
-    return (AI_ROUTING_USER_TOKEN_DIR / f"{slug}.txt") if slug else None
-
-
-def save_user_oauth_token(user_id, token: str) -> Path:
-    """Validates and saves one user's Claude Code token (the `sk-ant-oat…`
-    value `claude setup-token` prints). Raises ValueError for a missing user
-    id or a value that doesn't look like such a token — nothing is written."""
-    path = user_oauth_token_path(user_id)
-    if path is None:
-        raise ValueError("A user id is required to save a Claude token.")
-    clean = (token or "").strip()
-    if not _OAUTH_TOKEN_PATTERN.fullmatch(clean):
-        raise ValueError("That doesn't look like a Claude Code token — it should "
-                         "start with sk-ant-oat (the value `claude setup-token` prints).")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _ss_write_text(path, clean)                      # atomic (safe_save)
-    # Best effort: restrict the file to the current Windows user. Failure here
-    # (non-Windows, no icacls) must never block saving.
-    try:
-        import getpass
-        subprocess.run(["icacls", str(path), "/inheritance:r", "/grant:r",
-                        f"{getpass.getuser()}:F"],
-                       capture_output=True, timeout=10,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except Exception:
-        pass
-    return path
-
-
-def has_user_oauth_token(user_id) -> bool:
-    path = user_oauth_token_path(user_id)
-    try:
-        return bool(path and path.exists()
-                    and _OAUTH_TOKEN_PATTERN.fullmatch(path.read_text(encoding="utf-8").strip()))
-    except Exception:
-        return False
-
-
-def delete_user_oauth_token(user_id) -> bool:
-    """Removes one user's saved token. Returns True if a file was deleted."""
-    path = user_oauth_token_path(user_id)
-    try:
-        if path and path.exists():
-            path.unlink()
-            return True
-    except Exception:
-        pass
-    return False
 
 
 def try_capture_setup_token() -> bool:
@@ -2447,6 +2304,7 @@ if exist "{API_KEY_PATH}" (
         _invoke_block = (
             f'claude -p "{escaped_prompt}" ^\n'
             f'  --mcp-config "{mcp_config_path}" ^\n'
+            '  --strict-mcp-config ^\n'
             f'  --allowedTools "{allowed_tools}" ^\n'
             '  --output-format json ^\n'
             '  --permission-mode bypassPermissions > "%USERPROFILE%\\.ai-prowler\\last_single_run.json" 2>&1'
@@ -2464,8 +2322,11 @@ if exist "{OAUTH_TOKEN_PLAIN_PATH}" (
 """
         _invoke_block = (
             f'claude -p "{escaped_prompt}" ^\n'
-            '  --mcp-config "{mcp_config_path}" ^\n'
-            '  --allowedTools "{allowed_tools}" ^\n'
+            # 2026-10-22: these two were missing the f prefix, so the .bat got
+            # the literal text {mcp_config_path} / {allowed_tools}.
+            f'  --mcp-config "{mcp_config_path}" ^\n'
+            '  --strict-mcp-config ^\n'
+            f'  --allowedTools "{allowed_tools}" ^\n'
             '  --output-format json ^\n'
             '  --permission-mode bypassPermissions > "%USERPROFILE%\\.ai-prowler\\last_single_run.json" 2>&1'
         )
@@ -2498,158 +2359,6 @@ type "%~f0" >> "%USERPROFILE%\.ai-prowler\command_debug.log"
 {api_key_block}{_invoke_block}
 
 set RC=%ERRORLEVEL%
-exit /b %RC%
-"""
-
-
-def build_ai_routing_wrapper_content(prompt: str, mcp_config_path: str,
-                                      allowed_tools: str,
-                                       use_api_key: bool = False,
-                                       api_key_provider: str = "anthropic",
-                                      oauth_token_path: "Path | None" = None) -> str:
-    """Wrapper content for AI_ROUTING_TASK_NAME — the dedicated, trigger-
-    less on-demand task backing the Jobs PWA's "Run AI Routing" button.
-    Modeled on build_wrapper_script_content() (the PROVEN scheduled-queue
-    wrapper), NOT on build_single_prompt_wrapper_content() (the old
-    "▶ NOW" button's wrapper) — same absolute claude.exe path via
-    _get_claude_exe(), same OAuth-token-from-file auth block, same
-    AI_PROWLER_HOME working directory.
-
-    v2 (2026-09-18) — REAL BUG FOUND AND FIXED: the original version, like
-    build_single_prompt_wrapper_content(), embedded the prompt as a quoted
-    argument directly on the .bat's own `claude -p "<prompt>"` command
-    line (via _sanitize_prompt_for_batch()'s doubled-quote cmd.exe
-    escaping). Confirmed live that this silently breaks for a prompt this
-    long and quote-heavy: claude.exe ran successfully (exit 0) but with
-    the `ai-prowler` MCP server never actually attached — only an
-    unrelated globally-registered server ("mobile") was present, meaning
-    --mcp-config itself never got parsed as a real flag, almost certainly
-    because cmd.exe's / claude.exe's own command-line reparsing of a
-    heavily-""-escaped multi-hundred-word argument went wrong somewhere
-    before that flag. Verified directly: the EXACT same prompt/config/
-    tools, passed as genuine separate argv elements via Python's
-    subprocess.run() (no shell involved, no quoting to get wrong) instead
-    of through a cmd.exe command line, connects to `ai-prowler` correctly
-    every time and exposes the full real tool list.
-
-    Fix: the prompt is no longer a command-line argument at all. It's
-    written to AI_ROUTING_PROMPT_TXT_PATH as plain UTF-8 text (real
-    newlines, real quotes, real %, nothing escaped — none of it can touch
-    cmd.exe's parsing once it's file content instead of an argument) and
-    piped to claude's stdin with `type ... | claude -p` — "-p" alone,
-    with no positional prompt argument, is documented as reading the
-    prompt from stdin ("useful for pipes"). This sidesteps the whole
-    class of quoting risk instead of trying to get the escaping more
-    exactly right.
-
-    Args mirror build_wrapper_script_content()'s auth-block parameters;
-    see that function's docstring for why each auth path reads its
-    credential from a file at runtime rather than embedding it.
-    """
-    api_key_block = ""
-    _invoke_block = ""
-    # 2026-10-12: Grok has no Claude-Code-style CLI — its branch exports
-    # XAI_API_KEY and invokes the in-module Grok runner, reading the prompt
-    # back from the plain-text file (same file the claude branch pipes).
-    _provider = _normalize_provider(api_key_provider)
-    _claude_invoke = (
-        f'type "{AI_ROUTING_PROMPT_TXT_PATH}" | "{_get_claude_exe()}" -p ^\n'
-        f'  --mcp-config "{mcp_config_path}" ^\n'
-        f'  --allowedTools "{allowed_tools}" ^\n'
-        '  --output-format json ^\n'
-        f'  --permission-mode bypassPermissions > "{AI_ROUTING_LAST_RUN_PATH}" 2>&1'
-    )
-    if oauth_token_path is not None:
-        # Server mode (2026-09-19): the run is billed to the SPECIFIC user who
-        # tapped the button, using the Claude token an admin saved for them in
-        # the Admin tab — never the host's shared token, and never the API-key
-        # path (a per-user API key isn't a supported setup). Same read-from-a-
-        # file-at-runtime pattern as the shared token: nothing secret is ever
-        # written into the .bat itself.
-        api_key_block = f"""REM Use THIS user's Claude Code OAuth token — see
-REM build_ai_routing_wrapper_content()'s docstring (server mode).
-if exist "{oauth_token_path}" (
-    set /p CLAUDE_CODE_OAUTH_TOKEN=<"{oauth_token_path}"
-) else (
-    echo [ERROR] No Claude token is saved for this user - set one in the Admin tab.
-    exit /b 1
-)
-
-"""
-        _invoke_block = _claude_invoke
-    elif use_api_key and _provider == "grok":
-        _grok_path = api_key_path("grok")
-        api_key_block = f"""REM Use XAI_API_KEY (Grok) — see build_wrapper_script_content()'s
-REM docstring for why this reads from a file at runtime.
-if exist "{_grok_path}" (
-    set /p XAI_API_KEY=<"{_grok_path}"
-) else (
-    echo [ERROR] Grok API key auth is selected but {_grok_path} was not found.
-    exit /b 1
-)
-
-"""
-        _tqa_parent = str(LOCAL_MCP_SCRIPT_PATH.parent)
-        # _self_gate_python_invocation() — NOT a naively-quoted path (v8.1.13).
-        _invoke_block = (
-            f'{_self_gate_python_invocation()} -c "import sys,pathlib; '
-            f"sys.path.insert(0,r'{_tqa_parent}'); "
-            "import task_queue_automation as _tqa; "
-            f"_p=pathlib.Path(r'{AI_ROUTING_PROMPT_TXT_PATH}').read_text(encoding='utf-8'); "
-            "_tqa.run_grok_prompt_headless(_p); "
-            "_lr=_tqa.load_last_run() or {}; "
-            "print('GROK_AI_ROUTING status='+str(_lr.get('status'))+' detail='+str(_lr.get('detail'))[:300])\" "
-            f'> "{AI_ROUTING_LAST_RUN_PATH}" 2>&1'
-        )
-    elif use_api_key:
-        api_key_block = f"""REM Use ANTHROPIC_API_KEY — see build_wrapper_script_content()'s
-REM docstring for why this reads from a file at runtime.
-if exist "{API_KEY_PATH}" (
-    set /p ANTHROPIC_API_KEY=<"{API_KEY_PATH}"
-) else (
-    echo [ERROR] use_api_key is enabled but {API_KEY_PATH} was not found.
-    exit /b 1
-)
-
-"""
-        _invoke_block = _claude_invoke
-    else:
-        api_key_block = f"""REM Use the Claude Code OAuth token — see build_wrapper_script_content()'s
-REM docstring for why this reads from a file at runtime.
-if exist "{OAUTH_TOKEN_PLAIN_PATH}" (
-    set /p CLAUDE_CODE_OAUTH_TOKEN=<"{OAUTH_TOKEN_PLAIN_PATH}"
-) else (
-    echo [ERROR] No Claude Code OAuth token found — click Get / Renew Token in AI-Prowler first.
-    exit /b 1
-)
-
-"""
-        _invoke_block = _claude_invoke
-
-    # Write the prompt as its own plain file — no batch escaping needed at
-    # all now (see docstring above): real newlines, real quotes, real %.
-    AI_ROUTING_PROMPT_TXT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    AI_ROUTING_PROMPT_TXT_PATH.write_text(prompt, encoding="utf-8")
-
-    AI_ROUTING_WRAPPER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return rf"""@echo off
-chcp 65001 >nul
-REM Auto-generated by task_queue_automation.py (build_ai_routing_wrapper_content)
-REM — do not edit by hand. Content is rewritten fresh before every trigger of
-REM AI-Prowler-AIRoutingRunner; whatever is here right now is the LAST
-REM on-demand AI Routing request that was made. The actual prompt text
-REM lives in {AI_ROUTING_PROMPT_TXT_PATH.name}, piped in via stdin below —
-REM see this function's docstring for why it's not a command-line argument.
-
-cd /d "{AI_PROWLER_HOME}"
-
-{api_key_block}{_invoke_block}
-
-set RC=%ERRORLEVEL%
-REM Completion marker written LAST, after the claude call has fully
-REM returned — this, not pending_tasks.json (never touched by this
-REM dedicated task), is what the polling caller watches for.
-echo %RC% %date% %time% > "{AI_ROUTING_DONE_MARKER_PATH}"
 exit /b %RC%
 """
 
@@ -3437,127 +3146,6 @@ try {{
 """
 
 
-def _build_register_ai_routing_task_ps1(wrapper_script_path: str, username: str,
-                                         result_file: str) -> str:
-    """Registers AI_ROUTING_TASK_NAME with the same proven S4U principal as
-    _build_register_queue_task_ps1() above, but deliberately WITH NO
-    TRIGGER at all — Register-ScheduledTask doesn't require -Trigger, and a
-    triggerless task is still fully runnable on demand via
-    `schtasks /run` / Start-ScheduledTask. This task must never fire on its
-    own; it exists purely to be started explicitly, each time with a fresh
-    wrapper script written for that one specific routing request — see
-    AI_ROUTING_TASK_NAME's module-level comment for why this needs to be a
-    genuinely separate task rather than reusing SCHEDULED_TASK_NAME."""
-    return f"""$ErrorActionPreference = 'Stop'
-try {{
-    $action = New-ScheduledTaskAction -Execute '{wrapper_script_path}'
-    $principal = New-ScheduledTaskPrincipal -UserId '{username}' -LogonType S4U -RunLevel Limited
-    Register-ScheduledTask -TaskName '{AI_ROUTING_TASK_NAME}' -Action $action -Principal $principal -Force | Out-Null
-    Set-Content -Path '{result_file}' -Value 'OK' -Encoding UTF8
-}} catch {{
-    $msg = $_.Exception.Message -replace "[\\r\\n]+", " "
-    Set-Content -Path '{result_file}' -Value "FAIL: $msg" -Encoding UTF8
-}}
-"""
-
-
-def _register_ai_routing_task_elevated(wrapper_script_path: Path, run_as_user: str,
-                                        timeout_sec: int = 30) -> tuple[bool, str]:
-    """Same one-time-UAC-prompt elevation pattern as
-    _register_queue_task_elevated() — Register-ScheduledTask with an S4U
-    principal requires it regardless of whether a trigger is attached."""
-    result_file = AI_PROWLER_HOME / f"_register_ai_routing_task_result_{os.getpid()}.txt"
-    ps1_path = AI_PROWLER_HOME / f"_register_ai_routing_task_{os.getpid()}.ps1"
-    AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
-    try:
-        ps1_path.write_text(
-            _build_register_ai_routing_task_ps1(
-                str(wrapper_script_path).replace("'", "''"), run_as_user,
-                str(result_file)),
-            encoding="utf-8")
-    except Exception as e:
-        return False, f"Could not write task registration script: {e}"
-
-    try:
-        subprocess.run(
-            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
-             f'Start-Process -FilePath "powershell.exe" -ArgumentList '
-             f'\'-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{ps1_path}"\' '
-             f'-Verb RunAs -Wait'],
-            capture_output=True, text=True, timeout=timeout_sec,
-            creationflags=subprocess.CREATE_NO_WINDOW)
-
-        deadline = time.time() + timeout_sec
-        while time.time() < deadline:
-            if result_file.exists():
-                break
-            time.sleep(0.5)
-        else:
-            return False, (
-                "Timed out waiting for the elevated task registration to "
-                "complete — if a UAC prompt appeared, it may have been "
-                "declined or is still waiting for a response.")
-
-        content = result_file.read_text(encoding="utf-8-sig", errors="replace").strip()
-        if content.startswith("OK"):
-            return True, "ok"
-        return False, content[len("FAIL: "):] if content.startswith("FAIL:") else content
-    except subprocess.TimeoutExpired:
-        return False, "Timed out."
-    except Exception as e:
-        return False, str(e)
-    finally:
-        for p in (ps1_path, result_file):
-            try:
-                p.unlink(missing_ok=True)
-            except Exception:
-                pass
-
-
-def ai_routing_task_exists() -> bool:
-    """Same shape as scheduled_task_exists(), for AI_ROUTING_TASK_NAME."""
-    r = subprocess.run(["schtasks", "/query", "/tn", AI_ROUTING_TASK_NAME],
-                        capture_output=True, text=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW)
-    return r.returncode == 0
-
-
-def install_ai_routing_task(run_as_user: str = None) -> tuple[bool, str]:
-    """One-time setup — call from a real user-initiated GUI action (a
-    button click), never silently from a background thread: this triggers
-    a genuine UAC consent prompt, same as install_scheduled_task() does for
-    the main queue runner, and there is no way around that for creating an
-    S4U-principal task. Idempotent (Register-ScheduledTask -Force replaces
-    a prior registration cleanly) — safe to call again if ever needed.
-
-    The wrapper script path registered here is fixed (AI_ROUTING_WRAPPER_PATH,
-    below) — its CONTENT gets rewritten fresh by
-    build_ai_routing_wrapper_content() immediately before every on-demand
-    trigger, but the task's own registration (path, principal, no trigger)
-    only needs to happen once, here.
-
-    Returns (success, detail)."""
-    if run_as_user is None:
-        run_as_user = os.environ.get("USERNAME") or getpass.getuser()
-
-    _grant_ok, _grant_detail = grant_batch_logon_right(run_as_user)
-
-    # Ensure a placeholder wrapper exists at the registered path before
-    # first registration — Register-ScheduledTask just needs *a* file to
-    # point its Action at; content is irrelevant until the first real
-    # on-demand trigger overwrites it.
-    AI_ROUTING_WRAPPER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if not AI_ROUTING_WRAPPER_PATH.exists():
-        AI_ROUTING_WRAPPER_PATH.write_text("@echo off\r\nexit /b 0\r\n", encoding="utf-8")
-
-    reg_ok, reg_detail = _register_ai_routing_task_elevated(AI_ROUTING_WRAPPER_PATH, run_as_user)
-    if not reg_ok:
-        return False, reg_detail
-    if _grant_ok:
-        return True, "ok"
-    return True, f"ok (batch logon right grant had an issue: {_grant_detail})"
-
-
 def _register_queue_task_elevated(wrapper_script_path: Path, schedule_time: str,
                                    schedule_end_time: str, check_mode: str,
                                    times_per_day: int, enabled: bool, username: str,
@@ -3813,6 +3401,107 @@ def uninstall_scheduled_task() -> tuple[bool, str]:
     if ok:
         return True, "ok (required elevation)"
     return False, f"{plain_detail} | elevated retry also failed: {elevated_detail}"
+
+
+# ── Scheduled runs: connect to the running AI-Prowler (2026-10-22, David) ────
+RUNNING_SERVER_MCP_CONFIG_PATH = AI_PROWLER_HOME / "claude_mcp_config_running.json"
+
+
+def scheduled_run_mcp_config() -> str:
+    """Called by the scheduled queue wrapper right before Claude runs: prints
+    the --mcp-config path for the running AI-Prowler (starting the normal app
+    and waiting when needed), or NO_SERVER after recording why the run was
+    skipped (last-run status, last_headless_run.json and the audit log)."""
+    ok, result = connect_to_running_ai_prowler()
+    if ok:
+        return result
+    _record_skipped_run(result)
+    return "NO_SERVER"
+
+
+def _record_skipped_run(why: str) -> None:
+    try:
+        _write_last_run("failure", f"Scheduled run skipped — {why}")
+    except Exception:
+        pass
+    try:
+        AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
+        (AI_PROWLER_HOME / "last_headless_run.json").write_text(
+            json.dumps({"result": f"Skipped — {why}"}), encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] scheduled run skipped: {why}\n")
+    except Exception:
+        pass
+
+
+def retire_cli_ai_routing() -> list:
+    """2026-10-22 (David): cleans up what the removed Claude CLI AI routing
+    left on this computer. Safe to call on every start — once clean it does
+    nothing. Returns a list of what it did (for the log).
+
+      * the "AI Route Optimizer (full reasoning)" custom analysis task (and
+        any queued copy of it) — routing is done from the Jobs app now;
+      * the on-demand Scheduled Task (AI-Prowler-AIRoutingRunner) — it has no
+        trigger, so if Windows refuses to delete it without admin rights it is
+        left in place (it can never run on its own);
+      * ~/.ai-prowler/ai_routing — its wrapper, prompt and the per-user Claude
+        tokens saved for it (no longer used by anything).
+    """
+    if RETIRED_AI_ROUTING_MARKER.exists():
+        return []
+    done = []
+    try:
+        import custom_tasks_manager as _ctm
+        tasks = _ctm.load_custom_tasks()
+        ids = [x.get("task_id") for x in tasks
+               if isinstance(x, dict) and x.get("label") == RETIRED_ROUTE_TASK_LABEL]
+        if ids:
+            for tid in ids:
+                _ctm.delete_task(tasks, tid)
+            if _ctm.save_custom_tasks(tasks):
+                done.append(f"removed the '{RETIRED_ROUTE_TASK_LABEL}' custom task")
+        pending = AI_PROWLER_HOME / "pending_tasks.json"
+        if pending.exists():
+            queue = _ss_read_json(pending, default=None)
+            if isinstance(queue, list):
+                keep = [e for e in queue if not (isinstance(e, dict) and (
+                    e.get("label") == RETIRED_ROUTE_TASK_LABEL or (ids and e.get("source_id") in ids)))]
+                if len(keep) != len(queue):
+                    _ss_write_text(pending, json.dumps(keep, indent=2, ensure_ascii=False))
+                    done.append(f"removed {len(queue) - len(keep)} queued AI Route Optimizer run(s)")
+    except Exception as e:  # noqa: BLE001
+        done.append(f"custom task cleanup skipped: {e}")
+    if os.name == "nt":
+        try:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            q = subprocess.run(["schtasks", "/query", "/tn", RETIRED_AI_ROUTING_TASK_NAME],
+                               capture_output=True, text=True, timeout=20, creationflags=flags)
+            if q.returncode == 0:
+                d = subprocess.run(["schtasks", "/delete", "/tn", RETIRED_AI_ROUTING_TASK_NAME, "/f"],
+                                   capture_output=True, text=True, timeout=20, creationflags=flags)
+                done.append("removed the AI Routing scheduled task" if d.returncode == 0 else
+                            "the old AI Routing scheduled task needs admin rights to remove "
+                            "(harmless — it has no trigger and never runs)")
+        except Exception as e:  # noqa: BLE001
+            done.append(f"scheduled task check skipped: {e}")
+    try:
+        if RETIRED_AI_ROUTING_DIR.exists():
+            shutil.rmtree(RETIRED_AI_ROUTING_DIR, ignore_errors=True)
+            done.append("removed ~/.ai-prowler/ai_routing (runner files and per-user tokens)")
+    except Exception as e:  # noqa: BLE001
+        done.append(f"ai_routing folder cleanup skipped: {e}")
+    # Clean (or only the harmless admin-only task left): don't check again.
+    if not any("skipped" in d for d in done) and not RETIRED_AI_ROUTING_DIR.exists():
+        try:
+            AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
+            RETIRED_AI_ROUTING_MARKER.write_text(
+                datetime.now().isoformat(timespec="seconds") + "\n" + "\n".join(done), encoding="utf-8")
+        except Exception:
+            pass
+    return done
 
 
 # ── Audit log read (for the GUI's "View Audit Log" button) ──────────────

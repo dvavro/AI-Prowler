@@ -157,8 +157,10 @@ def test_pwa_runs_prescreen_before_both_route_buttons():
     html = (_SRC / "jobs" / "index.html").read_text(encoding="utf-8")
     rt = html[html.index("async function routeToday("):]
     assert rt.index("_prescreenRoute(") < rt.index("mcpCall('suggest_route_schedule'")
-    ai = html[html.index("async function runAiRouting("):]
-    assert ai.index("_prescreenRoute(") < ai.index("mcpCall('start_ai_routing'")
+    # 2026-10-22: 🧠 Run AI Route was replaced by 📋 Copy AI Route — same rule:
+    # the job check runs before the AI Route prompt is made.
+    ai = html[html.index("async function copyAiRoutePrompt("):]
+    assert ai.index("_prescreenRoute(") < ai.index("mcpCall('get_ai_route_prompt'")
     assert 'id="routePrescreen"' in html and 'id="jobsPrescreen"' in html
     assert 'data-jobid="${j.id}"' in html                   # job cards findable by warning
 

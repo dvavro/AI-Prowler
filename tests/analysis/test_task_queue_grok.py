@@ -42,7 +42,29 @@ def _isolated_home(tmp_path, monkeypatch):
     # "exist" create it explicitly.
     monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH",
                         tmp_path / "_no_such_dir" / "ai_prowler_mcp.py")
+    # 2026-10-22: Grok runs use the RUNNING AI-Prowler. Never read the real
+    # config.json token, never probe the real localhost:8000, never start the
+    # real app. Tests that need a "running" server set these per test.
+    monkeypatch.setattr(tqa, "AI_PROWLER_CONFIG_PATH", tmp_path / ".ai-prowler" / "config.json")
+    monkeypatch.setattr(tqa, "RUNNING_SERVER_MCP_CONFIG_PATH",
+                        tmp_path / ".ai-prowler" / "claude_mcp_config_running.json")
+    monkeypatch.setattr(tqa, "_server_answers", lambda *a, **kw: False)
+    monkeypatch.setattr(tqa, "_ai_prowler_app_running", lambda: False)
+    monkeypatch.setattr(tqa, "_start_ai_prowler_app",
+                        lambda: (False, "mocked — tests never start AI-Prowler"))
+    _now = [1_000_000.0]          # fake clock: waits finish instantly
+    monkeypatch.setattr(tqa.time, "time", lambda: _now[0])
+    monkeypatch.setattr(tqa.time, "sleep", lambda s: _now.__setitem__(0, _now[0] + s))
     monkeypatch.delenv("XAI_API_KEY", raising=False)
+    return tmp_path
+
+
+def _running_server(home, monkeypatch, token="tok-grok"):
+    """Pretend this PC's AI-Prowler is running with remote access set up."""
+    cfg = home / ".ai-prowler" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text('{"remote_token": "%s"}' % token, encoding="utf-8")
+    monkeypatch.setattr(tqa, "_server_answers", lambda *a, **kw: True)
 
 
 # ── Provider-aware key storage ─────────────────────────────────────────────
@@ -166,24 +188,8 @@ class TestGrokWrapperGeneration:
         assert "claude -p" in content
         assert "XAI_API_KEY" not in content
 
-    def test_ai_routing_wrapper_grok(self, _isolated_home):
-        content = tqa.build_ai_routing_wrapper_content(
-            "route prompt", "mcp.json", "mcp__ai-prowler__*",
-            use_api_key=True, api_key_provider="grok")
-        assert "XAI_API_KEY" in content
-        assert "run_grok_prompt_headless" in content
-        assert "claude -p" not in content
-
-    def test_ai_routing_wrapper_server_mode_ignores_grok(self, _isolated_home, tmp_path):
-        # Server mode (per-user OAuth token) always wins over the API-key path.
-        token = tmp_path / "user_token.txt"
-        token.write_text("tok")
-        content = tqa.build_ai_routing_wrapper_content(
-            "route prompt", "mcp.json", "mcp__ai-prowler__*",
-            use_api_key=True, api_key_provider="grok",
-            oauth_token_path=token)
-        assert "CLAUDE_CODE_OAUTH_TOKEN" in content
-        assert "XAI_API_KEY" not in content
+    # (the two AI Routing wrapper tests were removed 2026-10-22 with the
+    # Claude CLI AI Route — build_ai_routing_wrapper_content no longer exists)
 
 
 # ── Runner unit tests (no network) ─────────────────────────────────────────
@@ -265,29 +271,56 @@ class TestGrokRunner:
         assert seen["auth"] == "Bearer k"
         assert msg["content"] == "hi"
 
-    def test_run_grok_headless_no_key_fails_cleanly(self, _isolated_home):
-        tqa.LOCAL_MCP_SCRIPT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tqa.LOCAL_MCP_SCRIPT_PATH.write_text("# fake")
+    def test_run_grok_headless_no_key_fails_cleanly(self, _isolated_home, monkeypatch):
+        _running_server(_isolated_home, monkeypatch)
         ok, detail = tqa._run_grok_headless("do tasks", 60, "test run")
         assert ok is False
         assert "No Grok API key" in detail
         assert tqa.load_last_run()["status"] == "failure"
 
-    def test_run_grok_headless_missing_mcp_script(self, _isolated_home, monkeypatch):
-        monkeypatch.setattr(tqa, "load_api_key",
-                            lambda provider="anthropic": "xai-k")
+    def test_run_grok_headless_no_remote_access(self, _isolated_home, monkeypatch):
+        """No Bearer Token -> no running-AI-Prowler connection -> clear message,
+        and nothing is started."""
+        monkeypatch.setattr(tqa, "load_api_key", lambda provider="anthropic": "xai-k")
+
+        def _boom():
+            raise AssertionError("must not start AI-Prowler")
+        monkeypatch.setattr(tqa, "_start_ai_prowler_app", _boom)
         ok, detail = tqa._run_grok_headless("do tasks", 60, "test run")
         assert ok is False
-        assert "ai_prowler_mcp.py not found" in detail
+        assert detail == tqa.NO_REMOTE_ACCESS_MSG
+        assert "Remote Access" in tqa.load_last_run()["detail"]
+
+    def test_run_grok_headless_server_not_running(self, _isolated_home, monkeypatch):
+        cfg = _isolated_home / ".ai-prowler" / "config.json"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text('{"remote_token": "t"}', encoding="utf-8")
+        monkeypatch.setattr(tqa, "load_api_key", lambda provider="anthropic": "xai-k")
+        ok, detail = tqa._run_grok_headless("do tasks", 60, "test run", wait_sec=0)
+        assert ok is False
+        assert "isn't running" in detail
+
+    def test_single_prompt_never_starts_the_app(self, _isolated_home, monkeypatch):
+        cfg = _isolated_home / ".ai-prowler" / "config.json"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text('{"remote_token": "t"}', encoding="utf-8")
+        monkeypatch.setattr(tqa, "load_api_key", lambda provider="anthropic": "xai-k")
+
+        def _boom():
+            raise AssertionError("▶ NOW Grok run must not start AI-Prowler")
+        monkeypatch.setattr(tqa, "_start_ai_prowler_app", _boom)
+        ok, detail = tqa.run_grok_prompt_headless("hi")
+        assert ok is False and "isn't running" in detail
 
     def test_tool_loop_drives_mcp_and_returns_summary(
             self, _isolated_home, monkeypatch):
-        tqa.LOCAL_MCP_SCRIPT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tqa.LOCAL_MCP_SCRIPT_PATH.write_text("# fake")
+        _running_server(_isolated_home, monkeypatch, token="tok-grok")
         monkeypatch.setattr(tqa, "load_api_key",
                             lambda provider="anthropic": "xai-test-key")
         chat_calls = {"n": 0}
         final_messages = {}
+        made = {}
+
         def _fake_chat(api_key, messages, tools, model=None):
             chat_calls["n"] += 1
             assert api_key == "xai-test-key"
@@ -300,9 +333,12 @@ class TestGrokRunner:
                                   "arguments": '{"x": 1}'}}]}
             final_messages["messages"] = messages
             return {"content": "All done."}
+
         class _FakeMCP:
-            def __init__(self, *a, **kw): pass
-            def initialize(self, timeout=300): return {}
+            def __init__(self, token, url=None):
+                made["token"] = token
+                made["url"] = url
+            def initialize(self, timeout=60): return {}
             def list_tools(self):
                 return [{"name": "fake_tool", "description": "d",
                          "inputSchema": {"type": "object", "properties": {}}}]
@@ -310,14 +346,18 @@ class TestGrokRunner:
                 assert name == "fake_tool"
                 assert arguments == {"x": 1}
                 return "tool-output"
-            def close(self): pass
+            def close(self): made["closed"] = True
         monkeypatch.setattr(tqa, "_grok_chat", _fake_chat)
-        monkeypatch.setattr(tqa, "_StdioMCPClient", _FakeMCP)
+        monkeypatch.setattr(tqa, "_HttpMCPClient", _FakeMCP)
         monkeypatch.setattr(tqa, "load_config",
                             lambda: {"allowed_tools": "mcp__ai-prowler__*"})
         ok, detail = tqa._run_grok_headless("do tasks", 60, "test run")
         assert ok is True
         assert detail == "All done."
+        # Signed in to the running AI-Prowler with this install's token, and
+        # the session was closed afterwards.
+        assert made["token"] == "tok-grok" and made.get("closed") is True
+        assert made["url"] is None            # default = the local connection
         # The tool result was fed back into the conversation correctly.
         tool_msgs = [m for m in final_messages["messages"]
                      if m.get("role") == "tool"]
@@ -328,12 +368,12 @@ class TestGrokRunner:
 
     def test_tool_loop_surfaces_tool_errors_as_messages(
             self, _isolated_home, monkeypatch):
-        tqa.LOCAL_MCP_SCRIPT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tqa.LOCAL_MCP_SCRIPT_PATH.write_text("# fake")
+        _running_server(_isolated_home, monkeypatch)
         monkeypatch.setattr(tqa, "load_api_key",
                             lambda provider="anthropic": "xai-test-key")
         chat_calls = {"n": 0}
         final_messages = {}
+
         def _fake_chat(api_key, messages, tools, model=None):
             chat_calls["n"] += 1
             if chat_calls["n"] == 1:
@@ -342,9 +382,10 @@ class TestGrokRunner:
                      "function": {"name": "broken_tool", "arguments": "{}"}}]}
             final_messages["messages"] = messages
             return {"content": "Recovered."}
+
         class _FakeMCP:
             def __init__(self, *a, **kw): pass
-            def initialize(self, timeout=300): return {}
+            def initialize(self, timeout=60): return {}
             def list_tools(self):
                 return [{"name": "broken_tool", "description": "d",
                          "inputSchema": {"type": "object", "properties": {}}}]
@@ -352,7 +393,7 @@ class TestGrokRunner:
                 raise RuntimeError("boom")
             def close(self): pass
         monkeypatch.setattr(tqa, "_grok_chat", _fake_chat)
-        monkeypatch.setattr(tqa, "_StdioMCPClient", _FakeMCP)
+        monkeypatch.setattr(tqa, "_HttpMCPClient", _FakeMCP)
         monkeypatch.setattr(tqa, "load_config",
                             lambda: {"allowed_tools": "mcp__ai-prowler__*"})
         ok, detail = tqa._run_grok_headless("do tasks", 60, "test run")
@@ -360,6 +401,19 @@ class TestGrokRunner:
         tool_msgs = [m for m in final_messages["messages"]
                      if m.get("role") == "tool"]
         assert "ERROR calling broken_tool" in tool_msgs[0]["content"]
+
+    def test_connect_failure_is_reported(self, _isolated_home, monkeypatch):
+        _running_server(_isolated_home, monkeypatch)
+        monkeypatch.setattr(tqa, "load_api_key", lambda provider="anthropic": "xai-k")
+
+        class _DeadMCP:
+            def __init__(self, *a, **kw): pass
+            def initialize(self, timeout=60): raise OSError("connection refused")
+            def close(self): pass
+        monkeypatch.setattr(tqa, "_HttpMCPClient", _DeadMCP)
+        ok, detail = tqa._run_grok_headless("do tasks", 60, "test run")
+        assert ok is False
+        assert "Could not connect to the running AI-Prowler" in detail
 
 
 # ── Dry-run provider branching ─────────────────────────────────────────────
