@@ -1,11 +1,11 @@
 {
-  "version": "9.3.0",
-  "generated": "2026-10-19T18:01:01",
+  "version": "9.4.0",
+  "generated": "2026-10-25T13:32:38",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "d4b05735dfef27d189b11aa5edc502c787548c3b4540c448413145ad937a6577",
-      "bytes": 1502073
+      "sha256": "3bb7a8f55c8e292b9fd6d291433d8ff18c39f9c6f75a8d77448a2a30ba8607f5",
+      "bytes": 1493200
     },
     {
       "path": "rag_preprocessor.py",
@@ -14,8 +14,8 @@
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "2451e8d9d1e18176bf0a7d3ac49bee6d5d17a193d317241316f8ac0d142e0c59",
-      "bytes": 1731400
+      "sha256": "dedcb1adc7f101f743632a0b3ce2307cfde214c407b3aee914b19a04f6e02b2b",
+      "bytes": 1786316
     },
     {
       "path": "mcp_diagnostics.py",
@@ -24,8 +24,8 @@
     },
     {
       "path": "mcp_tool_catalog.py",
-      "sha256": "64f4e008c13a630a57c785c612fd6ab5be913f38be7fd114987f9da889e6acf5",
-      "bytes": 47878
+      "sha256": "eabcd86b1d28e06af2b5046bbac895074ca541bb17d9355474f4ff5b12a56fdb",
+      "bytes": 52331
     },
     {
       "path": "tool_config_store.py",
@@ -64,12 +64,12 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "d542525d60a30e816cabafcb7c66cf05b0d14f89bb7546ef760207cf9d3eefc3",
-      "bytes": 277960
+      "sha256": "1895b310434a5cac6408b538405bc862f7bc4de17f24205060e529389aee75fa",
+      "bytes": 312347
     },
     {
       "path": "VERSION",
-      "sha256": "14ebdd5f5d8dfccb0fc574ea9aabecc07d7cdd99d53e4fc01e58f9c3d23d18ef",
+      "sha256": "b138deb2a4876d4dddab7e07791bd6ece9652557672bd576fb25dfef1d0c5c5a",
       "bytes": 6
     },
     {
@@ -114,13 +114,13 @@
     },
     {
       "path": "custom_tasks_manager.py",
-      "sha256": "342e79f51e207ccc0144c00b4ebb1e2a10005bf03928ebf2dc9c68f5a9c72dff",
-      "bytes": 53174
+      "sha256": "a069a2334828236683e6c4e8d5bfef2d5250089274c69fe598dc394cc918cab1",
+      "bytes": 53541
     },
     {
       "path": "scheduler_jobs.py",
-      "sha256": "f164e5621e6a6bd52d97b070e2bbab15562a6d220e44d895c0ee685eb4865172",
-      "bytes": 19800
+      "sha256": "4aa177dec0490c66a812f0c2a84a7a9a12510d30de81377cfba2658277c94425",
+      "bytes": 22121
     },
     {
       "path": "scheduler_engine.py",
@@ -129,8 +129,8 @@
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "e38516d555f1da153f1c800a9887161e7e5fa4a69ce71edbf98e90472de0e782",
-      "bytes": 192940
+      "sha256": "315200e3f3a578767bcd25586c797931f7535dca13af6a25e8a9ce0b00d94eba",
+      "bytes": 179447
     },
     {
       "path": ".claude/settings.json",
@@ -159,18 +159,18 @@
     },
     {
       "path": "db_schema.py",
-      "sha256": "ccbb8fe04bfd91c483251b805954f647aabd77b2e69fb4ce3ac226d8b1d67f69",
-      "bytes": 40916
+      "sha256": "490cd34a16b6f66f2ad696b2f6bd279717b8754e2050187ecb40385417fc3c32",
+      "bytes": 50205
     },
     {
       "path": "db_read_ops.py",
-      "sha256": "fdf952b68d1254cebfc185af9db4bb4d98fd0f4f94c797503ab8add38f194c0e",
-      "bytes": 39407
+      "sha256": "1b6c199a7b6f2e9e315a015d406dad08a05d4b5b95b6990ff1f2639a911b0dfe",
+      "bytes": 40259
     },
     {
       "path": "db_write_ops.py",
-      "sha256": "5ee6ef7ffb2e8a3128b8e75ed3343cbb4d81a6a29e998d20dca44a987740c517",
-      "bytes": 227792
+      "sha256": "2099d63224e0f94266a7ffa3a03435c81012b011f2f70c530fbdf184f3252825",
+      "bytes": 231870
     },
     {
       "path": "db_route_ops.py",
@@ -188,19 +188,24 @@
       "bytes": 4892
     },
     {
-      "path": "cli_signin_relay.py",
-      "sha256": "2fc726402e223dc548b8121059133e5ee27793d44c5e5c81c178648f92751642",
-      "bytes": 11038
+      "path": "db_mileage_ops.py",
+      "sha256": "7d9c06fc2b1a6906acc9f7a2c34af5fdfadf792a452bbeb3950924d3d6885ebc",
+      "bytes": 140896
     },
     {
-      "path": "console_inject.py",
-      "sha256": "837ef06cb8d97c11e5205c1e14814bad0ad545f7268c489a045f2c0caa08837c",
-      "bytes": 3388
+      "path": "mileage_pdf.py",
+      "sha256": "316fafce2557c3a230d47c1cd3b482e1f890863aefa55d89d05a07afe2660fa3",
+      "bytes": 19643
+    },
+    {
+      "path": "week_plan.py",
+      "sha256": "8718683ddc4234fc24246f5c06d2ed9d376e2e081f2b0bce1063b6f0d11116aa",
+      "bytes": 17083
     },
     {
       "path": "jobs/index.html",
-      "sha256": "0729f71323fc5272cbe12df95a55dcf504757eb8542a782c9980e381b6bc6fc7",
-      "bytes": 1017084
+      "sha256": "f4e8a88534fea897b66252a6aa51b215ff0e804c1de86ca57d56ed406b76ecca",
+      "bytes": 1111207
     },
     {
       "path": "jobs/manifest.json",
@@ -229,8 +234,8 @@
     },
     {
       "path": "remote/index.html",
-      "sha256": "bb003c68eb528995259ecfbba5bb25a9f3b2e3070fded1bd31ddea44d5d5806f",
-      "bytes": 134230
+      "sha256": "2a729d48231e797d24e15af9c9982719a3dc2141ddd76c7d6f2e1c608b2b6107",
+      "bytes": 137783
     },
     {
       "path": "remote/manifest.json",
@@ -254,8 +259,8 @@
     },
     {
       "path": "setup_wizard.py",
-      "sha256": "5e10a2d82621f908bb2f49ee25f964fea42e4d7331c68473b4b896d9e914700a",
-      "bytes": 129290
+      "sha256": "66b813a77a2b81bb744cf6c90157eea30abfdab6f4d864db26663b804e0cbfae",
+      "bytes": 149757
     },
     {
       "path": "startup_log.py",
@@ -284,8 +289,8 @@
     },
     {
       "path": "hr_admin/index.html",
-      "sha256": "3839eac14457ac49e6f15ecebc409589108cca6c49948c6eae4502fdf62dff2c",
-      "bytes": 921676
+      "sha256": "e895cdd1b700fafdb8d9f0076f7609adfa1572aeb74a2ab6a58dfd51bc4c5087",
+      "bytes": 925233
     },
     {
       "path": "hr_admin/manifest.json",
@@ -309,8 +314,8 @@
     },
     {
       "path": "hr_portal/index.html",
-      "sha256": "3ca7e3188a01ba05f8302e4b0233848965c4bb351ccc87241771e22df33f4df3",
-      "bytes": 591281
+      "sha256": "f3c7fa0b47f2cc9fdd284ef73799af80e82770c6f0d27dd703de5ac305bd9e4b",
+      "bytes": 594840
     },
     {
       "path": "hr_portal/employee_manifest.json",

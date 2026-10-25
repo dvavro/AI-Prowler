@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 9.3.0 — updated October 22, 2026
+## Version 9.4.0 — updated October 22, 2026
 
 ---
 
