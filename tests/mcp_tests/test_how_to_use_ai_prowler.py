@@ -268,7 +268,7 @@ class TestHRAppsGuideIntegration:
         assert "hr_list_employees" in body
         assert "hr_send_notification" in body
         assert "server only" in body.lower()
-        assert "thirteen tool families" in body
+        assert "fourteen tool families" in body   # 2026-10-25: + mileage tracker
 
     def test_hr_body_identical_server_and_personal(self, mcp_mod, monkeypatch):
         """The HR section does not vary per connector - only the footer does."""

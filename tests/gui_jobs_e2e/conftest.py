@@ -157,12 +157,66 @@ def api(app_url, token, guard) -> ApiClient:
         return None
 
     guard.customer_resolver = _customer
+
+    # Mileage (2026-10-25) — read-only lookups the guard uses to recognise
+    # trips, time entries and reimbursements that belong to test data.
+    from safety import SANDBOX_DATES as _SBD
+
+    def _trip(trip_id: str):
+        try:
+            d = json.loads(client.call("get_mileage_log", {"start_date": min(_SBD), "end_date": max(_SBD)},
+                                       expect_ok=False))
+        except (ValueError, Exception):
+            return None
+        return next((t for t in d.get("trips", []) if str(t.get("trip_id")) == str(trip_id)), None)
+
+    def _entry_job(entry_id: str):
+        for e in client.read("TimeLog"):
+            if str(e.get("EntryID", e.get("Entry ID", ""))).strip() == str(entry_id).strip():
+                return str(e.get("JobID (JOB-####)", e.get("JobID", "")) or "").strip() or None
+        return None
+
+    def _reimb_driver(rid: str):
+        try:
+            rows = json.loads(client.call("mileage_reimbursement", {"action": "list", "as_json": True},
+                                          expect_ok=False))
+        except (ValueError, Exception):
+            return None
+        r = next((x for x in rows if str(x.get("reimbursement_id", "")).upper() == str(rid).upper()), None)
+        return (r.get("crew") or r.get("user_key")) if r else None
+
+    guard.trip_resolver = _trip
+    guard.entry_resolver = _entry_job
+    guard.reimb_resolver = _reimb_driver
     return client
 
 
 @pytest.fixture(scope="session")
 def data(api) -> TestData:
     return TestData(api, log=_log)
+
+
+def _mileage_purge(api, guard, why: str) -> dict:
+    """Delete E2E mileage rows for good (mileage_purge.py). Every test that
+    clocks a ZTEST job builds trips now, not only test_mileage_e2e — so this
+    runs at the start and end of every run. Never fails the run by itself:
+    anything it can't remove shows up as a leftover in SUMMARY.txt."""
+    from mileage_purge import purge
+    try:
+        n = purge(api, set(guard.created), RUN_DIR, _log, why)
+    except Exception as e:                       # never hide it, never crash cleanup
+        n = {"skipped": f"{type(e).__name__}: {e}"}
+        _log(f"mileage purge ({why}) FAILED: {n['skipped']}")
+    STATE.setdefault("mileage_purge", []).append((why, n))
+    return n
+
+
+def _mileage_leftovers() -> list[str]:
+    from mileage_purge import leftovers
+    try:
+        return leftovers()
+    except Exception as e:
+        return [f"(could not check mileage test data — {e})"]
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -217,6 +271,7 @@ def _session_preflight_and_cleanup(app_url, token, api, data, guard):
     STATE["preflight"] = "ok"
     # clean slate + safety net
     data.sweep("start-of-run")
+    _mileage_purge(api, guard, "start-of-run")
     try:
         STATE["backup"] = api.call("backup_job_database", {}).splitlines()[0]
     except Exception as e:
@@ -241,7 +296,8 @@ def _session_preflight_and_cleanup(app_url, token, api, data, guard):
         return
     try:
         STATE["cleanup"] = data.sweep("end-of-run")
-        STATE["leftovers"] = list(data.leftovers()) + settings_left
+        _mileage_purge(api, guard, "end-of-run")
+        STATE["leftovers"] = list(data.leftovers()) + _mileage_leftovers() + settings_left
     except Exception as e:                                  # never hide a cleanup failure
         STATE["cleanup"] = f"FAILED: {e}"
         STATE["leftovers"] = ["(could not verify — cleanup failed)"] + settings_left
@@ -478,6 +534,12 @@ def pytest_sessionfinish(session, exitstatus):
          "Settings toggles: all back as they were ✅" if STATE["settings"] == "all back as they were" else
          "Settings toggles NOT back ❌: " + "; ".join(STATE["settings"])),
     ]
+    for why, n in STATE.get("mileage_purge") or []:
+        lines.append(f"Mileage test data ({why}): " + (
+            f"not removed — {n['skipped']}" if "skipped" in n else
+            f"{n.get('trips', 0)} trips, {n.get('reimbursements', 0)} reimbursements, "
+            f"{n.get('vehicles', 0)} vehicles deleted" + (f" (backup {Path(n['backup']).name})"
+                                                            if n.get("backup") else "")))
     if STATE["preflight"] != "ok":
         lines.insert(3, f"NO TESTS RAN (pytest exit code {int(exitstatus)}) — the pre-flight stopped the run, "
                         "or pytest couldn't start (e.g. a bad -k expression). See pytest_output.txt")

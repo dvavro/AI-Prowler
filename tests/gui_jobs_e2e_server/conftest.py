@@ -236,7 +236,96 @@ def owner_api(srv, guard) -> ApiClient:
         return None
 
     guard.stop_resolver = _stop_route_date
+
+    # Mileage + learnings (2026-10-25) — owner reads only, so the guard can tell
+    # test trips / time entries / reimbursements / learnings from real ones.
+    from safety import SANDBOX_DATES as _SBD
+
+    def _trip(trip_id):
+        try:
+            d = json.loads(client.call("get_mileage_log", {"start_date": min(_SBD), "end_date": max(_SBD)},
+                                       expect_ok=False))
+        except Exception:
+            return None
+        return next((t for t in d.get("trips", []) if str(t.get("trip_id")) == str(trip_id)), None)
+
+    def _entry_job(entry_id):
+        for e in client.read("TimeLog"):
+            if str(e.get("EntryID", e.get("Entry ID", ""))).strip() == str(entry_id).strip():
+                return str(e.get("JobID (JOB-####)", e.get("JobID", "")) or "").strip() or None
+        return None
+
+    def _reimb(rid):
+        try:
+            rows = json.loads(client.call("mileage_reimbursement", {"action": "list", "as_json": True},
+                                          expect_ok=False))
+        except Exception:
+            return None
+        r = next((x for x in rows if str(x.get("reimbursement_id", "")).upper() == str(rid).upper()), None)
+        return (r.get("crew") or r.get("user_key")) if r else None
+
+    def _learning_title(lid):
+        """Title of learning `lid` among the owner's ztest-tagged learnings
+        (every status — a superseded one is 'archived'), read over /mcp."""
+        for l_id, title, _st in ztest_learnings(srv, guard):
+            if l_id == str(lid):
+                return title
+        return None
+
+    guard.trip_resolver, guard.entry_resolver = _trip, _entry_job
+    guard.reimb_resolver, guard.learning_resolver = _reimb, _learning_title
     return client
+
+
+def ztest_learnings(srv, guard) -> list:
+    """[(id, title, status icon)] of every learning tagged 'ztest' — active,
+    deprecated or archived — as the owner sees them (list_learnings over /mcp,
+    a read). SRV-API-12 creates and deletes its learnings with these."""
+    import re as _re
+    from ai_client import AiClient
+    ai = AiClient(srv["origin"], srv["owner"].token, guard, "U1", log=_log, api_log=_api_log)
+    res = ai.call("list_learnings", {"status": "", "tag": "ztest", "limit": 500}, expect_ok=False)
+    out = []
+    for block in _re.split(r"\n\s*\n", res):
+        m = _re.search(r"^\[\d+\]\s+(\S+)\s+(.+?)\s*$", block, _re.M)
+        i = _re.search(r"ID:\s*([0-9a-fA-F-]{36})", block)
+        if m and i:
+            out.append((i.group(1), m.group(2).strip(), m.group(1)))
+    return out
+
+
+def note_server_cleanup(what: str, test: str = "") -> None:
+    """A test left data on the SERVER that only tests/server_cleanup/
+    ztest_server_cleanup.py (run on the server) can remove: remember it, so
+    every test run on this PC reminds Vicki until it's done, and say so in
+    this run's SUMMARY.txt."""
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location("_e2e_server_cleanup_pending",
+                                        HERE.parent / "server_cleanup" / "pending.py")
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.add(what, test or _current_test["id"])
+    STATE.setdefault("server_cleanup", []).append(what)
+    _log(f"SERVER CLEANUP NEEDED: {what}")
+
+
+@pytest.fixture(scope="session")
+def server_cleanup_note():
+    """server_cleanup_note("what was left") — see note_server_cleanup()."""
+    return note_server_cleanup
+
+
+# Tests that leave data only the server script can remove (accepted photo
+# uploads, server mileage) run by default since 2026-10-25 (Vicki chose the
+# server-side cleanup script); each such run is remembered and every test run
+# on this PC reminds you to run tests\server_cleanup\run_ztest_server_cleanup.bat
+# on the server. E2E_SERVER_CLEANUP=off skips them (nothing left behind).
+SERVER_SCRIPT_CLEANUP = os.environ.get("E2E_SERVER_CLEANUP", "").strip().lower() != "off"
+
+
+@pytest.fixture(scope="session")
+def server_script_cleanup() -> bool:
+    return SERVER_SCRIPT_CLEANUP
 
 
 @pytest.fixture(scope="session")
@@ -461,6 +550,12 @@ def pytest_sessionfinish(session, exitstatus):
          "Cleanup: 0 ZTEST rows left ✅" if left == [] else
          f"Cleanup: {len(left)} ZTEST row(s) LEFT ❌: " + "; ".join(left)),
     ]
+    if STATE.get("server_cleanup"):
+        lines += ["", "⚠️ SERVER CLEANUP NEEDED — this run left test data the Jobs app can't delete:"]
+        lines += [f"   • {w}" for w in dict.fromkeys(STATE["server_cleanup"])]
+        lines += ["   On the AI-Prowler Server (signed in as AI-Prowler-Server) run "
+                  "tests\\server_cleanup\\run_ztest_server_cleanup.bat,",
+                  "   then on this PC tests\\server_cleanup\\server_cleanup_done.bat."]
     if STATE["preflight"] != "ok":
         lines.insert(3, f"NO TESTS RAN (pytest exit code {int(exitstatus)}) — see pytest_output.txt")
     if failed:

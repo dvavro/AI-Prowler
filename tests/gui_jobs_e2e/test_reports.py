@@ -81,11 +81,81 @@ def test_REP_01_charts_table_and_weeks_selector(app, page):
     expect(page.locator("#reportsContent svg")).to_have_count(4)
     expect(page.locator("#reportsContent")).to_contain_text("Weekly Tax Collected")
     rows = page.locator("#reportsContent table tbody tr")
-    expect(rows).to_have_count(17)                       # 8 back + this week + 8 ahead
+    # 2026-10-23 (David): default 52 weeks each way
+    expect(page.locator("#reportsWeeksSelect")).to_have_value("52")
+    expect(rows).to_have_count(105)                      # 52 back + this week + 52 ahead
     expect(rows.filter(has_text="(this week)")).to_have_count(1)
     app.log("REPORTS weeks each direction → 4")
     page.locator("#reportsWeeksSelect").select_option("4")
     expect(rows).to_have_count(9)
+
+
+# ── REP-07: every chart covers the whole range and scrolls sideways ─────────
+def test_REP_07_every_chart_spans_the_range_and_scrolls(app, page):
+    """David 2026-10-23: the Net Revenue chart stopped at December with no
+    scroll bar. All four charts now cover 52 weeks back and ahead, sit in a
+    sideways-scrolling box, and open scrolled to this week / this month."""
+    _open(app, page)
+    boxes = page.locator("#reportsContent .reports-chart-scroll")
+    expect(boxes).to_have_count(4)
+    page.wait_for_timeout(500)
+    info = page.evaluate("""() => [...document.querySelectorAll('#reportsContent .reports-chart-scroll')]
+        .map(b => ({sw: b.scrollWidth, cw: b.clientWidth, sl: b.scrollLeft,
+                    bars: b.querySelectorAll('svg > text').length}))""")
+    app.log(f"REPORTS chart boxes: {info}")
+    # weekly charts (105 weeks) are always wider than the screen: they scroll and
+    # open on this week. The monthly chart (25 months) may fit a wide PC screen
+    # — then it needs no scroll; on a phone it scrolls and opens on this month.
+    for b in info[1:]:
+        assert b["sw"] > b["cw"], f"a weekly chart doesn't scroll sideways: {info}"
+        assert b["sl"] > 0, f"a weekly chart didn't open scrolled to this week: {info}"
+    if info[0]["sw"] > info[0]["cw"]:
+        assert info[0]["sl"] > 0, f"the monthly chart didn't open scrolled to this month: {info}"
+    for b in info:
+        assert b["sw"] - b["sl"] >= b["cw"] - 1, f"a chart is cut off: {info}"
+    # the monthly chart: about 25 months (a year back to a year ahead), with years on its labels
+    net = page.get_by_test_id("reports-year-net")
+    expect(net).to_contain_text("'2")                    # e.g. "Oct '25", "Jan '27"
+    expect(page.get_by_test_id("reports-range-net-total")).to_be_visible()
+
+
+# ── REP-08: a 🔮 visit for a customer with no price uses their last job ─────
+def test_REP_08_recurring_visit_without_customer_price_uses_last_job(clean_slate, app, page, data, api):
+    """David 2026-10-23: imported customers have no Net Price / Standard Quote,
+    so every 🔮 visit counted $0. A visit is now valued at the customer's most
+    recent priced job (Quote less Discount) — here $180, +7% projected tax."""
+    import datetime as _dt
+    today = _dt.date.fromisoformat(page.evaluate(
+        "() => { const t = new Date(); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0')"
+        " + '-' + String(t.getDate()).padStart(2, '0'); }"))
+    last = today - _dt.timedelta(days=21)                 # Monthly -> next visit in ~10 days
+    last = last.replace(day=min(last.day, 28))            # so "+1 month" is the same day
+    visit = last.replace(month=last.month % 12 + 1, year=last.year + (last.month == 12))
+    out = api.call("create_customer", {"updates": {
+        "Company Name": "ZTEST E2E Recurring NoPrice", "City": "New Smyrna Beach", "State": "FL",
+        "ZIP": "32168", "Status Active/Inactive": "Active", "Frequency": "Monthly",
+        "Last Service Date": last.isoformat(), "Avg Job Duration (min)": 60}})
+    cid = out.split("NEW_CUST_ID=")[1].splitlines()[0].strip()
+    mon = visit - _dt.timedelta(days=visit.weekday())
+    label = f"{mon.month}/{mon.day}"
+    _open(app, page)
+
+    def _week():
+        row = page.locator("#reportsContent table tbody tr").filter(has_text=re.compile(rf"^\s*{re.escape(label)}(?!\d)"))
+        expect(row).to_have_count(1)
+        cells = [c.strip() for c in row.locator("td").all_inner_texts()]
+        return float(MONEY.search(cells[2]).group(1).replace(",", "")), float(MONEY.search(cells[5]).group(1).replace(",", ""))
+
+    before = _week()
+    app.log(f"REPORTS customer {cid} has no price; adding its last job at $200 − $20 on {last}")
+    data.job("REP08 last visit", date=last.isoformat(), **{
+        "CustomerID": cid, "Customer Name / Company": "ZTEST E2E Recurring NoPrice",
+        "Job Status": "Complete", "Quote Amount ($)": 200, "Discount Applied ($)": 20})
+    _refresh(app, page)
+    after = _week()
+    app.log(f"REPORTS week of {label} (🔮 visit {visit}): proj rev/tax {before} → {after}")
+    assert round(after[0] - before[0], 2) == 180, (before, after)
+    assert abs((after[1] - before[1]) - 12.6) <= 1, (before, after)    # 7% (the table rounds to $)
 
 
 # ── REP-02: this week's numbers move by exactly what was added ───────────────

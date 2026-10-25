@@ -258,18 +258,28 @@ def tracking_enabled(db_path: str) -> bool:
         val = _get_setting(conn, SETTING_ENABLED)
     finally:
         conn.close()
+    return _onoff(val, True)
+
+
+def _onoff(val, default: bool) -> bool:
+    """Read an on/off setting. The Settings tab writes Enabled/Disabled;
+    older versions wrote true/false. Blank or missing = default."""
     if val is None or str(val).strip() == "":
-        return True
-    return str(val).strip().lower() in ("1", "true", "yes", "on")
+        return default
+    return str(val).strip().lower() in ("1", "true", "yes", "on", "enabled", "enable")
 
 
 def set_tracking_enabled(db_path: str, enabled: bool, actor: str) -> str:
     conn = get_connection(db_path)
     try:
-        _set_setting(conn, SETTING_ENABLED, "true" if enabled else "false", actor)
+        _set_setting(conn, SETTING_ENABLED, "Enabled" if enabled else "Disabled", actor)
     finally:
         conn.close()
-    return f"✅ Mileage tracking turned {'ON' if enabled else 'OFF'}."
+    if enabled:
+        return "✅ Mileage tracking turned ON."
+    return ("✅ Mileage tracking turned OFF. The Jobs app won't ask anyone for miles and adds "
+            "no new trips to the mileage log; routes still show miles driven. Turn it back on "
+            "in Database → Settings → Mileage Tracking Enabled.")
 
 
 def get_rates(db_path: str) -> list:
@@ -1588,6 +1598,52 @@ REMINDER_TYPES = {
     "pay_period": "End of pay period — submit, approve, and pay crew reimbursements",
     "odometer": "Dec 31 and new or retired vehicles — record the odometer",
 }
+# 2026-10-25: each reminder is its own Enabled/Disabled row on Database →
+# Settings (older versions kept them all in one JSON row, SETTING_REMINDERS,
+# which migrate_legacy_settings() converts).
+REMINDER_SETTING_KEYS = {
+    "gaps": "Mileage Reminder - Daily Gaps",
+    "weekly": "Mileage Reminder - Weekly Review",
+    "pay_period": "Mileage Reminder - Pay Period",
+    "odometer": "Mileage Reminder - Odometer",
+}
+
+
+def migrate_legacy_settings(conn) -> int:
+    """Convert pre-2026-10-25 mileage settings to Settings-tab rows, so seeding
+    the new defaults never overrides a choice someone already made:
+      * Mileage Tracking Enabled true/false -> Enabled/Disabled
+      * the Mileage Reminders JSON row     -> one Enabled/Disabled row each
+        (the JSON row is removed once its values are copied).
+    Works on an open connection; the caller commits. Returns rows changed."""
+    changed = 0
+    now = utcnow_iso()
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (SETTING_ENABLED,)).fetchone()
+    if row is not None:
+        raw = str(row[0] if row[0] is not None else "").strip()
+        if raw and raw not in ("Enabled", "Disabled"):
+            new = "Enabled" if _onoff(raw, True) else "Disabled"
+            conn.execute("UPDATE settings SET value = ? WHERE key = ?", (new, SETTING_ENABLED))
+            changed += 1
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (SETTING_REMINDERS,)).fetchone()
+    if row is not None:
+        try:
+            m = json.loads(row[0]) if row[0] else {}
+        except Exception:
+            m = {}
+        if not isinstance(m, dict):
+            m = {}
+        for name, key in REMINDER_SETTING_KEYS.items():
+            if name not in m:
+                continue
+            cur = conn.execute(
+                "INSERT INTO settings (key, value, last_edited_by, last_edited_at) "
+                "VALUES (?, ?, 'system', ?) ON CONFLICT(key) DO NOTHING",
+                (key, "Enabled" if bool(m[name]) else "Disabled", now))
+            changed += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        conn.execute("DELETE FROM settings WHERE key = ?", (SETTING_REMINDERS,))
+        changed += 1
+    return changed
 
 
 # ── Miles follow schedule changes (FR-21) ─────────────────────────────────
@@ -2203,16 +2259,21 @@ def statement_pdf(db_path: str, rid: str = "", ukey: str = "", period_date: str 
 # ── Reminders (FR-24) ─────────────────────────────────────────────────────
 
 def get_reminder_settings(db_path: str) -> dict:
+    """Each reminder's own Settings row wins; the legacy JSON row (not yet
+    migrated) is the fallback; missing = on."""
     conn = get_connection(db_path)
     try:
         raw = _get_setting(conn, SETTING_REMINDERS)
+        rows = {k: _get_setting(conn, key) for k, key in REMINDER_SETTING_KEYS.items()}
     finally:
         conn.close()
     try:
         m = json.loads(raw) if raw else {}
     except Exception:
         m = {}
-    return {k: bool(m.get(k, True)) for k in REMINDER_TYPES}
+    if not isinstance(m, dict):
+        m = {}
+    return {k: _onoff(rows.get(k), bool(m.get(k, True))) for k in REMINDER_TYPES}
 
 
 def set_reminder(db_path: str, name: str, enabled: bool, actor: str) -> str:
@@ -2221,11 +2282,9 @@ def set_reminder(db_path: str, name: str, enabled: bool, actor: str) -> str:
             "odo": "odometer"}.get(name, name)
     if name not in REMINDER_TYPES:
         return "❌ Reminder must be one of: " + ", ".join(REMINDER_TYPES) + "."
-    cur = get_reminder_settings(db_path)
-    cur[name] = bool(enabled)
     conn = get_connection(db_path)
     try:
-        _set_setting(conn, SETTING_REMINDERS, json.dumps(cur), actor)
+        _set_setting(conn, REMINDER_SETTING_KEYS[name], "Enabled" if enabled else "Disabled", actor)
     finally:
         conn.close()
     return f"✅ Mileage reminder '{REMINDER_TYPES[name]}' turned {'ON' if enabled else 'OFF'}."

@@ -717,10 +717,12 @@ class TestRemoteAllowedTools:
         allowed = self._allowed(mcp_src)
         for tool in ["list_analysis_tasks", "get_pending_analysis_tasks",
                      "create_analysis_task", "update_analysis_task",
-                     "delete_analysis_task",
-                     "sync_due_tasks_to_queue", "queue_single_task"]:
+                     "delete_analysis_task", "queue_single_task"]:
             assert tool in allowed, \
                 f"'{tool}' missing from _REMOTE_ALLOWED — Tasks tab will get 400"
+        # 2026-10-23: sync_due_tasks_to_queue no longer exists as an MCP tool;
+        # its stale allow-list entry was removed (the Remote page never calls it).
+        assert "sync_due_tasks_to_queue" not in allowed
     def test_queue_single_task_defined_in_mcp(self, mcp_src):
         assert "def queue_single_task(" in mcp_src,             "queue_single_task not defined in ai_prowler_mcp.py"
 

@@ -634,6 +634,10 @@ MANIFEST_FILES = [
     "db_route_ops.py",
     "db_backup_ops.py",
     "db_export_ops.py",
+    # Added 2026-10-24: mileage tracker — ai_prowler_mcp.py and db_read_ops.py
+    # import it. Also listed in AI-Prowler-Setup.iss [Files].
+    "db_mileage_ops.py",
+    "mileage_pdf.py",
     # Added 2026-10-22: 🗓️ Plan Week — ai_prowler_mcp.py imports it for the
     # week-plan tools. Also listed in AI-Prowler-Setup.iss [Files].
     "week_plan.py",

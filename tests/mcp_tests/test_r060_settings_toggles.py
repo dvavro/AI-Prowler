@@ -59,7 +59,11 @@ def env(tmp_path):
                       "Customer Reminder SMS Enabled": "Disabled", "Route Origin Mode": "Jobs Only",
                       "Working Days": "Mon,Tue,Wed,Thu,Fri",
                       "Start/End Street Address": "1500 Shadow Pines Dr", "Start/End City": "New Smyrna Beach",
-                      "Start/End State": "Florida", "Start/End ZIP": "32168"})
+                      "Start/End State": "Florida", "Start/End ZIP": "32168",
+                      # mileage switches (2026-10-25, Database → Settings)
+                      "Mileage Tracking Enabled": "Enabled", "Mileage Reimbursement Period": "monthly",
+                      "Mileage Reminder - Daily Gaps": "Enabled", "Mileage Reminder - Weekly Review": "Enabled",
+                      "Mileage Reminder - Pay Period": "Enabled", "Mileage Reminder - Odometer": "Enabled"})
     s = sw.SettingsSwitch(api, g, state_file=tmp_path / "settings_to_restore.json")
     return g, api, s
 
@@ -165,3 +169,24 @@ def test_route_builds_left_alone_when_setting_off(env):
     s.set("Email Route On Build", "Disabled")
     a, note = g.route_email_args("suggest_route_schedule", {"route_date": safety.SANDBOX_DATE})
     assert "email_route" not in a and note == ""
+
+
+# ── Mileage switches (2026-10-25: moved to Database → Settings; MI-11 flips them)
+def test_mileage_switches_flip_and_go_back(env):
+    g, api, s = env
+    s.snapshot()
+    s.set("Mileage Reimbursement Period", "biweekly")
+    s.set("Mileage Tracking Enabled", "Disabled")
+    s.set("Mileage Reminder - Odometer", "Disabled")
+    for key, bad in (("Mileage Reimbursement Period", "yearly"), ("Mileage Tracking Enabled", "Maybe")):
+        a = {"sheet_name": "Settings", "id_column": "Setting", "job_identifier": key, "updates": {"Value": bad}}
+        assert g.check("update_job_spreadsheet", a)[0] == "block", key
+    # the rates / default-vehicle JSON rows are never test toggles
+    a = {"sheet_name": "Settings", "id_column": "Setting", "job_identifier": "Mileage Rates",
+         "updates": {"Value": "[]"}}
+    assert g.check("update_job_spreadsheet", a)[0] == "block"
+    assert sorted(s.restore()) == sorted(["Mileage Reimbursement Period", "Mileage Tracking Enabled",
+                                          "Mileage Reminder - Odometer"])
+    assert api.rows["Mileage Tracking Enabled"]["Value"] == "Enabled"
+    assert api.rows["Mileage Reimbursement Period"]["Value"] == "monthly"
+    assert s.verify() == []

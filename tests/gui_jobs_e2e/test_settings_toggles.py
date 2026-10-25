@@ -41,7 +41,8 @@ def _flip_in_app(app, page, key: str, value: str):
 
 # Working Days (2026-10-02) is flipped only by CAL-06 (test_calendar.py), which
 # first checks no REAL open "days" job would have its End Date re-counted.
-_FLIPPABLE_HERE = [k for k in TOGGLES if k != "Working Days"]
+# Mileage switches (2026-10-25) are flipped by MI-11 in test_mileage_e2e.py.
+_FLIPPABLE_HERE = [k for k in TOGGLES if k != "Working Days" and not k.startswith("Mileage ")]
 
 
 @pytest.mark.parametrize("key", _FLIPPABLE_HERE, ids=["route_email", "reminder_email", "reminder_sms", "route_origin_mode"])

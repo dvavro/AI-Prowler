@@ -7824,6 +7824,10 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
     Returns:
         Step-by-step guidance on which tools to use and in what order,
         plus key facts about capabilities, plus a connection-specific footer.
+
+    Voice examples:
+        "What can you do with AI-Prowler?"
+        "How do I plan my week by voice?"
     """
     import mcp as _mcp_pkg
     try:
@@ -7848,9 +7852,10 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "connection; personal mode sees the full catalog, server mode sees\n"
         "a smaller Tier-A-suppressed subset)\n"
         + "-" * 30 + "\n"
-        "AI-Prowler exposes thirteen tool families. Most question-answering\\n"
+        "AI-Prowler exposes fourteen tool families. Most question-answering\\n"
         "tasks use the first two; the others cover indexing, code editing,\n"
         "dev tooling, communications, contractor/field-service workflows,\n"
+        "the mileage tracker,\n"
         "job-tracker data portability, and agentic analysis.\n\n"
 
         "  • Knowledge retrieval (RAG over indexed documents):\n"
@@ -7941,13 +7946,65 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "    route_code to apply_route_order (a code only works for its own\n"
         "    date/crew). Plan Week: get_week_plan_data(route_code), then\n"
         "    propose_week_moves - that only SUGGESTS; the user approves in\n"
-        "    the Jobs app (apply_week_moves). Hard jobs never move.\n\n"
+        "    the Jobs app or by saying yes in the chat (apply_week_moves).\n"
+        "    Hard jobs never move.\n"
+        "    NOTE - voice and chat (2026-10-23): a spoken or typed request is\n"
+        "    treated exactly like the app's buttons - no pasting needed.\n"
+        "    \"Route me for today\" -> get_ai_route_prompt(route_date), then do\n"
+        "    the steps it returns yourself. \"Plan my week\" ->\n"
+        "    get_week_plan_prompt(week_start), then do its steps yourself.\n"
+        "    Approvals (apply_week_moves, approve_route_schedule) only after you\n"
+        "    read back what will change and the person clearly says yes. Keep\n"
+        "    replies short - they may be driving and listening, not reading.\n\n"
 
         "  • Contractor / business workflow:\n"
         "      email_invoice, text_invoice, email_receipt, text_receipt,\n"
         "      schedule_next_recurring_job, log_time_entry,\n"
         "      get_ar_aging_report, save_contact, get_sms_thread,\n"
         "      list_sms_contacts_with_replies\n\n"
+
+        # 2026-10-25: mileage tracker (spec "Jobs App Mileage Tracking for
+        # Tax Deductions", Phases 1-5). Same text on every connector.
+        "  • Mileage tracker — IRS business-mileage log (personal AND server\n"
+        "    mode, every role; field crew see and change only their own trips):\n"
+        "      get_mileage_log — trips, days needing a fix, vehicles, IRS rates,\n"
+        "        totals, reminders and reimbursement status for a date range (JSON).\n"
+        "      build_mileage_log — rebuild a day from clock-ins (home/company\n"
+        "        legs follow Settings -> Route Origin Mode), or backfill a range\n"
+        "        (preview=true first; owner/manager only).\n"
+        "      add_mileage_trip — log any business trip (supplies, bank, estimate,\n"
+        "        meeting) from fields, GPS points, or text=\"<what they said>\".\n"
+        "      update_mileage_trip — edit (reason required), void, split (add a\n"
+        "        stop), or show a trip's change history.\n"
+        "      fix_mileage_gap — fill a missing clock-out (dead phone) and rebuild.\n"
+        "      job_cancelled_on_arrival — customer cancelled at the door: the\n"
+        "        drive still counts, the job is marked Cancelled.\n"
+        "      manage_vehicles — vehicles by VIN (business or crew-owned),\n"
+        "        odometer readings, default / today's vehicle.\n"
+        "      get_mileage_report — miles by driver/vehicle/month, deduction per\n"
+        "        IRS rate period + parking/tolls, crew reimbursement status, Form\n"
+        "        4562 per-vehicle sheet, IRS record checks.\n"
+        "      export_mileage_log — the IRS log as PDF / Excel / CSV; deliver=\n"
+        "        file, email (email_to=...) or download.\n"
+        "      mileage_reimbursement — crew-car reimbursement per pay period:\n"
+        "        status, submit, approve, return (note), paid (date, method,\n"
+        "        reference), list, statement PDF. Nobody approves their own.\n"
+        "      review_mileage_log — AI review of a range: route/odometer\n"
+        "        mismatches, long legs, duplicates, vague purposes, no vehicle,\n"
+        "        misclassified commutes, late edits. Changes NOTHING.\n"
+        "      apply_mileage_review_fix — accept (audited edit) or dismiss ONE\n"
+        "        finding the user agreed to.\n"
+        "      mileage_settings — tracking on/off, IRS rates, lock/unlock a month\n"
+        "        or year, reimbursement pay period, reminders on/off, reminders due.\n"
+        "    NOTE - mileage by voice or chat: when someone says \"I drove to Home\n"
+        "    Depot for ladders\", call add_mileage_trip(text=...) and read back\n"
+        "    the 📝 confirmation; a ❓ reply lists what's missing (miles or a\n"
+        "    start place, a specific purpose) - ask for it, then save with the\n"
+        "    fields (confirm=false). The IRS needs a date, destination, a\n"
+        "    SPECIFIC business purpose (not just \"business\") and miles. Every\n"
+        "    edit or removal needs a short reason - ask for one. Locked months and\n"
+        "    submitted/paid reimbursements can't be changed. Accept review fixes\n"
+        "    and approve/pay reimbursements only after the person says yes.\n\n"
 
         "  • Data portability — export, backup & restore for the job\n"
         "    tracker (Job Board Architecture Spec Phase 8, spec §12):\n"
@@ -8900,6 +8957,10 @@ def update_tracked_directories(directory: Optional[str] = None,
 
     Returns:
         A summary of changes detected and files re-indexed.
+
+    Voice examples:
+        "Re-scan my folders for changes"
+        "Update the knowledge base"
     """
     load_config()
 
@@ -8971,6 +9032,10 @@ def get_database_stats(ctx: Context = None) -> str:
 
     Returns:
         A formatted statistics report.
+
+    Voice examples:
+        "How many documents are indexed?"
+        "How big is my knowledge base?"
     """
     # Build stats directly from ChromaDB rather than capturing show_stats()
     # print output.  This is safe in BOTH stdio mode (where sys.stdout is the
@@ -9109,6 +9174,10 @@ def list_tracked_directories(ctx: "Context | None" = None) -> str:
 
     Returns:
         A formatted list of tracked paths, or a message if none are registered.
+
+    Voice examples:
+        "Which folders are you watching?"
+        "What folders are tracked?"
     """
     dirs = load_auto_update_list()
     # R-072: no early return -- both sections always render, with (none)
@@ -9234,6 +9303,9 @@ def untrack_directory(directory: str, ctx: Context = None) -> str:
 
     Returns:
         A summary of what was removed.
+
+    Voice examples:
+        "Stop tracking my Downloads folder"
     """
     _user = _current_user(ctx)
 
@@ -9296,6 +9368,10 @@ async def check_ai_prowler_status(ctx: "Context | None" = None) -> str:
 
     Returns:
         A diagnostic status report for the Agentic RAG knowledge base.
+
+    Voice examples:
+        "Is AI-Prowler working?"
+        "Check AI-Prowler's status"
     """
     # Wait for background prewarm (ChromaDB + embedding model) — max 25s.
     # Prewarm runs in a thread so mcp.run() could start before it finishes.
@@ -9589,6 +9665,10 @@ def get_knowledge_base_overview(ctx: Context = None) -> str:
 
     Returns:
         Structured overview of the knowledge base contents.
+
+    Voice examples:
+        "What's in my knowledge base?"
+        "Give me an overview of my documents"
     """
     if not _prewarm_event.wait(timeout=60):
         _log.warning("get_knowledge_base_overview: prewarm timeout — returning early")
@@ -9709,6 +9789,10 @@ def search_documents(
     Returns:
         Numbered list of matching chunks with source file, chunk position,
         similarity score, and full text content.
+
+    Voice examples:
+        "Find my notes about the Crabby's contract"
+        "Search my documents for pressure washing prices"
     """
     if not query.strip():
         return "Query cannot be empty."
@@ -9851,6 +9935,10 @@ def expand_search_result(
 
     Returns:
         Target chunk plus surrounding chunks in reading order.
+
+    Voice examples:
+        "Show me more of that result"
+        "Read the text around that match"
     """
     window = max(1, min(5, window))
 
@@ -9933,6 +10021,10 @@ def read_document(
     Returns:
         Sequential chunks in reading order with position indicators and
         a continuation hint if the document has more chunks.
+
+    Voice examples:
+        "Read me the Norwoods service agreement"
+        "Open that document"
     """
     max_chunks = min(max(1, max_chunks), 30)
 
@@ -10022,6 +10114,10 @@ def list_indexed_documents(
 
     Returns:
         Sorted list of indexed documents grouped by file type.
+
+    Voice examples:
+        "List the documents you've indexed"
+        "What files are in the knowledge base?"
     """
     try:
         coll, where_filter = _scoped_collections_for_ctx(ctx)
@@ -10411,6 +10507,9 @@ def list_indexed_directories(ctx: Context = None) -> str:
 
     Returns:
         Directory tree with file counts, sorted alphabetically.
+
+    Voice examples:
+        "Which folders are indexed?"
     """
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
@@ -10651,6 +10750,10 @@ def get_home_address() -> str:
         The formatted address as a single string (e.g.
         "123 Main St, New Smyrna Beach, FL 32168"), or a clear message
         if no address has been configured yet in Settings.
+
+    Voice examples:
+        "What's my home address for routing?"
+        "Where does my route start?"
     """
     _telemetry_increment_tool_count("get_home_address")
 
@@ -10774,6 +10877,10 @@ def optimize_route(
     Returns:
         Optimized stop sequence with estimated arrival time, drive time, and
         distance for each leg. Includes totals and a hint to call build_maps_url().
+
+    Voice examples:
+        "Optimize today's route"
+        "What's the best order for tomorrow's stops?"
     """
     import requests as _req
     import datetime  as _dt
@@ -10976,6 +11083,10 @@ def build_maps_url(
     Returns:
         One or more tap-to-navigate URLs. For routes > 9 stops, multiple
         leg links are provided — tap each when the previous leg is complete.
+
+    Voice examples:
+        "Give me a Google Maps link for today's route"
+        "Map my stops for Friday"
     """
     import urllib.parse as _up
 
@@ -13778,6 +13889,10 @@ def get_sheet_columns(
     dropdown" concept in SQLite anymore, so DROPDOWN lines now come from
     a small hand-maintained map of genuinely dropdown-backed columns
     (see db_read_ops._KNOWN_DROPDOWNS) rather than a live worksheet scan.
+
+    Voice examples:
+        "What columns does the jobs table have?"
+        "What fields can I set on a customer?"
     """
     from db_read_ops import db_get_sheet_columns
 
@@ -14055,6 +14170,10 @@ def get_file_download_url(file_path: str) -> str:
           note          — usage reminder
         Or an error string if the file is not found, not tracked, the
         extension is not allowed, or the install is in server mode.
+
+    Voice examples:
+        "Send me a link to download the Norwoods invoice"
+        "Get me a download link for that file"
     """
     _telemetry_increment_tool_count("get_file_download_url")
 
@@ -14215,6 +14334,10 @@ def get_file_upload_url(filename: str, target_directory: str) -> str:
           note             — usage instructions
         Or an error string if the directory is not writable, not tracked,
         or the install is in server mode.
+
+    Voice examples:
+        "I want to upload a photo to my files"
+        "Give me an upload link"
     """
     _telemetry_increment_tool_count("get_file_upload_url")
 
@@ -14351,6 +14474,10 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
     Returns:
         Status report with ✅/⚠️/❌ for each tool and setup instructions
         for anything that needs configuration.
+
+    Voice examples:
+        "Which tools are turned on?"
+        "Is the job tracker enabled?"
     """
     lines = [
         "🔧 AI-Prowler Action Tools Status",
@@ -14496,6 +14623,23 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
         "",
         f"  ✅ get_ar_aging_report(filepath?, as_of_date?)",
         f"     AR aging buckets: Current / 1-30 / 31-60 / 61-90 / 90+ days",
+        "",
+        "─" * 50,
+        "",
+        "MILEAGE TRACKER (IRS business-mileage log — Jobs app Mileage tab):",
+        "",
+        "  ✅ get_mileage_log / build_mileage_log / add_mileage_trip /",
+        "     update_mileage_trip / fix_mileage_gap / job_cancelled_on_arrival",
+        "     Trips from clock-ins + any business trip by form, text or voice;",
+        "     audited edits (reason required), removals kept as void.",
+        "  ✅ manage_vehicles — vehicles by VIN, crew-owned cars, odometer.",
+        "  ✅ get_mileage_report / export_mileage_log — deduction by IRS rate",
+        "     period, Form 4562 sheet, record checks; PDF / Excel / CSV.",
+        "  ✅ mileage_reimbursement — crew-car reimbursement: submit, approve,",
+        "     return, paid, PDF statement.",
+        "  ✅ review_mileage_log / apply_mileage_review_fix — AI review;",
+        "     fixes only after the user agrees.",
+        "  ✅ mileage_settings — on/off, rates, lock months, pay period, reminders.",
         "",
     ]
 
@@ -15648,6 +15792,10 @@ def email_receipt(
 
     Returns:
         Confirmation with receipt details, or an error message.
+
+    Voice examples:
+        "Email the receipt for JOB-4091 to the customer"
+        "Send Bamboo Trading their receipt"
     """
     _telemetry_increment_tool_count("email_receipt")
 
@@ -15836,6 +15984,10 @@ def text_receipt(
 
     Returns:
         Confirmation with receipt details, or an error message.
+
+    Voice examples:
+        "Text the receipt for JOB-4091"
+        "Send Crabby's their receipt by text"
     """
     _telemetry_increment_tool_count("text_receipt")
 
@@ -15973,6 +16125,10 @@ def check_sms_configured(ctx: "Context | None" = None) -> str:
     Returns:
         Exactly one of two strings, safe for exact-match parsing:
         "✅ SMS configured" or "❌ SMS not configured".
+
+    Voice examples:
+        "Is texting set up?"
+        "Can you send text messages?"
     """
     try:
         from sms_backends import get_sms_backend, load_sms_config
@@ -15994,6 +16150,10 @@ def check_email_configured(ctx: "Context | None" = None) -> str:
     Returns:
         Exactly one of two strings, safe for exact-match parsing:
         "✅ Email configured" or "❌ Email not configured".
+
+    Voice examples:
+        "Is email set up?"
+        "Can you send email for me?"
     """
     try:
         cfg = _email_config_load()
@@ -17262,6 +17422,17 @@ def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx, g
     )
     if backup_msg and result.startswith("⏱️"):
         result = f"{result}\n   {backup_msg}"
+    # Mileage tracker Phase 2 (2026-10-24): after a successful clock-out,
+    # rebuild this driver's trips for today once they have no open clock-in.
+    # Never blocks or alters the clock-out result.
+    if action == "stop" and "Clocked OUT" in result:
+        import datetime as _lte_dt
+        import threading as _lte_th
+        # Background thread: routing lookups can take a few seconds and must
+        # not hold the clock-out (or _spreadsheet_write_lock) open.
+        _lte_th.Thread(target=mileage_after_clock_event, daemon=True,
+                       args=(db_path, _lte_dt.date.today().isoformat(), _lte_uid,
+                             _lte_display, _actor_display_name(ctx))).start()
     return result
 
 
@@ -17435,6 +17606,990 @@ def _get_daily_mileage_impl(entry_date: str, crew: str, filepath: str, ctx) -> s
         "there's no recorded GPS point marking those."
     )
     return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOLS 11.6 — Mileage tracker (2026-10-24, spec "Jobs App Mileage
+# Tracking for Tax Deductions"). Logic lives in db_mileage_ops.py; these are
+# thin wrappers that resolve the caller (Personal or Server mode), apply the
+# crew restriction (field crew see/change only their own trips), and gate
+# owner-only actions. Used by Claude/Muse/Grok and by the Jobs app's Mileage
+# tab through /pwa-api.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _mileage_caller(ctx, filepath: str = ""):
+    """(db_path, actor, restrict, ukey, crew_user_id, crew_name, is_admin, err)."""
+    import db_mileage_ops as _mo
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return None, "", False, "", "", "", False, "❌ No job database configured."
+    user = _current_user(ctx)
+    actor = _actor_display_name(ctx)
+    restrict, _crew_lower = _job_crew_scope(ctx, db_path)
+    if user is None:   # personal mode: the owner
+        return db_path, actor, False, "owner", "", "", True, ""
+    role = (user.get("role") or "").strip().lower()
+    uid = (user.get("id") or "").strip()
+    name = (user.get("name") or user.get("username") or "").strip()
+    return (db_path, actor, restrict, _mo.user_key(uid, name), uid, name,
+            role in ("owner", "manager"), "")
+
+
+def _mileage_off(db_path: str) -> str:
+    import db_mileage_ops as _mo
+    if not _mo.tracking_enabled(db_path):
+        return ("ℹ️ Mileage tracking is turned off (Database → Settings → Mileage Tracking "
+                "Enabled). The owner can turn it back on.")
+    return ""
+
+
+def mileage_after_clock_event(db_path: str, entry_date: str, crew_user_id: str, crew: str,
+                              actor: str) -> None:
+    """Phase 2 hook: rebuild the driver's day after a clock-out once they
+    have no open clock-in. Never raises — a mileage problem must never
+    block a clock-in/out."""
+    try:
+        import db_mileage_ops as _mo
+        from db_access import get_connection as _gc
+        if not _mo.tracking_enabled(db_path):
+            return
+        conn = _gc(db_path)
+        try:
+            ukey = _mo.entry_key(crew_user_id, crew)
+            open_rows = [r for r in conn.execute(
+                "SELECT crew_user_id, crew FROM time_entries WHERE entry_date = ? AND clock_out IS NULL",
+                (entry_date,)).fetchall() if _mo.entry_key(r["crew_user_id"], r["crew"]) == ukey]
+        finally:
+            conn.close()
+        if open_rows:
+            return
+        # Personal mode (no user id): the whole day belongs to the owner, so
+        # rebuild every personal-mode entry for the date (crew text is the
+        # job's crew, not the driver).
+        _mo.build_trips_for_day(db_path, entry_date, actor, crew_user_id=crew_user_id or "",
+                                crew=(crew or "") if crew_user_id else "")
+    except Exception as exc:
+        try:
+            log.warning(f"mileage auto-build skipped: {exc}")
+        except Exception:
+            pass
+
+
+@mcp.tool()
+def get_mileage_log(
+    start_date: str = "",
+    end_date:   str = "",
+    crew:       str = "",
+    filepath:   str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Mileage log for a date range as JSON: trips (date, from, to, miles,
+    purpose, vehicle, business/commute/reimbursable, edited/void flags),
+    days that need a fix (missing clock-out or location), vehicles, the
+    IRS rate table, totals, reminders due for the caller, and their crew
+    reimbursement status (owner/manager: the approval queue too). Days
+    whose jobs, clock times or route changed since they were built are
+    rebuilt first. Used by the Jobs app's Mileage tab and Database → Miles.
+    To answer a person in words, prefer get_mileage_report.
+
+    Field crew see only their own trips. Owner/manager/staff can filter
+    with crew (driver name).
+
+    Args:
+        start_date: YYYY-MM-DD (default: 7 days ago).
+        end_date:   YYYY-MM-DD (default: today).
+        crew:       Optional driver name to filter (owner/manager/staff).
+
+    Voice examples:
+        "Show my mileage for this week"
+        "What trips did Sam log yesterday?"
+    """
+    _telemetry_increment_tool_count("get_mileage_log")
+    import json as _json
+    import datetime as _ddt
+    import db_mileage_ops as _mo
+    db_path, actor, restrict, ukey, uid, name, is_admin, err = _mileage_caller(ctx, filepath)
+    if err:
+        return err
+    today = _ddt.date.today()
+    s = start_date or (today - _ddt.timedelta(days=7)).isoformat()
+    e = end_date or today.isoformat()
+    try:
+        driver = _mo.user_key("", crew) if (crew and not restrict) else ""
+        on = _mo.tracking_enabled(db_path)
+        if on:   # off = quiet: no rebuilding, no gaps asking anyone for miles
+            _mo.refresh_stale_days(db_path, s, e, actor)   # FR-21: jobs moved / cancelled / re-timed since built
+        trips = _mo.list_trips(db_path, s, e, restrict, ukey, driver, include_void=True)
+        gaps = _mo.day_gaps(db_path, s, e, restrict, ukey) if on else []
+        vehicles = _mo.list_vehicles(db_path, restrict_user_key=ukey if restrict else "")
+        ys = f"{today.year}-01-01"
+        ytd = _mo.list_trips(db_path, ys, today.isoformat(), restrict, ukey, driver)
+        wk0 = (today - _ddt.timedelta(days=today.weekday())).isoformat()
+        week = [t for t in ytd if t["trip_date"] >= wk0]
+    except ValueError as exc:
+        return f"❌ {exc}"
+
+    def _sum(rows, cls):
+        return round(sum(float(t["miles"] or 0) for t in rows if t["classification"] == cls), 1)
+    keep = ("trip_id", "trip_date", "start_time", "end_time", "crew", "driver_key", "vehicle_id",
+            "vehicle_label", "from_label", "to_label", "job_id", "customer_name", "seq", "miles",
+            "distance_source", "classification", "reimbursable", "category", "purpose", "parking_usd",
+            "tolls_usd", "origin", "manually_edited", "corrected", "needs_fix", "status", "void_reason",
+            "locked_period", "late_entry", "rate_cents", "notes", "origin_mode")
+    return _json.dumps({
+        "enabled": _mo.tracking_enabled(db_path), "start": s, "end": e,
+        "user_key": ukey, "is_admin": is_admin, "restricted": restrict,
+        "trips": [{k: t.get(k) for k in keep} for t in trips],
+        "gaps": gaps,
+        "vehicles": [{k: v.get(k) for k in ("vehicle_id", "label", "vin", "ownership", "owner_name",
+                                             "default_user_name", "placed_in_service", "active",
+                                             "last_odometer", "last_odometer_date", "nickname",
+                                             "year", "make", "model", "plate")} for v in vehicles],
+        "categories": _mo.CATEGORIES, "rates": _mo.get_rates(db_path),
+        "totals": {"week_business": _sum(week, "business"), "ytd_business": _sum(ytd, "business"),
+                   "ytd_commute": _sum(ytd, "commute")},
+        "reminders": _mo.due_reminders(db_path, ukey, is_admin),
+        "reimbursement": _mileage_reimb_summary(db_path, ukey, is_admin),
+    }, default=str)
+
+
+def _mileage_reimb_summary(db_path: str, ukey: str, is_admin: bool) -> dict:
+    """Small reimbursement block for the Mileage tab: whether this person
+    has crew-owned-vehicle trips to submit, their recent reimbursements, and
+    (owner/manager) the approval queue. Never raises."""
+    try:
+        import db_mileage_ops as _mo
+        p = _mo.reimbursement_preview(db_path, ukey)
+        mine = _mo.list_reimbursements(db_path, ukey, limit=6)
+        queue = _mo.list_reimbursements(db_path, statuses=["submitted", "approved"]) if is_admin else []
+        has_crew_car = any(v["ownership"] == "crew" for v in _mo.list_vehicles(db_path, restrict_user_key=ukey))
+        return {"current": {k: p[k] for k in ("period_start", "period_end", "kind", "trip_count", "miles",
+                                              "amount_usd", "parking_tolls_usd")}
+                | {"status": (p["existing"] or {}).get("status", ""),
+                   "reimbursement_id": (p["existing"] or {}).get("reimbursement_id", ""),
+                   "gap_days": sorted({g["date"] for g in p["gaps"]})},
+                "mine": mine, "queue": queue,
+                "show": bool(p["trip_count"] or mine or queue or has_crew_car)}
+    except Exception:
+        return {"show": False, "mine": [], "queue": []}
+
+
+@mcp.tool()
+def build_mileage_log(
+    date:       str = "",
+    start_date: str = "",
+    end_date:   str = "",
+    preview:    bool = True,
+    crew:       str = "",
+    filepath:   str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Build or rebuild the mileage log from clock-ins (job trips, plus the
+    home or company legs from Settings → Route Origin Mode).
+
+    - One day: pass date (e.g. after a job was moved or cancelled, or to
+      "recalculate" a day). Hand-edited trips are kept, never overwritten.
+    - Backfill a range: pass start_date and end_date. With preview=true
+      (default) nothing is written — you get counts first. Call again with
+      preview=false to build. Backfilled trips are marked as such.
+      Backfill is owner/manager only.
+
+    Voice examples:
+        "Recalculate my mileage for yesterday"
+        "Rebuild mileage for January through October"
+    """
+    _telemetry_increment_tool_count("build_mileage_log")
+    import db_mileage_ops as _mo
+    db_path, actor, restrict, ukey, uid, name, is_admin, err = _mileage_caller(ctx, filepath)
+    if err:
+        return err
+    off = _mileage_off(db_path)
+    if off:
+        return off
+    try:
+        if start_date or end_date:
+            if not is_admin:
+                return "❌ Only the owner or a manager can rebuild past mileage."
+            return _mo.backfill(db_path, start_date or end_date, end_date or start_date, actor, preview=preview)
+        if restrict:
+            s = _mo.build_trips_for_day(db_path, date or "today", actor, crew_user_id=uid, crew=name)
+        elif crew:
+            s = _mo.build_trips_for_day(db_path, date or "today", actor, crew=crew)
+        else:
+            s = _mo.build_trips_for_day(db_path, date or "today", actor)
+        return _mo.summarize_build(s)
+    except ValueError as exc:
+        return f"❌ {exc}"
+
+
+@mcp.tool()
+def add_mileage_trip(
+    to_place:       str = "",
+    purpose:        str = "",
+    miles:          str = "",
+    date:           str = "",
+    from_place:     str = "",
+    category:       str = "Other",
+    round_trip:     bool = False,
+    vehicle_id:     str = "",
+    start_time:     str = "",
+    end_time:       str = "",
+    from_gps:       str = "",
+    to_gps:         str = "",
+    odometer_start: str = "",
+    odometer_end:   str = "",
+    parking_usd:    str = "",
+    tolls_usd:      str = "",
+    job_id:         str = "",
+    notes:          str = "",
+    text:           str = "",
+    confirm:        bool = True,
+    for_crew:       str = "",
+    filepath:       str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Log a business trip that isn't (or isn't only) a job: supply runs,
+    bank, estimates, client meetings, repairs, training. Works from the
+    Jobs app form, the Start/End trip buttons, typed text, or voice.
+
+    IRS: every trip needs a date, a destination, a specific business
+    purpose, and miles. If miles are blank they're calculated from the
+    from/to places (or GPS points), or give odometer start and end.
+
+    Free-form: pass text="Home Depot for ladders, 12 miles, round trip".
+    With confirm=true (default) the parsed trip is shown back and NOT saved;
+    call again with the fields (or confirm=false) to save. If something is
+    missing the reply asks for it instead of guessing.
+
+    Owner/manager/staff can log a trip for a crew member with for_crew.
+
+    Talking to someone (voice or chat): pass what they said as text. Read
+    the 📝 confirmation back in one short sentence and save only after
+    they say yes. A ❓ reply lists what's missing — ask for it (miles, or
+    where they started so miles can be calculated; a specific purpose such
+    as "Supplies – ladders", never just "business"), then call again with
+    the fields and confirm=false. Keep replies short; they may be driving.
+
+    Voice examples:
+        "Log a business trip: bank deposit this afternoon, about 6 miles"
+        "I drove to Home Depot for ladders, 12 miles round trip"
+    """
+    _telemetry_increment_tool_count("add_mileage_trip")
+    import db_mileage_ops as _mo
+    db_path, actor, restrict, ukey, uid, name, is_admin, err = _mileage_caller(ctx, filepath)
+    if err:
+        return err
+    off = _mileage_off(db_path)
+    if off:
+        return off
+    if text and not to_place:
+        p = _mo.parse_trip_text(text)
+        if p["missing"]:
+            return ("❓ I need a bit more before I can log that: " + ", ".join(p["missing"]) +
+                    f".\n   So far: to '{p['to_label'] or '?'}', miles {p['miles'] or '?'}, "
+                    f"purpose '{p['purpose'] or '?'}', date {p['trip_date']}.")
+        if confirm:
+            rt = " (round trip — two legs)" if p["round_trip"] else ""
+            return (f"📝 Please confirm: {p['trip_date']}, to {p['to_label']}, {p['miles']:g} mi{rt}, "
+                    f"category {p['category']}, purpose '{p['purpose']}'.\n"
+                    "   Reply yes to save (I'll call add_mileage_trip with these fields and confirm=false).")
+        to_place, miles, purpose = p["to_label"], p["miles"], p["purpose"]
+        category, round_trip, date = p["category"], p["round_trip"], p["trip_date"]
+    if restrict or not for_crew:
+        crew_uid, crew_name = uid, name
+    else:   # owner/manager/staff logging for someone: attach to that person's account
+        crew_uid, crew_name = _mo.user_id_for_name(for_crew), for_crew.strip()
+    try:
+        return _mo.add_trip(
+            db_path, actor, trip_date=date or "today", to_label=to_place, purpose=purpose,
+            miles=miles if miles not in ("", None) else None, from_label=from_place,
+            category=category, crew_user_id=crew_uid, crew=crew_name, vehicle_id=vehicle_id,
+            start_time=start_time, end_time=end_time, round_trip=round_trip, from_gps=from_gps,
+            to_gps=to_gps, odometer_start=odometer_start or None, odometer_end=odometer_end or None,
+            parking_usd=parking_usd or None, tolls_usd=tolls_usd or None, job_id=job_id, notes=notes)
+    except ValueError as exc:
+        return f"❌ {exc}"
+
+
+@mcp.tool()
+def update_mileage_trip(
+    trip_id:        str,
+    reason:         str,
+    action:         str = "edit",
+    miles:          str = "",
+    purpose:        str = "",
+    to_place:       str = "",
+    from_place:     str = "",
+    date:           str = "",
+    vehicle_id:     str = "",
+    classification: str = "",
+    category:       str = "",
+    start_time:     str = "",
+    end_time:       str = "",
+    parking_usd:    str = "",
+    tolls_usd:      str = "",
+    notes:          str = "",
+    via_place:      str = "",
+    via_purpose:    str = "",
+    miles_to_via:   str = "",
+    miles_from_via: str = "",
+    filepath:       str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Change, remove, or split a mileage trip. Every change needs a short
+    reason and is kept in the audit trail (who, when, old and new value).
+    Locked or paid periods can't be changed. Field crew can change only
+    their own trips.
+
+    action:
+      "edit"    — change any of miles, purpose, to/from place, date,
+                  vehicle, classification (business/commute/personal),
+                  category, times, parking, tolls, notes.
+      "void"    — remove from totals (kept in the record as void).
+      "split"   — insert a stop into the leg (e.g. a supply house between
+                  two jobs): via_place, via_purpose, optional miles.
+      "history" — show the trip's change history.
+
+    Voice examples:
+        "Change TRIP-0042 to 14 miles — I took a detour for fuel"
+        "Remove TRIP-0051, it's a duplicate"
+        "Add a Home Depot stop between my first and second job"
+    """
+    _telemetry_increment_tool_count("update_mileage_trip")
+    import db_mileage_ops as _mo
+    db_path, actor, restrict, ukey, uid, name, is_admin, err = _mileage_caller(ctx, filepath)
+    if err:
+        return err
+    a = (action or "edit").strip().lower()
+    if a == "history":
+        h = _mo.trip_history(db_path, trip_id)
+        if not h:
+            return f"ℹ️ No changes recorded for {trip_id}."
+        return "\n".join([f"🕘 {trip_id} history:"] + [
+            f"  {r['edited_at'][:16]} {r['edited_by']}: {r['field']} {r['old_value']} → {r['new_value']} "
+            f"({r['reason']})" for r in h])
+    if a == "void":
+        return _mo.void_trip(db_path, trip_id, reason, actor, restrict, ukey)
+    if a == "split":
+        return _mo.split_trip(db_path, trip_id, via_place, via_purpose, reason, actor,
+                              miles_to_via=miles_to_via or None, miles_from_via=miles_from_via or None,
+                              restrict=restrict, ukey=ukey)
+    raw = {"miles": miles, "purpose": purpose, "to_label": to_place, "from_label": from_place,
+           "trip_date": date, "vehicle_id": vehicle_id, "classification": classification.lower(),
+           "category": category, "start_time": start_time, "end_time": end_time,
+           "parking_usd": parking_usd, "tolls_usd": tolls_usd, "notes": notes}
+    changes = {k: v for k, v in raw.items() if v not in ("", None)}
+    for k in ("parking_usd", "tolls_usd"):
+        if k in changes:
+            try:
+                changes[k] = float(changes[k])
+            except ValueError:
+                return f"❌ {k.split('_')[0].title()} must be a dollar amount."
+    try:
+        return _mo.update_trip(db_path, trip_id, changes, reason, actor, restrict, ukey)
+    except ValueError as exc:
+        return f"❌ {exc}"
+
+
+@mcp.tool()
+def fix_mileage_gap(
+    entry_id:       str,
+    clock_out_time: str,
+    reason:         str,
+    filepath:       str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Fix a missing clock-out (phone died, forgot to clock out): sets the
+    clock-out time on that time entry (location defaults to the job
+    address), records who fixed it and why, and rebuilds that day's trips.
+    For a stop that was never clocked in, use add_mileage_trip or
+    update_mileage_trip action="split". get_mileage_log lists open gaps.
+
+    Args:
+        entry_id:       Time entry ID from the gap list (e.g. "TE-0123").
+        clock_out_time: Local time, e.g. "15:30".
+        reason:         Required, e.g. "phone died".
+
+    Voice examples:
+        "My phone died at Norwoods — I left at 3:30"
+    """
+    _telemetry_increment_tool_count("fix_mileage_gap")
+    import db_mileage_ops as _mo
+    db_path, actor, restrict, ukey, uid, name, is_admin, err = _mileage_caller(ctx, filepath)
+    if err:
+        return err
+    return _mo.fix_missing_clock_out(db_path, entry_id, clock_out_time, reason, actor, restrict, ukey)
+
+
+@mcp.tool()
+def manage_vehicles(
+    action:            str = "list",
+    vehicle_id:        str = "",
+    vin:               str = "",
+    year:              str = "",
+    make:              str = "",
+    model:             str = "",
+    color:             str = "",
+    plate:             str = "",
+    nickname:          str = "",
+    ownership:         str = "business",
+    owner_name:        str = "",
+    default_driver:    str = "",
+    placed_in_service: str = "",
+    odometer:          str = "",
+    reading_date:      str = "",
+    reading_kind:      str = "spot",
+    date:              str = "",
+    include_retired:   bool = False,
+    skip_vin_check:    bool = False,
+    filepath:          str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Vehicles for the mileage log, any number, keyed by VIN.
+
+    action:
+      "list"        — vehicles with last odometer reading.
+      "add"         — vin (required), year/make/model, plate, ownership
+                      ("business" or "crew"), owner_name (crew-owned),
+                      default_driver, placed_in_service, starting odometer.
+                      Field crew can add only their own crew-owned car.
+      "update"      — change details of vehicle_id.
+      "retire"      — vehicle_id, optional final odometer.
+      "odometer"    — record a reading: vehicle_id, odometer, reading_date,
+                      reading_kind (year_start, year_end, spot). The IRS
+                      asks for total yearly miles per vehicle.
+      "set_default" — your default vehicle (vehicle_id).
+      "set_day"     — vehicle you drove on a date (vehicle_id, date).
+
+    Voice examples:
+        "Add our white F-150, VIN 1FTFW1ET5DFC10312, odometer 48,210"
+        "Record the odometer for VEH-0001: 58,000"
+        "I drove the van today"
+    """
+    _telemetry_increment_tool_count("manage_vehicles")
+    import db_mileage_ops as _mo
+    db_path, actor, restrict, ukey, uid, name, is_admin, err = _mileage_caller(ctx, filepath)
+    if err:
+        return err
+    a = (action or "list").strip().lower()
+    vlist = _mo.list_vehicles(db_path, include_retired, restrict_user_key=ukey if restrict else "")
+    mine = {v["vehicle_id"] for v in vlist}
+    if a == "list":
+        if not vlist:
+            return "ℹ️ No vehicles yet. Add one with its VIN."
+        return "\n".join(["🚙 Vehicles:"] + [
+            f"  {v['vehicle_id']} {v['label']} — {v['ownership']}-owned"
+            + (f" by {v['owner_name']}" if v["ownership"] == "crew" and v["owner_name"] else "")
+            + (f", odometer {v['last_odometer']:,} on {v['last_odometer_date']}" if v["last_odometer"] else
+               ", ⚠️ no odometer reading")
+            + ("" if v["active"] else " (retired)") for v in vlist])
+    if a == "add":
+        own = (ownership or "business").strip().lower()
+        o_uid, o_name = "", owner_name
+        if restrict:
+            if own != "crew":
+                return "❌ Field crew can add only their own crew-owned vehicle. Ask the owner to add business vehicles."
+            o_uid, o_name = uid, name
+        return _mo.add_vehicle(db_path, vin, actor, year=year, make=make, model=model, color=color,
+                               plate=plate, nickname=nickname, ownership=own, owner_user_id=o_uid,
+                               owner_name=o_name, default_user_id=uid if restrict else "",
+                               default_user_name=default_driver or (name if restrict else ""),
+                               placed_in_service=placed_in_service, odometer=odometer or None,
+                               skip_check_digit=skip_vin_check)
+    if a == "set_default":
+        if vehicle_id and vehicle_id not in mine:
+            return f"❌ {vehicle_id} isn't one of your vehicles."
+        return _mo.set_default_vehicle(db_path, ukey, vehicle_id, actor)
+    if a == "set_day":
+        if vehicle_id not in mine:
+            return f"❌ {vehicle_id} isn't one of your vehicles."
+        return _mo.set_day_vehicle(db_path, date or "today", ukey, vehicle_id, actor)
+    if not vehicle_id:
+        return "❌ vehicle_id is required."
+    if vehicle_id not in {v["vehicle_id"] for v in _mo.list_vehicles(db_path, True)}:
+        return f"❌ No vehicle {vehicle_id}."
+    if restrict and vehicle_id not in mine:
+        return "❌ You can only change your own vehicle."
+    if a == "odometer":
+        return _mo.add_odometer(db_path, vehicle_id, odometer, actor, reading_date, reading_kind)
+    if a == "retire":
+        if not (is_admin or restrict):
+            return "❌ Only the owner or a manager can retire a vehicle."
+        return _mo.retire_vehicle(db_path, vehicle_id, actor, date or "", odometer or None)
+    if a == "update":
+        ch = {"year": year, "make": make, "model": model, "color": color, "plate": plate,
+              "nickname": nickname, "owner_name": owner_name, "default_user_name": default_driver,
+              "placed_in_service": placed_in_service}
+        if not restrict and ownership and ownership != "business":
+            ch["ownership"] = ownership
+        return _mo.update_vehicle(db_path, vehicle_id, {k: v for k, v in ch.items() if v}, actor)
+    return "❌ action must be list, add, update, retire, odometer, set_default, or set_day."
+
+
+@mcp.tool()
+def get_mileage_report(
+    start_date: str = "",
+    end_date:   str = "",
+    crew:       str = "",
+    filepath:   str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Mileage report for a date range: business and commute miles by driver,
+    vehicle, and month; the deduction summary at the IRS standard rate for
+    each rate period (2026: 72.5¢ Jan–Jun, 76¢ Jul–Dec) plus parking and
+    tolls; crew reimbursement owed for crew-owned cars; the Form 4562
+    Part V per-vehicle sheet (business, commute, other personal, total
+    miles); and IRS record checks (missing purpose, vehicle, odometer,
+    late entries, 5+ vehicles in one day). Field crew see only their own.
+
+    Args:
+        start_date: YYYY-MM-DD (default: Jan 1 this year).
+        end_date:   YYYY-MM-DD (default: today).
+        crew:       Optional driver name (owner/manager/staff).
+
+    Voice examples:
+        "How many business miles did we drive in Q3?"
+        "What's my 2026 mileage deduction so far?"
+    """
+    _telemetry_increment_tool_count("get_mileage_report")
+    import datetime as _ddt
+    import db_mileage_ops as _mo
+    db_path, actor, restrict, ukey, uid, name, is_admin, err = _mileage_caller(ctx, filepath)
+    if err:
+        return err
+    today = _ddt.date.today()
+    try:
+        _mo.refresh_stale_days(db_path, start_date or f"{today.year}-01-01", end_date or today.isoformat(), actor)
+        rep = _mo.mileage_report(db_path, start_date or f"{today.year}-01-01", end_date or today.isoformat(),
+                                 restrict, ukey, _mo.user_key("", crew) if (crew and not restrict) else "")
+    except ValueError as exc:
+        return f"❌ {exc}"
+    return _mo.format_report(rep)
+
+
+@mcp.tool()
+def mileage_settings(
+    action:     str = "get",
+    enabled:    bool = True,
+    rate_cents: str = "",
+    effective:  str = "",
+    period:     str = "",
+    pay_period: str = "",
+    reminder:   str = "",
+    filepath:   str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Mileage settings (owner/manager). The same switches are rows on the
+    Jobs app's Database → Settings tab ("Mileage Tracking Enabled",
+    "Mileage Reimbursement Period", "Mileage Pay Period Start", and one
+    "Mileage Reminder - …" row per reminder).
+
+    action:
+      "get"          — tracking on/off, rate table, locked periods, crew
+                       reimbursement pay period, reminders.
+      "set_enabled"  — enabled=true/false. Off = quiet: the app never asks
+                       anyone for miles (no vehicle picker, no automatic
+                       trips, gaps, reminders or reimbursements) — e.g. a
+                       100% work vehicle tracked by yearly odometer. Route
+                       miles still show; the Mileage tab, Reports and
+                       Database → Miles stay; existing trips are kept.
+      "set_rate"     — rate_cents (e.g. 76) effective a date (YYYY-MM-DD).
+      "lock" / "unlock" — period "2026-09" or "2026". Locked trips can't
+                       be edited.
+      "set_period"   — pay_period weekly | biweekly | monthly for crew
+                       reimbursement (effective = optional first day for
+                       weekly/biweekly counting).
+      "set_reminder" — reminder gaps | weekly | pay_period | odometer,
+                       enabled=true/false.
+      "reminders"    — reminders due now for you (anyone).
+
+    Voice examples:
+        "Turn off mileage tracking"
+        "Lock September's mileage"
+        "Add the 2027 IRS mileage rate, 78 cents from January 1"
+        "Reimburse crew mileage every two weeks"
+        "Stop the weekly mileage reminder"
+    """
+    _telemetry_increment_tool_count("mileage_settings")
+    import json as _json
+    import db_mileage_ops as _mo
+    from db_access import get_connection as _gc
+    db_path, actor, restrict, ukey, uid, name, is_admin, err = _mileage_caller(ctx, filepath)
+    if err:
+        return err
+    a = (action or "get").strip().lower()
+    if a == "get":
+        conn = _gc(db_path)
+        try:
+            locks = [r["period"] for r in conn.execute("SELECT period FROM mileage_locks ORDER BY period").fetchall()]
+        finally:
+            conn.close()
+        return _json.dumps({"enabled": _mo.tracking_enabled(db_path), "rates": _mo.get_rates(db_path),
+                            "locked_periods": locks, "is_admin": is_admin,
+                            "reimbursement": _mo.get_reimb_settings(db_path),
+                            "reminders": _mo.get_reminder_settings(db_path),
+                            "reminder_types": _mo.REMINDER_TYPES})
+    if a == "reminders":
+        due = _mo.due_reminders(db_path, ukey, is_admin)
+        return "\n".join(["🔔 Mileage reminders:"] + [f"  • {r['text']}" for r in due]) if due \
+            else "✅ No mileage reminders right now."
+    if not is_admin:
+        return "❌ Only the owner or a manager can change mileage settings."
+    if a == "set_enabled":
+        return _mo.set_tracking_enabled(db_path, bool(enabled), actor)
+    if a == "set_rate":
+        if not rate_cents or not effective:
+            return "❌ Give rate_cents and the effective date."
+        return _mo.set_rate(db_path, effective, float(rate_cents), actor)
+    if a in ("lock", "unlock"):
+        return _mo.lock_period(db_path, period, actor, unlock=(a == "unlock"))
+    if a == "set_period":
+        return _mo.set_reimb_period(db_path, pay_period, actor, effective)
+    if a == "set_reminder":
+        return _mo.set_reminder(db_path, reminder, bool(enabled), actor)
+    return ("❌ action must be get, set_enabled, set_rate, lock, unlock, set_period, set_reminder, "
+            "or reminders.")
+
+
+# ── Phases 4–5 (2026-10-24): export, crew reimbursement, AI review, ───────
+#    cancelled on arrival. Same caller resolution / crew restriction as above.
+
+def _mileage_deliver(ctx, db_path: str, fname: str, data: bytes, mime: str, deliver: str,
+                     email_to: str, subject: str, body: str) -> str:
+    """deliver: 'download' -> JSON {filename, mime, base64} for the Jobs app;
+    'file' -> saved next to the job database (Mileage_Exports); 'email' ->
+    saved, then sent as an attachment with the existing send_email."""
+    import base64 as _b64
+    import json as _json
+    d = (deliver or "file").strip().lower()
+    if d == "download":
+        return _json.dumps({"filename": fname, "mime": mime, "bytes": len(data),
+                            "base64": _b64.b64encode(data).decode("ascii")})
+    if d not in ("file", "email"):
+        return "❌ deliver must be download, file, or email."
+    folder = os.path.join(os.path.dirname(db_path) or ".", "Mileage_Exports")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, fname)
+    with open(path, "wb") as fh:
+        fh.write(data)
+    if d == "email":
+        if not (email_to or "").strip():
+            return f"❌ Saved {path}, but give email_to (an address, or a team member's name) to send it."
+        r = send_email(to=email_to.strip(), subject=subject, body=body, attachment_path=path, ctx=ctx)
+        if str(r).lstrip().startswith(("❌", "⛔")):
+            return r
+        return f"📧 Sent {fname} to {email_to.strip()}.\n{r}"
+    return f"✅ Saved {fname} ({len(data):,} bytes) to {path}"
+
+
+@mcp.tool()
+def export_mileage_log(
+    start_date: str = "",
+    end_date:   str = "",
+    format:     str = "pdf",
+    crew:       str = "",
+    deliver:    str = "file",
+    email_to:   str = "",
+    filepath:   str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Export the IRS mileage log for a date range — for your accountant or
+    your records. One row per trip (date, driver, vehicle, VIN, ownership,
+    from, to, miles, purpose, business/commute, rate, amount, parking,
+    tolls, how the miles were measured, entry type, edited/corrected/void
+    flags) plus the summary: deduction by IRS rate period, crew
+    reimbursement, and the Form 4562 per-vehicle sheet.
+
+    Args:
+        start_date: YYYY-MM-DD (default Jan 1 this year).
+        end_date:   YYYY-MM-DD (default today).
+        format:     "pdf" (default), "xlsx" (Trips, Summary, Reimbursement,
+                    Vehicles sheets), or "csv" (trips only).
+        crew:       Optional driver name (owner/manager/staff). Field crew
+                    always get only their own trips.
+        deliver:    "file" (saved next to the job database, in
+                    Mileage_Exports), "email" (saved and emailed to
+                    email_to), or "download" (the Jobs app downloads it).
+        email_to:   Address or team member's name, with deliver="email".
+
+    Voice examples:
+        "Export my 2026 mileage log as a PDF"
+        "Email the Q3 mileage spreadsheet to my accountant at cpa@example.com"
+    """
+    _telemetry_increment_tool_count("export_mileage_log")
+    import datetime as _ddt
+    import db_mileage_ops as _mo
+    db_path, actor, restrict, ukey, uid, name, is_admin, err = _mileage_caller(ctx, filepath)
+    if err:
+        return err
+    today = _ddt.date.today()
+    s = start_date or f"{today.year}-01-01"
+    e = end_date or today.isoformat()
+    try:
+        _mo.refresh_stale_days(db_path, s, e, actor)
+        fname, data, mime = _mo.export_mileage(
+            db_path, s, e, format, restrict, ukey, _mo.user_key("", crew) if (crew and not restrict) else "",
+            prepared_for=name or "")
+    except ValueError as exc:
+        return f"❌ {exc}"
+    except ImportError as exc:
+        return f"❌ Excel export needs openpyxl ({exc}). Try format=\"csv\" or \"pdf\"."
+    return _mileage_deliver(ctx, db_path, fname, data, mime, deliver, email_to,
+                            f"Mileage log {s} to {e}",
+                            f"Attached: business mileage log {s} to {e} ({fname}).")
+
+
+@mcp.tool()
+def mileage_reimbursement(
+    action:           str = "status",
+    period_date:      str = "",
+    reimbursement_id: str = "",
+    note:             str = "",
+    paid_date:        str = "",
+    method:           str = "",
+    reference:        str = "",
+    crew:             str = "",
+    deliver:          str = "file",
+    email_to:         str = "",
+    as_json:          bool = False,
+    filepath:         str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Crew mileage reimbursement for business driving in a crew member's own
+    car, per pay period (Settings: weekly, biweekly, or monthly), at the IRS
+    standard rate plus parking and tolls.
+
+    Draft → Submitted (crew member) → Approved or Returned (owner/manager)
+    → Paid (owner/manager, with date, method, and reference). Submitted and
+    approved trips can't be changed; paid trips are locked. Nobody can
+    approve, return, or pay their own.
+
+    action:
+      "status"    — your current pay period (or period_date's) and your
+                    reimbursements; owner/manager also see the approval
+                    queue. Pass crew to look at one crew member.
+      "submit"    — submit the pay period containing period_date (default:
+                    the current one). Refused while any day needs a fix.
+                    Owner/manager can submit for a crew member (crew).
+      "approve"   — reimbursement_id. Fixes the amount.
+      "return"    — reimbursement_id + note (what to fix).
+      "paid"      — reimbursement_id, method (check, cash, payroll,
+                    transfer), paid_date, optional reference.
+      "list"      — all reimbursements (owner/manager) or yours.
+      "statement" — PDF statement for reimbursement_id (or a draft for the
+                    current period); deliver file / email / download.
+
+    Voice examples:
+        "Submit my mileage for this month"
+        "How much mileage do I owe each crew member?"
+        "Approve Sam's mileage reimbursement"
+        "Mark REIM-0003 paid by check 1042"
+        "Email Sam his mileage statement"
+    """
+    _telemetry_increment_tool_count("mileage_reimbursement")
+    import json as _json
+    import db_mileage_ops as _mo
+    db_path, actor, restrict, ukey, uid, name, is_admin, err = _mileage_caller(ctx, filepath)
+    if err:
+        return err
+    a = (action or "status").strip().lower()
+    # Whose reimbursement: yourself, or (owner/manager/staff) the named crew member.
+    t_uid, t_name, t_key = uid, name, ukey
+    if crew and not restrict:
+        t_uid = _mo.user_id_for_name(crew)
+        t_name = crew.strip()
+        t_key = _mo.user_key(t_uid, t_name)
+    rid = (reimbursement_id or "").strip().upper()
+
+    def _own_or_admin(r_key):
+        return is_admin or r_key == ukey
+
+    try:
+        if a == "status":
+            _mo.refresh_stale_days(db_path, *(_mo.period_bounds(db_path, period_date or _mo._today())[:2]), actor)
+            p = _mo.reimbursement_preview(db_path, t_key, period_date)
+            mine = _mo.list_reimbursements(db_path, t_key, limit=24)
+            queue = _mo.list_reimbursements(db_path, statuses=["submitted", "approved"]) if is_admin else []
+            if as_json:
+                pv = {k: v for k, v in p.items() if k != "trips"}
+                pv["trips"] = [{k: t.get(k) for k in ("trip_id", "trip_date", "from_label", "to_label", "purpose",
+                                                       "miles", "rate_cents", "parking_usd", "tolls_usd")}
+                               for t in p["trips"]]
+                return _json.dumps({"preview": pv, "mine": mine, "queue": queue, "is_admin": is_admin,
+                                    "settings": _mo.get_reimb_settings(db_path)}, default=str)
+            out = _mo.format_reimbursements(mine, p)
+            if queue:
+                out += "\n\nWaiting on you (owner/manager):\n" + _mo.format_reimbursements(queue).replace(
+                    "Reimbursements:\n", "")
+            return out
+        if a == "list":
+            rows = _mo.list_reimbursements(db_path, "" if is_admin and not crew else t_key)
+            return _json.dumps(rows, default=str) if as_json else _mo.format_reimbursements(rows)
+        if a == "submit":
+            if crew and not is_admin and not restrict and t_key != ukey:
+                return "❌ Only the owner or a manager can submit for someone else."
+            return _mo.submit_reimbursement(db_path, actor, t_key, t_uid, t_name, period_date)
+        if a in ("approve", "return", "paid"):
+            if not is_admin:
+                return "❌ Only the owner or a manager can approve, return, or mark reimbursements paid."
+            if not rid:
+                return "❌ reimbursement_id is required (e.g. REIM-0003)."
+            if a == "approve":
+                return _mo.approve_reimbursement(db_path, rid, actor, ukey)
+            if a == "return":
+                return _mo.return_reimbursement(db_path, rid, note, actor, ukey)
+            return _mo.mark_reimbursement_paid(db_path, rid, actor, ukey, paid_date, method, reference)
+        if a == "statement":
+            if rid:
+                rows = [r for r in _mo.list_reimbursements(db_path) if r["reimbursement_id"] == rid]
+                if not rows:
+                    return f"❌ No reimbursement {rid}."
+                if not _own_or_admin(rows[0]["user_key"]):
+                    return "❌ You can only see your own reimbursement statements."
+                who = rows[0]["crew"] or rows[0]["user_key"]
+            else:
+                who = t_name or "you"
+            fname, data = _mo.statement_pdf(db_path, rid, t_key, period_date)
+            return _mileage_deliver(ctx, db_path, fname, data, "application/pdf", deliver, email_to,
+                                    f"Mileage reimbursement statement {rid or ''}".strip(),
+                                    f"Hi {who}, attached is your mileage reimbursement statement ({fname}).")
+    except ValueError as exc:
+        return f"❌ {exc}"
+    return "❌ action must be status, submit, approve, return, paid, list, or statement."
+
+
+@mcp.tool()
+def review_mileage_log(
+    start_date:        str = "",
+    end_date:          str = "",
+    crew:              str = "",
+    include_dismissed: bool = False,
+    as_json:           bool = False,
+    filepath:          str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    AI mileage review: checks a date range for problems an IRS auditor or
+    accountant would notice and proposes fixes. NOTHING is changed — show
+    the findings to the user, and call apply_mileage_review_fix only for
+    the ones they accept.
+
+    Checks: logged miles vs the approved route plan (> 25% apart); trips vs
+    odometer readings; unusually long legs for the distance between the
+    places (missed stop, detour, wrong GPS); duplicate trips; job trips on
+    days nobody clocked in; one vehicle used by two drivers the same day;
+    vague or missing purposes; trips with no vehicle; commute legs that
+    look misclassified for Route Origin Mode; trips edited long after the
+    date; paid reimbursements changed afterwards. Dismissed findings aren't
+    raised again.
+
+    Args:
+        start_date / end_date: YYYY-MM-DD (default: the last 7 days).
+        crew: optional driver name (owner/manager/staff).
+
+    Voice examples:
+        "Review October mileage and fix the obvious problems"
+        "Check my mileage for this week"
+    """
+    _telemetry_increment_tool_count("review_mileage_log")
+    import datetime as _ddt
+    import json as _json
+    import db_mileage_ops as _mo
+    db_path, actor, restrict, ukey, uid, name, is_admin, err = _mileage_caller(ctx, filepath)
+    if err:
+        return err
+    today = _ddt.date.today()
+    s = start_date or (today - _ddt.timedelta(days=7)).isoformat()
+    e = end_date or today.isoformat()
+    try:
+        _mo.refresh_stale_days(db_path, s, e, actor)
+        f = _mo.review_mileage(db_path, s, e, restrict, ukey,
+                               _mo.user_key("", crew) if (crew and not restrict) else "", include_dismissed)
+    except ValueError as exc:
+        return f"❌ {exc}"
+    if as_json:
+        return _json.dumps({"start": s, "end": e, "findings": f}, default=str)
+    return _mo.format_review(f, s, e)
+
+
+@mcp.tool()
+def apply_mileage_review_fix(
+    finding_id: str,
+    action:     str = "accept",
+    note:       str = "",
+    filepath:   str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Apply (action="accept") or permanently skip (action="dismiss") one
+    finding from review_mileage_log, by its id (e.g.
+    "duplicate:2026-10-14:TRIP-0042"). An accepted fix goes through the
+    normal audited edit, with the reason "AI review: …". Only call this for
+    findings the user agreed to. Field crew can fix only their own trips.
+
+    Voice examples:
+        "Yes, remove that duplicate"
+        "Ignore the long-leg warning for the 14th"
+    """
+    _telemetry_increment_tool_count("apply_mileage_review_fix")
+    import db_mileage_ops as _mo
+    db_path, actor, restrict, ukey, uid, name, is_admin, err = _mileage_caller(ctx, filepath)
+    if err:
+        return err
+    return _mo.apply_review_fix(db_path, finding_id, action, actor, restrict, ukey, note)
+
+
+@mcp.tool()
+def job_cancelled_on_arrival(
+    job_id:   str,
+    gps:      str = "",
+    note:     str = "",
+    filepath: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    The customer cancelled when you arrived. Records a short visit at the
+    job (so the drive there still counts as a business trip, purpose
+    "<customer> – cancelled on site"), marks the job Cancelled with a note,
+    and rebuilds today's mileage. Field crew can do this only for jobs
+    assigned to them.
+
+    Args:
+        job_id: e.g. "JOB-4127".
+        gps:    Optional "lat,lon" where you are.
+        note:   Optional, e.g. "customer not home".
+
+    Voice examples:
+        "The Smiths cancelled when I got there"
+    """
+    _telemetry_increment_tool_count("job_cancelled_on_arrival")
+    import db_mileage_ops as _mo
+    from db_access import get_connection as _gc
+    db_path, actor, restrict, ukey, uid, name, is_admin, err = _mileage_caller(ctx, filepath)
+    if err:
+        return err
+    jid = (job_id or "").strip().upper()
+    if restrict:
+        conn = _gc(db_path)
+        try:
+            j = conn.execute("SELECT crew, crew_user_id FROM jobs WHERE job_id = ?", (jid,)).fetchone()
+        finally:
+            conn.close()
+        names = [x.strip().lower() for x in str((j["crew"] if j else "") or "").split(",")]
+        if j is None or not ((j["crew_user_id"] or "") == uid or name.strip().lower() in names):
+            return "❌ You can only do this for a job assigned to you."
+    return _mo.cancelled_on_arrival(db_path, jid, actor, crew_user_id=uid, crew_display=name, gps=gps,
+                                    note=note)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -18725,6 +19880,10 @@ def unapprove_route_schedule(
     Returns:
         A ↩️ confirmation — or a ✅ "nothing to un-approve" message if
         route_date has no approved route.
+
+    Voice examples:
+        "Unapprove today's route"
+        "Take the approval off Friday's route"
     """
     db_path = _resolve_job_db_path(ctx, filepath)
     if not db_path:
@@ -19162,7 +20321,13 @@ def pin_route_stop(
         rejected (job not on the route, bad position, position already
         pinned to another job).
 
-    Voice examples: (not applicable — PWA-button-only tool)
+    From chat or voice: typed and spoken requests are treated exactly like the
+    app's buttons (2026-10-23, David) — use this whenever the person asks for it.
+
+    Voice examples:
+        "Make Crabby's the first stop on tomorrow's route"
+        "Pin JOB-4092 as stop 2 on Friday"
+        "Unpin Norwoods on Thursday's route"
     """
     db_path = _resolve_job_db_path(ctx, filepath)
     if not db_path:
@@ -19261,7 +20426,13 @@ def pause_job(
           rejected (job not found, or job already complete/cancelled — those can
           never be paused).
 
-    Voice examples: (not applicable — PWA-button-only tool)
+    From chat or voice: typed and spoken requests are treated exactly like the
+    app's buttons (2026-10-23, David) — use this whenever the person asks for it.
+
+    Voice examples:
+        "Pause the Norwoods job, they're closed for renovations"
+        "Put JOB-4095 on hold"
+        "Resume the Crabby's New Smyrna job"
     """
     db_path = _resolve_job_db_path(ctx, filepath)
     if not db_path:
@@ -19403,7 +20574,13 @@ def get_approved_route_stops(
         arrival; drove_min/drove_miles are the leg from the previous stop
         to this one. Unapproved dates carry "approved": false and no stops.
 
-    Voice examples: (not applicable -- PWA-only tool)
+    From chat or voice: typed and spoken requests are treated exactly like the
+    app's buttons (2026-10-23, David) — use this whenever the person asks for it.
+
+    Voice examples:
+        "What time am I at each stop today?"
+        "How many miles is today's approved route?"
+        "When am I due at Norwoods on Friday?"
     """
     db_path = _resolve_job_db_path(ctx, filepath)
     if not db_path:
@@ -19493,14 +20670,15 @@ _RUN_AI_ROUTING_PROMPT_TEMPLATE = (
     "FIT warnings using the same real timeline engine \"Get AI Suggestion\" "
     "uses. If a warning fired that a different order would have avoided, "
     "try once more with a revised order before finishing.\n\n"
-    "Do not modify Jobs_Schedule directly and do not click/simulate "
-    "\"Approve\" -- leave the Route tab's own Approve button for the owner "
-    "to press after reviewing. Do not send any email, text/SMS, or record "
+    "Do not modify Jobs_Schedule directly, and do not approve the route on "
+    "your own -- the owner approves it with the Route tab's Approve button "
+    "after reviewing, or by telling you yes in this chat (only then call "
+    "approve_route_schedule(route_date=\"{route_date}\"{crew_arg})). Do not send any email, text/SMS, or record "
     "any learning -- this run's ONLY job is to plan and apply the route; "
     "nothing else should be touched or sent as a side effect. Keep your "
     "final text response short — a one-paragraph plain-language summary "
-    "of the order and any warnings is all that will be shown back to the "
-    "person who tapped the button."
+    "of the order and any warnings is all the person needs (they may be "
+    "listening, not reading)."
 )
 
 # ── Home address for a route's start/end (2026-09-19) ───────────────────────
@@ -19852,7 +21030,16 @@ def get_ai_route_prompt(
         "ROUTE_CODE: RT-XXXXXX" and "MADE_BY: <machine>" lines, a blank line,
         then the prompt text — or a ❌ message.
 
-    Voice examples: (not applicable — PWA-button-only tool)
+    From chat or voice: typed and spoken requests are treated exactly like the
+    app's buttons (2026-10-23, David) — use this whenever the person asks for it.
+    When someone asks to plan or route a day, call this, then carry out the
+    returned prompt's steps yourself in the same chat (it starts with
+    confirm_route_code) — nobody needs to copy or paste anything.
+
+    Voice examples:
+        "Route me for today"
+        "Plan tomorrow's route"
+        "Build Friday's route for Sam"
     """
     import datetime as _gdt
     route_date = (route_date or "").strip()
@@ -19898,8 +21085,10 @@ def get_ai_route_prompt(
 @mcp.tool()
 def confirm_route_code(code: str, ctx: "Context | None" = None) -> str:
     """
-    Step 1 of a pasted AI Route prompt (see get_ai_route_prompt): checks
-    whether THIS AI-Prowler made the route code. Read-only.
+    Step 1 of an AI Route or Plan Week prompt — pasted, or one you got
+    yourself from get_ai_route_prompt / get_week_plan_prompt after "route me
+    for today" or "plan my week": checks whether THIS AI-Prowler made the
+    route code. Read-only.
 
     Args:
         code: The route code from the prompt, e.g. "RT-7K3QX9".
@@ -19909,7 +21098,9 @@ def confirm_route_code(code: str, ctx: "Context | None" = None) -> str:
         "MATCH — ..." (use this AI-Prowler for the whole route) or
         "NO MATCH — ..." (try the other AI-Prowler connector).
 
-    Voice examples: (not applicable — used by pasted AI Route prompts)
+    Voice examples:
+        (none of its own — it is step 1 after "route me for today" or "plan my week";
+         see get_ai_route_prompt / get_week_plan_prompt)
     """
     label = _route_machine_label()
     info = _lookup_route_code(code)
@@ -19977,7 +21168,8 @@ def get_week_plan_prompt(
     asks ANY AI chat with this AI-Prowler connected to suggest moving SOFT jobs
     so jobs near each other (Settings → Week Plan Distance (miles), default 5)
     are done on the same day of the week. Nothing is planned or changed here —
-    the AI only proposes (propose_week_moves) and the user approves in the app.
+    the AI only proposes (propose_week_moves) and the user approves in the app
+    or by saying yes in the chat.
 
     Args:
         week_start: Any YYYY-MM-DD date in the week to plan (its Monday is used).
@@ -19988,7 +21180,17 @@ def get_week_plan_prompt(
         "ROUTE_CODE: WK-XXXXXX" and "MADE_BY: <machine>" lines, a blank line,
         then the prompt — or a ❌ message.
 
-    Voice examples: (not applicable — PWA-button-only tool)
+    From chat or voice: typed and spoken requests are treated exactly like the
+    app's buttons (2026-10-23, David) — use this whenever the person asks for it.
+    When someone asks to plan their week, call this, then carry out the
+    returned prompt's steps yourself in the same chat — nobody needs to copy
+    or paste anything. They can then approve in the app, or by saying yes in
+    the chat (read the moves back first, then apply_week_moves).
+
+    Voice examples:
+        "Plan my week"
+        "Plan next week so jobs near each other are on the same day"
+        "Can you group my jobs better this week?"
     """
     import week_plan as _wp
     d = _wp.parse_iso(week_start)
@@ -20034,13 +21236,17 @@ def get_week_plan_prompt(
         f"3. propose_week_moves(route_code=\"{code}\", moves='[{{\"job_id\": \"JOB-####\", "
         "\"to\": \"YYYY-MM-DD\", \"reason\": \"short reason, e.g. 0.4 mi from JOB-#### on Thu\"}]') "
         "-- send an empty list [] if nothing is worth moving. This only SUGGESTS: nothing "
-        "changes until I approve it in the Jobs app. Read its reply; if it rejected a move, fix "
+        "changes until I approve it (in the Jobs app or in this chat). Read its reply; if it "
+        "rejected a move, fix "
         "or drop it and call it again (each call replaces your earlier suggestions).\n"
         "4. Do not change jobs any other way, and do not route, email, text or record any "
         "learning.\n\n"
         "Finish with a short plain-language summary of what you suggested and why, then tell "
-        "me to open the Jobs app → Route tab → 🗓️ Plan Week → Check for suggestions to approve "
-        "them. After that I'll route each day."
+        "me I can approve them in the Jobs app → Route tab → 🗓️ Plan Week → Check for "
+        "suggestions, or right here: if I say yes in this chat (to all of them or to the ones "
+        f"I name), call apply_week_moves(proposal_code=\"{code}\", job_ids=\"...\") with just "
+        f"those jobs; if I say no, call dismiss_week_proposal(proposal_code=\"{code}\"). After "
+        "that I'll route each day."
     )
     return f"ROUTE_CODE: {code}\nMADE_BY: {label}\n\n{prompt}"
 
@@ -20048,7 +21254,8 @@ def get_week_plan_prompt(
 @mcp.tool()
 def get_week_plan_data(route_code: str, ctx: "Context | None" = None) -> str:
     """
-    Step 1 of a pasted 🗓️ Plan Week prompt: the week's jobs and what may move
+    Step 1 of a 🗓️ Plan Week (a pasted prompt, or one you got from
+    get_week_plan_prompt after "plan my week"): the week's jobs and what may move
     where, as JSON. Read-only. Only works with a "WK-" code made by THIS
     AI-Prowler (see get_week_plan_prompt / confirm_route_code).
 
@@ -20061,7 +21268,8 @@ def get_week_plan_data(route_code: str, ctx: "Context | None" = None) -> str:
         booked_job_minutes_by_day, jobs (with movable / may_move_to), and
         nearby_pairs — or a ❌ message.
 
-    Voice examples: (not applicable — used by pasted Plan Week prompts)
+    Voice examples:
+        (none of its own — it runs as part of "plan my week"; see get_week_plan_prompt)
     """
     import json as _wj
     import week_plan as _wp
@@ -20075,10 +21283,12 @@ def get_week_plan_data(route_code: str, ctx: "Context | None" = None) -> str:
 @mcp.tool()
 def propose_week_moves(route_code: str, moves: str, ctx: "Context | None" = None) -> str:
     """
-    Step 3 of a pasted 🗓️ Plan Week prompt: SUGGESTS moving soft jobs to other
+    Step 3 of a 🗓️ Plan Week (pasted, or after "plan my week"): SUGGESTS moving soft jobs to other
     days of the week. Every move is checked (soft only, a day in its
     may_move_to list, ...); accepted ones are saved as a suggestion that the
-    user approves or dismisses in the Jobs app. No job is changed here. Each
+    user approves or dismisses in the Jobs app — or in the chat: read the moves
+    back, and on a clear yes call apply_week_moves (no: dismiss_week_proposal).
+    No job is changed here. Each
     call replaces this code's earlier suggestion.
 
     Args:
@@ -20091,7 +21301,8 @@ def propose_week_moves(route_code: str, moves: str, ctx: "Context | None" = None
         What was accepted and rejected (with why), any day-length warnings,
         and a reminder that nothing changes until the user approves.
 
-    Voice examples: (not applicable — used by pasted Plan Week prompts)
+    Voice examples:
+        (none of its own — it runs as part of "plan my week"; see get_week_plan_prompt)
     """
     import week_plan as _wp
     info, db_path, crew, err = _week_code_info(ctx, route_code)
@@ -20134,7 +21345,12 @@ def get_week_proposal(week_start: str, crew: str = "", ctx: "Context | None" = N
     Returns:
         JSON {"ok": true, "proposal": {...} | null} or {"ok": false, "error": "..."}.
 
-    Voice examples: (not applicable — PWA-button-only tool)
+    From chat or voice: typed and spoken requests are treated exactly like the
+    app's buttons (2026-10-23, David) — use this whenever the person asks for it.
+
+    Voice examples:
+        "Are there any week plan suggestions waiting?"
+        "What moves did you suggest for next week?"
     """
     import json as _wj
     import week_plan as _wp
@@ -20165,7 +21381,15 @@ def apply_week_moves(proposal_code: str, job_ids: str, ctx: "Context | None" = N
     Returns:
         One ✅/❌ line per job.
 
-    Voice examples: (not applicable — PWA-button-only tool)
+    From chat or voice: typed and spoken requests are treated exactly like the
+    app's buttons (2026-10-23, David) — use this whenever the person asks for it.
+    From chat or voice, call it only after you have read the suggested moves
+    back and the person clearly said yes — to all of them or to the ones they
+    name (move only those).
+
+    Voice examples:
+        "Yes, make those moves"
+        "Approve the Crabby's move but not the Norwoods one"
     """
     import week_plan as _wp
     p = _wp.get_proposal(_week_proposals_path(), proposal_code)
@@ -20201,7 +21425,12 @@ def dismiss_week_proposal(proposal_code: str, ctx: "Context | None" = None) -> s
         proposal_code: The suggestion's "WK-XXXXXX" code.
         ctx:           MCP context (injected automatically).
 
-    Voice examples: (not applicable — PWA-button-only tool)
+    From chat or voice: typed and spoken requests are treated exactly like the
+    app's buttons (2026-10-23, David) — use this whenever the person asks for it.
+
+    Voice examples:
+        "No thanks, keep the week as it is"
+        "Dismiss the week plan suggestions"
     """
     import week_plan as _wp
     p = _wp.get_proposal(_week_proposals_path(), proposal_code)
@@ -20706,6 +21935,10 @@ def list_learnings(
 
     Returns:
         Numbered list of learnings sorted by date (newest first).
+
+    Voice examples:
+        "What have you learned about my customers?"
+        "List my learnings"
     """
     if not _SELF_LEARNING_AVAILABLE:
         return ("❌ Self-Learning module not available.\n"
@@ -20807,6 +22040,10 @@ def update_learning(
 
     Returns:
         Confirmation of updated fields, or error if learning not found.
+
+    Voice examples:
+        "Update that learning: Crabby's now wants service on Mondays"
+        "Change the note about Norwoods"
     """
     if not _SELF_LEARNING_AVAILABLE:
         return ("❌ Self-Learning module not available.\n"
@@ -20870,6 +22107,10 @@ def get_learning(learning_id: str, ctx: Context = None) -> str:
         JSON {"id", "title", "content", "context", "category", "outcome",
         "tags" (list), "confidence", "status", "created_at", "updated_at"} —
         or an ❌ message if it isn't found.
+
+    Voice examples:
+        "Show me that learning"
+        "Read me learning number 12"
     """
     _telemetry_increment_tool_count("get_learning")
     if not _SELF_LEARNING_AVAILABLE:
@@ -20968,6 +22209,10 @@ def delete_learning(learning_id: str, ctx: Context = None) -> str:
 
     Returns:
         Confirmation or error if not found / not authorized.
+
+    Voice examples:
+        "Forget the note about Bamboo's gate code"
+        "Delete that learning"
     """
     if not _SELF_LEARNING_AVAILABLE:
         return ("❌ Self-Learning module not available.\n"
@@ -21036,6 +22281,10 @@ def get_learning_stats() -> str:
 
     Returns:
         Formatted statistics report.
+
+    Voice examples:
+        "How many learnings do I have?"
+        "Learning stats"
     """
     if not _SELF_LEARNING_AVAILABLE:
         return ("❌ Self-Learning module not available.\n"
@@ -21439,6 +22688,10 @@ def grep_documents(
         Grouped-by-file list of matches with real line numbers. Each match
         includes its surrounding context_lines lines. Ends with a suggested
         read_file_lines() call so the agent can extract more context.
+
+    Voice examples:
+        "Find every file that mentions JOB-4092"
+        "Search my code for apply_route_order"
     """
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
@@ -21608,6 +22861,10 @@ def read_file_lines(
     Returns:
         Numbered line block with a header showing the range / total lines,
         and a continuation hint if more lines exist beyond what was returned.
+
+    Voice examples:
+        "Read me the first 50 lines of that file"
+        "Show lines 100 to 200 of rag_gui.py"
     """
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
@@ -22430,6 +23687,10 @@ def create_file(filepath: str, content: str, encoding: str = "text", ctx: "Conte
                  indexed in ChromaDB. Failure: a clear error explaining what
                  went wrong (path not allowlisted, file already exists,
                  parent missing, write circuit-breaker tripped, etc.).
+
+    Voice examples:
+        "Create a new notes file for the Crabby's job"
+        "Make a file called todo.txt"
     """
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
@@ -22545,6 +23806,10 @@ def write_file(filepath: str, content: str, verify_after_write: bool = False, en
     Returns:
         Success: confirmation including backup path and byte counts.
         Failure: a clear error message.
+
+    Voice examples:
+        "Replace the contents of todo.txt with this list"
+        "Save this as my price sheet"
     """
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
@@ -22705,6 +23970,10 @@ def str_replace_in_file(filepath: str,
         Success: confirmation with line where the change landed, backup path,
                  and (if verify_after_write) the surrounding context.
         Failure: detailed error explaining why (not found, ambiguous, etc.).
+
+    Voice examples:
+        "In todo.txt change 'Friday' to 'Monday'"
+        "Fix that typo in the file"
     """
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
@@ -23212,6 +24481,10 @@ def create_directory(dirpath: str, parents: bool = True, ctx: "Context | None" =
     Returns:
         Confirmation with whether the directory was newly created or already
         existed, or an error explaining why creation failed.
+
+    Voice examples:
+        "Make a folder for 2027 invoices"
+        "Create a new folder called Photos"
     """
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
@@ -23268,6 +24541,10 @@ def list_directory(dirpath: str, show_hidden: bool = False) -> str:
         A formatted listing with file/dir indicators, sizes for files, and
         a summary line. Output is sorted: directories first, then files,
         each group alphabetically.
+
+    Voice examples:
+        "What's in my Documents folder?"
+        "List the files in that folder"
     """
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
@@ -23364,6 +24641,9 @@ def copy_to_backup(filepath: str) -> str:
 
     Returns:
         Confirmation including the backup path, or an error.
+
+    Voice examples:
+        "Back up that file before you change it"
     """
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
@@ -23413,6 +24693,10 @@ def list_backups(filepath: str) -> str:
     Returns:
         Sorted list (newest = highest N first) of backups, or a message if
         none exist.
+
+    Voice examples:
+        "What backups do I have of that file?"
+        "List the file backups"
     """
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
@@ -23489,6 +24773,10 @@ def restore_backup(filepath: str, backup_number: int) -> str:
 
     Returns:
         Confirmation with byte counts before and after, or an error.
+
+    Voice examples:
+        "Restore the previous version of that file"
+        "Undo my last change to that file"
     """
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
@@ -23857,6 +25145,9 @@ def reset_write_counter() -> str:
 
     Returns:
         Confirmation with the count that was reset.
+
+    Voice examples:
+        "Reset the write limit"
     """
     old = _reset_write_counter_internal()
     _log.info("Write counter reset (was %d)", old)
@@ -23907,6 +25198,10 @@ def diff_files(
     Returns:
         Unified diff with a summary header, or a confirmation that the files
         are identical.  Output is truncated with a notice if it exceeds max_lines.
+
+    Voice examples:
+        "What changed between these two files?"
+        "Compare that file with its backup"
     """
     import difflib as _difflib
     import re as _re_diff
@@ -24099,6 +25394,9 @@ def compile_check(filepath: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> s
 
     Returns:
         "✅ compile OK" or the compiler's error output.
+
+    Voice examples:
+        "Check that Python file compiles"
     """
     enabled, why = _dev_tools_enabled()
     if not enabled:
@@ -24150,6 +25448,9 @@ def check_python_import(module_or_path: str, timeout_sec: int = _DEV_CHECK_TIMEO
 
     Returns:
         "✅ import OK" or the traceback the import produced.
+
+    Voice examples:
+        "Does that module import cleanly?"
     """
     enabled, why = _dev_tools_enabled()
     if not enabled:
@@ -24375,6 +25676,9 @@ def syntax_check(filepath: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> st
 
     Returns:
         "✅ syntax OK — <lang>" or the compiler's error output.
+
+    Voice examples:
+        "Check that file for syntax errors"
     """
     enabled, why = _dev_tools_enabled()
     if not enabled:
@@ -24466,6 +25770,9 @@ def lint_check(filepath: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> str:
 
     Returns:
         "✅ lint clean — <lang>" or the linter's warnings/errors.
+
+    Voice examples:
+        "Lint that Python file"
     """
     enabled, why = _dev_tools_enabled()
     if not enabled:
@@ -24875,6 +26182,10 @@ def run_script_start(script_path: str, args: str = "",
     Returns:
         job_id string on success (e.g. "job_20260615_143022_a3f7").
         Use this id with run_script_status and run_script_kill.
+
+    Voice examples:
+        "Start the test run in the background"
+        "Kick off that long script"
     """
     enabled, why = _dev_tools_enabled()
     if not enabled:
@@ -25061,6 +26372,10 @@ def run_script_status(job_id: str, tail_lines: int = 50) -> str:
     Returns:
         Status block with manifest info + log tail.
         Status values: running / done / failed / timeout / error / killed
+
+    Voice examples:
+        "Is that script still running?"
+        "How's the test run going?"
     """
     enabled, why = _dev_tools_enabled()
     if not enabled:
@@ -25198,6 +26513,10 @@ def run_script_kill(job_id: str) -> str:
 
     Returns:
         Confirmation of kill + final log tail.
+
+    Voice examples:
+        "Stop that script"
+        "Cancel the test run"
     """
     enabled, why = _dev_tools_enabled()
     if not enabled:
@@ -25955,6 +27274,10 @@ def configure_email(username: str,
 
     Returns:
         Confirmation string, or an error if the config could not be saved.
+
+    Voice examples:
+        "Set up my email for sending"
+        "Change the email I send from"
     """
     _telemetry_increment_tool_count("configure_email")
 
@@ -27301,10 +28624,9 @@ def get_pending_analysis_tasks(ctx: Context = None) -> str:
 
     v8.1.9: this is now due-filtered. A recurring task sitting in the
     queue ahead of its next_due date will NOT appear here — it stays
-    queued (persistent) and only surfaces once actually due. Call
-    sync_due_tasks_to_queue() first if you want any due custom-task
-    definitions that haven't been individually queued yet to be picked up
-    too — this tool only reads what's already in the queue.
+    queued (persistent) and only surfaces once actually due. To run a
+    due custom task that isn't queued yet, queue it with queue_single_task()
+    first — this tool only reads what's already in the queue.
 
     Call this tool at the start of any session where the user says they have
     analysis to run, or whenever instructed to check for pending/due tasks.
@@ -27478,7 +28800,7 @@ def list_analysis_tasks(ctx: Context = None) -> str:
         "note": (
             "This is the full definition list (custom_analysis_tasks.json), "
             "not the run queue. A task with is_due=true is not automatically "
-            "running — call sync_due_tasks_to_queue() to push it into the run "
+            "running — call queue_single_task(task_id) to push it into the run "
             "queue, then get_pending_analysis_tasks() to pick it up, or run "
             "it directly right now if the user asks for that."
         ),
@@ -27503,6 +28825,10 @@ def queue_single_task(task_id: str, ctx: Context = None) -> str:
         task_id: The task_id from list_analysis_tasks() output.
     Returns:
         Confirmation string or error message.
+
+    Voice examples:
+        "Run the weekly AR review now"
+        "Queue my sales analysis to run now"
     """
     import json as _jq, datetime as _dtq, pathlib
 
@@ -27582,6 +28908,10 @@ def get_all_queued_tasks(ctx: Context = None) -> str:
       queued_at  — when it was added to queue
       schedule   — none / daily / weekly / monthly
     Returns empty JSON array [] if queue is empty.
+
+    Voice examples:
+        "What's in the task queue?"
+        "Which analyses are queued?"
     """
     import json as _jgq, datetime as _dtgq
     try:
@@ -27616,6 +28946,10 @@ def delete_analysis_task(task_id: str, ctx: Context = None) -> str:
     Returns:
         Confirmation of what was removed, or an error if the ID matched
         neither a definition nor a queue entry.
+
+    Voice examples:
+        "Delete the weather check task"
+        "Remove that custom analysis"
     """
     _telemetry_increment_tool_count("delete_analysis_task")
 
@@ -27738,6 +29072,10 @@ def update_analysis_task(
         task_id wasn't found, a value was invalid, the edit would leave
         all three outputs (learnings/report/email) off (v8.1.10), or
         daily_times_per_day would end up outside 1-24 (v8.1.11).
+
+    Voice examples:
+        "Change the AR review to run monthly"
+        "Make the weather check run at 7am"
     """
     _telemetry_increment_tool_count("update_analysis_task")
 
@@ -31528,6 +32866,14 @@ def _run_server_mode(port: int, token: str,
                         # from this allow-list: 400 "Unknown tool". Same gap class as
                         # delete_customer (R-049).
                         "rename_customer",
+                        # Mileage tracker (2026-10-24): Mileage tab, Clock-screen
+                        # vehicle picker, Reports mileage card. Crew scoping is
+                        # enforced inside each tool (field crew: own trips only).
+                        "get_mileage_log", "build_mileage_log", "add_mileage_trip",
+                        "update_mileage_trip", "fix_mileage_gap", "manage_vehicles",
+                         "get_mileage_report", "mileage_settings",
+                         "export_mileage_log", "mileage_reimbursement", "review_mileage_log",
+                         "apply_mileage_review_fix", "job_cancelled_on_arrival",
                     }
 
                     _srv_pa_g = globals()
@@ -33352,6 +34698,13 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                         # from this allow-list: 400 "Unknown tool". Same gap class as
                         # delete_customer (R-049).
                         "rename_customer",
+                        # Mileage tracker (2026-10-24) — same set as server mode's
+                        # _srv_pa_allowed (test_r049 checks the two stay in sync).
+                        "get_mileage_log", "build_mileage_log", "add_mileage_trip",
+                        "update_mileage_trip", "fix_mileage_gap", "manage_vehicles",
+                         "get_mileage_report", "mileage_settings",
+                         "export_mileage_log", "mileage_reimbursement", "review_mileage_log",
+                         "apply_mileage_review_fix", "job_cancelled_on_arrival",
                     }
 
                     _g = globals()
@@ -33864,7 +35217,6 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                                 "update_analysis_task",
                                 "delete_analysis_task",
                                 "complete_analysis_task",
-                                "sync_due_tasks_to_queue",
                                 "queue_single_task",
                                 "get_all_queued_tasks",
                             }

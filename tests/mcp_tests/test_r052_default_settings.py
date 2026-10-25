@@ -64,7 +64,8 @@ def db(tmp_path):
 def test_the_16_editable_settings_are_listed():
     # 17 since 2026-10-02: "Working Days" (Vicki) joined the 16 R-052 rows.
     # 18 since 2026-10-22: "Week Plan Distance (miles)" (🗓️ Plan Week, default 5).
-    assert len(KEYS) == 18 and len(set(KEYS)) == 18
+    # 25 since 2026-10-25: 7 mileage switches moved here from the Profile card.
+    assert len(KEYS) == 25 and len(set(KEYS)) == 25
     for k in ("Route Origin Mode", "Start/End Street Address", "Start/End ZIP",
               "Email Route On Build", "Workday Start Time", "Lunch Break Duration (min)",
               "Hard Time Tolerance (min)", "Recurring Job Lead Time (days)",
@@ -73,7 +74,7 @@ def test_the_16_editable_settings_are_listed():
 
 
 def test_seeding_a_fresh_db_adds_every_row(db):
-    assert dwo.db_seed_default_settings(db) == 18
+    assert dwo.db_seed_default_settings(db) == 25
     s = _settings(db)
     for k in KEYS:
         assert k in s
@@ -100,7 +101,7 @@ def test_existing_values_are_never_overwritten(db):
     conn.execute("INSERT INTO settings (key, value) VALUES ('Workday Start Time', '06:30')")
     conn.commit()
     conn.close()
-    assert dwo.db_seed_default_settings(db) == 16
+    assert dwo.db_seed_default_settings(db) == 23
     s = _settings(db)
     assert s["Route Origin Mode"] == "Company Location"
     assert s["Workday Start Time"] == "06:30"

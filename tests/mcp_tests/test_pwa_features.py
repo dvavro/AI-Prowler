@@ -340,7 +340,12 @@ class TestFeature1_AppShell:
         # jobs/index.html's <nav class="bottomnav"> section and widen the
         # upper bound again with a comment, same as this one, rather than
         # just bumping the number with no explanation.
-        assert 4 <= count <= 10, f"Expected 4-10 nav tabs, got {count}"
+        # 2026-10-24: widened from 4-10 to 4-11 -- the mileage tracker
+        # (Phases 1-3, IRS business-mileage log) added its own "Mileage" tab
+        # after Clock, at the owner's request ("make the Mileage screen live
+        # in its own bottom-nav tab"). It is hidden when mileage tracking is
+        # turned off in settings, but the markup is always present = 11.
+        assert 4 <= count <= 11, f"Expected 4-11 nav tabs, got {count}"
         for label in ["Jobs", "Calendar", "Clock", "Photos", "Profile"]:
             assert label in nav_section, f"Nav tab '{label}' missing"
 

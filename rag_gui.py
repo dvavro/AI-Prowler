@@ -3411,6 +3411,26 @@ phone, can run the whole workflow without a laptop:
 | `schedule_next_recurring_job(job_identifier)` | Books the next recurring visit automatically after a job is completed. |
 | `log_time_entry(job_identifier, action)` | Clock in / clock out — writes actual duration back to the schedule. |
 
+## Mileage Tracker — IRS Business Miles
+
+Behind the Jobs App's **Mileage** tab and **Database → 🚗 Miles**. Trips build themselves from clock-ins; anyone can add a business trip by form, text, or just telling Claude, Muse, or Grok. Field crew see only their own trips.
+
+| Tool | What it does |
+|---|---|
+| `get_mileage_log(start_date, end_date)` | Trips, days needing a fix, vehicles, IRS rates, totals, reminders, reimbursement status. |
+| `build_mileage_log(date)` / `(start_date, end_date, preview)` | Rebuild a day from clock-ins, or backfill past days (preview first). |
+| `add_mileage_trip(to_place, purpose, miles, …)` / `(text=…)` | Log any business trip; asks for anything missing, confirms before saving. |
+| `update_mileage_trip(trip_id, reason, action)` | Edit, remove (void), add a stop, or show history — every change needs a reason. |
+| `fix_mileage_gap(entry_id, clock_out_time, reason)` | Fill a missing clock-out (dead phone) and rebuild the day. |
+| `job_cancelled_on_arrival(job_id)` | Customer cancelled at the door — the drive still counts; job marked Cancelled. |
+| `manage_vehicles(action, …)` | Vehicles by VIN, crew-owned cars, odometer readings, default / today's vehicle. |
+| `get_mileage_report(start_date, end_date)` | Miles, deduction per IRS rate period, reimbursement status, Form 4562 sheet, record checks. |
+| `export_mileage_log(start_date, end_date, format, deliver)` | PDF / Excel / CSV — save, email to your accountant, or download. |
+| `mileage_reimbursement(action, …)` | Crew-car reimbursement: submit, approve, return, mark paid, PDF statement. |
+| `review_mileage_log(start_date, end_date)` | AI review — finds problems and proposes fixes; changes nothing. |
+| `apply_mileage_review_fix(finding_id, action)` | Accept (audited) or dismiss one finding. |
+| `mileage_settings(action, …)` | On/off, IRS rates, lock/unlock a month, pay period, reminders. |
+
 ## Invoicing & Billing
 
 | Tool | What it does |

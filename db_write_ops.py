@@ -398,6 +398,11 @@ _ID_PREFIX_DIGITS = {
     "quotes": ("quote_id", "QTE", 4),
     "invoices": ("invoice_id", "INV", 4),
     "time_entries": ("entry_id", "TE", 4),
+    # Mileage tracker (2026-10-24): vehicles and trips use the same
+    # never-reuse counter (R-044) as jobs/quotes/invoices.
+    "vehicles": ("vehicle_id", "VEH", 4),
+    "mileage_trips": ("trip_id", "TRIP", 4),
+    "mileage_reimbursements": ("reimbursement_id", "REIM", 4),
 }
 
 
@@ -4564,6 +4569,32 @@ DEFAULT_SETTINGS = [
      "Enabled (default) = the Reports → Customer Reminders \"Text Selected\" button works. "
      "Disabled = that button is grayed out and the send is refused. Still needs an SMS provider "
      "configured to actually send."),
+    # 2026-10-25: mileage switches live here (they used to be on the Profile card).
+    ("Mileage Tracking Enabled", "Enabled",
+     "Enabled (default) = the Jobs app keeps an IRS mileage log: it asks which vehicle at clock-in, "
+     "builds trips from your day, shows gaps to fix, reminders and crew reimbursements. "
+     "Disabled = for a 100% work vehicle tracked by odometer start/end of year: the app never "
+     "asks anyone for miles and writes no new entries to the mileage log (Database → Miles). "
+     "Your route still shows miles driven exactly as before, and the Mileage tab, Reports and "
+     "Database → Miles stay (just no new data). Trips already logged are kept."),
+    ("Mileage Reimbursement Period", "monthly",
+     "How often crew submit their own-car mileage for reimbursement: weekly, biweekly, or "
+     "monthly (default). A submitted or approved reimbursement freezes that person's trips "
+     "for the period."),
+    ("Mileage Pay Period Start", "2026-01-05",
+     "A date (YYYY-MM-DD) weekly and biweekly reimbursement periods count from — usually the "
+     "first day of a pay period. Ignored for monthly."),
+    ("Mileage Reminder - Daily Gaps", "Enabled",
+     "Daily, 7 PM — your mileage today has gaps to fix. Only when Mileage Tracking is Enabled."),
+    ("Mileage Reminder - Weekly Review", "Enabled",
+     "Monday — review last week's miles (the owner gets a summary). Only when Mileage Tracking "
+     "is Enabled."),
+    ("Mileage Reminder - Pay Period", "Enabled",
+     "End of a pay period — submit, approve, and pay crew reimbursements. Only when Mileage "
+     "Tracking is Enabled."),
+    ("Mileage Reminder - Odometer", "Enabled",
+     "Dec 31, and vehicles with no reading — record the odometer. Only when Mileage Tracking "
+     "is Enabled."),
 ]
 
 
@@ -4572,6 +4603,14 @@ def db_seed_default_settings(db_path: str) -> int:
     added (0 when everything already exists). Never changes an existing row.
     Best-effort: returns 0 on any error rather than breaking the caller."""
     try:
+        # Convert older mileage settings first so a seeded default never hides
+        # a choice already made (true/false, the Mileage Reminders JSON row).
+        try:
+            import db_mileage_ops
+            with transaction(db_path) as mconn:
+                db_mileage_ops.migrate_legacy_settings(mconn)
+        except Exception:
+            pass
         conn = get_connection(db_path)
         try:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(settings)").fetchall()}

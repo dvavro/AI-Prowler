@@ -206,6 +206,28 @@ def _todays_jobs_structured() -> list[dict]:
     except Exception:
         return []
 
+def _mileage_db_path() -> str:
+    try:
+        from ai_prowler_mcp import _resolve_job_db_path
+        return _resolve_job_db_path(None, "") or ""
+    except Exception:
+        return ""
+
+
+def _mileage_brief_lines() -> list[str]:
+    """Owner's mileage lines for the morning / Monday brief. [] when mileage
+    tracking is off, there's no job database, or anything fails."""
+    try:
+        import html
+        import db_mileage_ops
+        db = _mileage_db_path()
+        if not db:
+            return []
+        return [html.escape(l) for l in db_mileage_ops.brief_lines(db)]
+    except Exception:
+        return []
+
+
 def _pending_tasks() -> list[dict]:
     try:
         p = Path.home() / ".ai-prowler" / "pending_tasks.json"
@@ -297,6 +319,15 @@ def job_morning_briefing(config: dict):
         sms = _sms_replies()
         if sms and "unread" in sms.lower():
             parts.append(f"<h3>💬 Unanswered Messages</h3><pre>{sms[:500]}</pre>")
+
+        # Mileage (2026-10-24, mileage spec FR-19/24/25): reminders, IRS
+        # record warnings, and on Mondays a short AI review of last week.
+        mi = _mileage_brief_lines()
+        if mi:
+            parts.append("<h3>🚗 Mileage</h3><ul>")
+            for l in mi:
+                parts.append(f"<li>{l}</li>")
+            parts.append("</ul>")
 
         # Due analysis tasks
         tasks = [t for t in _pending_tasks()
@@ -423,6 +454,30 @@ def job_end_of_day_summary(config: dict):
         return None
 
 
+def job_mileage_reminders(config: dict):
+    """Evening (7 PM): mileage reminders for the owner — days with gaps,
+    Monday's weekly review, crew reimbursements to submit / approve / pay,
+    and odometer readings due (each switchable in the Jobs app → Profile →
+    Mileage tracking). Silent when there's nothing to do."""
+    try:
+        import html
+        import db_mileage_ops
+        db = _mileage_db_path()
+        if not db:
+            return None
+        due = db_mileage_ops.due_reminders(db, "owner", True)
+        if not due:
+            return None
+        parts = ["<h2>🚗 Mileage reminders</h2><ul>"]
+        for r in due:
+            parts.append(f"<li>{html.escape(r['text'])}</li>")
+        parts += ["</ul>", "<p><i>Open the Jobs app → Mileage, or ask Claude, Muse, or Grok "
+                  "(\"review this week's mileage\", \"approve Sam's mileage\").</i></p>", _footer()]
+        return f"🚗 Mileage reminders — {_today()}", "\n".join(parts)
+    except Exception:
+        return None
+
+
 # ── Registry ─────────────────────────────────────────────────────────────────
 
 JOB_REGISTRY: dict[str, dict] = {
@@ -466,6 +521,13 @@ JOB_REGISTRY: dict[str, dict] = {
         "description":  "Jobs completed vs scheduled today, missing time entries",
         "fn":           job_end_of_day_summary,
         "default_time": "18:00",
+        "default_days": "daily",
+    },
+    "mileage_reminders": {
+        "label":        "🚗 Mileage Reminders",
+        "description":  "Mileage gaps to fix, weekly review, crew reimbursements to approve/pay, odometer readings",
+        "fn":           job_mileage_reminders,
+        "default_time": "19:00",
         "default_days": "daily",
     },
 }

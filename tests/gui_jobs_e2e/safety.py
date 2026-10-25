@@ -117,8 +117,45 @@ ROUTE_EMAILED_MARK = "Route link and results emailed to"
 # the page gets the labeled stand-in reply and nothing changes. (Found
 # 2026-09-27 by SRV-SCR-08.)
 MARKS_READ = {"check_sms_replies", "check_whatsapp_replies"}
-NEVER = {"restore_job_database", "record_learning", "update_learning", "delete_learning",
-         "delete_sms_consent", "configure_email"}
+NEVER = {"restore_job_database", "record_learning", "update_learning",
+         "delete_sms_consent", "configure_email",
+         # 2026-10-25: on the Jobs app's allow-list but never classified here —
+         # stopping a real indexing run is never a test's business.
+         "cancel_indexing"}
+READ |= {"indexing_status",
+         # 2026-10-25: the server suite's SRV-API-12 lists the owner's ztest learnings
+         "list_learnings"}
+
+# ── Mileage tracker (2026-10-25) ──────────────────────────────────────────────
+# Found while writing test_mileage_e2e.py: the Jobs app calls mileage_settings
+# on EVERY page load (mileageInit) and get_mileage_log for the Clock screen's
+# vehicle picker, and none of the 13 mileage tools was classified — so every
+# E2E test ended with "GUARD BLOCKED … UNCLASSIFIED tool 'mileage_settings'".
+# Rules (Guard._mileage_decision):
+#   reads                      get_mileage_log / get_mileage_report / review_mileage_log,
+#                              history, status/list, downloads (deliver=download)
+#   add_mileage_trip           a new trip dated inside the sandbox window; a crew
+#                              member only if ZTEST-named; a vehicle only if ours
+#   update_mileage_trip /      a trip this run created, or one on a sandbox day that
+#   apply_mileage_review_fix   belongs to a test job or a ZTEST driver
+#   build_mileage_log          one sandbox day (never a backfill range)
+#   fix_mileage_gap            a time entry on a test job
+#   job_cancelled_on_arrival   a test job
+#   manage_vehicles            add a ZTEST-nicknamed vehicle; odometer/update/
+#                              retire/set_day only on our vehicles; set_default never
+#                              (it would steer every future real trip)
+#   mileage_reimbursement      submit for a ZTEST driver; approve/return/paid only
+#                              on a reimbursement this run submitted
+#   mileage_settings           get/reminders; set_period/set_reminder only after the
+#                              originals were saved (put back after); the rest never
+#   export / statement         download only; file -> recorded, email -> outbound
+MILEAGE_READ = {"get_mileage_log", "get_mileage_report", "review_mileage_log"}
+MILEAGE_TOOLS = MILEAGE_READ | {
+    "add_mileage_trip", "update_mileage_trip", "build_mileage_log", "fix_mileage_gap",
+    "manage_vehicles", "mileage_settings", "export_mileage_log", "mileage_reimbursement",
+    "apply_mileage_review_fix", "job_cancelled_on_arrival",
+}
+_MILEAGE_ID_RE = re.compile(r"\b((?:TRIP|VEH|REIM)-\d+)\b")
 
 # create_quote says NEW_QTE_ID=… (found 2026-09-26, DB-08: a quote the test
 # made through the UI wasn't registered, so its Delete was — correctly — blocked).
@@ -171,6 +208,21 @@ class Guard:
         self.real_route_emails = 0          # auto route emails the guard let through
         self.route_emails_seen = 0          # "📧 Route link and results emailed to" replies
         self.route_emails_suppressed = 0    # builds whose auto-email the guard switched off
+        # Mileage (2026-10-25), set by conftest.py — read-only lookups:
+        # trip_resolver(trip_id) -> {"trip_date", "job_id", "crew"} or None;
+        # entry_resolver(entry_id) -> job_id of that time entry, or None.
+        self.trip_resolver = None
+        self.entry_resolver = None
+        self.reimb_resolver = None      # rid -> driver name, or {"crew", "all_test"}; None = unknown
+        # Server suite: names whose OWN pay period a test checked holds only
+        # test trips — their plain "submit" (no crew) is then allowed.
+        self.mileage_submit_ok: set[str] = set()
+        # learning id -> its title, or None (server suite: the owner deletes
+        # only "ZTEST E2E …" learnings — SRV-API-12 set-up / clean-up)
+        self.learning_resolver = None
+        # Original mileage pay period + reminder switches; set_period /
+        # set_reminder are allowed only once these were saved (a test puts them back).
+        self.mileage_settings_saved: dict | None = None
 
     # ── Settings toggles (R-060) ──────────────────────────────────────────────
     @property
@@ -247,6 +299,22 @@ class Guard:
                 with self._lock:
                     self.created.add(i)
                 self.log(f"guard: registered {i} (renamed by rename_customer)")
+        # Mileage (2026-10-25): trips / vehicles / reimbursements a call the
+        # guard allowed has just created ("✅ Saved TRIP-0012, TRIP-0013",
+        # "✅ Added VEH-0003", "✅ Split … TRIP-…"). The guard only lets these
+        # run on test data, so whatever they made is ours. (Reimbursements are
+        # recognised by their ZTEST driver instead — reimb_resolver — because
+        # a status/list reply names other people's too.)
+        if (tool in ("add_mileage_trip", "update_mileage_trip", "manage_vehicles",
+                     "job_cancelled_on_arrival", "apply_mileage_review_fix")
+                and str(result_text or "").lstrip().startswith("✅")):
+            ids = set(_MILEAGE_ID_RE.findall(str(result_text)))
+            if ids:
+                with self._lock:
+                    new = ids - self.created
+                    self.created |= ids
+                if new:
+                    self.log(f"guard: registered {', '.join(sorted(new))} (from {tool})")
         if tool in CREATE and result_text:
             for i in _ID_RE.findall(result_text):
                 with self._lock:
@@ -328,9 +396,140 @@ class Guard:
             return (j in self.created, f"job={j}")
         return (ident in self.created, f"id={ident or '(none)'}")
 
+    # ── mileage tracker (2026-10-25) — see MILEAGE_TOOLS above ───────────────
+    def _mileage_trip_owned(self, trip_id: str) -> tuple[bool, str]:
+        tid = str(trip_id or "").strip().upper()
+        if not tid:
+            return False, "trip=(none)"
+        if tid in self.created:
+            return True, f"trip={tid} (made by this run)"
+        t = self.trip_resolver(tid) if self.trip_resolver else None
+        if not t:
+            return False, f"trip={tid} (not found in the sandbox window)"
+        d, job, crew = str(t.get("trip_date") or ""), str(t.get("job_id") or ""), str(t.get("crew") or "")
+        if d in SANDBOX_DATES and (job in self.created or crew.startswith(ZTEST_PREFIX)):
+            with self._lock:
+                self.created.add(tid)
+            return True, f"trip={tid} ({d}, {'job ' + job if job in self.created else 'driver ' + crew})"
+        return False, f"trip={tid} ({d or 'no date'}, job {job or '-'}, driver {crew or 'owner'})"
+
+    def _mileage_vehicle_ok(self, vid) -> bool:
+        v = str(vid or "").strip().upper()
+        return (not v) or v in self.created
+
+    def _mileage_decision(self, tool: str, a: dict) -> tuple[str, str]:
+        act = str(a.get("action", "") or "").strip().lower()
+        deliver = str(a.get("deliver", "file") or "file").strip().lower()
+        if tool in MILEAGE_READ:
+            return "allow", "read (mileage)"
+        if tool == "export_mileage_log" or (tool == "mileage_reimbursement" and act == "statement"):
+            if deliver == "download":
+                return "allow", "read (download to the browser)"
+            if deliver == "email":
+                return "record", "outbound: emails the mileage file"
+            return "record", "would save a file next to the real job database"
+        if tool == "mileage_settings":
+            if act in ("", "get", "reminders"):
+                return "allow", "read (mileage settings)"
+            if act in ("set_period", "set_reminder"):
+                if self.mileage_settings_saved is None:
+                    return "block", f"mileage_settings {act} before the originals were saved"
+                return "allow", f"test toggle mileage {act} (originals saved, put back after)"
+            return "block", f"mileage_settings {act} is never changed by E2E (tracking on/off, rates, locks)"
+        if tool == "add_mileage_trip":
+            d = str(a.get("date", "") or "").strip() or SANDBOX_DATE
+            fc = str(a.get("for_crew", "") or "").strip()
+            if d not in SANDBOX_DATES:
+                return "block", f"new trip dated {d} — outside the sandbox window"
+            # A real crew member (server suite: Samual / Vicki) only on a trip
+            # marked as test data in its notes — the cleanup finds it by that.
+            if fc and not fc.startswith(ZTEST_PREFIX) and ZTEST_PREFIX not in str(a.get("notes", "") or ""):
+                return "block", f"new trip for {fc!r} — not a ZTEST driver and not marked {ZTEST_PREFIX!r}"
+            if not self._mileage_vehicle_ok(a.get("vehicle_id")):
+                return "block", f"new trip in vehicle {a.get('vehicle_id')} — not a test vehicle"
+            return "allow", f"new trip on {d}" + (f" for {fc}" if fc else "")
+        if tool == "update_mileage_trip":
+            if act == "history":
+                return "allow", "read (trip history)"
+            ok, why = self._mileage_trip_owned(a.get("trip_id"))
+            if ok and not self._mileage_vehicle_ok(a.get("vehicle_id")):
+                return "block", f"{why} -> vehicle {a.get('vehicle_id')} is not a test vehicle"
+            d = str(a.get("date", "") or "").strip()
+            if ok and d and d not in SANDBOX_DATES:
+                return "block", f"{why} -> date {d} is outside the sandbox window"
+            return ("allow" if ok else "block"), (f"test data ({why})" if ok else f"NOT test data ({why})")
+        if tool == "apply_mileage_review_fix":
+            m = re.search(r"TRIP-\d+", str(a.get("finding_id", "") or "").upper())
+            ok, why = self._mileage_trip_owned(m.group(0) if m else "")
+            return ("allow" if ok else "block"), f"review finding {a.get('finding_id')!r}: {why}"
+        if tool == "build_mileage_log":
+            if a.get("start_date") or a.get("end_date"):
+                return "block", "backfill ranges are never run by E2E"
+            d = str(a.get("date", "") or "").strip() or SANDBOX_DATE
+            return (("allow", f"rebuild sandbox day {d}") if d in SANDBOX_DATES
+                    else ("block", f"rebuild {d} — outside the sandbox window"))
+        if tool == "fix_mileage_gap":
+            eid = str(a.get("entry_id", "") or "").strip()
+            job = self.entry_resolver(eid) if self.entry_resolver else None
+            return (("allow", f"time entry {eid} on test job {job}") if job and job in self.created
+                    else ("block", f"time entry {eid} (job {job or 'unknown'}) — not test data"))
+        if tool == "job_cancelled_on_arrival":
+            j = str(a.get("job_id", "") or "").strip().upper()
+            return (("allow", f"test job {j}") if j in self.created else ("block", f"job {j} — not test data"))
+        if tool == "manage_vehicles":
+            if act in ("", "list"):
+                return "allow", "read (vehicles)"
+            if act == "add":
+                nick = str(a.get("nickname", "") or "")
+                return (("allow", f"new test vehicle {nick!r}") if nick.startswith(ZTEST_PREFIX)
+                        else ("block", f"new vehicle {nick!r} — test vehicles are nicknamed '{ZTEST_PREFIX} …'"))
+            if act == "set_default":
+                return "block", "set_default changes the default vehicle for every future real trip"
+            vid = str(a.get("vehicle_id", "") or "").strip().upper()
+            if act == "set_day":
+                d = str(a.get("date", "") or "").strip() or SANDBOX_DATE
+                ok = vid in self.created and d in SANDBOX_DATES
+                return ("allow" if ok else "block"), f"day vehicle {vid} on {d}"
+            return (("allow", f"test vehicle {vid} ({act})") if vid in self.created
+                    else ("block", f"vehicle {vid or '(none)'} ({act}) — not a test vehicle"))
+        if tool == "mileage_reimbursement":
+            if act in ("", "status", "list"):
+                return "allow", "read (reimbursements)"
+            if act == "submit":
+                crew = str(a.get("crew", "") or "").strip()
+                if crew.startswith(ZTEST_PREFIX):
+                    return "allow", f"submit for test driver {crew}"
+                # Server suite: a real user submits their OWN period only after
+                # the test confirmed (as the owner) it holds nothing but test trips.
+                ok = self.mileage_submit_ok
+                if ok and (not crew or crew in ok):
+                    return "allow", f"submit {crew or 'own'} period — checked: only test trips in it"
+                return "block", f"submit for {crew or 'the caller'} — not a ZTEST driver, period not checked"
+            rid = str(a.get("reimbursement_id", "") or "").strip().upper()
+            if rid and rid in self.created:                # submitted by this run after the period check
+                return "allow", f"{rid} ({act}) — submitted by this run"
+            who = self.reimb_resolver(rid) if (self.reimb_resolver and rid) else None
+            if isinstance(who, dict):                     # {"crew": …, "all_test": bool}
+                all_test, who = bool(who.get("all_test")), who.get("crew")
+            else:
+                all_test = False
+            return (("allow", f"{rid} of {who} ({act}) — test data") if (str(who or "").startswith(ZTEST_PREFIX)
+                                                                         or all_test)
+                    else ("block", f"{rid or '(none)'} ({act}) — not a test driver's reimbursement"))
+        return "block", f"mileage tool {tool} has no rule"
+
     def check(self, tool: str, args: dict | None) -> tuple[str, str]:
         """Returns (decision, reason). decision: 'allow' | 'record' | 'block'."""
         a = args or {}
+        if tool in MILEAGE_TOOLS:
+            return self._mileage_decision(tool, a)
+        if tool == "delete_learning":
+            # 2026-10-25: SRV-API-12's learnings are removed by the owner over
+            # /mcp — only ones titled "ZTEST E2E …" (looked up, never guessed).
+            lid = str(a.get("learning_id", "") or "").strip()
+            title = self.learning_resolver(lid) if (self.learning_resolver and lid) else None
+            return (("allow", f"test learning {lid} {title!r}") if str(title or "").upper().startswith(ZTEST_PREFIX)
+                    else ("block", f"learning {lid or '(none)'} ({title!r}) — not a ZTEST learning"))
         if tool in READ:
             return "allow", "read"
         if tool in CREATE:

@@ -8,7 +8,10 @@ the app sends. Test jobs are owner-made ZTEST jobs (J-A Samual's, J-B Vicki's).
 Cleanup: an accepted upload writes a real file into the server's
 JobPhotos\\<job> folder. The server's reply says which folder; if that folder is
 on this machine the test deletes exactly the files it uploaded (and the folder
-if it's then empty). If it isn't reachable from here, it's logged as a leftover.
+if it's then empty). The AI-Prowler Server is its own machine, so normally it
+isn't: the files (always named "…ztest_photo.txt") are then removed ON THE
+SERVER by tests\\server_cleanup\\run_ztest_server_cleanup.bat — the run notes
+it and every test run on this PC reminds you (2026-10-25).
 
 Run: run_tests_gui_jobs_e2e.bat --server --human -k test_srv_photos
 """
@@ -39,9 +42,20 @@ LEFTOVERS: list[str] = []
 SERVER_JOBPHOTOS = Path(os.environ.get("E2E_SERVER_JOBPHOTOS")
                         or r"C:\Users\AI-Prowler-Server\Documents\AI-Prowler\JobPhotos")
 CAN_CLEAN = SERVER_JOBPHOTOS.is_dir() and os.access(SERVER_JOBPHOTOS, os.W_OK)
-needs_cleanup_access = pytest.mark.skipif(
-    not CAN_CLEAN, reason=f"can't reach the server's photo folder ({SERVER_JOBPHOTOS}) to remove an "
-                          "accepted upload — set E2E_SERVER_JOBPHOTOS or grant this account access")
+# 2026-10-25 (Vicki): the server is its own machine, so the folder is never
+# reachable from here. Accepted uploads now run anyway, and the files they
+# leave are removed by tests\server_cleanup\ztest_server_cleanup.py ON THE
+# SERVER (it takes every "ztest" file in JobPhotos). The run notes it, and
+# every test run on this PC reminds you until that's done.
+# E2E_SERVER_CLEANUP=off brings back the old skip.
+
+
+@pytest.fixture
+def cleanup_ok(server_script_cleanup):
+    if not (CAN_CLEAN or server_script_cleanup):
+        pytest.skip(f"can't reach the server's photo folder ({SERVER_JOBPHOTOS}) and "
+                    "E2E_SERVER_CLEANUP=off — the uploaded file couldn't be removed")
+    return True
 
 
 def _upload(srv, token, job_id, name="ztest_photo.txt", data=b"ZTEST E2E photo"):
@@ -55,11 +69,18 @@ def _upload(srv, token, job_id, name="ztest_photo.txt", data=b"ZTEST E2E photo")
     return st, d
 
 
-def _remove_uploaded(d):
-    """Delete exactly the files the server said it saved; then the folder if empty."""
+def _remove_uploaded(d, note=None):
+    """Delete exactly the files the server said it saved; then the folder if
+    empty. Unreachable from here (the server is its own machine): hand them to
+    the server cleanup script via `note`, else they're a leftover."""
     folder = Path(d.get("dir", ""))
     if not d.get("dir") or not folder.is_dir():
         if d.get("files"):
+            names = [str(f) for f in d.get("files", [])]
+            if note and all("ztest" in n.lower() for n in names):
+                note(f"uploaded test photo(s) {', '.join(names)} in JobPhotos\\{folder.name}")
+                log.info(f"[SRV-PHOTOS] {names} in {d.get('dir')!r} — left for the server cleanup script")
+                return
             LEFTOVERS.append(f"{d.get('dir')} {d.get('files')}")
             log.info(f"[SRV-PHOTOS] can't reach {d.get('dir')!r} from here — leftover: {d.get('files')}")
         return
@@ -99,26 +120,27 @@ def test_SRV_SCOPE_12_crew_cannot_upload_to_another_crews_job(srv, jobs, photos_
     assert _no_files_in(folder), f"a file was written for Vicki's job: {folder}"
 
 
-@needs_cleanup_access
-def test_SRV_SCOPE_12_crew_can_upload_to_own_job(srv, jobs):
+def test_SRV_SCOPE_12_crew_can_upload_to_own_job(srv, jobs, cleanup_ok, server_cleanup_note):
     st, d = _upload(srv, srv["users"]["U3"].access_token, jobs["mine"])
     try:
         assert st == 200 and d.get("ok") and d.get("saved") == 1, f"Samual can't upload to his own job: {st} {d}"
         assert Path(d["dir"]).name == jobs["mine"], f"saved under the wrong job folder: {d['dir']}"
+        assert all("ztest" in str(f).lower() for f in d.get("files", [])), \
+            f"the saved name lost 'ztest' — the server cleanup script couldn't find it: {d.get('files')}"
     finally:
         if d.get("ok"):
-            _remove_uploaded(d)
+            _remove_uploaded(d, server_cleanup_note)
 
 
-@needs_cleanup_access
 @pytest.mark.parametrize("key", ["U1", "U2"])
-def test_SRV_SCOPE_12_owner_and_manager_can_upload_to_any_crews_job(srv, jobs, key):
+def test_SRV_SCOPE_12_owner_and_manager_can_upload_to_any_crews_job(srv, jobs, key, cleanup_ok,
+                                                                    server_cleanup_note):
     st, d = _upload(srv, srv["users"][key].access_token, jobs["theirs"])
     try:
         assert st == 200 and d.get("ok"), f"{key} can't upload to Vicki's job: {st} {d}"
     finally:
         if d.get("ok"):
-            _remove_uploaded(d)
+            _remove_uploaded(d, server_cleanup_note)
 
 
 # ── R-028 / R-029 on the server: bad or made-up job numbers ──────────────────
@@ -140,7 +162,7 @@ def test_SRV_PH_08_job_number_cannot_escape_the_photos_folder(srv, photos_root, 
             shutil.rmtree(outside, ignore_errors=True)
 
 
-def test_SRV_PH_09_upload_for_a_job_that_does_not_exist_is_refused(srv, photos_root):
+def test_SRV_PH_09_upload_for_a_job_that_does_not_exist_is_refused(srv, photos_root, server_cleanup_note):
     fake = f"JOB-ZT{uuid.uuid4().hex[:6].upper()}"
     st, d = _upload(srv, srv["owner"].access_token, fake)
     try:
@@ -148,7 +170,7 @@ def test_SRV_PH_09_upload_for_a_job_that_does_not_exist_is_refused(srv, photos_r
         assert not (CAN_CLEAN and (photos_root / fake).exists()), f"a folder was created for non-existent {fake}"
     finally:
         if d.get("ok"):
-            _remove_uploaded(d)
+            _remove_uploaded(d, server_cleanup_note)
 
 
 def test_SRV_PHOTOS_zz_no_leftovers():

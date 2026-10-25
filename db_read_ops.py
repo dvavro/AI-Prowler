@@ -36,6 +36,27 @@ from db_write_ops import (
 )
 
 
+# Mileage tracker (2026-10-24): once-a-day safety-net build of recent days
+# that have clock-ins but no trips (see db_mileage_ops.maybe_sweep_recent_days).
+# Run in a background thread so a Jobs read never waits on routing lookups;
+# the in-process day check keeps it to one thread per database per day.
+_MILEAGE_SWEEP_DAY: dict = {}
+
+
+def _maybe_sweep_mileage_in_background(db_path: str) -> None:
+    try:
+        today = datetime.date.today().isoformat()
+        if _MILEAGE_SWEEP_DAY.get(db_path) == today:
+            return
+        _MILEAGE_SWEEP_DAY[db_path] = today
+        import threading
+        import db_mileage_ops
+        threading.Thread(target=db_mileage_ops.maybe_sweep_recent_days, args=(db_path,),
+                         daemon=True).start()
+    except Exception:
+        pass
+
+
 def _canonical_display_pairs(header_map: dict) -> list:
     """Inverts a *_HEADER_MAP (display_header -> db_col) into an ordered
     list of (db_col, display_header) pairs, one per db_col, keeping the
@@ -305,6 +326,7 @@ def db_read_job_spreadsheet(db_path: str, sheet_name: str = "", filter_date: str
     if target_sheet == "Jobs_Schedule":
         _maybe_sweep_recurring_jobs(db_path)
         _maybe_send_stale_customer_digest(db_path)
+        _maybe_sweep_mileage_in_background(db_path)
 
     max_rows = min(max_rows, 500)
 

@@ -326,6 +326,48 @@ _RAW = [
     ('get_daily_mileage', 'job_tracker', 'Daily mileage estimate',
      'Estimates miles driven from clock-in/clock-out GPS points.', BOTH,
      False, None, False, None),
+    # Mileage tracker (2026-10-24) — IRS-ready mileage log; the Jobs app's
+    # Mileage tab calls these through /pwa-api.
+    ('get_mileage_log', 'job_tracker', 'Mileage log',
+     'Trips, gaps to fix, vehicles, rates, and totals for a date range (JSON).', BOTH,
+     False, None, True, "Used by the Jobs PWA App's Mileage tab."),
+    ('build_mileage_log', 'job_tracker', 'Build / backfill mileage',
+     'Builds trips from clock-ins and home/company legs; backfills past dates with a preview.', BOTH,
+     False, None, True, "Used by the Jobs PWA App's Mileage tab."),
+    ('add_mileage_trip', 'job_tracker', 'Add a business trip',
+     'Logs a non-job business trip by form, Start/End buttons, text, or voice.', BOTH,
+     False, None, True, "Used by the Jobs PWA App's Mileage tab."),
+    ('update_mileage_trip', 'job_tracker', 'Edit / remove / split a trip',
+     'Audited edits to a mileage trip; void with reason; insert a stop.', BOTH,
+     False, None, True, "Used by the Jobs PWA App's Mileage tab."),
+    ('fix_mileage_gap', 'job_tracker', 'Fix a missing clock-out',
+     'Fills a missing clock-out (dead phone) with a reason and rebuilds the day.', BOTH,
+     False, None, True, "Used by the Jobs PWA App's Mileage tab."),
+    ('manage_vehicles', 'job_tracker', 'Vehicles (VIN) and odometer',
+     'Add vehicles by VIN, crew-owned cars, odometer readings, day vehicle.', BOTH,
+     False, None, True, "Used by the Jobs PWA App's Mileage tab."),
+    ('get_mileage_report', 'job_tracker', 'Mileage report and deduction',
+     'Miles by driver/vehicle/month, deduction by IRS rate period, reimbursement, Form 4562 sheet.', BOTH,
+     False, None, True, "Used by the Jobs PWA App's Reports screen."),
+    ('mileage_settings', 'job_tracker', 'Mileage settings',
+     'Tracking on/off, IRS rate table, lock periods, reimbursement pay period, reminders.', BOTH,
+     False, None, True, "Used by the Jobs PWA App's Mileage tab."),
+    ('export_mileage_log', 'job_tracker', 'Export mileage log',
+     'IRS mileage log as PDF, Excel (Trips/Summary/Reimbursement/Vehicles) or CSV; save, email, or download.',
+     BOTH, False, None, True, "Used by the Jobs PWA App's Reports screen."),
+    ('mileage_reimbursement', 'job_tracker', 'Crew mileage reimbursement',
+     'Submit, approve, return, and mark paid crew-car mileage per pay period; PDF statements.', BOTH,
+     False, None, True, "Used by the Jobs PWA App's Mileage tab."),
+    ('review_mileage_log', 'job_tracker', 'AI mileage review',
+     'Finds route/odometer mismatches, long legs, duplicates, vague purposes, misclassified commutes; '
+     'proposes fixes without changing anything.', BOTH,
+     False, None, True, "Used by the Jobs PWA App's Mileage tab."),
+    ('apply_mileage_review_fix', 'job_tracker', 'Apply a mileage review fix',
+     'Accepts (audited edit) or dismisses one AI mileage review finding.', BOTH,
+     False, None, True, "Used by the Jobs PWA App's Mileage tab."),
+    ('job_cancelled_on_arrival', 'job_tracker', 'Customer cancelled on arrival',
+     'Records the visit so the drive still counts, marks the job Cancelled, rebuilds the day.', BOTH,
+     False, None, True, "Used by the Jobs PWA App's Mileage tab."),
     ('get_ar_aging_report', 'job_tracker', 'AR aging report',
      'Accounts-receivable aging report from unpaid invoices.', BOTH,
      False, None, False, None),
@@ -693,6 +735,14 @@ JOBS_APP_TOOLS: FrozenSet[str] = frozenset({
     "list_team_members",
       "cancel_indexing", "indexing_status",  # R-069 (2026-10-08): stop button + status readout
       "rename_customer",  # (2026-10-08): Jobs app customer screen via pwa-api
+    # Mileage tracker (2026-10-24): Mileage tab, Clock-screen vehicle picker,
+    # Reports mileage card.
+    "get_mileage_log", "build_mileage_log", "add_mileage_trip", "update_mileage_trip",
+    "fix_mileage_gap", "manage_vehicles", "get_mileage_report", "mileage_settings",
+    # Mileage Phases 4–5 (2026-10-24): export, reimbursement, AI review,
+    # cancelled on arrival.
+    "export_mileage_log", "mileage_reimbursement", "review_mileage_log",
+    "apply_mileage_review_fix", "job_cancelled_on_arrival",
 })
 
 _JOBS_APP_NOTE = "Used by the Jobs app — turning it off also turns that feature off in the app."

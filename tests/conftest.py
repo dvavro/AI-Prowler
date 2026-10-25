@@ -485,3 +485,26 @@ def pytest_configure(config):
         config.pluginmanager.register(
             _mod.FdTrackerPlugin(config), "fd_tracker_plugin"
         )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Server cleanup reminder (2026-10-25, Vicki): every run — run_tests.bat, the
+# E2E launchers, the runs Claude starts — ends by saying whether the AI-Prowler
+# Server needs its test data removed, why, and the command
+# (tests/server_cleanup/pending.py). Never affects the run's result.
+# ──────────────────────────────────────────────────────────────────────────────
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    if os.environ.get("AIPROWLER_NO_CLEANUP_REMINDER", "") == "1":
+        return
+    try:
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location("_e2e_server_cleanup_pending",
+                                             Path(__file__).parent / "server_cleanup" / "pending.py")
+        _p = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_p)
+        lines = _p.reminder_lines()
+    except Exception as e:                      # a reminder must never break a run
+        lines = [f"(server cleanup reminder unavailable: {type(e).__name__}: {e})"]
+    terminalreporter.write_sep("-", "AI-Prowler Server test-data cleanup")
+    for line in lines:
+        terminalreporter.write_line(line)

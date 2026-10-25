@@ -249,3 +249,57 @@ def test_BRD_09_card_text_is_escaped(clean_slate, app, page, data):
     _open_board(app, page)
     expect(_card(page, jid)).to_contain_text('<img src=x onerror="window.__e2e_board_xss=1">')
     assert page.evaluate("() => window.__e2e_board_xss") is None
+
+
+def _browser_day(page, offset_days):
+    """The browser's own date (the Board ages cards by it) moved by offset_days."""
+    return page.evaluate("""(n) => { const t = new Date(); const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() + n);
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }""",
+                         offset_days)
+
+
+# ── BRD-10: mark one Complete job Paid, then tap the next — it still opens ───
+def test_BRD_10_second_complete_card_opens_after_saving_the_first(clean_slate, app, page, api, data):
+    """David 2026-10-23: after marking a Complete job Paid from the Board, the
+    next Complete card did nothing until the page was refreshed (the Database
+    reload after Save dropped Completed jobs from the edit form's cache)."""
+    j1, j2 = data.job("BRD10 first"), data.job("BRD10 second")
+    for jid in (j1, j2):
+        _api_set(api, jid, {"Job Status": "Complete", "Payment Status": "Unpaid"})
+    _open_board(app, page)
+    app.log(f"BOARD tap {j1}, mark it Paid, Save")
+    _card(page, j1, "Complete").click()
+    expect(page.locator("#jobFormModal")).to_be_visible()
+    expect(page.locator("#jfJobId")).to_have_value(j1)
+    page.locator("#jfPayment").select_option("Paid")
+    with page.expect_response(lambda r: _update_request(r.request), timeout=30_000):
+        page.locator("#jobFormSaveBtn").click()
+    expect(page.locator("#jobFormModal")).to_be_hidden(timeout=20_000)
+    assert _db_job(api, j1)["Payment Status"] == "Paid"
+    page.wait_for_timeout(1500)            # let the post-save reloads (Database + Board) finish
+    app.log(f"BOARD tap the next Complete card {j2} — no refresh")
+    _card(page, j2, "Complete").click()
+    expect(page.locator("#jobFormModal")).to_be_visible(timeout=10_000)
+    expect(page.locator("#jfJobId")).to_have_value(j2)
+
+
+# ── BRD-11: Complete column drops PAID jobs once the job is a week old ───────
+def test_BRD_11_complete_column_hides_old_paid_jobs_only(clean_slate, app, page, api, data):
+    """Counted from the job's own date, not its last edit: marking an old job
+    Paid today must not keep it on the board for another week. Unpaid and
+    Partial jobs always stay; this week's paid jobs stay."""
+    old = _browser_day(page, -14)
+    recent = _browser_day(page, -2)
+    old_paid = data.job("BRD11 old paid", date=old)
+    old_unpaid = data.job("BRD11 old unpaid", date=old)
+    old_partial = data.job("BRD11 old partial", date=old)
+    new_paid = data.job("BRD11 recent paid", date=recent)
+    for jid, pay in [(old_paid, "Paid"), (old_unpaid, "Unpaid"), (old_partial, "Partial"), (new_paid, "Paid")]:
+        _api_set(api, jid, {"Job Status": "Complete", "Payment Status": pay})   # edited just now
+    _open_board(app, page)
+    expect(_card(page, old_unpaid, "Complete")).to_have_count(1)
+    expect(_card(page, old_partial, "Complete")).to_have_count(1)
+    expect(_card(page, new_paid, "Complete")).to_have_count(1)
+    expect(_card(page, old_paid)).to_have_count(0)
+    # nothing is deleted — the Database still has it
+    assert _db_job(api, old_paid)["Payment Status"] == "Paid"

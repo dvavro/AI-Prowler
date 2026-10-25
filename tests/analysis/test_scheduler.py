@@ -36,6 +36,7 @@ class TestJobRegistry:
         expected = {
             "morning_briefing", "overdue_invoice_alert", "due_analysis_tasks",
             "sms_reply_monitor", "weather_watch", "end_of_day_summary",
+            "mileage_reminders",   # 2026-10-24: mileage spec FR-24 (owner's 7 PM digest)
         }
         assert set(sj.JOB_REGISTRY.keys()) == expected
 

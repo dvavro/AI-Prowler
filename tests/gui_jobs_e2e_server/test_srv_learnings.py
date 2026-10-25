@@ -3,12 +3,16 @@
 rules as editing/deleting it: crew only their own, manager any employee's but
 never the owner's, owner any.
 
-Setup / cleanup are done OUTSIDE this file, as the owner, because the Jobs app
-can create learnings but not delete them:
-  before: an owner learning titled "ZTEST E2E R-042 owner learning" exists
-  after:  every learning titled "ZTEST E2E R-042 …" is deleted
-Calls go straight to /pwa-api (the write guard blocks record_learning outright).
-Everything this file creates is titled "ZTEST E2E R-042 …".
+Set-up and clean-up are automatic since 2026-10-25 (Vicki: tests that couldn't
+be written because of cleanup). The Jobs app can create learnings but not
+delete them — the OWNER can, through Claude's tools (/mcp): this module
+  before: deletes any "ZTEST E2E R-042 …" learnings an interrupted run left,
+          then records the owner learning "ZTEST E2E R-042 owner learning";
+  after:  deletes every "ZTEST E2E R-042 …" learning — active AND the retired
+          (archived) ones a supersede leaves — and checks none is left.
+The write guard lets the owner delete a learning only when its title starts
+with "ZTEST E2E" (looked up, never guessed). record_learning goes straight to
+/pwa-api (the guard blocks it outright). All learnings here are tagged "ztest".
 
 Run: run_tests_gui_jobs_e2e.bat --server --human -k test_srv_learnings
 """
@@ -18,11 +22,13 @@ import re
 
 import pytest
 
+from ai_client import AiClient
 from api import http
 
 log = logging.getLogger("e2e_srv")
 
 OWNER_TITLE = "ZTEST E2E R-042 owner learning"
+PREFIX = "ZTEST E2E R-042"
 
 
 def _call(srv, key, tool, args):
@@ -51,12 +57,43 @@ def _record(srv, key, title, supersedes=""):
         "tags": "ztest", "supersedes_id": supersedes})
 
 
+def _owner_ai(srv, guard):
+    return AiClient(srv["origin"], srv["owner"].token, guard, "U1")
+
+
+def _test_learnings(srv, guard):
+    """[(id, title)] of every ztest-tagged R-042 learning, any status (owner, /mcp)."""
+    res = _owner_ai(srv, guard).call("list_learnings", {"status": "", "tag": "ztest", "limit": 500},
+                                     expect_ok=False)
+    out = []
+    for block in re.split(r"\n\s*\n", res):
+        m = re.search(r"^\[\d+\]\s+\S+\s+(.+?)\s*$", block, re.M)
+        i = re.search(r"ID:\s*([0-9a-fA-F-]{36})", block)
+        if m and i and m.group(1).strip().startswith(PREFIX):
+            out.append((i.group(1), m.group(1).strip()))
+    return out
+
+
+def _delete_all(srv, guard) -> list:
+    ai = _owner_ai(srv, guard)
+    for lid, title in _test_learnings(srv, guard):
+        out = ai.call("delete_learning", {"learning_id": lid}, expect_ok=False)
+        log.info(f"[SRV-API-12] owner deletes {title!r} ({lid}) -> {out.splitlines()[0][:120] if out else ''}")
+    return _test_learnings(srv, guard)
+
+
 @pytest.fixture(scope="module")
-def owner_learning(srv):
+def owner_learning(srv, owner_api, guard):
+    # owner_api sets the guard's learning lookup (title by id) the delete rule needs
+    left = _delete_all(srv, guard)
+    assert not left, f"couldn't remove learnings an earlier run left: {left}"
+    st, res = _record(srv, "U1", OWNER_TITLE)
+    assert st == 200 and "✅" in res, f"owner couldn't record the set-up learning: {st} {res[:200]}"
     lid, _ = _find_id(srv, OWNER_TITLE)
-    if not lid:
-        pytest.skip(f"setup missing: create an owner learning titled {OWNER_TITLE!r} first")
-    return lid
+    assert lid, "the owner's set-up learning isn't found as active after recording it"
+    yield lid
+    left = _delete_all(srv, guard)
+    assert not left, f"SRV-API-12 learnings left after clean-up: {left}"
 
 
 @pytest.mark.parametrize("key", ["U3", "U2"])     # field crew, manager
@@ -70,13 +107,10 @@ def test_SRV_API_12_cannot_retire_the_owners_learning(srv, owner_learning, key):
 
 
 def test_SRV_API_12_control_crew_can_retire_their_own_learning(srv, owner_learning):
-    # Takes owner_learning only so the control skips with the rest of SRV-API-12 when
-    # David hasn't set it up — this test records 2 learnings the suite can't clean up.
     st, res = _record(srv, "U3", "ZTEST E2E R-042 crew original")
     assert st == 200 and "✅" in res, res[:200]
     old = re.search(r"ID\s*:\s*([0-9a-f-]{36})", res).group(1)
     st, res = _record(srv, "U3", "ZTEST E2E R-042 crew replacement", supersedes=old)
     log.info(f"[SRV-API-12] Samual supersedes his own learning -> HTTP {st}: {res.splitlines()[0][:160]}")
-    log.warning("[SRV-API-12] leaves 2 learnings to delete by hand: 'ZTEST E2E R-042 crew original' / 'crew replacement'")
     assert st == 200 and not res.lstrip().startswith(("⛔", "❌")), res[:200]
     assert _find_id(srv, "ZTEST E2E R-042 crew original")[0] is None, "his own old learning is still active"

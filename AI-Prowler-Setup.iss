@@ -294,6 +294,9 @@ Source: "db_route_ops.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "week_plan.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "db_backup_ops.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "db_export_ops.py"; DestDir: "{app}"; Flags: ignoreversion
+; 2026-10-24: mileage tracker (Jobs app Mileage tab) — also in release.py MANIFEST_FILES
+Source: "db_mileage_ops.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "mileage_pdf.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "scope_resolver.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "scope_lookup.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "file_watchdog.py"; DestDir: "{app}"; Flags: ignoreversion

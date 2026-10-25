@@ -123,6 +123,42 @@ html,body{height:100%;background:var(--bg);color:#ffffff;font-family:'Inter',-ap
      wide screens they still share the width evenly and nothing scrolls. */
   overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;scrollbar-width:none}
 .bottomnav::-webkit-scrollbar{display:none}
+/* Mileage tracker (2026-10-24) */
+.mi-totals{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
+.mi-total{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;text-align:center}
+.mi-total b{display:block;font-size:20px;color:#fff}
+.mi-total span{font-size:11px;color:var(--muted)}
+.mi-day{font-size:12px;font-weight:700;color:var(--cyan);letter-spacing:.05em;margin:14px 2px 6px;text-transform:uppercase}
+.mi-trip{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:6px;cursor:pointer}
+.mi-trip.void{opacity:.45}
+.mi-trip.void .mi-route{text-decoration:line-through}
+.mi-trip.fix{border-color:#f87171}
+.mi-trip-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.mi-route{font-size:14px;color:#fff;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.mi-miles{font-size:15px;font-weight:700;color:#fff;white-space:nowrap}
+.mi-sub{font-size:12px;color:var(--sub);margin-top:3px}
+.mi-badge{display:inline-block;font-size:10px;font-weight:700;border-radius:6px;padding:1px 6px;margin:4px 4px 0 0;background:#23283a;color:#aab}
+.mi-badge.biz{background:#12351f;color:#4ade80}
+.mi-badge.com{background:#2a2a2a;color:#bbb}
+.mi-badge.rmb{background:#3a2c0f;color:#fbbf24}
+.mi-badge.bad{background:#3b1414;color:#f87171}
+.mi-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mi-form label{display:block;font-size:12px;color:#aaa;margin:8px 0 3px}
+.mi-form input,.mi-form select,.mi-form textarea{width:100%;box-sizing:border-box;background:#0d0d20;border:1px solid #333;color:#fff;border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit}
+.mi-form .mi-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mi-gap{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;color:#ddd}
+.mi-gap:last-child{border-bottom:none}
+/* Mileage Phases 4–5: reminders, reimbursement status, AI review findings */
+.mi-note{background:#1d2238;border:1px solid #2e3657;border-radius:10px;padding:8px 10px;margin-bottom:6px;font-size:13px;color:#dbe3ff}
+.mi-note.warn{background:#3a2c0f;border-color:#6b5112;color:#fde68a}
+.mi-find{border-bottom:1px solid var(--border);padding:9px 0;font-size:13px;color:#ddd;line-height:1.4}
+.mi-find:last-child{border-bottom:none}
+.mi-find .sev{font-weight:700;font-size:10px;margin-right:6px;letter-spacing:.05em}
+.mi-status{display:inline-block;font-size:10px;font-weight:700;border-radius:6px;padding:1px 6px;background:#23283a;color:#aab;text-transform:uppercase}
+.mi-status.submitted{background:#1e3a5f;color:#93c5fd}
+.mi-status.approved{background:#3a2c0f;color:#fbbf24}
+.mi-status.paid{background:#12351f;color:#4ade80}
+.mi-status.returned{background:#3b1414;color:#f87171}
 /* Update-available banner — see the serviceWorker 'updatefound' handler
    near DOMContentLoaded. Fixed-position overlay (not part of page flow),
    so it never needs to know about the bottom nav's height or any given
@@ -787,6 +823,11 @@ textarea::placeholder{color:#c0c6d8}
         <div class="card-body">
           <div class="field-label">Select Job</div>
           <select id="clockJobSelect"><option value="">— choose a job —</option></select>
+          <!-- Mileage (2026-10-24): which vehicle you're driving today. -->
+          <div id="clockVehicleRow" class="mt-12" style="display:none">
+            <div class="field-label">Vehicle today (for mileage)</div>
+            <select id="clockVehicleSelect" data-testid="clock-vehicle" onchange="miSetDayVehicle(this.value)"><option value="">— choose a vehicle —</option></select>
+          </div>
           <div class="mt-12 row">
             <button class="btn btn-success" id="clockInBtn" onclick="clockAction('start')">▶ Clock In</button>
             <button class="btn btn-danger" id="clockOutBtn" onclick="clockAction('stop')" disabled>■ Clock Out</button>
@@ -798,6 +839,51 @@ textarea::placeholder{color:#c0c6d8}
         <div class="card-header"><span class="card-title">Recent Entries</span></div>
         <div class="card-body" id="clockHistory"><p style="font-size:13px;color:var(--muted)">No entries yet.</p></div>
       </div>
+    </div>
+
+    <!-- ── Mileage (2026-10-24) ──────────────────────────────────────────
+         IRS-ready business mileage log: trips build themselves from
+         clock-ins (plus home/company legs from Route Origin Mode); anyone
+         can add a non-job business trip by Start/End, text, voice, or the
+         form; every change needs a reason and is kept in the audit trail. -->
+    <div id="screen-mileage" class="screen">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <h1 class="section-head">Mileage</h1>
+        <button class="btn btn-ghost" style="width:auto;padding:8px 10px" onclick="loadMileage()" title="Refresh mileage">↻</button>
+      </div>
+      <p class="section-sub">Business miles for taxes — date, destination, purpose, and miles for every trip.</p>
+      <div class="card" id="miEntryCard" data-testid="mi-entry">
+        <div class="card-body">
+          <div id="miActiveTrip" style="display:none;margin-bottom:10px;font-size:13px;color:#fbbf24"></div>
+          <div class="mi-actions">
+            <button class="btn btn-success" id="miStartBtn" data-testid="mi-start" onclick="miStartTrip()">▶ Start trip</button>
+            <button class="btn btn-primary" data-testid="mi-add" onclick="miAddTripForm()">＋ Add trip</button>
+          </div>
+          <div style="display:flex;gap:6px;margin-top:10px">
+            <input id="miQuickText" data-testid="mi-quick-text" placeholder="Type: Home Depot for ladders, 12 miles" style="flex:1;background:#0d0d20;border:1px solid #333;color:#fff;border-radius:8px;padding:8px 10px;font-size:14px" onkeydown="if(event.key==='Enter')miQuickAdd()">
+            <button class="btn btn-ghost" style="width:auto;padding:8px 10px" title="Log it" onclick="miQuickAdd()">➤</button>
+          </div>
+          <div id="miQuickResult" style="font-size:12px;color:var(--sub);margin-top:6px"></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:6px 0 10px">
+        <select id="miRangeSelect" data-testid="mi-range" onchange="MI.range=this.value;_miToggleCustom();loadMileage()"
+          style="background:#1a1a2e;border:1px solid #333;color:#ddd;border-radius:8px;padding:6px 8px;font-size:13px">
+          <option value="week">This week</option><option value="lastweek">Last week</option>
+          <option value="month">This month</option><option value="lastmonth">Last month</option>
+          <option value="year">This year</option><option value="custom">Custom…</option>
+        </select>
+        <span id="miCustomRange" style="display:none">
+          <input type="date" id="miStart" onchange="MI.start=this.value;loadMileage()" style="background:#1a1a2e;border:1px solid #333;color:#ddd;border-radius:8px;padding:5px">
+          <input type="date" id="miEnd" onchange="MI.end=this.value;loadMileage()" style="background:#1a1a2e;border:1px solid #333;color:#ddd;border-radius:8px;padding:5px">
+        </span>
+        <span id="miToolsRow" style="display:contents">
+        <button class="btn btn-ghost" style="width:auto;padding:6px 10px;font-size:12px" onclick="miRecalcDay()">⟳ Recalculate a day</button>
+        <button class="btn btn-ghost" style="width:auto;padding:6px 10px;font-size:12px" data-testid="mi-review" onclick="miReview()">🤖 Review with AI</button>
+        <button class="btn btn-ghost" style="width:auto;padding:6px 10px;font-size:12px" data-testid="mi-cancelled" onclick="miCancelledForm()">🚫 Cancelled on arrival</button>
+        </span>
+      </div>
+      <div id="miContent"><div class="loader"><div class="spinner"></div> Loading mileage…</div></div>
     </div>
 
     <div id="screen-photos" class="screen">
@@ -898,16 +984,38 @@ textarea::placeholder{color:#c0c6d8}
           <pre id="arAgingReport" style="margin:0;white-space:pre-wrap;font-size:12px;line-height:1.45;color:#ddd;font-family:ui-monospace,Consolas,monospace">Loading…</pre>
         </div>
       </div>
+      <!-- Mileage report (2026-10-24): owner and managers. Miles by driver /
+           vehicle / month, deduction by IRS rate period, crew reimbursement,
+           Form 4562 vehicle sheet, and IRS record checks. -->
+      <div class="card" id="mileageReportCard" data-testid="reports-mileage" style="display:none;margin-bottom:16px">
+        <div class="card-header"><span class="card-title">🚗 Mileage &amp; deduction</span></div>
+        <div class="card-body">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+            <input type="date" id="miRepStart" style="background:#1a1a2e;border:1px solid #333;color:#ddd;border-radius:8px;padding:5px">
+            <input type="date" id="miRepEnd" style="background:#1a1a2e;border:1px solid #333;color:#ddd;border-radius:8px;padding:5px">
+            <button class="btn btn-ghost" style="width:auto;padding:6px 12px;font-size:12px;font-weight:600" onclick="loadMileageReport()">Run</button>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px" data-testid="reports-mileage-export">
+            <span style="font-size:12px;color:#aaa">Export:</span>
+            <button class="btn btn-ghost" style="width:auto;padding:5px 10px;font-size:12px" onclick="miExport('pdf','rep')">⬇ PDF</button>
+            <button class="btn btn-ghost" style="width:auto;padding:5px 10px;font-size:12px" onclick="miExport('xlsx','rep')">⬇ Excel</button>
+            <button class="btn btn-ghost" style="width:auto;padding:5px 10px;font-size:12px" onclick="miExport('csv','rep')">⬇ CSV</button>
+            <button class="btn btn-ghost" style="width:auto;padding:5px 10px;font-size:12px" onclick="miReview('rep')">🤖 Review with AI</button>
+          </div>
+          <pre id="mileageReport" style="margin:0;white-space:pre-wrap;font-size:12px;line-height:1.45;color:#ddd;font-family:ui-monospace,Consolas,monospace">Loading…</pre>
+        </div>
+      </div>
       <div id="reportsOwnerOnly">
-      <p class="section-sub">Weekly revenue (actual = paid so far, projected = still owed) and scheduled hours (actual = Completed, projected = Scheduled/In Progress). Projected also includes the calendar's 🔮 recurring visits, valued at each customer's Net Price, 7% tax and Avg Job Duration. Solid bars are actual, hatched bars are projected.</p>
+      <p class="section-sub">Weekly revenue (actual = paid so far, projected = still owed) and scheduled hours (actual = Completed, projected = Scheduled/In Progress). Projected also includes the calendar's 🔮 recurring visits, valued at each customer's Net Price (or, when that's blank, their most recent priced job), 7% tax and Avg Job Duration. Solid bars are actual, hatched bars are projected. Every chart covers the whole range — scroll sideways to see it all.</p>
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;flex-wrap:wrap">
         <label style="font-size:12px;color:#aaa">Weeks each direction:
           <select id="reportsWeeksSelect" onchange="_setReportsWeeks(this.value)"
             style="margin-left:6px;background:#1a1a2e;border:1px solid #333;color:#aaa;border-radius:8px;padding:5px 6px;font-size:12px;font-weight:600;cursor:pointer">
             <option value="4">4</option>
-            <option value="8" selected>8</option>
+            <option value="8">8</option>
             <option value="12">12</option>
             <option value="26">26</option>
+            <option value="52" selected>52</option>
           </select>
         </label>
       </div>
@@ -1329,6 +1437,12 @@ textarea::placeholder{color:#c0c6d8}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/></svg>
       <span class="nav-label">Clock</span>
     </button>
+    <!-- Mileage (2026-10-24): IRS-ready mileage log. Hidden until the server
+         says tracking is on (mileageInit); Settings can turn it off. -->
+    <button class="nav-btn" id="navMileage" data-testid="nav-mileage" onclick="showScreen('mileage',this)" style="display:none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17h14l-1.5-6.5A2 2 0 0015.6 9H8.4a2 2 0 00-1.9 1.5L5 17z"/><circle cx="7.5" cy="17.5" r="1.8"/><circle cx="16.5" cy="17.5" r="1.8"/><path d="M3 13h2M19 13h2"/></svg>
+      <span class="nav-label">Mileage</span>
+    </button>
     <button class="nav-btn" data-testid="nav-photos" onclick="showScreen('photos',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
       <span class="nav-label">Photos</span>
@@ -1364,6 +1478,21 @@ textarea::placeholder{color:#c0c6d8}
        sibling of .main inside #app, as intended, instead of being nested
        inside .main. #app itself stays open past this point for #jobModal,
        #toast, and <script> below, closing at its own tag near end of body. -->
+
+<!-- ── Mileage sheet (2026-10-24): one reusable pop-up for every mileage form
+     (add trip, edit, fix a gap, vehicles, backfill). Same overlay style as
+     the invoice form below. -->
+<div id="miSheet" data-testid="mi-sheet" style="display:none;position:fixed;inset:0;height:100vh;height:100dvh;overflow:hidden;background:rgba(0,0,0,.82);z-index:420;flex-direction:column;padding:20px 16px calc(12px + var(--safe-bot))" onclick="if(event.target===this)miCloseSheet()">
+  <div style="flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;max-width:500px;width:100%;margin:0 auto">
+    <div style="background:#0e1018;border-radius:16px;border:1px solid #2a2f45;padding:18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div id="miSheetTitle" style="font-size:17px;font-weight:700;color:#fff"></div>
+        <button class="btn btn-ghost" style="width:auto;padding:6px 10px" onclick="miCloseSheet()">✕</button>
+      </div>
+      <div id="miSheetBody" class="mi-form"></div>
+    </div>
+  </div>
+</div>
 
 <!-- ── Invoice Create Form Modal ────────────────────────────────────────────
      Shown when the user taps "Create Invoice" from the job detail sheet.
@@ -1846,6 +1975,7 @@ function bootApp() {
     navReports.style.display = (!state.serverMode || _rr === 'owner' || _rr === 'manager' || _rr === 'staff') ? '' : 'none';
   }
 
+  mileageInit();   // Mileage tab / Clock vehicle picker / Profile switch (2026-10-24)
   loadJobs(); setConn(true);
   _restoreOpenClock();   // R-025: still clocked in after the app was closed
   checkSmsConfiguredStatus();
@@ -2475,10 +2605,13 @@ function _custPreferredDaysText(c) {
   return '';
 }
 
-function _calRecurringProjections(customers) {
+function _calRecurringProjections(customers, horizonDate) {
   const out = [];
   const today = new Date(); today.setHours(0,0,0,0);
-  const horizon = new Date(today.getFullYear(), today.getMonth() + 12, today.getDate());
+  // Calendar: 12 months ahead. Reports may pass a later horizon (2026-10-23:
+  // "Weeks each direction" up to 52 must be filled to its last week).
+  const horizon = (horizonDate instanceof Date && !isNaN(horizonDate.getTime()))
+    ? horizonDate : new Date(today.getFullYear(), today.getMonth() + 12, today.getDate());
   (customers || []).forEach(function(c) {
     if (!c) return;
     if ((c['Status Active/Inactive'] || '').trim().toLowerCase() === 'inactive') return;
@@ -2521,7 +2654,7 @@ function _calRecurringProjections(customers) {
     // how the sweep chains job -> next job with _add_months (Jan 31 -> Feb 28
     // -> Mar 28). Plain setMonth() overflowed instead (Jan 31 -> Mar 3).
     let d = new Date(lastSvc.getTime());
-    for (let guard = 0; guard < 60; guard++) {
+    for (let guard = 0; guard < 160; guard++) {   // weekly over 2 years = 104 visits
       if (stepDays) {
         d = new Date(d.getTime()); d.setDate(d.getDate() + stepDays);
       } else {
@@ -5139,7 +5272,831 @@ function showScreen(name, btn) {
   if (name === 'calendar') loadCalendar();
   if (name === 'clock') _restoreOpenClock();   // R-025: pick up a clock-in made elsewhere
   if (name === 'reports') loadReports();
+  if (name === 'mileage') loadMileage();
   _maybeReshowUpdateBanner();
+}
+
+// ── MILEAGE TRACKER (2026-10-24) ────────────────────────────────────────────
+// IRS-ready mileage log (spec "Jobs App Mileage Tracking for Tax Deductions").
+// All logic and permissions live server-side (db_mileage_ops.py + the
+// *_mileage_* tools); this screen only shows the log and sends the user's
+// changes. Field crew see and change only their own trips (server enforces).
+var MI = { data: null, range: 'week', start: '', end: '', enabled: false, available: false };
+var MI_ACTIVE_KEY = 'ap_mi_active_trip';
+
+function _miLocalIso(d) { var z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); }
+function _miNowHM() { var d = new Date(); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
+function _miIsAdmin() { return !state.serverMode || ['owner', 'manager'].indexOf((state.userRole || '').trim().toLowerCase()) >= 0; }
+function _miCanPickCrew() { return state.serverMode && ['owner', 'manager', 'staff'].indexOf((state.userRole || '').trim().toLowerCase()) >= 0; }
+function _miFirst(r) { return String(r || '').split('\n')[0]; }
+function _miToast(r) { showToast(_miFirst(r).slice(0, 160), _isFailureResult(r) || /^🔒/.test(r) ? 'error' : 'success'); }
+function _miGps() {
+  return new Promise(function (res) {
+    if (!navigator.geolocation) return res('');
+    navigator.geolocation.getCurrentPosition(
+      function (p) { res(p.coords.latitude.toFixed(6) + ',' + p.coords.longitude.toFixed(6)); },
+      function () { res(''); }, { timeout: 8000, maximumAge: 30000, enableHighAccuracy: true });
+  });
+}
+function _miRange() {
+  var t = new Date(), s, e = _miLocalIso(t), d, wd;
+  if (MI.range === 'week') { d = new Date(t); wd = (d.getDay() + 6) % 7; d.setDate(d.getDate() - wd); s = _miLocalIso(d); }
+  else if (MI.range === 'lastweek') { d = new Date(t); wd = (d.getDay() + 6) % 7; d.setDate(d.getDate() - wd - 7); s = _miLocalIso(d); d.setDate(d.getDate() + 6); e = _miLocalIso(d); }
+  else if (MI.range === 'month') { s = _miLocalIso(new Date(t.getFullYear(), t.getMonth(), 1)); }
+  else if (MI.range === 'lastmonth') { s = _miLocalIso(new Date(t.getFullYear(), t.getMonth() - 1, 1)); e = _miLocalIso(new Date(t.getFullYear(), t.getMonth(), 0)); }
+  else if (MI.range === 'year') { s = t.getFullYear() + '-01-01'; }
+  else { s = MI.start || e; e = MI.end || e; }
+  return [s, e];
+}
+function _miToggleCustom() {
+  var c = document.getElementById('miCustomRange'); if (c) c.style.display = MI.range === 'custom' ? '' : 'none';
+}
+function _miVehicleOptions(sel, includeBlank) {
+  var vs = (MI.data && MI.data.vehicles) || [];
+  var h = includeBlank ? '<option value="">— default / none —</option>' : '';
+  vs.filter(function (v) { return v.active; }).forEach(function (v) {
+    h += '<option value="' + esc(v.vehicle_id) + '"' + (v.vehicle_id === sel ? ' selected' : '') + '>' +
+      esc(v.vehicle_id + ' · ' + v.label + (v.ownership === 'crew' ? ' (crew-owned)' : '')) + '</option>';
+  });
+  return h;
+}
+function _miCatOptions(sel) {
+  var cs = (MI.data && MI.data.categories) || ['Supplies', 'Bank', 'Other'];
+  return cs.map(function (c) { return '<option' + (c === sel ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('');
+}
+
+// ── Start-up / enable state ────────────────────────────────────────────
+async function mileageInit() {
+  try {
+    var r = await mcpCall('mileage_settings', { action: 'get' });
+    var j = JSON.parse(r);
+    MI.available = true; MI.enabled = !!j.enabled; MI.settings = j;
+  } catch (e) { MI.available = false; MI.enabled = false; }   // older server or tool turned off
+  _miApplyEnabled();
+  if (MI.enabled) _miRefreshPickerOnly();
+  _miRenderActiveTrip();
+}
+// 2026-10-25: the on/off switch is Database → Settings → "Mileage Tracking
+// Enabled". Off = quiet, not gone: the Mileage tab, Reports card and
+// Database → Miles stay, but nothing asks anyone for miles — no vehicle
+// picker at clock-in, no Start/Add trip, no gaps, reminders or
+// reimbursements. (For a 100% work vehicle tracked by yearly odometer.)
+// Route miles are separate and always shown.
+function _miApplyEnabled() {
+  var nav = document.getElementById('navMileage'); if (nav) nav.style.display = MI.available ? '' : 'none';
+  var row = document.getElementById('clockVehicleRow'); if (row && !MI.enabled) row.style.display = 'none';
+  var card = document.getElementById('miEntryCard'); if (card) card.style.display = MI.enabled ? '' : 'none';
+  var tools = document.getElementById('miToolsRow'); if (tools) tools.style.display = MI.enabled ? 'contents' : 'none';
+  if (!MI.enabled) { var at = document.getElementById('miActiveTrip'); if (at) at.style.display = 'none'; }
+}
+
+// ── Clock-screen vehicle picker ───────────────────────────────────────
+async function _miRefreshPickerOnly() {
+  try {
+    var today = _miLocalIso(new Date());
+    var raw = await mcpCall('get_mileage_log', { start_date: today, end_date: today });
+    if (raw.charAt(0) !== '{') return;
+    MI.data = JSON.parse(raw); _miFillVehiclePicker();
+  } catch (e) { /* best effort */ }
+}
+function _miFillVehiclePicker() {
+  var row = document.getElementById('clockVehicleRow'), sel = document.getElementById('clockVehicleSelect');
+  if (!row || !sel || !MI.data) return;
+  var vs = (MI.data.vehicles || []).filter(function (v) { return v.active; });
+  row.style.display = (MI.enabled && vs.length) ? '' : 'none';
+  var today = _miLocalIso(new Date());
+  var used = (MI.data.trips || []).filter(function (t) { return t.trip_date === today && t.vehicle_id && t.status === 'active'; });
+  var cur = used.length ? used[used.length - 1].vehicle_id : (sel.value || '');
+  sel.innerHTML = '<option value="">— choose a vehicle —</option>' + _miVehicleOptions(cur, false);
+}
+async function miSetDayVehicle(vid) {
+  if (!vid) return;
+  var r = await mcpCall('manage_vehicles', { action: 'set_day', vehicle_id: vid, date: _miLocalIso(new Date()) });
+  _miToast(r);
+}
+
+// ── Load + render the Mileage tab ─────────────────────────────────────
+async function loadMileage() {
+  var box = document.getElementById('miContent'); if (!box) return;
+  _miToggleCustom(); _miRenderActiveTrip();
+  var rg = _miRange();
+  box.innerHTML = '<div class="loader"><div class="spinner"></div> Loading mileage…</div>';
+  try {
+    var raw = await mcpCall('get_mileage_log', { start_date: rg[0], end_date: rg[1] });
+    if (raw.charAt(0) !== '{') { box.innerHTML = '<div style="padding:16px;color:#f87171">' + esc(_miFirst(raw)) + '</div>'; return; }
+    MI.data = JSON.parse(raw); MI.enabled = !!MI.data.enabled; MI.available = true;
+    _miApplyEnabled();   // the Settings-tab switch may have changed since start-up
+    _miRender(); _miFillVehiclePicker();
+    _milesRefreshIfOpen();   // a change made from Database → Miles shows there too
+  } catch (e) { box.innerHTML = '<div style="padding:16px;color:#f87171">' + esc(e.message) + '</div>'; }
+}
+function _miBadges(t) {
+  var b = [];
+  if (t.status === 'void') b.push('<span class="mi-badge bad">removed</span>');
+  else if (t.classification === 'commute') b.push('<span class="mi-badge com">commute — not deductible</span>');
+  else if (t.classification === 'personal') b.push('<span class="mi-badge com">personal</span>');
+  else b.push('<span class="mi-badge biz">business</span>');
+  if (t.reimbursable) b.push('<span class="mi-badge rmb">reimbursable</span>');
+  if (t.needs_fix && t.status !== 'void') b.push('<span class="mi-badge bad">needs fix</span>');
+  if (t.manually_edited && t.origin !== 'manual') b.push('<span class="mi-badge">✎ edited</span>');
+  if (t.origin === 'manual') b.push('<span class="mi-badge">added</span>');
+  if (t.origin === 'backfill') b.push('<span class="mi-badge">rebuilt later</span>');
+  if (t.corrected) b.push('<span class="mi-badge">corrected</span>');
+  if (t.late_entry) b.push('<span class="mi-badge">late entry</span>');
+  if (t.locked_period) b.push('<span class="mi-badge">🔒</span>');
+  if (!t.vehicle_id && t.status === 'active') b.push('<span class="mi-badge bad">no vehicle</span>');
+  return b.join('');
+}
+function _miRender() {
+  var d = MI.data, box = document.getElementById('miContent');
+  var h = '';
+  var on = !!d.enabled;
+  if (!on) h += '<div class="card" data-testid="mi-off"><div class="card-body" style="color:#fbbf24">Mileage tracking is off, so the app won\'t ask anyone for miles. ' +
+    'Your route still shows miles driven. Trips already logged are kept. To turn it on: Database → Settings → Mileage Tracking Enabled.</div></div>';
+  if (on) h += _miRemindersHtml(d.reminders);
+  var tot = d.totals || {};
+  var rangeBiz = 0; (d.trips || []).forEach(function (t) { if (t.status === 'active' && t.classification === 'business') rangeBiz += Number(t.miles) || 0; });
+  h += '<div class="mi-totals">' +
+    '<div class="mi-total"><b>' + rangeBiz.toFixed(1) + '</b><span>business mi, this view</span></div>' +
+    '<div class="mi-total"><b>' + Number(tot.week_business || 0).toFixed(1) + '</b><span>this week</span></div>' +
+    '<div class="mi-total"><b>' + Number(tot.ytd_business || 0).toFixed(1) + '</b><span>year to date</span></div></div>';
+  // Needs fix
+  var gaps = on ? (d.gaps || []) : [];
+  if (gaps.length) {
+    h += '<div class="card" data-testid="mi-gaps"><div class="card-header"><span class="card-title" style="color:#f87171">⚠️ Needs fix (' + gaps.length + ')</span></div><div class="card-body">';
+    gaps.forEach(function (g) {
+      if (g.type === 'missing_clock_out') {
+        h += '<div class="mi-gap"><span>' + esc(g.date + ' · ' + (g.where || '') + ' · clocked in ' + (g.clock_in || '') + ', no clock-out') + '</span>' +
+          '<button class="btn btn-ghost" style="width:auto;padding:5px 10px;font-size:12px" onclick="miFixGap(\'' + esc(g.entry_id) + '\')">Fix</button></div>';
+      } else {
+        h += '<div class="mi-gap"><span>' + esc(g.date + ' · ' + g.gap) + '</span>' +
+          '<button class="btn btn-ghost" style="width:auto;padding:5px 10px;font-size:12px" onclick="miEditTrip(\'' + esc(g.trip_id) + '\')">Fix</button></div>';
+      }
+    });
+    h += '</div></div>';
+  }
+  // Crew reimbursement (crew-owned cars) — status, submit, owner's approval queue
+  if (on) h += _miReimbHtml(d.reimbursement);
+  // Trips by day
+  var trips = d.trips || [];
+  if (!trips.length) {
+    h += '<div style="text-align:center;padding:20px;color:var(--muted);font-size:13px">' +
+      (on ? 'No trips in this range yet. Trips appear after you clock out of your last job, or add one above.' : 'No trips in this range.') + '</div>';
+  } else {
+    var lastDay = '';
+    trips.forEach(function (t) {
+      if (t.trip_date !== lastDay) {
+        lastDay = t.trip_date;
+        var dayMi = 0; trips.forEach(function (x) { if (x.trip_date === lastDay && x.status === 'active' && x.classification === 'business') dayMi += Number(x.miles) || 0; });
+        h += '<div class="mi-day">' + esc(new Date(lastDay + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })) + ' · ' + dayMi.toFixed(1) + ' business mi</div>';
+      }
+      var cls = 'mi-trip' + (t.status === 'void' ? ' void' : '') + (t.needs_fix && t.status !== 'void' ? ' fix' : '');
+      var who = (_miCanPickCrew() && t.crew) ? ' · ' + t.crew : '';
+      h += '<div class="' + cls + '" data-testid="mi-trip" data-trip="' + esc(t.trip_id) + '" onclick="miEditTrip(\'' + esc(t.trip_id) + '\')">' +
+        '<div class="mi-trip-top"><span class="mi-route">' + esc((t.from_label || 'Start') + ' → ' + t.to_label) + '</span>' +
+        '<span class="mi-miles">' + Number(t.miles || 0).toFixed(1) + ' mi</span></div>' +
+        '<div class="mi-sub">' + esc(t.purpose || '') + (t.start_time ? ' · ' + esc(t.start_time) : '') + who +
+        (t.vehicle_label ? ' · ' + esc(t.vehicle_label) : '') + '</div>' + _miBadges(t) + '</div>';
+    });
+  }
+  if (!on) { box.innerHTML = h; return; }   // off: no vehicle set-up, exports or owner tools to fill in
+  // Vehicles
+  var vs = d.vehicles || [];
+  h += '<div class="card" style="margin-top:14px" data-testid="mi-vehicles"><div class="card-header"><span class="card-title">🚙 Vehicles</span>' +
+    '<button class="btn btn-ghost" style="width:auto;padding:4px 10px;font-size:12px" onclick="miAddVehicleForm()">＋ Add</button></div><div class="card-body">';
+  if (!vs.length) h += '<p style="font-size:13px;color:var(--muted);margin:0">No vehicles yet. Add one with its VIN so trips count for the right vehicle.</p>';
+  vs.forEach(function (v) {
+    h += '<div class="mi-gap"><span><b>' + esc(v.vehicle_id) + '</b> ' + esc(v.label) + (v.ownership === 'crew' ? ' · crew-owned' + (v.owner_name ? ' (' + esc(v.owner_name) + ')' : '') : '') +
+      '<br><span style="font-size:11px;color:var(--muted)">' + (v.last_odometer ? 'Odometer ' + Number(v.last_odometer).toLocaleString() + ' on ' + esc(v.last_odometer_date) : '⚠️ no odometer reading') + (v.active ? '' : ' · retired') + '</span></span>' +
+      '<span style="display:flex;gap:4px"><button class="btn btn-ghost" style="width:auto;padding:5px 8px;font-size:12px" onclick="miOdometerForm(\'' + esc(v.vehicle_id) + '\')">Odometer</button>' +
+      '<button class="btn btn-ghost" style="width:auto;padding:5px 8px;font-size:12px" onclick="miSetDefaultVehicle(\'' + esc(v.vehicle_id) + '\')">Default</button></span></div>';
+  });
+  h += '</div></div>';
+  // Export this view (IRS log for your records or your accountant)
+  h += '<div class="card" data-testid="mi-export"><div class="card-body"><div style="font-size:12px;color:var(--sub);margin-bottom:6px">Export this view — the IRS mileage log for your records or your accountant</div>' +
+    '<div style="display:flex;gap:6px"><button class="btn btn-ghost" style="flex:1;padding:6px" onclick="miExport(\'pdf\')">⬇ PDF</button>' +
+    '<button class="btn btn-ghost" style="flex:1;padding:6px" onclick="miExport(\'xlsx\')">⬇ Excel</button>' +
+    '<button class="btn btn-ghost" style="flex:1;padding:6px" onclick="miExport(\'csv\')">⬇ CSV</button></div></div></div>';
+  // Owner / manager tools
+  if (d.is_admin) {
+    h += '<div class="card" data-testid="mi-admin"><div class="card-header"><span class="card-title">🛠 Owner tools</span></div><div class="card-body">' +
+      '<div class="mi-actions"><button class="btn btn-ghost" onclick="miBackfillForm()">Rebuild past mileage</button>' +
+      '<button class="btn btn-ghost" onclick="miLockForm()">Lock / unlock a month</button></div>' +
+      '<p style="font-size:11px;color:var(--muted);margin:8px 0 0">Rates: ' + (d.rates || []).map(function (r) { return esc(r.from) + ' ' + r.cents + '¢'; }).join(' · ') + ' (change in Settings or ask Claude).</p></div></div>';
+  }
+  box.innerHTML = h;
+}
+
+// ── Sheet helpers ─────────────────────────────────────────────────────
+function miSheet(title, html) {
+  document.getElementById('miSheetTitle').textContent = title;
+  document.getElementById('miSheetBody').innerHTML = html;
+  document.getElementById('miSheet').style.display = 'flex';
+}
+function miCloseSheet() { document.getElementById('miSheet').style.display = 'none'; }
+function _miVal(id) { var e = document.getElementById(id); return e ? String(e.value || '').trim() : ''; }
+
+// ── Add trip (form) ───────────────────────────────────────────────────
+function miAddTripForm(pre) {
+  pre = pre || {};
+  var today = _miLocalIso(new Date());
+  var h = '<p style="font-size:12px;color:var(--sub);margin:0 0 4px">Any business driving — supplies, bank, estimates, meetings. The IRS needs the date, where you went, why, and the miles.</p>' +
+    '<div class="mi-row"><div><label>Date</label><input type="date" id="miF_date" value="' + esc(pre.date || today) + '"></div>' +
+    '<div><label>Category</label><select id="miF_cat">' + _miCatOptions(pre.category || 'Supplies') + '</select></div></div>' +
+    '<label>From</label><input id="miF_from" placeholder="Start address or place" value="' + esc(pre.from || '') + '">' +
+    '<label>To (destination) *</label><input id="miF_to" placeholder="e.g. Home Depot, Dixie Fwy" value="' + esc(pre.to || '') + '">' +
+    '<label>Business purpose *</label><input id="miF_purpose" placeholder="e.g. Supplies – ladders and caulk" value="' + esc(pre.purpose || '') + '">' +
+    '<div class="mi-row"><div><label>Miles (blank = calculate)</label><input id="miF_miles" inputmode="decimal" value="' + esc(pre.miles || '') + '"></div>' +
+    '<div><label>Round trip?</label><select id="miF_rt"><option value="0">One way</option><option value="1">Round trip</option></select></div></div>' +
+    '<div class="mi-row"><div><label>Odometer start</label><input id="miF_os" inputmode="numeric"></div><div><label>Odometer end</label><input id="miF_oe" inputmode="numeric"></div></div>' +
+    '<label>Vehicle</label><select id="miF_vehicle">' + _miVehicleOptions(pre.vehicle || '', true) + '</select>' +
+    '<div class="mi-row"><div><label>Parking $</label><input id="miF_park" inputmode="decimal"></div><div><label>Tolls $</label><input id="miF_toll" inputmode="decimal"></div></div>' +
+    (_miCanPickCrew() ? '<label>For crew member (blank = me)</label><input id="miF_crew" placeholder="Name">' : '') +
+    '<label>Notes</label><input id="miF_notes">' +
+    '<input type="hidden" id="miF_fromgps" value="' + esc(pre.from_gps || '') + '"><input type="hidden" id="miF_togps" value="' + esc(pre.to_gps || '') + '">' +
+    '<input type="hidden" id="miF_st" value="' + esc(pre.start_time || '') + '"><input type="hidden" id="miF_et" value="' + esc(pre.end_time || '') + '">' +
+    '<button class="btn btn-primary mt-12" data-testid="mi-save-trip" onclick="miSaveTrip()">Save trip</button>' +
+    '<div id="miF_result" style="font-size:12px;margin-top:8px"></div>';
+  miSheet(pre.title || 'Add a business trip', h);
+}
+async function miSaveTrip() {
+  var args = {
+    date: _miVal('miF_date'), category: _miVal('miF_cat'), from_place: _miVal('miF_from'),
+    to_place: _miVal('miF_to'), purpose: _miVal('miF_purpose'), miles: _miVal('miF_miles'),
+    round_trip: _miVal('miF_rt') === '1', odometer_start: _miVal('miF_os'), odometer_end: _miVal('miF_oe'),
+    vehicle_id: _miVal('miF_vehicle'), parking_usd: _miVal('miF_park'), tolls_usd: _miVal('miF_toll'),
+    notes: _miVal('miF_notes'), from_gps: _miVal('miF_fromgps'), to_gps: _miVal('miF_togps'),
+    start_time: _miVal('miF_st'), end_time: _miVal('miF_et'), for_crew: _miVal('miF_crew')
+  };
+  var out = document.getElementById('miF_result');
+  if (!args.to_place || !args.purpose) { out.style.color = '#f87171'; out.textContent = 'Destination and business purpose are required.'; return; }
+  out.style.color = 'var(--sub)'; out.textContent = 'Saving…';
+  try {
+    var r = await mcpCall('add_mileage_trip', args);
+    if (_isFailureResult(r)) { out.style.color = '#f87171'; out.textContent = _miFirst(r); return; }
+    _miToast(r); miCloseSheet(); localStorage.removeItem(MI_ACTIVE_KEY); _miRenderActiveTrip(); loadMileage();
+  } catch (e) { out.style.color = '#f87171'; out.textContent = e.message; }
+}
+
+// ── Start / End trip buttons ──────────────────────────────────────────
+function _miActive() { try { return JSON.parse(localStorage.getItem(MI_ACTIVE_KEY) || 'null'); } catch (e) { return null; } }
+function _miRenderActiveTrip() {
+  var a = _miActive(), box = document.getElementById('miActiveTrip'), btn = document.getElementById('miStartBtn');
+  if (!box || !btn) return;
+  if (MI.available && !MI.enabled) { box.style.display = 'none'; return; }   // tracking off: quiet
+  if (a) {
+    box.style.display = ''; box.textContent = '🚗 Trip in progress since ' + a.start_time + ' (' + a.date + ')' + (a.from_gps ? '' : ' — no GPS at start');
+    btn.textContent = '■ End trip'; btn.className = 'btn btn-danger'; btn.onclick = miEndTrip;
+  } else {
+    box.style.display = 'none'; btn.textContent = '▶ Start trip'; btn.className = 'btn btn-success'; btn.onclick = miStartTrip;
+  }
+}
+async function miStartTrip() {
+  showToast('Getting your location…');
+  var g = await _miGps();
+  localStorage.setItem(MI_ACTIVE_KEY, JSON.stringify({ date: _miLocalIso(new Date()), start_time: _miNowHM(), from_gps: g }));
+  _miRenderActiveTrip();
+  showToast(g ? 'Trip started' : 'Trip started (no GPS — you can type the miles at the end)', 'success');
+}
+async function miEndTrip() {
+  var a = _miActive(); if (!a) return _miRenderActiveTrip();
+  showToast('Getting your location…');
+  var g = await _miGps();
+  miAddTripForm({ title: 'End trip — where did you go?', date: a.date, from: a.from_gps ? 'Trip start' : '',
+    from_gps: a.from_gps, to_gps: g, start_time: a.start_time, end_time: _miNowHM() });
+}
+
+// ── Quick add by text or voice ────────────────────────────────────────
+async function miQuickAdd(confirmed) {
+  var txt = _miVal('miQuickText'), out = document.getElementById('miQuickResult');
+  if (!txt) { out.textContent = 'Type a trip, e.g. "Bank deposit at Chase, 6 miles".'; return; }
+  out.style.color = 'var(--sub)'; out.textContent = confirmed ? 'Saving…' : 'Reading…';
+  try {
+    var r = await mcpCall('add_mileage_trip', { text: txt, confirm: !confirmed });
+    if (/^📝/.test(r)) {
+      out.innerHTML = esc(_miFirst(r).replace('📝 Please confirm: ', 'Log this? ')) +
+        ' <button class="btn btn-success" style="width:auto;padding:3px 10px;font-size:12px" onclick="miQuickAdd(true)">Save</button>' +
+        ' <button class="btn btn-ghost" style="width:auto;padding:3px 10px;font-size:12px" onclick="miQuickToForm()">Edit</button>';
+      return;
+    }
+    if (/^❓/.test(r)) { out.style.color = '#fbbf24'; out.innerHTML = esc(r).replace(/\n/g, '<br>') + ' <button class="btn btn-ghost" style="width:auto;padding:3px 10px;font-size:12px" onclick="miQuickToForm()">Use the form</button>'; return; }
+    if (_isFailureResult(r)) { out.style.color = '#f87171'; out.textContent = _miFirst(r); return; }
+    out.style.color = 'var(--green)'; out.textContent = _miFirst(r);
+    document.getElementById('miQuickText').value = ''; loadMileage();
+  } catch (e) { out.style.color = '#f87171'; out.textContent = e.message; }
+}
+function miQuickToForm() {
+  var txt = _miVal('miQuickText');
+  var m = /(\d+(?:\.\d+)?)\s*(?:mi\b|miles?\b)/i.exec(txt);
+  miAddTripForm({ to: '', purpose: txt, miles: m ? m[1] : '' });
+}
+// (2026-10-25, Vicki) The in-app microphone button was removed: voice entry is
+// done by talking to Claude, Muse, or Grok, which log the trip with
+// add_mileage_trip and ask for anything missing.
+
+// ── Edit / remove / split a trip ──────────────────────────────────────
+function miEditTrip(id) {
+  var t = ((MI.data && MI.data.trips) || []).find(function (x) { return x.trip_id === id; });
+  if (!t) return;
+  var ro = t.status === 'void' || t.locked_period;
+  var h = '<p style="font-size:12px;color:var(--sub);margin:0 0 6px">' + esc(t.trip_id + ' · ' + t.trip_date + (t.needs_fix ? ' · ⚠️ ' + t.needs_fix : '')) +
+    (t.status === 'void' ? '<br>Removed: ' + esc(t.void_reason || '') : '') + (t.locked_period ? '<br>🔒 Locked period — read only.' : '') + '</p>' +
+    '<div class="mi-row"><div><label>Date</label><input type="date" id="miE_date" value="' + esc(t.trip_date) + '"></div>' +
+    '<div><label>Miles</label><input id="miE_miles" inputmode="decimal" value="' + esc(t.miles) + '"></div></div>' +
+    '<label>From</label><input id="miE_from" value="' + esc(t.from_label || '') + '">' +
+    '<label>To</label><input id="miE_to" value="' + esc(t.to_label || '') + '">' +
+    '<label>Business purpose</label><input id="miE_purpose" value="' + esc(t.purpose || '') + '">' +
+    '<div class="mi-row"><div><label>Type</label><select id="miE_cls">' +
+    ['business', 'commute', 'personal'].map(function (c) { return '<option' + (c === t.classification ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select></div>' +
+    '<div><label>Category</label><select id="miE_cat">' + _miCatOptions(t.category || 'Other') + '</select></div></div>' +
+    '<label>Vehicle</label><select id="miE_vehicle">' + _miVehicleOptions(t.vehicle_id || '', true) + '</select>' +
+    '<div class="mi-row"><div><label>Parking $</label><input id="miE_park" inputmode="decimal" value="' + esc(t.parking_usd || '') + '"></div>' +
+    '<div><label>Tolls $</label><input id="miE_toll" inputmode="decimal" value="' + esc(t.tolls_usd || '') + '"></div></div>' +
+    '<label>Reason for the change * (kept in the audit trail)</label><input id="miE_reason" placeholder="e.g. detour for fuel, phone died">' +
+    (ro ? '' : '<button class="btn btn-primary mt-12" data-testid="mi-save-edit" onclick="miSaveEdit(\'' + esc(id) + '\')">Save changes</button>' +
+      '<div class="mi-actions mt-8"><button class="btn btn-ghost" onclick="miSplitForm(\'' + esc(id) + '\')">＋ Add a stop</button>' +
+      '<button class="btn btn-danger" onclick="miVoidTrip(\'' + esc(id) + '\')">Remove trip</button></div>') +
+    '<button class="btn btn-ghost mt-8" onclick="miHistory(\'' + esc(id) + '\')">Change history</button>' +
+    '<div id="miE_result" style="font-size:12px;margin-top:8px;white-space:pre-wrap"></div>';
+  miSheet('Trip ' + t.trip_id, h);
+  MI._editing = t;
+}
+async function miSaveEdit(id) {
+  var t = MI._editing || {}, out = document.getElementById('miE_result');
+  var reason = _miVal('miE_reason');
+  if (!reason) { out.style.color = '#f87171'; out.textContent = 'Please give a short reason — the IRS log keeps every change.'; return; }
+  var args = { trip_id: id, reason: reason, action: 'edit' };
+  var map = { date: ['miE_date', t.trip_date], miles: ['miE_miles', t.miles], from_place: ['miE_from', t.from_label],
+    to_place: ['miE_to', t.to_label], purpose: ['miE_purpose', t.purpose], classification: ['miE_cls', t.classification],
+    category: ['miE_cat', t.category], vehicle_id: ['miE_vehicle', t.vehicle_id], parking_usd: ['miE_park', t.parking_usd],
+    tolls_usd: ['miE_toll', t.tolls_usd] };
+  Object.keys(map).forEach(function (k) { var v = _miVal(map[k][0]); if (v !== String(map[k][1] == null ? '' : map[k][1])) args[k] = v; });
+  if (Object.keys(args).length <= 3) { out.style.color = 'var(--sub)'; out.textContent = 'Nothing changed.'; return; }
+  var r = await mcpCall('update_mileage_trip', args);
+  if (_isFailureResult(r) || /^🔒/.test(r)) { out.style.color = '#f87171'; out.textContent = _miFirst(r); return; }
+  _miToast(r); miCloseSheet(); loadMileage();
+}
+async function miVoidTrip(id) {
+  var reason = _miVal('miE_reason') || prompt('Why remove this trip? (it stays in the record as removed)');
+  if (!reason) return;
+  var r = await mcpCall('update_mileage_trip', { trip_id: id, reason: reason, action: 'void' });
+  _miToast(r); if (!_isFailureResult(r)) { miCloseSheet(); loadMileage(); }
+}
+function miSplitForm(id) {
+  var t = MI._editing || {};
+  miSheet('Add a stop to ' + id,
+    '<p style="font-size:12px;color:var(--sub);margin:0">' + esc((t.from_label || '') + ' → ' + (t.to_label || '')) + ' becomes ' + esc((t.from_label || '') + ' → stop → ' + (t.to_label || '')) + '.</p>' +
+    '<label>Stop (place) *</label><input id="miS_via" placeholder="e.g. Home Depot, Dixie Fwy">' +
+    '<label>Purpose of the stop *</label><input id="miS_purpose" placeholder="e.g. Supplies – caulk">' +
+    '<div class="mi-row"><div><label>Miles to stop (blank = calculate)</label><input id="miS_m1" inputmode="decimal"></div>' +
+    '<div><label>Miles from stop</label><input id="miS_m2" inputmode="decimal"></div></div>' +
+    '<label>Reason *</label><input id="miS_reason" placeholder="e.g. stopped for supplies">' +
+    '<button class="btn btn-primary mt-12" onclick="miSaveSplit(\'' + esc(id) + '\')">Add stop</button><div id="miS_result" style="font-size:12px;margin-top:8px"></div>');
+}
+async function miSaveSplit(id) {
+  var out = document.getElementById('miS_result');
+  var args = { trip_id: id, action: 'split', via_place: _miVal('miS_via'), via_purpose: _miVal('miS_purpose'),
+    miles_to_via: _miVal('miS_m1'), miles_from_via: _miVal('miS_m2'), reason: _miVal('miS_reason') };
+  if (!args.via_place || !args.via_purpose || !args.reason) { out.style.color = '#f87171'; out.textContent = 'Stop, purpose and reason are required.'; return; }
+  var r = await mcpCall('update_mileage_trip', args);
+  if (_isFailureResult(r)) { out.style.color = '#f87171'; out.textContent = _miFirst(r); return; }
+  _miToast(r); miCloseSheet(); loadMileage();
+}
+async function miHistory(id) {
+  var r = await mcpCall('update_mileage_trip', { trip_id: id, reason: 'view', action: 'history' });
+  var out = document.getElementById('miE_result'); if (out) { out.style.color = 'var(--sub)'; out.textContent = r; }
+}
+
+// ── Fix a gap (dead phone / forgotten clock-out) ──────────────────────
+function miFixGap(entryId) {
+  var g = ((MI.data && MI.data.gaps) || []).find(function (x) { return x.entry_id === entryId; }) || {};
+  var where = (g.date ? g.date + ' · ' : '') + (g.where || '') + (g.clock_in ? ' (clocked in ' + g.clock_in + ')' : '');
+  miSheet('Fix missing clock-out',
+    '<p style="font-size:12px;color:var(--sub);margin:0">' + esc(where || entryId) + ' — when did you leave? The job address is used for the location.</p>' +
+    '<label>Clock-out time *</label><input type="time" id="miG_time">' +
+    '<label>Reason *</label><input id="miG_reason" placeholder="e.g. phone died">' +
+    '<button class="btn btn-primary mt-12" onclick="miSaveGap(\'' + esc(entryId) + '\')">Save and rebuild the day</button>' +
+    '<div id="miG_result" style="font-size:12px;margin-top:8px;white-space:pre-wrap"></div>');
+}
+async function miSaveGap(entryId) {
+  var out = document.getElementById('miG_result'), t = _miVal('miG_time'), reason = _miVal('miG_reason');
+  if (!t || !reason) { out.style.color = '#f87171'; out.textContent = 'Time and reason are required.'; return; }
+  var r = await mcpCall('fix_mileage_gap', { entry_id: entryId, clock_out_time: t, reason: reason });
+  if (_isFailureResult(r)) { out.style.color = '#f87171'; out.textContent = _miFirst(r); return; }
+  _miToast(r); miCloseSheet(); loadMileage();
+}
+
+// ── Recalculate a day (after jobs moved / cancelled / route changed) ──
+function miRecalcDay() {
+  miSheet('Recalculate a day',
+    '<p style="font-size:12px;color:var(--sub);margin:0">Rebuilds the day\'s job trips from clock-ins — use it after a job was moved, cancelled, or the route changed. Trips you edited by hand are kept.</p>' +
+    '<label>Date</label><input type="date" id="miR_date" value="' + _miLocalIso(new Date()) + '">' +
+    '<button class="btn btn-primary mt-12" onclick="miSaveRecalc()">Recalculate</button><div id="miR_result" style="font-size:12px;margin-top:8px;white-space:pre-wrap"></div>');
+}
+async function miSaveRecalc() {
+  var out = document.getElementById('miR_result');
+  out.style.color = 'var(--sub)'; out.textContent = 'Working…';
+  var r = await mcpCall('build_mileage_log', { date: _miVal('miR_date') });
+  out.style.color = _isFailureResult(r) ? '#f87171' : 'var(--sub)'; out.textContent = r;
+  if (!_isFailureResult(r)) loadMileage();
+}
+
+// ── Vehicles ──────────────────────────────────────────────────────────
+function miAddVehicleForm() {
+  var crewOnly = state.serverMode && (state.userRole || '').trim().toLowerCase() === 'field_crew';
+  miSheet('Add a vehicle',
+    '<p style="font-size:12px;color:var(--sub);margin:0">The VIN is on the driver-side dashboard or door jamb, and on the registration.</p>' +
+    '<label>VIN * (17 characters)</label><input id="miV_vin" maxlength="17" style="text-transform:uppercase" placeholder="1FTFW1ET5DFC10312">' +
+    '<div class="mi-row"><div><label>Year</label><input id="miV_year" inputmode="numeric"></div><div><label>Make</label><input id="miV_make"></div></div>' +
+    '<div class="mi-row"><div><label>Model</label><input id="miV_model"></div><div><label>Plate</label><input id="miV_plate"></div></div>' +
+    '<label>Nickname</label><input id="miV_nick" placeholder="e.g. White F-150">' +
+    (crewOnly ? '<input type="hidden" id="miV_own" value="crew"><p style="font-size:12px;color:#fbbf24">This is added as your own (crew-owned) car — your trips in it are reimbursable.</p>'
+      : '<label>Owned by</label><select id="miV_own"><option value="business">The business</option><option value="crew">A crew member (reimbursable)</option></select>' +
+        '<label>Crew owner name (if crew-owned)</label><input id="miV_owner">' +
+        '<label>Default driver</label><input id="miV_driver">') +
+    '<div class="mi-row"><div><label>In service since</label><input type="date" id="miV_pis" value="' + _miLocalIso(new Date()) + '"></div>' +
+    '<div><label>Odometer now</label><input id="miV_odo" inputmode="numeric"></div></div>' +
+    '<button class="btn btn-primary mt-12" data-testid="mi-save-vehicle" onclick="miSaveVehicle()">Add vehicle</button><div id="miV_result" style="font-size:12px;margin-top:8px"></div>');
+}
+async function miSaveVehicle(skipCheck) {
+  var out = document.getElementById('miV_result');
+  var args = { action: 'add', vin: _miVal('miV_vin'), year: _miVal('miV_year'), make: _miVal('miV_make'),
+    model: _miVal('miV_model'), plate: _miVal('miV_plate'), nickname: _miVal('miV_nick'),
+    ownership: _miVal('miV_own') || 'business', owner_name: _miVal('miV_owner'), default_driver: _miVal('miV_driver'),
+    placed_in_service: _miVal('miV_pis'), odometer: _miVal('miV_odo'), skip_vin_check: !!skipCheck };
+  var r = await mcpCall('manage_vehicles', args);
+  if (_isFailureResult(r)) {
+    out.style.color = '#f87171'; out.textContent = _miFirst(r);
+    if (/check digit/i.test(r)) out.innerHTML += ' <button class="btn btn-ghost" style="width:auto;padding:3px 10px;font-size:12px" onclick="miSaveVehicle(true)">It’s correct (non-US VIN)</button>';
+    return;
+  }
+  _miToast(r); miCloseSheet(); loadMileage();
+}
+function miOdometerForm(vid) {
+  miSheet('Odometer — ' + vid,
+    '<p style="font-size:12px;color:var(--sub);margin:0">The IRS asks for each vehicle\'s total miles for the year — record a reading on Jan 1 and Dec 31 (or when it starts/stops being used).</p>' +
+    '<div class="mi-row"><div><label>Reading *</label><input id="miO_val" inputmode="numeric"></div>' +
+    '<div><label>Date</label><input type="date" id="miO_date" value="' + _miLocalIso(new Date()) + '"></div></div>' +
+    '<label>Kind</label><select id="miO_kind"><option value="spot">Regular reading</option><option value="year_start">Start of year</option><option value="year_end">End of year</option></select>' +
+    '<button class="btn btn-primary mt-12" onclick="miSaveOdometer(\'' + esc(vid) + '\')">Save reading</button><div id="miO_result" style="font-size:12px;margin-top:8px"></div>');
+}
+async function miSaveOdometer(vid) {
+  var out = document.getElementById('miO_result');
+  var r = await mcpCall('manage_vehicles', { action: 'odometer', vehicle_id: vid, odometer: _miVal('miO_val'), reading_date: _miVal('miO_date'), reading_kind: _miVal('miO_kind') });
+  if (_isFailureResult(r)) { out.style.color = '#f87171'; out.textContent = _miFirst(r); return; }
+  _miToast(r); miCloseSheet(); loadMileage();
+}
+async function miSetDefaultVehicle(vid) {
+  var r = await mcpCall('manage_vehicles', { action: 'set_default', vehicle_id: vid });
+  _miToast(r);
+}
+
+// ── Owner tools: backfill + lock ──────────────────────────────────────
+function miBackfillForm() {
+  var y = new Date().getFullYear();
+  miSheet('Rebuild past mileage',
+    '<p style="font-size:12px;color:var(--sub);margin:0">Builds trips for past days from existing clock-ins. Preview first — nothing is written until you confirm. Days that already have trips are left alone; new ones are marked "rebuilt later".</p>' +
+    '<div class="mi-row"><div><label>From</label><input type="date" id="miB_s" value="' + y + '-01-01"></div>' +
+    '<div><label>To</label><input type="date" id="miB_e" value="' + _miLocalIso(new Date()) + '"></div></div>' +
+    '<button class="btn btn-ghost mt-12" data-testid="mi-backfill-preview" onclick="miBackfill(true)">Preview</button>' +
+    '<div id="miB_result" style="font-size:12px;margin-top:8px;white-space:pre-wrap;color:var(--sub)"></div>');
+}
+async function miBackfill(preview) {
+  var out = document.getElementById('miB_result');
+  out.textContent = preview ? 'Checking…' : 'Building — this can take a minute for many days…';
+  var r = await mcpCall('build_mileage_log', { start_date: _miVal('miB_s'), end_date: _miVal('miB_e'), preview: !!preview });
+  out.textContent = r;
+  if (preview && !_isFailureResult(r) && /Days to build: [1-9]/.test(r)) {
+    out.innerHTML = esc(r) + '<br><button class="btn btn-primary mt-8" data-testid="mi-backfill-build" onclick="miBackfill(false)">Build these days</button>';
+  }
+  if (!preview && !_isFailureResult(r)) loadMileage();
+}
+function miLockForm() {
+  var t = new Date(), m = new Date(t.getFullYear(), t.getMonth() - 1, 1);
+  miSheet('Lock or unlock mileage',
+    '<p style="font-size:12px;color:var(--sub);margin:0">Lock a month (or year) once it\'s reviewed — locked trips can\'t be edited.</p>' +
+    '<label>Period (2026-09 or 2026)</label><input id="miL_p" value="' + _miLocalIso(m).slice(0, 7) + '">' +
+    '<div class="mi-actions mt-12"><button class="btn btn-primary" onclick="miLock(false)">🔒 Lock</button><button class="btn btn-ghost" onclick="miLock(true)">🔓 Unlock</button></div>' +
+    '<div id="miL_result" style="font-size:12px;margin-top:8px"></div>');
+}
+async function miLock(unlock) {
+  var r = await mcpCall('mileage_settings', { action: unlock ? 'unlock' : 'lock', period: _miVal('miL_p') });
+  var out = document.getElementById('miL_result'); out.style.color = _isFailureResult(r) ? '#f87171' : 'var(--green)'; out.textContent = _miFirst(r);
+  if (!_isFailureResult(r)) loadMileage();
+}
+
+// ── Reports card ──────────────────────────────────────────────────────
+async function loadMileageReport() {
+  var pre = document.getElementById('mileageReport'); if (!pre) return;
+  var s = document.getElementById('miRepStart'), e = document.getElementById('miRepEnd');
+  if (s && !s.value) s.value = new Date().getFullYear() + '-01-01';
+  if (e && !e.value) e.value = _miLocalIso(new Date());
+  pre.textContent = 'Loading…';
+  try { pre.textContent = await mcpCall('get_mileage_report', { start_date: s.value, end_date: e.value }); }
+  catch (err) { pre.textContent = '❌ ' + err.message; }
+}
+
+// ── Mileage Phases 4–5 (2026-10-24): reminders, crew reimbursement, ──────
+//    export (PDF / Excel / CSV), AI review, cancelled on arrival, settings.
+function _miMoney(v) { return '$' + (Number(v) || 0).toFixed(2); }
+function _miBtn(label, onclick, cls, testid) {
+  return '<button class="btn ' + (cls || 'btn-ghost') + '" style="width:auto;padding:4px 10px;font-size:12px"' +
+    (testid ? ' data-testid="' + testid + '"' : '') + ' onclick="' + onclick + '">' + label + '</button>';
+}
+function _miRemindersHtml(list) {
+  if (!list || !list.length) return '';
+  return '<div data-testid="mi-reminders">' + list.map(function (r) {
+    var warn = r.type === 'gaps' || r.type === 'pay_period', btn = '';
+    if (r.action === 'submit') btn = ' ' + _miBtn('Submit', "miReimbSubmit('" + esc(r.period || '') + "')", 'btn-primary');
+    else if (r.action === 'odometer' && r.vehicle_id) btn = ' ' + _miBtn('Record', "miOdometerForm('" + esc(r.vehicle_id) + "')");
+    else if (r.action === 'review') btn = ' ' + _miBtn('Review', 'miReview()');
+    return '<div class="mi-note' + (warn ? ' warn' : '') + '">🔔 ' + esc(r.text) + btn + '</div>';
+  }).join('') + '</div>';
+}
+function _miStatusChip(s) { return '<span class="mi-status ' + esc(s || '') + '">' + esc(s || 'not submitted') + '</span>'; }
+function _miReimbRow(r, admin) {
+  var id = esc(r.reimbursement_id);
+  var acts = _miBtn('PDF', "miReimbStatement('" + id + "')");
+  if (admin && r.status === 'submitted') acts += _miBtn('Approve', "miReimbApprove('" + id + "')", 'btn-success', 'mi-reimb-approve') + _miBtn('Return', "miReimbReturnForm('" + id + "')");
+  if (admin && r.status === 'approved') acts += _miBtn('Mark paid', "miReimbPaidForm('" + id + "')", 'btn-success', 'mi-reimb-paid') + _miBtn('Return', "miReimbReturnForm('" + id + "')");
+  var note = '';
+  if (r.status === 'returned' && r.return_note) note = '<br><span style="font-size:11px;color:#f87171">Returned: ' + esc(r.return_note) + '</span>';
+  if (r.status === 'paid') note = '<br><span style="font-size:11px;color:var(--muted)">Paid ' + esc(r.paid_date || '') + ' · ' + esc(r.paid_method || '') + (r.paid_reference ? ' #' + esc(r.paid_reference) : '') + '</span>';
+  return '<div class="mi-gap" data-testid="mi-reimb-row"><span>' + (admin ? esc(r.crew || r.user_key) + ' · ' : '') + id + ' · ' +
+    esc(r.period_start + ' – ' + r.period_end) + ' · ' + _miMoney(r.total_usd) + ' ' + _miStatusChip(r.status) + note + '</span>' +
+    '<span style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">' + acts + '</span></div>';
+}
+function _miReimbHtml(rb) {
+  if (!rb || !rb.show) return '';
+  var c = rb.current || {};
+  var h = '<div class="card" style="margin-top:4px" data-testid="mi-reimb"><div class="card-header"><span class="card-title">🧾 Crew mileage reimbursement</span></div><div class="card-body">' +
+    '<div class="mi-gap"><span>Pay period ' + esc((c.period_start || '') + ' – ' + (c.period_end || '')) +
+    '<br><span style="font-size:11px;color:var(--muted)">' + (c.trip_count || 0) + ' trips in your own car · ' + (Number(c.miles) || 0).toFixed(1) + ' mi · ' +
+    _miMoney((Number(c.amount_usd) || 0) + (Number(c.parking_tolls_usd) || 0)) +
+    (c.gap_days && c.gap_days.length ? ' · ⚠️ fix ' + esc(c.gap_days.join(', ')) + ' first' : '') + '</span></span>' +
+    '<span style="display:flex;gap:4px;align-items:center">' + _miStatusChip(c.status) +
+    ((!c.status || c.status === 'returned') && c.trip_count ? _miBtn('Submit', "miReimbSubmit('" + esc(c.period_start || '') + "')", 'btn-primary', 'mi-reimb-submit') : '') +
+    '</span></div>';
+  (rb.mine || []).forEach(function (r) { h += _miReimbRow(r, false); });
+  if ((rb.queue || []).length) {
+    h += '<div style="font-size:12px;font-weight:700;color:var(--cyan);margin:12px 0 4px">WAITING ON YOU</div>';
+    rb.queue.forEach(function (r) { h += _miReimbRow(r, true); });
+  }
+  return h + '<p style="font-size:11px;color:var(--muted);margin:8px 0 0">Business driving in your own car is paid back at the IRS rate plus parking and tolls. Submit each pay period; the owner approves and marks it paid.</p></div></div>';
+}
+async function miReimbSubmit(period) {
+  if (!confirm('Submit your mileage for this pay period? The trips can’t be changed while the owner reviews it.')) return;
+  var r = await mcpCall('mileage_reimbursement', { action: 'submit', period_date: period || '' });
+  _miToast(r); if (!_isFailureResult(r)) loadMileage();
+}
+async function miReimbApprove(id) {
+  if (!confirm('Approve ' + id + '? The amount is fixed once approved.')) return;
+  var r = await mcpCall('mileage_reimbursement', { action: 'approve', reimbursement_id: id });
+  _miToast(r); if (!_isFailureResult(r)) loadMileage();
+}
+function miReimbReturnForm(id) {
+  miSheet('Return ' + id,
+    '<p style="font-size:12px;color:var(--sub);margin:0">The crew member sees your note and can fix the trips, then resubmit.</p>' +
+    '<label>What needs fixing? *</label><input id="miRt_note" placeholder="e.g. the 10/14 bank trip looks doubled">' +
+    '<button class="btn btn-primary mt-12" onclick="miReimbReturn(\'' + esc(id) + '\')">Return to crew member</button>' +
+    '<div id="miRt_result" style="font-size:12px;margin-top:8px"></div>');
+}
+async function miReimbReturn(id) {
+  var note = _miVal('miRt_note'), out = document.getElementById('miRt_result');
+  if (!note) { out.style.color = '#f87171'; out.textContent = 'Please say what needs fixing.'; return; }
+  var r = await mcpCall('mileage_reimbursement', { action: 'return', reimbursement_id: id, note: note });
+  if (_isFailureResult(r)) { out.style.color = '#f87171'; out.textContent = _miFirst(r); return; }
+  _miToast(r); miCloseSheet(); loadMileage();
+}
+function miReimbPaidForm(id) {
+  miSheet('Mark ' + id + ' paid',
+    '<div class="mi-row"><div><label>Paid on</label><input type="date" id="miPd_date" value="' + _miLocalIso(new Date()) + '"></div>' +
+    '<div><label>Method</label><select id="miPd_method"><option value="check">Check</option><option value="cash">Cash</option><option value="payroll">Payroll</option><option value="transfer">Bank transfer</option></select></div></div>' +
+    '<label>Reference (check number, payroll run…)</label><input id="miPd_ref">' +
+    '<button class="btn btn-success mt-12" onclick="miReimbPaid(\'' + esc(id) + '\')">Mark paid</button>' +
+    '<div id="miPd_result" style="font-size:12px;margin-top:8px"></div>');
+}
+async function miReimbPaid(id) {
+  var out = document.getElementById('miPd_result');
+  var r = await mcpCall('mileage_reimbursement', { action: 'paid', reimbursement_id: id, paid_date: _miVal('miPd_date'),
+    method: _miVal('miPd_method'), reference: _miVal('miPd_ref') });
+  if (_isFailureResult(r)) { out.style.color = '#f87171'; out.textContent = _miFirst(r); return; }
+  _miToast(r); miCloseSheet(); loadMileage();
+}
+async function miReimbStatement(id) {
+  showToast('Preparing the statement…');
+  try { _miDownload(await mcpCall('mileage_reimbursement', { action: 'statement', reimbursement_id: id, deliver: 'download' })); }
+  catch (err) { showToast(err.message, 'error'); }
+}
+
+// Files come back from the server as {filename, mime, base64}; saved with a
+// temporary link so it works the same on a phone and a desktop browser.
+function _miDownload(raw) {
+  var j = null;
+  try { j = JSON.parse(raw); } catch (e) { j = null; }
+  if (!j || !j.base64) { showToast(_miFirst(raw) || 'Download failed', 'error'); return false; }
+  var bin = atob(j.base64), arr = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  var url = URL.createObjectURL(new Blob([arr], { type: j.mime || 'application/octet-stream' }));
+  var a = document.createElement('a');
+  a.href = url; a.download = j.filename || 'download'; a.style.display = 'none';
+  document.body.appendChild(a); a.click();
+  setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 4000);
+  showToast('Downloaded ' + (j.filename || ''), 'success');
+  return true;
+}
+function _miRangeFor(where) {
+  if (where === 'rep') {
+    var s = document.getElementById('miRepStart'), e = document.getElementById('miRepEnd');
+    return [(s && s.value) || (new Date().getFullYear() + '-01-01'), (e && e.value) || _miLocalIso(new Date())];
+  }
+  return _miRange();
+}
+async function miExport(fmt, where) {
+  var rg = _miRangeFor(where);
+  showToast('Preparing ' + (fmt === 'xlsx' ? 'Excel' : fmt.toUpperCase()) + '…');
+  try { _miDownload(await mcpCall('export_mileage_log', { start_date: rg[0], end_date: rg[1], format: fmt, deliver: 'download' })); }
+  catch (err) { showToast(err.message, 'error'); }
+}
+
+// AI review: findings with a proposed fix; nothing changes until Fix is tapped.
+async function miReview(where) {
+  var rg = _miRangeFor(where);
+  MI._reviewRange = rg;
+  miSheet('Review with AI', '<div class="loader"><div class="spinner"></div> Checking ' + esc(rg[0] + ' – ' + rg[1]) + '…</div>');
+  try {
+    var raw = await mcpCall('review_mileage_log', { start_date: rg[0], end_date: rg[1], as_json: true });
+    if (raw.charAt(0) !== '{') { document.getElementById('miSheetBody').innerHTML = '<p style="color:#f87171">' + esc(_miFirst(raw)) + '</p>'; return; }
+    MI._findings = JSON.parse(raw).findings || [];
+    _miRenderFindings();
+  } catch (err) { document.getElementById('miSheetBody').innerHTML = '<p style="color:#f87171">' + esc(err.message) + '</p>'; }
+}
+function _miRenderFindings() {
+  var f = MI._findings || [], b = document.getElementById('miSheetBody'), rg = MI._reviewRange || ['', ''];
+  if (!b) return;
+  if (!f.length) { b.innerHTML = '<p style="font-size:13px;color:var(--green)" data-testid="mi-review-clean">✅ No problems found for ' + esc(rg[0] + ' – ' + rg[1]) + '.</p>'; return; }
+  var col = { high: '#f87171', medium: '#fbbf24', low: '#aab' };
+  var h = '<p style="font-size:12px;color:var(--sub);margin:0 0 6px">' + f.length + ' thing(s) to look at for ' + esc(rg[0] + ' – ' + rg[1]) +
+    '. Nothing changes until you tap Fix; Skip hides a finding for good.</p>';
+  f.forEach(function (x, i) {
+    var open = (!x.fix && x.trip_id) ? _miBtn('Open trip', "miCloseSheet();miEditTrip('" + esc(x.trip_id) + "')") : '';
+    h += '<div class="mi-find" data-testid="mi-finding"><span class="sev" style="color:' + (col[x.severity] || '#aab') + '">' + esc(String(x.severity).toUpperCase()) + '</span>' +
+      '<b>' + esc(x.title) + '</b><br>' + esc(x.message) +
+      (x.fix ? '<br><span style="color:var(--cyan)">Proposed fix: ' + esc(x.fix.summary) + '</span>' : '') +
+      '<div style="display:flex;gap:6px;margin-top:6px">' + (x.fix ? _miBtn('Fix', 'miReviewAct(' + i + ",'accept')", 'btn-success', 'mi-finding-fix') : open) +
+      _miBtn('Skip', 'miReviewAct(' + i + ",'dismiss')", 'btn-ghost', 'mi-finding-skip') + '</div></div>';
+  });
+  b.innerHTML = h;
+}
+async function miReviewAct(i, action) {
+  var x = (MI._findings || [])[i]; if (!x) return;
+  var r = await mcpCall('apply_mileage_review_fix', { finding_id: x.id, action: action });
+  _miToast(r);
+  if (!_isFailureResult(r) && !/^🔒/.test(r)) { MI._findings.splice(i, 1); _miRenderFindings(); loadMileage(); }
+}
+
+// Customer cancelled on arrival: the drive there still counts; the job is
+// marked Cancelled and today's mileage is rebuilt.
+function miCancelledForm() {
+  var today = _miLocalIso(new Date());
+  var jobs = (state.jobs || []).filter(function (j) {
+    var st = (j.status || '').trim().toLowerCase();
+    return (j.date || '').slice(0, 10) === today && st !== 'complete' && st !== 'completed' && st !== 'cancelled';
+  });
+  var h = '<p style="font-size:12px;color:var(--sub);margin:0 0 6px">For when you drove to a job and the customer cancelled at the door. The drive there still counts as a business trip, and the job is marked Cancelled.</p>';
+  jobs.forEach(function (j) {
+    h += '<div class="mi-gap"><span>' + esc((j.customer || j.id) + (j.start ? ' · ' + j.start : '')) + '<br><span style="font-size:11px;color:var(--muted)">' + esc(j.id) + '</span></span>' +
+      _miBtn('Cancelled', "miCancelled('" + esc(j.id) + "')", 'btn-danger') + '</div>';
+  });
+  h += '<label>' + (jobs.length ? 'Or type the job ID' : 'Job ID') + '</label><input id="miC_job" placeholder="JOB-1234">' +
+    '<label>Note (optional)</label><input id="miC_note" placeholder="e.g. customer not home">' +
+    '<button class="btn btn-danger mt-12" data-testid="mi-cancelled-save" onclick="miCancelled()">Record cancelled on arrival</button>' +
+    '<div id="miC_result" style="font-size:12px;margin-top:8px;white-space:pre-wrap"></div>';
+  miSheet('Customer cancelled on arrival', h);
+}
+async function miCancelled(jobId) {
+  var id = jobId || _miVal('miC_job'), out = document.getElementById('miC_result');
+  if (!id) { out.style.color = '#f87171'; out.textContent = 'Pick a job or type its ID.'; return; }
+  if (!confirm('Mark ' + id + ' as cancelled on arrival?')) return;
+  out.style.color = 'var(--sub)'; out.textContent = 'Getting your location…';
+  var g = await _miGps();
+  var r = await mcpCall('job_cancelled_on_arrival', { job_id: id, gps: g, note: _miVal('miC_note') });
+  if (_isFailureResult(r)) { out.style.color = '#f87171'; out.textContent = _miFirst(r); return; }
+  _miToast(r); miCloseSheet(); loadMileage();
+  if (typeof loadJobs === 'function') { try { loadJobs(); } catch (e) { /* best effort */ } }
+}
+
+// Mileage switches (on/off, crew reimbursement period, each reminder) are
+// rows on Database → Settings since 2026-10-25 — no Profile card.
+
+// ── Database → 🚗 Miles (2026-10-25, Vicki): the running mileage log as a
+// table, newest first. Tapping a row opens the same edit sheet as the
+// Mileage tab (miEditTrip): every change needs a reason and is kept in the
+// trip's history; removed trips stay in the record (Show removed). Field
+// crew see only their own trips (the server enforces it).
+window._milesRange = window._milesRange || 'month';
+window._milesShowVoid = !!window._milesShowVoid;
+window._milesSearch = window._milesSearch || '';
+function _milesRangeDates() {
+  var t = new Date(), e = _miLocalIso(t), s, r = window._milesRange, d;
+  if (r === 'month') s = _miLocalIso(new Date(t.getFullYear(), t.getMonth(), 1));
+  else if (r === 'lastmonth') { s = _miLocalIso(new Date(t.getFullYear(), t.getMonth() - 1, 1)); e = _miLocalIso(new Date(t.getFullYear(), t.getMonth(), 0)); }
+  else if (r === '30') { d = new Date(t); d.setDate(d.getDate() - 30); s = _miLocalIso(d); }
+  else if (r === 'year') s = t.getFullYear() + '-01-01';
+  else if (r === 'lastyear') { s = (t.getFullYear() - 1) + '-01-01'; e = (t.getFullYear() - 1) + '-12-31'; }
+  else { s = window._milesStart || e; e = window._milesEnd || e; }
+  return [s, e];
+}
+async function _renderMilesSheet() {
+  var rg = _milesRangeDates(), raw;
+  try { raw = await mcpCall('get_mileage_log', { start_date: rg[0], end_date: rg[1] }); }
+  catch (err) { return '<div style="padding:16px;color:#f87171">' + esc(err.message) + '</div>'; }
+  if (String(raw || '').charAt(0) !== '{') return '<div style="padding:16px;color:#f87171">' + esc(_miFirst(raw)) + '</div>';
+  var d = JSON.parse(raw);
+  MI.data = d;                       // the edit sheet (miEditTrip) looks trips up here
+  var trips = (d.trips || []).slice().sort(function (a, b) {
+    var ka = (a.trip_date || '') + (a.start_time || a.end_time || '') + String(1000 + (a.seq || 0));
+    var kb = (b.trip_date || '') + (b.start_time || b.end_time || '') + String(1000 + (b.seq || 0));
+    return ka < kb ? 1 : ka > kb ? -1 : 0;
+  });
+  var ctl = 'background:#1a1a2e;border:1px solid #333;color:#ddd;border-radius:8px;padding:5px 8px;font-size:12px';
+  var opt = function (v, l) { return '<option value="' + v + '"' + (window._milesRange === v ? ' selected' : '') + '>' + l + '</option>'; };
+  var h = '<div style="padding:8px" data-testid="miles-sheet">' +
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">' +
+    '<select data-testid="miles-range" style="' + ctl + '" onchange="_milesSetRange(this.value)">' +
+    opt('month', 'This month') + opt('lastmonth', 'Last month') + opt('30', 'Last 30 days') + opt('year', 'This year') +
+    opt('lastyear', 'Last year') + opt('custom', 'Custom…') + '</select>' +
+    (window._milesRange === 'custom'
+      ? '<input type="date" style="' + ctl + '" value="' + esc(rg[0]) + '" onchange="window._milesStart=this.value;loadSheet(\'Miles\')">' +
+        '<input type="date" style="' + ctl + '" value="' + esc(rg[1]) + '" onchange="window._milesEnd=this.value;loadSheet(\'Miles\')">' : '') +
+    '<input id="milesSearch" data-testid="miles-search" placeholder="Search place, purpose, driver, trip ID" value="' + esc(window._milesSearch) +
+    '" oninput="window._milesSearch=this.value;_milesApplyFilter()" style="flex:1;min-width:150px;' + ctl + '">' +
+    '<label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:4px;white-space:nowrap"><input type="checkbox" data-testid="miles-show-void"' +
+    (window._milesShowVoid ? ' checked' : '') + ' onchange="window._milesShowVoid=this.checked;_milesApplyFilter()"> Show removed</label>' +
+    (d.enabled ? '<button class="btn btn-primary" style="width:auto;padding:5px 12px;font-size:12px" data-testid="miles-add" onclick="miAddTripForm()">＋ Add trip</button>' : '') + '</div>' +
+    (d.enabled ? '' : '<div data-testid="miles-off" style="font-size:12px;color:#fbbf24;margin:0 0 8px">Mileage tracking is off (Settings tab → Mileage Tracking Enabled), so no new trips are added to this log. Your route still shows miles driven; trips already logged are kept.</div>');
+  var n = 0, biz = 0, com = 0;
+  trips.forEach(function (t) {
+    if (t.status !== 'active') return;
+    n++;
+    if (t.classification === 'business') biz += Number(t.miles) || 0;
+    if (t.classification === 'commute') com += Number(t.miles) || 0;
+  });
+  h += '<div style="font-size:12px;color:#aaa;margin-bottom:6px">' + esc(rg[0] + ' – ' + rg[1]) + ' · ' + n + ' trips · ' + biz.toFixed(1) +
+    ' business mi · ' + com.toFixed(1) + ' commute mi. Tap a row to edit, remove, or add a stop — each change needs a reason and is kept in the trip’s history.</div>';
+  if (!trips.length) return h + '<div style="padding:20px;text-align:center;color:#777">No trips in this range.</div></div>';
+  var th = 'position:sticky;top:0;background:#14142a;color:#aaa;font-weight:600;text-align:left;padding:6px 8px;white-space:nowrap;border-bottom:1px solid #333';
+  var cols = ['Date', 'Trip', 'Driver', 'Vehicle', 'From', 'To', 'Miles', 'Purpose', 'Type', 'Entry', 'Notes'];
+  h += '<table style="border-collapse:collapse;width:100%;font-size:12px"><thead><tr>' +
+    cols.map(function (c) { return '<th style="' + th + (c === 'Miles' ? ';text-align:right' : '') + '">' + c + '</th>'; }).join('') +
+    '</tr></thead><tbody>';
+  var td = 'padding:6px 8px;border-bottom:1px solid #222;color:#ddd;white-space:nowrap';
+  trips.forEach(function (t) {
+    var notes = [];
+    if (t.status === 'void') notes.push('removed: ' + (t.void_reason || ''));
+    if (t.needs_fix && t.status !== 'void') notes.push('⚠️ ' + t.needs_fix);
+    if (t.manually_edited && t.origin !== 'manual') notes.push('✎ edited');
+    if (t.corrected) notes.push('corrected');
+    if (t.late_entry) notes.push('late entry');
+    if (t.reimbursable) notes.push('reimbursable');
+    if (t.locked_period) notes.push('🔒 locked');
+    if (!t.vehicle_id && t.status === 'active') notes.push('no vehicle');
+    var entry = t.origin === 'manual' ? 'added' : (t.origin === 'backfill' ? 'rebuilt' : 'auto');
+    var text = [t.trip_id, t.trip_date, t.crew, t.vehicle_label, t.from_label, t.to_label, t.purpose, t.customer_name]
+      .join(' ').toLowerCase();
+    var isVoid = t.status === 'void';
+    h += '<tr class="miles-row" data-testid="miles-row" data-trip="' + esc(t.trip_id) + '" data-void="' + (isVoid ? 1 : 0) +
+      '" data-text="' + esc(text) + '" onclick="miEditTrip(\'' + esc(t.trip_id) + '\')" style="cursor:pointer' +
+      (isVoid ? ';opacity:.45;text-decoration:line-through' : '') + '">' +
+      '<td style="' + td + '">' + esc(t.trip_date) + (t.start_time ? ' ' + esc(t.start_time) : '') + '</td>' +
+      '<td style="' + td + '">' + esc(t.trip_id) + '</td>' +
+      '<td style="' + td + '">' + esc(t.crew || (t.driver_key === 'owner' ? 'Owner' : t.driver_key) || '') + '</td>' +
+      '<td style="' + td + '">' + esc(t.vehicle_label || '') + '</td>' +
+      '<td style="' + td + ';max-width:160px;overflow:hidden;text-overflow:ellipsis">' + esc(t.from_label || '') + '</td>' +
+      '<td style="' + td + ';max-width:180px;overflow:hidden;text-overflow:ellipsis">' + esc(t.to_label || '') + '</td>' +
+      '<td style="' + td + ';text-align:right;font-weight:700;color:#fff">' + (Number(t.miles) || 0).toFixed(1) + '</td>' +
+      '<td style="' + td + ';max-width:260px;overflow:hidden;text-overflow:ellipsis">' + esc(t.purpose || '') + '</td>' +
+      '<td style="' + td + '">' + esc(t.classification || '') + '</td>' +
+      '<td style="' + td + '">' + entry + '</td>' +
+      '<td style="' + td + ';color:#aab">' + esc(notes.join(' · ')) + '</td></tr>';
+  });
+  return h + '</tbody></table></div>';
+}
+function _milesSetRange(v) { window._milesRange = v; loadSheet('Miles'); }
+function _milesApplyFilter() {
+  var q = String(window._milesSearch || '').trim().toLowerCase();
+  document.querySelectorAll('#sheetContent .miles-row').forEach(function (r) {
+    var show = (window._milesShowVoid || r.getAttribute('data-void') !== '1') &&
+      (!q || String(r.getAttribute('data-text') || '').indexOf(q) >= 0);
+    r.style.display = show ? '' : 'none';
+  });
+}
+function _milesRefreshIfOpen() {
+  try {
+    var scr = document.getElementById('screenSheet');
+    if (typeof _activeSheet !== 'undefined' && _activeSheet === 'Miles' && scr && scr.classList &&
+        scr.classList.contains('active')) loadSheet('Miles');
+  } catch (e) { /* best effort */ }
 }
 
 // ── REPORTS (2026-09-23, at the owner's request) ────────────────────────────
@@ -5152,10 +6109,24 @@ function showScreen(name, btn) {
 // is gated by navReports' own visibility (owner role in server mode,
 // unconditional in personal mode); this screen trusts that gate rather than
 // re-checking, same as every other screen here.
-window._reportsWeeksEachDirection = window._reportsWeeksEachDirection || 8;
+// (2026-10-23, David) default 52 weeks each direction (a full year back and
+// ahead); every chart spans that whole range and scrolls sideways.
+var REPORTS_DEFAULT_WEEKS = 52;
+var REPORTS_ROW_CAP = 1000;   // same cap the Calendar reads with
+window._reportsWeeksEachDirection = window._reportsWeeksEachDirection || REPORTS_DEFAULT_WEEKS;
 function _setReportsWeeks(n) {
-  window._reportsWeeksEachDirection = parseInt(n, 10) || 8;
+  window._reportsWeeksEachDirection = parseInt(n, 10) || REPORTS_DEFAULT_WEEKS;
   loadReports();
+}
+// Scroll each Reports chart so this week / this month sits in the middle
+// (the charts are wider than the screen at 26–52 weeks each way).
+function _reportsCenterCharts() {
+  document.querySelectorAll('#reportsContent .reports-chart-scroll').forEach(function(box) {
+    var mark = box.querySelector('[data-current="1"]');
+    if (!mark) return;
+    var x = parseFloat(mark.getAttribute('x')) || 0;
+    box.scrollLeft = Math.max(0, x - box.clientWidth / 2);
+  });
 }
 
 // Monday-anchored ISO week start for a Date, at local midnight.
@@ -5192,14 +6163,52 @@ function _durationToHours(value, unit) {
 var REPORTS_PROJECTED_TAX_RATE = 0.07;
 function _reportsNum(v) { var n = parseFloat(String(v == null ? '' : v).replace(/[$,%\s]/g, '')); return isNaN(n) ? 0 : n; }
 // One visit's pre-tax value from the customer's own fields.
-function _reportsCustomerVisitValue(c) {
+// (2026-10-23, David) When the customer has no Net Price / Standard Quote
+// (true of every customer imported from QuickBooks), fall back to that
+// customer's most recent priced job (Quote less Discount) — otherwise every
+// 🔮 visit counted as $0 and projected revenue only showed jobs already on
+// the schedule. lastJob = _reportsLastJobByCustomer(jobRows).
+function _reportsCustomerVisitValue(c, lastJob) {
   if (!c) return 0;
   var v = _reportsNum(c['Net Price ($)']);
   if (!v) {
     var sq = _reportsNum(c['Standard Quote ($)']), pct = _reportsNum(c['Discount (%)']);
     v = sq - sq * pct / 100;
   }
-  return Math.max(0, v);
+  if (!(v > 0) && lastJob) {
+    var hit = _reportsLastJobFor(lastJob, c);
+    if (hit) v = hit.value;
+  }
+  return Math.max(0, v || 0);
+}
+// Most recent non-cancelled job WITH a price, per customer (by CustomerID
+// and by name): {value: Quote - Discount (pre-tax), hours: Est. Duration}.
+function _reportsLastJobByCustomer(jobRows) {
+  var best = {};
+  (jobRows || []).forEach(function(r) {
+    if ((r['Job Status'] || '').trim().toLowerCase() === 'cancelled') return;
+    var q = _reportsNum(r['Quote Amount ($)']);
+    if (!(q > 0)) return;
+    var val = Math.max(0, q - _reportsNum(r['Discount Applied ($)']));
+    var d = parseJobDate(r['Service Date']);
+    var t = d ? d.getTime() : 0;
+    var hrs = _durationToHours(r['Est. Duration'], r['Est. Duration Unit']);
+    var keys = [];
+    var cid = (r['CustomerID (Customers!A)'] || r['CustomerID'] || '').trim();
+    var nm = (r['Customer Name / Company'] || '').trim().toLowerCase();
+    if (cid) keys.push('id:' + cid);
+    if (nm) keys.push('name:' + nm);
+    keys.forEach(function(k) {
+      if (!best[k] || t >= best[k].t) best[k] = { t: t, value: val, hours: hrs };
+    });
+  });
+  return best;
+}
+function _reportsLastJobFor(lastJob, c) {
+  if (!lastJob || !c) return null;
+  var cid = (c['CustomerID (CUST-####)'] || '').trim();
+  var nm = (c['Company Name'] || '').trim().toLowerCase();
+  return (cid && lastJob['id:' + cid]) || (nm && lastJob['name:' + nm]) || null;
 }
 function _reportsCustomersById(custRows) {
   var byId = {};
@@ -5216,9 +6225,10 @@ function _reportsIsUnpricedAutoJob(r) {
   return String(r['Service Details / Notes'] || '').indexOf('Auto-generated recurring job') !== -1
     && String(r['Quote Amount ($)'] == null ? '' : r['Quote Amount ($)']).trim() === '';
 }
-function _reportsRecurringProjections(custRows, jobRows) {
+function _reportsRecurringProjections(custRows, jobRows, horizonDate) {
   var num = _reportsNum;
   var byId = _reportsCustomersById(custRows);
+  var lastJob = _reportsLastJobByCustomer(jobRows);
   // real jobs per date, per customer (id and name) — the calendar's skip rule
   var real = {};
   (jobRows || []).forEach(function(r) {
@@ -5233,14 +6243,16 @@ function _reportsRecurringProjections(custRows, jobRows) {
     if (name) real[k]['name:' + name] = true;
   });
   var out = [];
-  _calRecurringProjections(custRows).forEach(function(p) {
+  _calRecurringProjections(custRows, horizonDate).forEach(function(p) {
     var onDay = real[p.date] || {};
     if (p.custId ? onDay['id:' + p.custId] : onDay['name:' + p.customer]) return;
     var c = (p.custId && byId[p.custId]) || {};
-    var revenue = _reportsCustomerVisitValue(c);
+    var revenue = _reportsCustomerVisitValue(c, lastJob);
+    var hours = num(c['Avg Job Duration (min)']) / 60;
+    if (!(hours > 0)) { var lj = _reportsLastJobFor(lastJob, c); hours = lj ? lj.hours : 0; }
     out.push({ date: p.date, custId: p.custId, customer: p.customer, revenue: revenue,
                tax: Math.round(revenue * REPORTS_PROJECTED_TAX_RATE * 100) / 100,
-               hours: num(c['Avg Job Duration (min)']) / 60 });
+               hours: hours });
   });
   return out;
 }
@@ -5261,17 +6273,32 @@ window._reportsRecurringProjections = _reportsRecurringProjections;
 //   🔮 visit     : _reportsRecurringProjections revenue, already pre-tax
 // Returns 12 {label, monthIndex, actualNet, projNet, isCurrent}.
 var _REPORTS_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-function _reportsYearNet(rows, invByJob, custById, custRows, today) {
+// (2026-10-23, David) rangeStart/rangeEnd (Dates): one bar per month from
+// rangeStart's month to rangeEnd's month — the Reports page passes the same
+// span as "Weeks each direction", so this chart runs as far back and ahead
+// as the weekly ones. Omitted = the calendar year, as before. Month labels
+// carry the year on January and on the first bar ("Jan '27").
+function _reportsYearNet(rows, invByJob, custById, custRows, today, rangeStart, rangeEnd) {
   today = today || new Date();
   var year = today.getFullYear();
-  var months = _REPORTS_MONTHS.map(function(lbl, i) {
-    return { label: lbl, monthIndex: i, actualNet: 0, projNet: 0, isCurrent: i === today.getMonth() };
-  });
+  var first = rangeStart ? new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1) : new Date(year, 0, 1);
+  var last = rangeEnd ? new Date(rangeEnd.getFullYear(), rangeEnd.getMonth(), 1) : new Date(year, 11, 1);
+  var months = [], idx = {};
+  for (var m = new Date(first.getTime()), n = 0; m <= last && n < 60; m = new Date(m.getFullYear(), m.getMonth() + 1, 1), n++) {
+    var lbl = _REPORTS_MONTHS[m.getMonth()];
+    if (rangeStart && (n === 0 || m.getMonth() === 0)) lbl += " '" + String(m.getFullYear()).slice(2);
+    var mk = m.getFullYear() + '-' + m.getMonth();
+    idx[mk] = months.length;
+    months.push({ label: lbl, monthIndex: m.getMonth(), year: m.getFullYear(), actualNet: 0, projNet: 0,
+                  isCurrent: m.getFullYear() === year && m.getMonth() === today.getMonth() });
+  }
+  var _monthOf = function(d) { var i = idx[d.getFullYear() + '-' + d.getMonth()]; return i === undefined ? null : months[i]; };
+  var lastJob = _reportsLastJobByCustomer(rows);
   (rows || []).forEach(function(r) {
     if ((r['Job Status'] || '').trim() === 'Cancelled') return;
     var d = parseJobDate(r['Service Date']);
-    if (!d || d.getFullYear() !== year) return;
-    var mb = months[d.getMonth()];
+    var mb = d ? _monthOf(d) : null;
+    if (!mb) return;
     var jobId = r['JobID (JOB-####)'];
     var inv = jobId && invByJob ? invByJob[jobId] : null;
     if (inv) {
@@ -5283,17 +6310,18 @@ function _reportsYearNet(rows, invByJob, custById, custRows, today) {
       mb.projNet += Math.max(0, (total - paid) - (tax - taxPaid));
     } else if (_reportsIsUnpricedAutoJob(r)) {
       var c = (custById || {})[(r['CustomerID (Customers!A)'] || r['CustomerID'] || '').trim()];
-      mb.projNet += _reportsCustomerVisitValue(c);
+      mb.projNet += _reportsCustomerVisitValue(c, lastJob);
     } else {
       var q = parseFloat(r['Quote Amount ($)']), disc = parseFloat(r['Discount Applied ($)']);
       mb.projNet += Math.max(0, (isNaN(q) ? 0 : q) - (isNaN(disc) ? 0 : disc));
     }
   });
   if ((custRows || []).length) {
-    _reportsRecurringProjections(custRows, rows).forEach(function(p) {
+    var horizon = new Date(last.getFullYear(), last.getMonth() + 1, 0);   // end of the last month shown
+    _reportsRecurringProjections(custRows, rows, horizon).forEach(function(p) {
       var d = parseJobDate(p.date);
-      if (!d || d.getFullYear() !== year) return;
-      months[d.getMonth()].projNet += p.revenue;
+      var mb2 = d ? _monthOf(d) : null;
+      if (mb2) mb2.projNet += p.revenue;
     });
   }
   return months;
@@ -5334,19 +6362,25 @@ async function loadReports() {
   _show('customerRemindersCard', _remView);
   _show('staleCustomerMessageBox', _ownerView);          // sending is owner-only
   _show('reportsOwnerOnly', _ownerView);
+  // owner + managers (2026-10-24). Shown even with tracking off (2026-10-25):
+  // the report simply has no new trips then.
+  _show('mileageReportCard', _arView && MI.available);
+  if (_arView && MI.available) loadMileageReport();
   if (_arView) loadArAging();
   if (!_ownerView) return;
   var el = document.getElementById('reportsContent');
   if (!el) return;
   el.innerHTML = '<div class="loader"><div class="spinner"></div> Loading reports…</div>';
-  var weeksEach = window._reportsWeeksEachDirection || 8;
+  var weeksEach = window._reportsWeeksEachDirection || REPORTS_DEFAULT_WEEKS;
   var weeksSel = document.getElementById('reportsWeeksSelect');
   if (weeksSel) weeksSel.value = String(weeksEach);
 
   try {
     var fetched = await Promise.all([
-      mcpCall('read_job_spreadsheet', { sheet_name: 'Jobs_Schedule', max_rows: 500 }),
-      mcpCall('read_job_spreadsheet', { sheet_name: 'Invoices', max_rows: 500 }),
+      // 2026-10-23: 52 weeks each way covers two years of jobs — read up to
+      // REPORTS_ROW_CAP rows (the warning below fires at that same cap).
+      mcpCall('read_job_spreadsheet', { sheet_name: 'Jobs_Schedule', max_rows: REPORTS_ROW_CAP }),
+      mcpCall('read_job_spreadsheet', { sheet_name: 'Invoices', max_rows: REPORTS_ROW_CAP }),
       // (2026-10-09, David) 🔮 recurring visits count as projected — they
       // come from the Customers sheet, same as the calendar's projections.
       mcpCall('read_job_spreadsheet', { sheet_name: 'Customers', max_rows: 500 })
@@ -5404,8 +6438,13 @@ async function loadReports() {
     var custRows = _isFailureResult(rawCust) ? [] : _routeParseSheetText(rawCust);
     var custById = _reportsCustomersById(custRows);
 
-    // (2026-10-21, David) Calendar-year Net revenue (after sales tax), by month.
-    var yearMonths = _reportsYearNet(rows, invByJob, custById, custRows, today);
+    // (2026-10-21, David) Net revenue (after sales tax), by month — since
+    // 2026-10-23 over the same span as the weekly charts (first week's
+    // Monday through the last week's Sunday).
+    var _rangeStart = parseJobDate(minKey);
+    var _rangeEnd = parseJobDate(maxKey); if (_rangeEnd) _rangeEnd = new Date(_rangeEnd.getFullYear(), _rangeEnd.getMonth(), _rangeEnd.getDate() + 6);
+    var yearMonths = _reportsYearNet(rows, invByJob, custById, custRows, today, _rangeStart, _rangeEnd);
+    var _lastJob = _reportsLastJobByCustomer(rows);
 
     rows.forEach(function(r) {
       var status = (r['Job Status'] || '').trim();
@@ -5435,7 +6474,7 @@ async function loadReports() {
         // calendar, not yet priced or invoiced: valued like the 🔮 visit it
         // replaced — the customer's Net Price, plus 7% projected tax.
         var _ac = custById[(r['CustomerID (Customers!A)'] || r['CustomerID'] || '').trim()];
-        chargeable = _reportsCustomerVisitValue(_ac);
+        chargeable = _reportsCustomerVisitValue(_ac, _lastJob);
         paid = 0;
         if (!(_noSalesTaxIsSet(r['No Sales Tax']) || _noSalesTaxIsSet(r['no_sales_tax']))) {
           _autoTax = Math.round(chargeable * REPORTS_PROJECTED_TAX_RATE * 100) / 100;
@@ -5491,7 +6530,7 @@ async function loadReports() {
     // hours = Avg Job Duration (min). Projections are future-only, so they
     // never touch "actual".
     if (custRows.length) {
-      _reportsRecurringProjections(custRows, rows).forEach(function(p) {
+      _reportsRecurringProjections(custRows, rows, _rangeEnd).forEach(function(p) {
         var key = _weekKey(parseJobDate(p.date));
         if (key < minKey || key > maxKey || !buckets[key]) return;
         buckets[key].projRevenue += p.revenue;
@@ -5503,6 +6542,7 @@ async function loadReports() {
 
     var weeks = order.map(function(k) { return buckets[k]; });
     el.innerHTML = _renderReportsHtml(weeks, rawCount, yearMonths);
+    _reportsCenterCharts();
   } catch (err) {
     el.innerHTML = '<div style="text-align:center;padding:24px;color:#f87171">Could not load reports: ' + escapeHtml(err.message) + '</div>';
   }
@@ -5511,15 +6551,26 @@ async function loadReports() {
 function _reportsYearNetCard(months) {
   if (!months || !months.length) return '';
   var year = new Date().getFullYear();
-  var act = 0, proj = 0;
-  months.forEach(function(m) { act += m.actualNet; proj += m.projNet; });
+  var act = 0, proj = 0, yAct = 0, yProj = 0;
+  months.forEach(function(m) {
+    act += m.actualNet; proj += m.projNet;
+    if ((m.year || year) === year) { yAct += m.actualNet; yProj += m.projNet; }
+  });
   var money = function(v) { return '$' + Math.round(v).toLocaleString(); };
+  var first = months[0], last = months[months.length - 1];
+  var span = _REPORTS_MONTHS[first.monthIndex] + ' ' + (first.year || year) + ' – '
+    + _REPORTS_MONTHS[last.monthIndex] + ' ' + (last.year || year);
+  var multiYear = months.some(function(m) { return (m.year || year) !== year; });
   return '<div class="card" data-testid="reports-year-net"><div class="card-header"><span class="card-title">'
-    + '📅 Net Revenue (after sales tax) — ' + year + '</span></div><div class="card-body" style="padding:12px">'
-    + '<div style="font-size:13px;color:#ddd;margin-bottom:8px" data-testid="reports-year-net-total">'
-    + '<b>' + money(act) + '</b> actual + <b>' + money(proj) + '</b> projected = '
-    + '<b style="color:#a78bfa">' + money(act + proj) + '</b> for ' + year + '</div>'
-    + _reportsChartSvg(months, ['actualNet', 'projNet'], money)
+    + '📅 Net Revenue (after sales tax) — ' + (multiYear ? 'by month' : year) + '</span></div><div class="card-body" style="padding:12px">'
+    + '<div style="font-size:13px;color:#ddd;margin-bottom:4px" data-testid="reports-year-net-total">'
+    + '<b>' + money(yAct) + '</b> actual + <b>' + money(yProj) + '</b> projected = '
+    + '<b style="color:#a78bfa">' + money(yAct + yProj) + '</b> for ' + year + '</div>'
+    + (multiYear
+        ? '<div style="font-size:12px;color:#aaa;margin-bottom:8px" data-testid="reports-range-net-total">'
+          + span + ': <b>' + money(act) + '</b> actual + <b>' + money(proj) + '</b> projected = <b>' + money(act + proj) + '</b></div>'
+        : '')
+    + _reportsChartSvg(months, ['actualNet', 'projNet'], money, 44)
     + '<div style="font-size:11px;color:#888;margin-top:6px">Revenue minus the sales tax in it (not profit — '
     + 'expenses aren’t tracked). Actual = paid so far; projected = still owed, not yet invoiced, '
     + 'and 🔮 recurring visits.</div>'
@@ -5529,9 +6580,9 @@ function _reportsYearNetCard(months) {
 function _renderReportsHtml(weeks, rawCount, yearMonths) {
   // Same 500-row-cap honesty as TimeLog/Invoices — a very wide range on a
   // busy install could mean older/further-out weeks are undercounted.
-  var truncWarn = (rawCount >= 500)
+  var truncWarn = (rawCount >= REPORTS_ROW_CAP)
     ? '<div style="background:#2a1f10;border:1px solid var(--amber);border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:12px;color:#ffd18a">'
-      + '⚠️ Only the first 500 job rows were available — the weeks at either edge of this range may be undercounted. Narrow the range above for a complete picture.</div>'
+      + '⚠️ Only the first ' + REPORTS_ROW_CAP + ' job rows were available — the weeks at either edge of this range may be undercounted. Narrow the range above for a complete picture.</div>'
     : '';
   return truncWarn
     + _reportsYearNetCard(yearMonths)   // (2026-10-21) yearly Net revenue (after sales tax)
@@ -5550,12 +6601,12 @@ function _renderReportsHtml(weeks, rawCount, yearMonths) {
 // Solid bar = actual (Completed), hatched bar = projected (Scheduled/In
 // Progress) — stacked on top of the actual portion so the full bar height is
 // always the week's total. A dashed cyan line marks the current week.
-function _reportsChartSvg(weeks, keys, fmt) {
+function _reportsChartSvg(weeks, keys, fmt, barWidth) {
   var actualKey = keys[0], projKey = keys[1];
   var maxVal = 0;
   weeks.forEach(function(w) { maxVal = Math.max(maxVal, w[actualKey] + w[projKey]); });
   if (maxVal <= 0) maxVal = 1;
-  var barW = 22, gap = 6, chartH = 130, padTop = 14, padBottom = 22, padLeft = 4;
+  var barW = barWidth || 22, gap = 6, chartH = 130, padTop = 14, padBottom = 22, padLeft = 4;
   var width = weeks.length * (barW + gap) + padLeft;
   var height = chartH + padTop + padBottom;
   var bars = weeks.map(function(w, i) {
@@ -5568,7 +6619,7 @@ function _reportsChartSvg(weeks, keys, fmt) {
     var labelColor = w.isCurrent ? '#67e8f9' : '#888';
     var svg = '';
     if (w.isCurrent) {
-      svg += '<line x1="' + (x - gap / 2) + '" y1="' + padTop + '" x2="' + (x - gap / 2) + '" y2="' + (padTop + chartH)
+      svg += '<line data-current="1" x="' + x + '" x1="' + (x - gap / 2) + '" y1="' + padTop + '" x2="' + (x - gap / 2) + '" y2="' + (padTop + chartH)
         + '" stroke="#67e8f9" stroke-width="1" stroke-dasharray="2,2" opacity="0.6"/>';
     }
     if (actualH > 0.5) {
@@ -5585,7 +6636,7 @@ function _reportsChartSvg(weeks, keys, fmt) {
     svg += '<text x="' + (x + barW / 2) + '" y="' + (padTop + chartH + 14) + '" font-size="8" fill="' + labelColor + '" text-anchor="middle">' + esc(w.label) + '</text>';
     return svg;
   }).join('');
-  return '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch">'
+  return '<div class="reports-chart-scroll" style="overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px">'
     + '<svg viewBox="0 0 ' + width + ' ' + height + '" width="' + width + '" height="' + height + '" style="display:block">'
     + '<defs><pattern id="reportsHatch" width="4" height="4" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">'
     + '<line x1="0" y1="0" x2="0" y2="4" stroke="#7c3aed" stroke-width="2" opacity="0.5"/></pattern></defs>'
@@ -5950,6 +7001,9 @@ var _SHEETS = [
   {name:'Quotes',           label:'💲 Quotes',     addable:true},
   {name:'TimeLog',          label:'⏱ TimeLog',    addable:false},
   {name:'Route_Planner',    label:'🗺 Route',      addable:false},
+  // Mileage log (2026-10-25, Vicki): the running list of trips, editable
+  // through the same audited edit sheet as the Mileage tab (reason required).
+  {name:'Miles',            label:'🚗 Miles',      addable:false},
   {name:'Services_Pricing', label:'💰 Pricing',    addable:true},
   {name:'Settings',         label:'⚙ Settings',   addable:false},
   {name:'AI-Prowler-Commands',label:'📖 Commands', addable:false},
@@ -6910,6 +7964,13 @@ async function loadSheet(sheetName) {
   if (sheetName === 'Settings') {
     el.innerHTML = '<div style="text-align:center;padding:24px;color:#aaa"><div class="spinner"></div> Loading Settings...</div>';
     el.innerHTML = await _renderSettingsCard();
+    _restoreSheetScroll();
+    return;
+  }
+  if (sheetName === 'Miles') {
+    el.innerHTML = '<div style="text-align:center;padding:24px;color:#aaa"><div class="spinner"></div> Loading Miles...</div>';
+    el.innerHTML = await _renderMilesSheet();
+    _milesApplyFilter();
     _restoreSheetScroll();
     return;
   }
@@ -8018,7 +9079,35 @@ async function _openGenericEditModal(sheetName, rowId, rowData, rowIdx, lockedFi
           'Customer Reminder Email Enabled': 'Enabled',
           'Customer Reminder SMS Enabled': 'Enabled',
           'Customer Reminder Daily Digest': 'Disabled',
+          // Mileage switches (2026-10-25, moved here from the Profile card).
+          // Readers: db_mileage_ops.tracking_enabled / get_reminder_settings.
+          'Mileage Tracking Enabled': 'Enabled',
+          'Mileage Reminder - Daily Gaps': 'Enabled',
+          'Mileage Reminder - Weekly Review': 'Enabled',
+          'Mileage Reminder - Pay Period': 'Enabled',
+          'Mileage Reminder - Odometer': 'Enabled',
         };
+        // Crew mileage reimbursement period: weekly / biweekly / monthly.
+        if (sheetName === 'Settings' && col === 'Value' && rowData['Setting'] === 'Mileage Reimbursement Period') {
+          var mpSel = document.createElement('select');
+          mpSel.style.cssText = style;
+          mpSel.dataset.colName = col;
+          [
+            { v: 'weekly', t: 'weekly' },
+            { v: 'biweekly', t: 'biweekly — every 2 weeks' },
+            { v: 'monthly', t: 'monthly (default)' },
+          ].forEach(function(opt) {
+            var o = document.createElement('option');
+            o.value = opt.v; o.textContent = opt.t;
+            mpSel.appendChild(o);
+          });
+          var mpv = String(val || '').trim().toLowerCase();
+          mpSel.value = (mpv === 'weekly' || mpv === 'biweekly') ? mpv : 'monthly';
+          lbl.innerHTML = esc(colName) + '<br>';
+          lbl.appendChild(mpSel);
+          inp.appendChild(lbl);
+          return;
+        }
         if (sheetName === 'Settings' && col === 'Value' && _ENABLED_DISABLED_SETTINGS.hasOwnProperty(rowData['Setting'])) {
           var edDefault = _ENABLED_DISABLED_SETTINGS[rowData['Setting']];
           var edOther = (edDefault === 'Enabled') ? 'Disabled' : 'Enabled';
@@ -8034,7 +9123,11 @@ async function _openGenericEditModal(sheetName, rowId, rowData, rowIdx, lockedFi
           // Anything other than the exact non-default string (blank, typo,
           // etc.) falls back to THIS setting's own default, matching its
           // backend reader's own default-on-anything-else behavior.
-          edSel.value = (val === edOther) ? edOther : edDefault;
+          // Older rows may say true/false (mileage before 2026-10-25).
+          var edv = String(val || '').trim().toLowerCase();
+          var edNorm = /^(enabled|true|yes|on|1)$/.test(edv) ? 'Enabled'
+                     : /^(disabled|false|no|off|0)$/.test(edv) ? 'Disabled' : val;
+          edSel.value = (edNorm === edOther) ? edOther : edDefault;
           lbl.innerHTML = esc(colName) + '<br>';
           lbl.appendChild(edSel);
           inp.appendChild(lbl);
@@ -8585,8 +9678,17 @@ function _jfPausedCheckSync(fromOpen) {
 }
 
 function openEditJobModal(jobId) {
-  const j = (window._allSheetJobs || []).find(x => x.id === jobId);
-  if (!j) return;
+  let j = (window._allSheetJobs || []).find(x => x.id === jobId);
+  // (2026-10-23, David) Board bug: after saving a Complete job, the Database
+  // reload rebuilds _allSheetJobs from its own list, which hides Completed
+  // jobs by default — so the NEXT Complete card tapped on the Board wasn't
+  // in the cache and this returned silently until a page refresh. Fall back
+  // to the Board's own row for that job (and put it back in the cache).
+  if (!j && Array.isArray(state.boardJobs)) {
+    const br = state.boardJobs.find(r => String(_boardJobId(r)) === String(jobId));
+    if (br) { _mergeIntoSheetJobsCache([br]); j = (window._allSheetJobs || []).find(x => x.id === jobId); }
+  }
+  if (!j) { showToast('Could not open ' + jobId + ' — tap ↻ to refresh', 'error'); return; }
   window._jfCurrentJob = j;   // (2026-10-06) _jfPausedCheckSync reads the stash from this
   _captureSheetScroll();   // scroll-preservation (2026-10-04) — see _openGenericEditModal
   // Show Jobs_Schedule fields, hide generic
@@ -8991,6 +10093,13 @@ async function saveJobForm() {
 
 
 
+        // Mileage switches (2026-10-25): apply right away — show/hide the
+        // clock-in vehicle picker, Start/Add trip, reminders and gaps.
+        if (window._jfCurrentSheet === 'Settings' &&
+            /^mileage /i.test(String(window._jfCurrentRowId || genericUpdates.Setting || '').trim()) &&
+            typeof mileageInit === 'function') {
+          try { await mileageInit(); } catch (e) { /* best effort */ }
+        }
         // Working Days (2026-10-02): saving it APPLIES it right away — the
         // server already reads it fresh on every call; this refreshes the
         // app's own copy (Calendar, Route tab day list) and says so, so no
@@ -9490,8 +10599,18 @@ function _boardSorted(jobs, col) {
   // its newest-first order).
   const timeOrdered = (col === 'Scheduled' || col === 'In Progress' || col === 'Complete');
   const newestFirst = !timeOrdered && (col === 'Cancelled');
+  // (2026-10-23, David) Complete: NEWEST date first again (the 2026-09-21
+  // rule) — the 10-06 route-order change had flipped it to oldest first, so
+  // old unpaid jobs sat above today's work. Within one day the approved
+  // route order / start time still runs top to bottom. Undated jobs last.
+  const newestDayFirst = (col === 'Complete');
   return jobs.slice().sort(function(a, b) {
     const ka = _boardTimeKey(a), kb = _boardTimeKey(b);
+    if (newestDayFirst && ka.d !== kb.d) {
+      if (ka.d === Number.MAX_SAFE_INTEGER) return 1;
+      if (kb.d === Number.MAX_SAFE_INTEGER) return -1;
+      return kb.d - ka.d;
+    }
     if (timeOrdered) {
       const aa = _boardApprovedArrMin(a), ba = _boardApprovedArrMin(b);
       if (aa !== null && ba !== null) {
@@ -9500,8 +10619,8 @@ function _boardSorted(jobs, col) {
         const cmpT = (ka.d - kb.d) || (aa - ba) || ka.id.localeCompare(kb.id);
         if (cmpT !== 0) return cmpT;
       }
-      else if (aa !== null) return -1;
-      else if (ba !== null) return 1;
+      else if (aa !== null && ka.d === kb.d) return -1;
+      else if (ba !== null && ka.d === kb.d) return 1;
     }
     const cmp = (ka.d - kb.d) || (ka.t - kb.t) || ka.id.localeCompare(kb.id);
     return newestFirst ? -cmp : cmp;
@@ -9530,13 +10649,36 @@ function _boardAgeMs(r) {
   return isNaN(t) ? 0 : (Date.now() - t);
 }
 function _boardIsStale(r) { return _boardAgeMs(r) > BOARD_STALE_MS; }
+// (2026-10-23, David) Complete jobs: the week is counted from the job's own
+// date (End Date for a multi-day job, else Service Date), not from the last
+// edit — marking an old job Paid used to restart its week, so paid jobs from
+// weeks ago kept cluttering the column. No date -> fall back to last edit.
+function _boardJobDateIsOld(r) {
+  const iso = _toDateInputValue(r['End Date (blank = single-day job)'] || '') || _toDateInputValue(r['Service Date'] || '');
+  if (!iso) return _boardIsStale(r);
+  const p = iso.split('-').map(Number);
+  const d = new Date(p[0], p[1] - 1, p[2]);
+  return isNaN(d.getTime()) ? _boardIsStale(r) : (Date.now() - d.getTime()) > BOARD_STALE_MS;
+}
+// Whole days from the job's own date (End Date for a multi-day job, else
+// Service Date) to today, in the browser's local time. Null when undated.
+function _boardDaysSinceJob(r) {
+  const iso = _toDateInputValue(r['End Date (blank = single-day job)'] || '') || _toDateInputValue(r['Service Date'] || '');
+  if (!iso) return null;
+  const p = iso.split('-').map(Number);
+  const d = new Date(p[0], p[1] - 1, p[2]);
+  if (isNaN(d.getTime())) return null;
+  const t = new Date();
+  const today0 = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+  return Math.round((today0 - d) / 86400000);
+}
 function _boardIsPaid(r) {
   const p = (r['Payment Status'] || '').trim();
   return p !== '' && p !== 'Unpaid' && p !== 'Partial';
 }
 function _boardVisibleInColumn(r, col) {
   if (col === 'Cancelled') return !_boardIsStale(r);
-  if (col === 'Complete')  return !(_boardIsStale(r) && _boardIsPaid(r));
+  if (col === 'Complete')  return !(_boardJobDateIsOld(r) && _boardIsPaid(r));
   return true;
 }
 
@@ -9661,12 +10803,25 @@ function boardCardHTML(r) {
       // report — a job with no Payment Status set yet (not yet invoiced/
       // priced) shows nothing here rather than a misleading "Unpaid".
       const payStatus = String(r['Payment Status'] || '').trim();
+      // (2026-10-23, David) Age markers: an open job past its date shows
+      // "⏰ N days late"; a Complete job not yet paid shows how many days
+      // since the job ("💳 Unpaid · 12 days"), so old work stands out.
+      const _bdCol = _boardStatus(r);
+      const _bdAge = _boardDaysSinceJob(r);
+      let lateLine = '';
+      if ((_bdCol === 'Scheduled' || _bdCol === 'In Progress') && _bdAge !== null && _bdAge > 0) {
+        lateLine = `<span class="board-card-late" data-testid="board-late" style="color:var(--amber);font-weight:700">⏰ ${_bdAge} day${_bdAge === 1 ? '' : 's'} late</span>`;
+      }
+      const _bdOwedAge = (_bdCol === 'Complete' && !_boardIsPaid(r) && _bdAge !== null && _bdAge > 0)
+        ? ' · ' + _bdAge + ' day' + (_bdAge === 1 ? '' : 's') : '';
       let paymentBadge = '';
       if (payStatus) {
         const paid = _boardIsPaid(r);
         paymentBadge = paid
           ? `<span class="board-card-pay board-card-pay-paid" title="Payment Status: ${escapeHtml(payStatus)}">💰 Paid</span>`
-          : `<span class="board-card-pay board-card-pay-unpaid" title="Payment Status: ${escapeHtml(payStatus)}">💳 ${escapeHtml(payStatus)}</span>`;
+          : `<span class="board-card-pay board-card-pay-unpaid" title="Payment Status: ${escapeHtml(payStatus)}">💳 ${escapeHtml(payStatus)}${_bdOwedAge}</span>`;
+      } else if (_bdOwedAge) {
+        paymentBadge = `<span class="board-card-pay board-card-pay-unpaid" title="No payment recorded yet">💳 Not paid${_bdOwedAge}</span>`;
       }
       // (2026-10-08) per-job No Sales Tax — 🚫🧾 badge on tax-exempt jobs.
       // Reads the raw sheet column; the value shape is defensive (1/"1"/true/yes).
@@ -9683,6 +10838,7 @@ function boardCardHTML(r) {
         <div class="board-card-meta">
           <span>👤 ${crew}</span>
           <span>📅 ${svcDate}${svcType ? ' · ' + svcType : ''}</span>
+          ${lateLine}
           ${timeLine}
           ${approvedLine}
           ${driveLine}

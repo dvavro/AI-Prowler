@@ -34,7 +34,16 @@ SWITCHES = {
     # Working Days (Vicki 2026-10-02): weekday-only vs. every day. The server
     # stores this in a tidy form, so these are exactly what it saves.
     "Working Days": ("Mon,Tue,Wed,Thu,Fri", "Mon,Tue,Wed,Thu,Fri,Sat,Sun"),
+    # Mileage (Vicki 2026-10-25): the switches moved from the Profile card to
+    # Database → Settings. Flipped only by MI-11 (test_mileage_e2e.py).
+    "Mileage Tracking Enabled": ("Enabled", "Disabled"),
+    "Mileage Reimbursement Period": ("weekly", "biweekly", "monthly"),
+    "Mileage Reminder - Daily Gaps": ("Enabled", "Disabled"),
+    "Mileage Reminder - Weekly Review": ("Enabled", "Disabled"),
+    "Mileage Reminder - Pay Period": ("Enabled", "Disabled"),
+    "Mileage Reminder - Odometer": ("Enabled", "Disabled"),
 }
+MILEAGE_SWITCHES = tuple(k for k in SWITCHES if k.startswith("Mileage "))
 TOGGLES = tuple(SWITCHES)
 # Saved with the switches but never changed: the app's Route Origin Mode form
 # also re-saves these four Start/End Address rows (their current values) — the

@@ -328,6 +328,190 @@ CREATE TABLE IF NOT EXISTS service_pricing (
     version                   INTEGER NOT NULL DEFAULT 1
 );
 
+-- ── Mileage tracker (2026-10-24, MILEAGE spec) ──────────────────────
+-- IRS-ready business mileage log (Pub. 463 ch. 4-5, Form 4562 Part V).
+-- Trips are never hard-deleted (status='void'), every edit is audited in
+-- mileage_trip_edits, and IDs come from generate_next_id (never reused).
+CREATE TABLE IF NOT EXISTS vehicles (
+    vehicle_id                TEXT PRIMARY KEY,      -- VEH-####
+    vin                       TEXT NOT NULL UNIQUE,  -- 17 chars, check digit validated
+    year                      INTEGER,
+    make                      TEXT,
+    model                     TEXT,
+    color                     TEXT,
+    plate                     TEXT,
+    nickname                  TEXT,
+    ownership                 TEXT NOT NULL DEFAULT 'business',  -- business | crew
+    owner_user_id             TEXT,                  -- users.id (crew-owned)
+    owner_name                TEXT,
+    default_user_id           TEXT,
+    default_user_name         TEXT,
+    placed_in_service         TEXT,                  -- YYYY-MM-DD (Form 4562)
+    retired_on                TEXT,
+    active                    INTEGER NOT NULL DEFAULT 1,
+    created_by                TEXT,
+    created_at                TEXT,
+    last_edited_by            TEXT,
+    last_edited_at            TEXT,
+    version                   INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS odometer_readings (
+    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+    vehicle_id                TEXT NOT NULL REFERENCES vehicles(vehicle_id),
+    reading_date              TEXT NOT NULL,         -- YYYY-MM-DD
+    odometer                  INTEGER NOT NULL,
+    kind                      TEXT NOT NULL DEFAULT 'spot',  -- added | year_start | year_end | retired | spot
+    photo                     TEXT,
+    entered_by                TEXT,
+    entered_at                TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_odometer_vehicle_date ON odometer_readings(vehicle_id, reading_date);
+
+CREATE TABLE IF NOT EXISTS mileage_trips (
+    trip_id                   TEXT PRIMARY KEY,      -- TRIP-####, never reused
+    trip_date                 TEXT NOT NULL,         -- YYYY-MM-DD
+    start_time                TEXT,                  -- HH:MM (local)
+    end_time                  TEXT,
+    crew_user_id              TEXT,
+    crew                      TEXT,
+    vehicle_id                TEXT REFERENCES vehicles(vehicle_id),
+    from_label                TEXT,
+    from_lat                  REAL,
+    from_lon                  REAL,
+    to_label                  TEXT NOT NULL,         -- IRS: destination
+    to_lat                    REAL,
+    to_lon                    REAL,
+    job_id                    TEXT,                  -- null for bookends / non-job trips
+    customer_name             TEXT,
+    seq                       INTEGER,               -- order within the day
+    miles                     REAL NOT NULL,         -- IRS: amount
+    distance_source           TEXT NOT NULL,         -- gps | address | route | manual | odometer
+    classification            TEXT NOT NULL,         -- business | commute | personal
+    reimbursable              INTEGER NOT NULL DEFAULT 0,
+    origin_mode               TEXT,                  -- Jobs Only | Company Location, at build time
+    category                  TEXT,                  -- Job | Supplies | Equipment | Bank | ...
+    purpose                   TEXT NOT NULL,         -- IRS: business purpose
+    parking_usd               REAL,
+    tolls_usd                 REAL,
+    receipt_photo             TEXT,
+    origin                    TEXT NOT NULL,         -- auto | manual | backfill
+    build_key                 TEXT,                  -- de-dup key for auto/backfill rebuilds
+    manually_edited           INTEGER NOT NULL DEFAULT 0,
+    corrected                 INTEGER NOT NULL DEFAULT 0,
+    needs_fix                 TEXT,                  -- gap description, NULL when complete
+    status                    TEXT NOT NULL DEFAULT 'active',  -- active | void
+    void_reason               TEXT,
+    locked                    INTEGER NOT NULL DEFAULT 0,
+    reimbursement_id          TEXT,
+    notes                     TEXT,
+    created_at                TEXT NOT NULL,         -- IRS: recorded at or near the time
+    created_by                TEXT,
+    last_edited_by            TEXT,
+    last_edited_at            TEXT,
+    version                   INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mileage_trips_date ON mileage_trips(trip_date);
+CREATE INDEX IF NOT EXISTS idx_mileage_trips_crew_date ON mileage_trips(crew_user_id, crew, trip_date);
+CREATE INDEX IF NOT EXISTS idx_mileage_trips_build_key ON mileage_trips(build_key);
+CREATE INDEX IF NOT EXISTS idx_mileage_trips_last_edited_at ON mileage_trips(last_edited_at);
+
+CREATE TABLE IF NOT EXISTS mileage_trip_edits (
+    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+    trip_id                   TEXT NOT NULL REFERENCES mileage_trips(trip_id),
+    field                     TEXT NOT NULL,
+    old_value                 TEXT,
+    new_value                 TEXT,
+    edited_by                 TEXT,
+    edited_at                 TEXT NOT NULL,
+    reason                    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mileage_trip_edits_trip ON mileage_trip_edits(trip_id);
+
+-- Which vehicle a driver used on a given day (Clock-screen picker).
+CREATE TABLE IF NOT EXISTS mileage_day_vehicles (
+    trip_date                 TEXT NOT NULL,
+    user_key                  TEXT NOT NULL,         -- users.id, or lowercased crew name in personal mode
+    vehicle_id                TEXT NOT NULL REFERENCES vehicles(vehicle_id),
+    set_by                    TEXT,
+    set_at                    TEXT,
+    PRIMARY KEY (trip_date, user_key)
+);
+
+CREATE TABLE IF NOT EXISTS mileage_locks (
+    period                    TEXT PRIMARY KEY,      -- YYYY-MM or YYYY
+    locked_by                 TEXT,
+    locked_at                 TEXT NOT NULL
+);
+
+-- Crew mileage reimbursement per pay period (mileage spec FR-23, Phase 5).
+-- Submitted -> Approved or Returned -> Paid. Trips link through
+-- mileage_trips.reimbursement_id; they can't change while the period is
+-- submitted or approved, and are locked once it's paid. Every status change
+-- is kept in mileage_reimbursement_events.
+CREATE TABLE IF NOT EXISTS mileage_reimbursements (
+    reimbursement_id          TEXT PRIMARY KEY,      -- REIM-####, never reused
+    user_key                  TEXT NOT NULL,         -- users.id, or lowercased crew name / 'owner'
+    crew_user_id              TEXT,
+    crew                      TEXT,
+    period_start              TEXT NOT NULL,
+    period_end                TEXT NOT NULL,
+    period_kind               TEXT,                  -- weekly | biweekly | monthly
+    status                    TEXT NOT NULL,         -- submitted | returned | approved | paid
+    trip_count                INTEGER,
+    miles                     REAL,
+    amount_usd                REAL,                  -- frozen at approval
+    parking_tolls_usd         REAL,
+    return_note               TEXT,
+    submitted_by              TEXT,
+    submitted_at              TEXT,
+    approved_by               TEXT,
+    approved_at               TEXT,
+    paid_date                 TEXT,
+    paid_method               TEXT,                  -- check | cash | payroll | transfer
+    paid_reference            TEXT,
+    paid_by                   TEXT,
+    paid_at                   TEXT,
+    created_at                TEXT NOT NULL,
+    last_edited_by            TEXT,
+    last_edited_at            TEXT,
+    version                   INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(user_key, period_start)
+);
+CREATE INDEX IF NOT EXISTS idx_mileage_trips_reimb ON mileage_trips(reimbursement_id);
+
+CREATE TABLE IF NOT EXISTS mileage_reimbursement_events (
+    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+    reimbursement_id          TEXT NOT NULL REFERENCES mileage_reimbursements(reimbursement_id),
+    from_status               TEXT,
+    to_status                 TEXT NOT NULL,
+    actor                     TEXT,
+    at                        TEXT NOT NULL,
+    note                      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mileage_reimb_events ON mileage_reimbursement_events(reimbursement_id);
+
+-- Fingerprint of what each built day came from, per driver (FR-21): when a
+-- job is moved/cancelled/deleted or a clock entry or route changes, the
+-- fingerprint stops matching and the day is rebuilt.
+CREATE TABLE IF NOT EXISTS mileage_day_builds (
+    trip_date                 TEXT NOT NULL,
+    user_key                  TEXT NOT NULL,
+    signature                 TEXT NOT NULL,
+    built_at                  TEXT NOT NULL,
+    PRIMARY KEY (trip_date, user_key)
+);
+
+-- AI mileage review (FR-25): findings someone accepted or dismissed, so a
+-- dismissed finding isn't raised again.
+CREATE TABLE IF NOT EXISTS mileage_review_actions (
+    finding_id                TEXT PRIMARY KEY,      -- check:date:target
+    action                    TEXT NOT NULL,         -- accepted | dismissed
+    acted_by                  TEXT,
+    acted_at                  TEXT NOT NULL,
+    note                      TEXT
+);
+
 -- ── schema metadata (for future migrations) ─────────────────────────
 CREATE TABLE IF NOT EXISTS schema_meta (
     key   TEXT PRIMARY KEY,
