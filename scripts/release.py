@@ -587,6 +587,9 @@ MANIFEST_FILES = [
     "subscription_client.py",
     "mobile_activator.py",
     "cloudflared_service_helper.py",
+    # v9.5.0 cloudflared security upgrade (eMudhra advisory)
+    "cloudflared_upgrade.py",
+    "upgrade_cloudflared.ps1",
     "sms_backends.py",
     "sms_inbox.py",
     # (2026-10-02: migrate_spreadsheet.py and AI-Prowler_Job_Tracker.xlsx

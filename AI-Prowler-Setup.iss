@@ -328,6 +328,11 @@ Source: "mobile_activator.py"; DestDir: "{app}"; Flags: ignoreversion
 ; service with the correct tunnel token. Kept separate so UAC elevation
 ; can be requested from within the non-elevated AI-Prowler GUI process.
 Source: "cloudflared_service_helper.py"; DestDir: "{app}"; Flags: ignoreversion
+; v9.5.0 — cloudflared security upgrade (Cloudflare eMudhra advisory, Oct 2026).
+; upgrade_cloudflared.ps1 is run by the CLOUDFLARED step below AND by
+; cloudflared_upgrade.py (in-app prompt) so both paths share one implementation.
+Source: "cloudflared_upgrade.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "upgrade_cloudflared.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 ; --- v8.0.0 SMS backends ---
 ; sms_backends.py : Provider abstraction layer — Twilio, SignalWire, Vonage, and
@@ -576,6 +581,9 @@ const
   // cloudflared: Cloudflare Tunnel client — provides the public HTTPS URL
   // that lets Claude mobile reach the local HTTP MCP server.
   CLOUDFLARED_URL      = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe';
+  // v9.5.0: minimum safe cloudflared (Cloudflare eMudhra advisory, Oct 2026).
+  // Keep in sync with DEFAULT_MIN_VERSION in cloudflared_upgrade.py.
+  CLOUDFLARED_MIN_VERSION = '2026.10.2';
 
 
 // ============================================================
@@ -3194,6 +3202,23 @@ begin
       ExecWithLogging(True, '[Cloudflared]', 'powershell.exe',
         '-NoProfile -ExecutionPolicy Bypass -File "' + PsFile + '"');
       DeleteFileIfExists(PsFile);
+
+      // v9.5.0: the step above SKIPS when cloudflared.exe already exists, so
+      // an upgrade install kept whatever old version was there. Bring it up
+      // to CLOUDFLARED_MIN_VERSION with the shared upgrade script: verifies
+      // the Cloudflare signature + version, stops/restarts the tunnel service
+      // only if it runs this exe, rolls back on failure. No-op when current.
+      // Best-effort like the rest of this step - never blocks the install.
+      if FileExists(ExpandConstant('{app}\upgrade_cloudflared.ps1')) then
+      begin
+        SetProgress(94, 'Checking Cloudflare Tunnel client version...');
+        AppendInstallLog('[Cloudflared] Ensuring version >= ' + CLOUDFLARED_MIN_VERSION);
+        ExecWithLogging(True, '[Cloudflared-Upgrade]', 'powershell.exe',
+          '-NoProfile -ExecutionPolicy Bypass -File "' +
+          ExpandConstant('{app}\upgrade_cloudflared.ps1') + '"' +
+          ' -Dest "' + ExpandConstant('{app}\cloudflared.exe') + '"' +
+          ' -MinVersion "' + CLOUDFLARED_MIN_VERSION + '"');
+      end;
       SetProgress(95, 'Cloudflare Tunnel client ready.');
     end;
 

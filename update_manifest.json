@@ -1,11 +1,11 @@
 {
-  "version": "9.4.0",
-  "generated": "2026-10-25T13:32:38",
+  "version": "9.5.0",
+  "generated": "2026-10-27T07:54:51",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "3bb7a8f55c8e292b9fd6d291433d8ff18c39f9c6f75a8d77448a2a30ba8607f5",
-      "bytes": 1493200
+      "sha256": "958521e6f82828ba7e8c183e882ac2c3dda5e251b71390fa668f2ee3ec728ae9",
+      "bytes": 1498368
     },
     {
       "path": "rag_preprocessor.py",
@@ -64,12 +64,12 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "1895b310434a5cac6408b538405bc862f7bc4de17f24205060e529389aee75fa",
+      "sha256": "8845fe61427d1b3451e4602a8ed422f0a29b866323b89e45d2b3f9c6ae51bf40",
       "bytes": 312347
     },
     {
       "path": "VERSION",
-      "sha256": "b138deb2a4876d4dddab7e07791bd6ece9652557672bd576fb25dfef1d0c5c5a",
+      "sha256": "c073f1444bd5b84e8b30b29389ecd55c16ffd778c0c899d5eb60893063342a80",
       "bytes": 6
     },
     {
@@ -101,6 +101,16 @@
       "path": "cloudflared_service_helper.py",
       "sha256": "05f8dbe803783171bbbaf243796eac81bd509aaa62f43e24e79a33f0e6be64b8",
       "bytes": 5373
+    },
+    {
+      "path": "cloudflared_upgrade.py",
+      "sha256": "5459b8e12ee6e4ffc786841522959fa7e9cdc1214e4245d02b956af0dbfdc59d",
+      "bytes": 7196
+    },
+    {
+      "path": "upgrade_cloudflared.ps1",
+      "sha256": "3abfb7b55fa6db36f1a90bedcffd19cb6df36d214ef78d8919d6d8cd941bd5d0",
+      "bytes": 8671
     },
     {
       "path": "sms_backends.py",

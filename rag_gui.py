@@ -4913,6 +4913,12 @@ or from the Help menu."""
                     except Exception:
                         pass
 
+                    # v9.5.0: tunnel-client security check (eMudhra advisory)
+                    try:
+                        self._check_cloudflared_security(notif_data)
+                    except Exception:
+                        traceback.print_exc()
+
                     n = len(notif_data.get('notifications', []))
                     print(f"[notif] {n} notifications fetched OK", flush=True)
                     # Success — make sure the debug label stays hidden
@@ -4936,6 +4942,10 @@ or from the Help menu."""
                                         notif_data)
                         self.root.after(0, self._show_notif_debug,
                                         "[Notifications: using cache]")
+                        try:
+                            self._check_cloudflared_security(notif_data)
+                        except Exception:
+                            traceback.print_exc()
                         return
                 except Exception as cache_err:
                     print(f"[notif] cache read failed: "
@@ -4944,6 +4954,11 @@ or from the Help menu."""
 
                 self.root.after(0, self._show_notif_debug,
                                 "[Notifications: fetch failed, no cache]")
+                # Offline with no cache: still check against the built-in floor.
+                try:
+                    self._check_cloudflared_security(None)
+                except Exception:
+                    traceback.print_exc()
 
             except Exception as outer:
                 # Catches early crashes (missing attributes, etc.) so the
@@ -5013,6 +5028,88 @@ or from the Help menu."""
             except Exception:
                 pass
             self._update_banner_widget = None
+
+    # ── Tunnel client security check (v9.5.0) ───────────────────────────────
+    # Cloudflare advisory Oct 2026 (eMudhra intermediate CA compromise):
+    # cloudflared < 2026.10.2 trusts certificates anyone can now forge. The
+    # in-app updater never replaces cloudflared.exe (it's not in the update
+    # manifest and lives in Program Files), so existing installs are fixed
+    # here: check once per launch, offer a one-approval (UAC) upgrade that
+    # runs upgrade_cloudflared.ps1 — the same script the installer uses.
+    # Desktop-only installs with no cloudflared.exe are never prompted.
+    # Declining just means being asked again next launch.
+    def _check_cloudflared_security(self, notif_data=None):
+        """Background-thread safe. Runs at most once per launch."""
+        if getattr(self, '_cf_security_checked', False):
+            return
+        self._cf_security_checked = True
+        try:
+            import cloudflared_upgrade as _cfu
+        except Exception as e:
+            print(f"[cloudflared] upgrade module unavailable: {e}", flush=True)
+            return
+        info = _cfu.check(notif_data=notif_data)
+        print(f"[cloudflared] status={info['status']} current={info['current']} "
+              f"minimum={info['minimum']}", flush=True)
+        if info['status'] == 'outdated':
+            # Small delay so the prompt doesn't land on top of startup dialogs.
+            self.root.after(3000, self._prompt_cloudflared_upgrade, info)
+
+    def _prompt_cloudflared_upgrade(self, info):
+        """Main thread: ask, then run the elevated upgrade in a worker."""
+        ok = messagebox.askyesno(
+            "Security update for Remote Access",
+            f"Your Cloudflare Tunnel client (cloudflared {info['current']}) "
+            f"needs a security update to version {info['minimum']} or newer.\n\n"
+            "Older versions trust security certificates that are now known to "
+            "be compromised, so someone on the same network could intercept "
+            "your Remote Access connection.\n\n"
+            "AI-Prowler will download the official signed update from "
+            "Cloudflare and install it. Windows will ask for administrator "
+            "approval once. Remote Access pauses for a few seconds and then "
+            "reconnects on its own — nothing needs to be set up again.\n\n"
+            "Update now?",
+            icon='warning', parent=self.root)
+        if not ok:
+            print("[cloudflared] upgrade postponed by user", flush=True)
+            return
+
+        def _worker():
+            try:
+                import cloudflared_upgrade as _cfu
+                res = _cfu.run_elevated_upgrade(info['exe'], info['minimum'])
+            except Exception as e:
+                res = {'status': 'failed', 'message': f"{type(e).__name__}: {e}"}
+            print(f"[cloudflared] upgrade result: {res}", flush=True)
+            self.root.after(0, self._show_cloudflared_upgrade_result, res)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _show_cloudflared_upgrade_result(self, res):
+        status = res.get('status')
+        log_hint = str(Path.home() / '.ai-prowler' / 'cloudflared_upgrade.log')
+        if status in ('upgraded', 'ok'):
+            messagebox.showinfo(
+                "Remote Access updated",
+                f"Cloudflare Tunnel client is now version "
+                f"{res.get('new_version') or '(current)'}.\n\n"
+                f"{res.get('message', '')}\n\n"
+                "No other changes are needed.",
+                parent=self.root)
+        elif status == 'cancelled':
+            messagebox.showinfo(
+                "Update not installed",
+                "The update needs administrator approval and wasn't installed.\n\n"
+                "You'll be asked again the next time AI-Prowler starts.",
+                parent=self.root)
+        else:
+            messagebox.showwarning(
+                "Remote Access update failed",
+                f"The tunnel client could not be updated:\n\n"
+                f"{res.get('message', 'unknown error')}\n\n"
+                "Your existing Remote Access setup was left as it was.\n"
+                f"Details: {log_hint}",
+                parent=self.root)
 
     # ── Update downloaded but NOT installed yet (2026-10-21, David) ─────────
     # Download Update only STAGES the files; RAG_RUN.bat installs them the next
@@ -5546,6 +5643,9 @@ or from the Help menu."""
                     'subscription_client.py',
                     'mobile_activator.py',
                     'cloudflared_service_helper.py',
+                    # v9.5.0 cloudflared security upgrade (eMudhra advisory)
+                    'cloudflared_upgrade.py',
+                    'upgrade_cloudflared.ps1',
                 ]
 
                 _files = _fallback_files
