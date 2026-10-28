@@ -70,6 +70,36 @@ button.b.ghost{background:none;color:var(--acc);border:1px solid var(--acc)}
 button.b.warn{background:var(--warn)}button.b.bad{background:var(--bad);color:#fff}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .row>*{flex:1 1 140px;min-width:0}
+/* A button sized to its words next to a box (Save, Undo import, Assign…) — "flex:0"
+   on its own let it shrink to nothing and the text spilled out (David 2026-10-28) */
+.row>button.b[style*="flex:0"],.tog>button.b[style*="flex:0"]{flex:0 0 auto!important;white-space:nowrap}
+/* Sign-in screen — same look as the Jobs app (David 2026-10-28) */
+body.authing header,body.authing #fab{display:none!important}
+.auth-screen{position:fixed;inset:0;z-index:20;overflow-y:auto;display:flex;flex-direction:column;justify-content:center;
+align-items:center;padding:calc(var(--safe-top) + 40px) 24px calc(var(--safe-bot) + 40px);text-align:center;gap:16px;
+background:radial-gradient(ellipse at top,#0a1628 0%,#07080f 60%)}
+.auth-logo{width:96px;height:96px;border-radius:20px;margin-bottom:8px;box-shadow:0 0 40px rgba(0,212,255,.3)}
+.auth-title{font-size:28px;font-weight:700;color:#fff;margin:0}
+.auth-app{font-size:13px;font-weight:700;letter-spacing:.12em;color:var(--acc);margin:-10px 0 0}
+.auth-sub{font-size:14px;color:#d0d4e0;line-height:1.5;max-width:300px;font-weight:500;margin:0}
+.auth-screen input.auth-input{width:100%;max-width:320px;background:var(--card);border:1px solid var(--line);border-radius:12px;
+padding:16px;font-size:18px;color:#fff;text-align:center;letter-spacing:.3em;font-family:monospace;outline:none;min-height:0}
+.auth-screen input.auth-input:focus{border-color:var(--acc);box-shadow:0 0 0 2px rgba(0,212,255,.15)}
+.auth-screen input.auth-input::placeholder{letter-spacing:.1em;font-size:14px;color:#c0c6d8}
+.auth-screen input.auth-input.invalid{border-color:var(--bad);box-shadow:0 0 0 2px rgba(255,68,85,.18)}
+.auth-input-wrap{position:relative;width:100%;max-width:320px}
+.auth-input-wrap input.auth-input{padding-right:46px;padding-left:46px}
+.auth-eye-btn{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:34px;height:34px;background:none;border:none;
+font-size:17px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--mute);opacity:.85;padding:0}
+.auth-eye-btn:active{opacity:.6}
+.auth-btn{width:100%;max-width:320px;padding:16px;background:linear-gradient(135deg,#00aaff,#0066cc);color:#fff;border:none;
+border-radius:12px;font:inherit;font-size:16px;font-weight:700;cursor:pointer;box-shadow:0 4px 20px rgba(0,140,255,.35);
+-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.auth-btn:active{transform:scale(.98)}
+.auth-btn:disabled{opacity:.6}
+.auth-err{font-size:13px;color:var(--bad);margin:0;max-width:320px}
+.auth-note{font-size:13px;color:var(--warn);margin:0;max-width:320px}
+.auth-help{font-size:11px;color:#8a90a8;margin:8px 0 0;max-width:300px;line-height:1.5}
 .fab{position:fixed;right:18px;bottom:calc(18px + var(--safe-bot));width:58px;height:58px;border-radius:50%;
 font-size:30px;line-height:58px;padding:0;min-height:0;box-shadow:0 6px 20px rgba(0,212,255,.35);z-index:6}
 .msg{border-left:3px solid var(--line);padding:6px 10px;margin:8px 0;overflow-wrap:anywhere}
@@ -313,19 +343,46 @@ function showLogin(note) {
   stopPoll(); $('#tabs').classList.add('hide'); $('#fab').classList.add('hide'); $('#who').textContent = '';
   ['#refreshBtn', '#signOutBtn', '#bell'].forEach(s => $(s).classList.add('hide'));
   const server = S.mode === 'server';
-  app.innerHTML = `<div class="card"><h2 style="margin:0 0 6px">Sign in</h2>
-    <p class="muted">${server ? 'Use your AI-Prowler name and password (token) from the server\'s Admin tab.'
-      : 'Use your AI-Prowler Bearer Token (Settings tab on your PC).'}</p>
-    ${note ? `<p style="color:var(--warn)">${esc(note)}</p>` : ''}
-    ${server ? '<label>Name</label><input id="lgName" autocomplete="username">' : ''}
-    <label>${server ? 'Password' : 'Bearer Token'}</label>
-    <input id="lgTok" type="password" autocomplete="current-password">
-    <div class="row" style="margin-top:12px"><button class="b" id="lgGo">Sign in</button></div></div>`;
+  document.body.classList.add('authing');
+  // Same sign-in screen as the Jobs app: logo, title, password box with a 👁️ to
+  // show what you typed, blue Unlock button, the problem shown right under it.
+  app.innerHTML = `<div class="auth-screen" id="authScreen">
+    <img class="auth-logo" src="/desk/icon-192.png" alt="AI-Prowler">
+    <h1 class="auth-title">AI-Prowler</h1>
+    <p class="auth-app">SERVICE DESK</p>
+    <p class="auth-sub">${server ? 'Enter your name and password from AI-Prowler → Admin.'
+      : 'Enter your Bearer Token from AI-Prowler Settings → Remote Access.'}</p>
+    ${note ? `<p class="auth-note">${esc(note)}</p>` : ''}
+    ${server ? '<input id="lgName" class="auth-input" type="text" placeholder="Your name" maxlength="128" autocomplete="username">' : ''}
+    <div class="auth-input-wrap">
+      <input id="lgTok" class="auth-input" type="password" placeholder="${server ? 'Password' : 'Bearer Token'}" maxlength="256" autocomplete="current-password">
+      <button type="button" id="lgEye" class="auth-eye-btn" aria-label="Show password" tabindex="-1">&#x1F441;&#xFE0F;</button>
+    </div>
+    <button class="auth-btn" id="lgGo">&#x1F513; Unlock</button>
+    <p class="auth-err hide" id="lgErr"></p>
+    <p class="auth-help">💡 ${server ? 'Your owner gives you your name and password.'
+      : 'Find your token in AI-Prowler → Settings → Remote Access → Bearer Token → Show'}</p>
+  </div>`;
+  const clearErr = () => { $('#lgTok').classList.remove('invalid'); $('#lgErr').classList.add('hide'); };
   $('#lgGo').addEventListener('click', doLogin);
+  $('#lgTok').addEventListener('input', clearErr);
   $('#lgTok').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  if (server) $('#lgName').addEventListener('keydown', e => { if (e.key === 'Enter') $('#lgTok').focus(); });
+  $('#lgEye').addEventListener('click', () => {
+    const inp = $('#lgTok'), btn = $('#lgEye'), show = inp.type === 'password';
+    inp.type = show ? 'text' : 'password';
+    btn.innerHTML = show ? '&#x1F648;' : '&#x1F441;&#xFE0F;';
+    btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+  });
+}
+function loginError(msg) {
+  const e = $('#lgErr'); if (!e) { toast(msg); return; }
+  e.textContent = msg; e.classList.remove('hide'); $('#lgTok').classList.add('invalid');
 }
 async function doLogin() {
   const tok = $('#lgTok').value.trim();
+  if (!tok) { loginError(S.mode === 'server' ? 'Enter your password.' : 'Enter your Bearer Token.'); return; }
+  const go = $('#lgGo'); go.disabled = true;
   try {
     if (S.mode === 'server') {
       const r = await fetch('/desk-api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -340,8 +397,13 @@ async function doLogin() {
       S.token = tok;
     }
     sessionStorage.setItem('desk_token', S.token);
+    document.body.classList.remove('authing');
     await start();
-  } catch (e) { toast(e.message); }
+  } catch (e) {
+    if (!$('#lgTok')) showLogin();
+    document.body.classList.add('authing');
+    loginError(e.message);
+  } finally { if (go.isConnected) go.disabled = false; }
 }
 function signOut(note) { sessionStorage.removeItem('desk_token'); S.token = ''; showLogin(note); }
 

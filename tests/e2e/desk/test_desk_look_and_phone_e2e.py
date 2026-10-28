@@ -49,6 +49,27 @@ def _boxes_ok(p, where):
 def test_L1_looks_like_the_other_apps(business, people):
     o = people(business, "Olive (owner, phone)", phone=True)
     o.page.goto(f"{business.base}/desk/")
+    # sign-in screen = the Jobs app's: logo, password box with 👁️, blue Unlock (David 2026-10-28)
+    o.page.locator("#authScreen .auth-logo").wait_for()
+    assert o.page.evaluate("document.querySelector('.auth-logo').naturalWidth") > 0, "logo didn't load"
+    assert o.page.locator("header").is_hidden(), "the app's top bar shows on the sign-in screen"
+    assert "Unlock" in o.page.locator("#lgGo").inner_text()
+    o.type("#lgTok", "abc123")
+    assert o.page.locator("#lgTok").get_attribute("type") == "password"
+    o.click("#lgEye")
+    assert o.page.locator("#lgTok").get_attribute("type") == "text", "the eye didn't show the password"
+    o.click("#lgEye")
+    assert o.page.locator("#lgTok").get_attribute("type") == "password"
+    o.type("#lgName", "Olive Owner")
+    o.click("#lgGo")                                          # wrong password → says so under the button
+    o.page.locator("#lgErr:not(.hide)").wait_for()
+    assert "invalid" in (o.page.locator("#lgTok").get_attribute("class") or "")
+    # version badge, stamped by the server, tap → latest
+    badge = o.page.locator("#apPwaVer")
+    assert re.match(r"v\d+\.\d+\.\d+ · [0-9a-f]{6}$", badge.inner_text()), badge.inner_text()
+    badge.click()
+    o.page.locator("#apPwaVer.ok", has_text="latest").wait_for()
+    o.sign_in("Olive Owner")
     # icon top-left, loaded
     icon = o.page.locator(".brand-icon img")
     icon.wait_for()
@@ -57,13 +78,7 @@ def test_L1_looks_like_the_other_apps(business, people):
     assert box["x"] < 40 and box["y"] < 90, f"icon isn't at the upper left: {box}"
     assert o.page.locator(".brand-name").inner_text() == "AI-PROWLER"
     assert o.page.title() == "AI-Prowler Service Desk"
-    # version badge, stamped by the server, tap → latest
-    badge = o.page.locator("#apPwaVer")
-    assert re.match(r"v\d+\.\d+\.\d+ · [0-9a-f]{6}$", badge.inner_text()), badge.inner_text()
-    badge.click()
-    o.page.locator("#apPwaVer.ok", has_text="latest").wait_for()
     # signed in: who, refresh, sign out
-    o.sign_in("Olive Owner")
     assert "Olive Owner" in o.page.locator(".brand-role").inner_text()
     st, d = business.api("POST", "/desk-api/tickets", {"kind": "internal", "title": "ZTEST L1 refresh me"},
                          name="Olive Owner")
@@ -128,6 +143,23 @@ def test_L4_cards_show_how_long_each_ticket_has_waited(business, people):
     o.page.locator(f".board [data-open='{urgent['ticket_id']}'] .chip.wait").wait_for()
     assert o.page.locator(f".board [data-open='{done['ticket_id']}'] .chip.wait").count() == 0, \
         "a Fixed ticket isn't waiting on anyone"
+
+
+@pytest.mark.parametrize("phone", [False, True], ids=["desktop", "phone"])
+def test_L5_settings_buttons_keep_their_words_inside(business, people, phone):
+    """David 2026-10-28 (screenshot): "Save" and "Undo import" in Settings spilled
+    out of their buttons. Every button's words must fit inside it."""
+    o = people(business, "Olive (owner)" + (", phone" if phone else ""), phone=phone)
+    o.sign_in("Olive Owner")
+    o.tab("settings")
+    o.page.locator("#undoGo").wait_for()
+    spill = o.page.evaluate("""() => [...document.querySelectorAll('#app button')]
+        .filter(b => b.offsetParent && b.scrollWidth > b.clientWidth + 1)
+        .map(b => (b.id || b.textContent.trim()).slice(0, 30))""")
+    assert not spill, f"words spill out of these buttons: {spill}"
+    for sel in ("#acSave", "#undoGo"):
+        bb, box = o.page.locator(sel).bounding_box(), o.page.locator(sel).locator("xpath=..").bounding_box()
+        assert bb["width"] >= 60 and bb["x"] + bb["width"] <= box["x"] + box["width"] + 1, (sel, bb, box)
 
 
 @pytest.mark.parametrize("device", ["Pixel 7", "iPhone 13"])
