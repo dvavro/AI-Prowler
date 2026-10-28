@@ -91,6 +91,12 @@ def build_ticket_json(conn: sqlite3.Connection, ticket_id: str) -> dict:
     doc["relations"] = [dict(r) for r in conn.execute(
         "SELECT kind, target, created_at, created_by FROM ticket_relations WHERE ticket_id = ? "
         "ORDER BY created_at", (ticket_id,))]
+    try:
+        doc["watchers"] = [dict(r) for r in conn.execute(
+            "SELECT email, name, added_at, added_by FROM ticket_watchers WHERE ticket_id = ? "
+            "ORDER BY added_at, email", (ticket_id,))]
+    except sqlite3.OperationalError:          # a database from before watchers existed
+        doc["watchers"] = []
     doc["updated_at"] = t.get("last_edited_at")
     doc["rev"] = t.get("version")
     return doc
@@ -235,6 +241,11 @@ def _insert_from_doc(conn: sqlite3.Connection, doc: dict) -> None:
                          "created_by) VALUES (?, ?, ?, ?, ?)",
                          (tid, rel["kind"], rel["target"], rel.get("created_at") or doc.get("created_at"),
                           rel.get("created_by") or "rebuild"))
+        for w in doc.get("watchers") or []:
+            conn.execute("INSERT OR IGNORE INTO ticket_watchers (ticket_id, email, name, added_at, added_by) "
+                         "VALUES (?, ?, ?, ?, ?)",
+                         (tid, w["email"], w.get("name") or "", w.get("added_at") or doc.get("created_at"),
+                          w.get("added_by") or "rebuild"))
         # Event, message and attachment ids are global counters, so a partial
         # rebuild must not reuse the old numbers: insert with fresh ids and map
         # each old message id to its new one for the attachments that point at it.

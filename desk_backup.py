@@ -189,7 +189,8 @@ def restore(db_path: str, name: str, *, actor=None, edition: str = rules.BUSINES
             conn = desk_db.get_connection(db_path)
             try:
                 conn.execute("BEGIN IMMEDIATE")
-                for table in ("ticket_attachments", "ticket_messages", "ticket_events", "tickets"):
+                for table in ("ticket_watchers", "ticket_relations", "ticket_attachments", "ticket_messages",
+                              "ticket_events", "tickets"):
                     conn.execute(f"DELETE FROM {table} WHERE ticket_id = ?", (tid,))
                 conn.execute("COMMIT")
                 desk_files._insert_from_doc(conn, doc)

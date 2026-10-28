@@ -339,6 +339,69 @@ def test_scheduler_alerts_after_two_failed_backups(db, monkeypatch):
     assert len(alerts) == 1 and "2 times" in alerts[0]
 
 
+# ── auto-close: Fixed + 3 quiet days -> Closed (spec) ────────────────────────
+
+def _fixed_customer_ticket(db, edition=r.SOLO, title="Streaks"):
+    c = desk_db.upsert_contact(db, name="Mrs Lopez", phone="386-555-0100")
+    actor = None if edition == r.SOLO else OWNER_S
+    t = desk_db.create_ticket(db, title=title, kind="external", contact_id=c["contact_id"],
+                              actor=actor, edition=edition,
+                              **({} if edition == r.SOLO else {"assignee": "dave"}))
+    desk_db.change_state(db, t["ticket_id"], r.IN_PROGRESS, actor=actor, edition=edition)
+    desk_db.change_state(db, t["ticket_id"], r.FIXED, actor=actor, edition=edition)
+    return t["ticket_id"], c
+
+
+def test_auto_close_after_three_quiet_days(db):
+    tid, _c = _fixed_customer_ticket(db)
+    own = desk_db.create_ticket(db, title="Renew license", kind="internal", edition=r.SOLO)
+    desk_db.change_state(db, own["ticket_id"], r.FIXED, edition=r.SOLO)
+    now = datetime.datetime.now(UTC)
+    assert desk_reports.auto_close(db, edition=r.SOLO, now=now + datetime.timedelta(days=2, hours=23)) == []
+    assert desk_reports.auto_close(db, edition=r.SOLO, now=now + datetime.timedelta(days=3, minutes=1)) == [tid]
+    t = desk_db.get_ticket(db, tid)
+    assert t["state"] == r.CLOSED and "automatically" in t["close_reason"]
+    last = t["state_history"][-1] if "state_history" in t else None
+    con = desk_db.get_connection(db)
+    try:
+        who = con.execute("SELECT actor FROM ticket_events WHERE ticket_id = ? AND kind = 'state_change' "
+                          "ORDER BY event_id DESC LIMIT 1", (tid,)).fetchone()[0]
+    finally:
+        con.close()
+    assert who == "system", last
+    assert desk_db.get_ticket(db, own["ticket_id"])["state"] == r.FIXED     # the owner's own to-do stays
+    assert desk_files.verify(db) == []
+
+
+def test_a_customer_message_restarts_the_quiet_clock(db):
+    tid, c = _fixed_customer_ticket(db)
+    cust = {"id": "cust", "role": "customer", "contact_id": c["contact_id"]}
+    desk_db.add_message(db, tid, "thanks, looks good so far", actor=cust, edition=r.SOLO, visibility="public")
+    later = (datetime.datetime.now(UTC) + datetime.timedelta(days=2)).isoformat(timespec="seconds")
+    con = desk_db.get_connection(db)
+    try:
+        con.execute("UPDATE ticket_messages SET at = ? WHERE ticket_id = ?", (later, tid))
+    finally:
+        con.close()
+    now = datetime.datetime.now(UTC)
+    assert desk_reports.auto_close(db, edition=r.SOLO, now=now + datetime.timedelta(days=3, minutes=1)) == []
+    assert desk_reports.auto_close(db, edition=r.SOLO, now=now + datetime.timedelta(days=5, minutes=1)) == [tid]
+
+
+def test_auto_close_zero_days_means_never_and_business_works_too(db):
+    desk_db.set_setting(db, "auto_close_days", 0, actor=OWNER_S)
+    tid, _c = _fixed_customer_ticket(db, edition=r.BUSINESS)
+    far = datetime.datetime.now(UTC) + datetime.timedelta(days=40)
+    assert desk_reports.auto_close(db, edition=r.BUSINESS, now=far) == []
+    desk_db.set_setting(db, "auto_close_days", 1, actor=OWNER_S)
+    did = desk_scheduler.run_once(db, edition=r.BUSINESS, now=far)
+    assert did["auto_closed"] == [tid]
+    with pytest.raises(desk_db.DeskError):
+        desk_db.set_setting(db, "auto_close_days", "3", actor=OWNER_S)       # type is checked
+    assert "auto_close_days = 5" in desk_tools.tickets_settings(db, OWNER_S, r.BUSINESS,
+                                                                setting="auto_close_days", value="5")
+
+
 # ── tools ────────────────────────────────────────────────────────────────────
 
 def test_phase3_tools_text(db):

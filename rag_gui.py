@@ -15820,6 +15820,9 @@ or from the Help menu."""
                                 d = d.replace('https://','').replace('http://','').rstrip('/')
                                 if d and hasattr(self, '_jobs_url_var'):
                                     self._jobs_url_var.set(f"https://{d}/jobs/")
+                                if d and getattr(self, '_desk_url_vars', None):   # Service Desk rows
+                                    self._desk_url_vars['app'].set(f"https://{d}/desk/")
+                                    self._desk_url_vars['support'].set(f"https://{d}/support/new")
                             except Exception:
                                 pass
                             try:
@@ -18762,6 +18765,22 @@ or from the Help menu."""
 
         ttk.Label(pwa_url_row, text="← send to crew phones",
                   font=('Arial', 8), foreground='gray').pack(side='left')
+
+        # ── Service Desk app (PWA) + customer request page — 2026-10-28, David ──
+        # "In AI-Prowler business tab make sure you provide the URL for the PWA
+        # install on cell phones like the copy and the QR code like the other PWA
+        # apps." Both modes (personal = Solo edition, server = team edition).
+        # Same tunnel_domain as the Jobs row; same shared QR window.
+        desk_lf = ttk.LabelFrame(banner,
+                                 text="🎫 Service Desk — Mobile URL for Tickets",
+                                 padding=(8, 4))
+        desk_lf.pack(fill='x', pady=(8, 0))
+        try:
+            import desk_gui_links as _dgl
+            self._desk_url_vars = _dgl.build_desk_url_rows(self, desk_lf)
+        except Exception as _e_dgl:
+            ttk.Label(desk_lf, text=f"Service Desk links unavailable: {_e_dgl}",
+                      font=('Arial', 8), foreground='gray').pack(anchor='w')
 
         ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
 

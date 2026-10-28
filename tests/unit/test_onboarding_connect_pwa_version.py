@@ -34,7 +34,7 @@ if str(_SRC) not in sys.path:
 
 import setup_wizard as sw  # noqa: E402
 
-PWA_APPS = ["jobs", "remote", "hr_admin", "hr_portal"]
+PWA_APPS = ["jobs", "remote", "hr_admin", "hr_portal", "desk"]   # desk = Service Desk (2026-10-28)
 JS_STAMP_RE = re.compile(r"/\*AP_PWA_BUILD\*/'([^']*)'/\*AP_PWA_BUILD_END\*/")   # same as the page's JS
 
 

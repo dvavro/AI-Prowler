@@ -182,11 +182,12 @@ def my_tickets(db_path, actor, edition) -> str:
 
 def update_ticket(db_path, actor, edition, *, ticket_id, title="", description="",
                   priority="", type="", due="", job_id="", customer_id="",
-                  sms_fallback=None, reason="", expected_version=None) -> str:
+                  sms_fallback=None, reason="", expected_version=None, resolution="") -> str:
     def go():
         fields = {}
         for k, v in (("title", title), ("description", description), ("type", type),
-                     ("job_id", job_id), ("customer_id", customer_id)):
+                     ("job_id", job_id), ("customer_id", customer_id),
+                     ("resolution", (resolution or "").strip())):
             if v:
                 fields[k] = v
         if priority:
@@ -606,7 +607,52 @@ def ticket_updates_json(db_path, actor, edition, *, since="") -> str:
     return json.dumps({"ok": True, **out}, default=str)
 
 
+def ticket_watchers(db_path, actor, edition, *, ticket_id, add="", remove="", directory_fn=None) -> str:
+    """Show / add / remove the internal people emailed when a ticket changes
+    state. add / remove: comma-separated names or emails — a name is looked up
+    in the same address list the app suggests (team, saved contacts, Jobs
+    customers, past ticket contacts)."""
+    import desk_http
+
+    def go():
+        tid = ticket_id.strip().upper()
+        if desk_db.get_ticket(db_path, tid, actor=actor, edition=edition) is None:
+            raise desk_db.NotFoundError(f"no ticket {tid} that you can see")
+        book = []
+
+        def resolve(who):
+            who = who.strip()
+            if desk_db._EMAIL_RE.match(who.lower()):
+                return who.lower(), ""
+            if not book:
+                book.extend(desk_http.directory(db_path, actor, {"directory": directory_fn} if directory_fn else {}))
+            low = who.lower()
+            hits = [e for e in book if e["name"].lower() == low] or \
+                   [e for e in book if low in e["name"].lower()]
+            if len(hits) == 1:
+                return hits[0]["email"], hits[0]["name"]
+            if not hits:
+                raise desk_db.DeskError(f"no email on file for {who!r} — say the address instead")
+            raise desk_db.DeskError(f"{who!r} could be " + ", ".join(
+                f"{e['name']} <{e['email']}>" for e in hits[:6]) + " — which one?")
+        done = []
+        for who in [w for w in (add or "").split(",") if w.strip()]:
+            em, nm = resolve(who)
+            desk_db.set_watcher(db_path, tid, em, name=nm, actor=actor, edition=edition)
+            done.append(f"added {nm or em}")
+        for who in [w for w in (remove or "").split(",") if w.strip()]:
+            em, nm = resolve(who)
+            desk_db.set_watcher(db_path, tid, em, remove=True, actor=actor, edition=edition)
+            done.append(f"removed {nm or em}")
+        ws = desk_db.list_watchers(db_path, tid)
+        listing = ", ".join(f"{w['name']} <{w['email']}>" if w["name"] else w["email"] for w in ws) or "nobody yet"
+        return (("✅ " + "; ".join(done) + ". ") if done else "") + \
+            f"Watching {tid} (emailed on every change of state): {listing}."
+    return _run(go)
+
+
 SETTING_HELP = {
+    "customer_status_updates": "tell the customer, in one line, when their request is in progress and when it's closed",
     "own_tickets": "the Owner can file tickets to himself (Solo)",
     "subcontractor_tickets": "the Owner can open tickets about a subcontractor",
     "sms_fallback_default": "new tickets also alert by SMS",
@@ -617,6 +663,8 @@ SETTING_HELP = {
     "email_new_request_mode": "an email that isn't a reply: off or create",
     "email_intake": "read the AI-Prowler email account for ticket replies (IMAP)",
     "csat_enabled": "ask customers to rate a closed request",
+    "auto_close_days": "close a Fixed customer ticket after this many days with no reply from the customer (0 = never)",
+    "digest_hour": "hour of the morning digest email (0-23)",
 }
 
 
@@ -630,6 +678,9 @@ def tickets_settings(db_path, actor, edition, *, setting="", value=None) -> str:
                 v = True
             elif low in ("false", "off", "no", "0"):
                 v = False
+        default = desk_db.SETTING_DEFAULTS.get(setting)
+        if isinstance(v, str) and type(default) is int and v.strip().lstrip("-").isdigit():
+            v = int(v.strip())                       # "5" from chat / voice
         if setting:
             desk_db.set_setting(db_path, setting, v, actor=actor, edition=edition)
         s = desk_db.get_settings(db_path)

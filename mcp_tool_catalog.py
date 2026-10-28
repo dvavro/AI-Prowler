@@ -785,6 +785,10 @@ _RAW = [
     ('tickets_settings', 'service_desk', 'Service Desk settings',
      'Show or change Service Desk settings (owner).', BOTH,
      False, None, True, 'Used by the Service Desk app.'),
+    ('ticket_watchers', 'service_desk', 'Ticket watchers',
+     'Show, add or remove the internal people emailed whenever a ticket changes state '
+     '(by name or email; names come from the team, saved contacts, customers and past contacts).', BOTH,
+     False, None, True, 'Used by the Service Desk app.'),
 ]
 
 TOOL_CATALOG: Dict[str, ToolMeta] = {

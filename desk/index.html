@@ -3,21 +3,48 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#00d4ff">
+<meta name="theme-color" content="#0e1018">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Service Desk">
 <link rel="manifest" href="/desk/manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="/desk/icon-192.png">
 <link rel="apple-touch-icon" href="/desk/icon-192.png">
-<title>Service Desk</title>
+<title>AI-Prowler Service Desk</title>
 <style>
-:root{--bg:#07080f;--card:#11131f;--line:#23263a;--ink:#e8ecf6;--mute:#8d93a8;--acc:#00d4ff;
---ok:#3ddc84;--warn:#ffb020;--bad:#ff5470;--r:12px}
+/* Same look as the Jobs app (2026-10-28, David): dark surface top bar with the
+   AI-Prowler icon top-left, cyan brand, ↻ refresh, update banner, version badge. */
+:root{--bg:#07080f;--surface:#0e1018;--card:#12141f;--line:#2a2f45;--ink:#ffffff;--mute:#c0c6d8;--acc:#00d4ff;
+--ok:#00e87a;--warn:#ffb700;--bad:#ff4455;--r:12px;
+--safe-top:env(safe-area-inset-top,0px);--safe-bot:env(safe-area-inset-bottom,0px)}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-padding-bottom:calc(72px + env(safe-area-inset-bottom))}
-header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding:10px 14px}
-header h1{font-size:17px;margin:0;display:flex;align-items:center;gap:8px}
-header .who{margin-left:auto;font-size:12px;color:var(--mute);font-weight:400}
-.tabs{display:flex;gap:6px;margin-top:8px;overflow-x:auto}
-.tab{border:1px solid var(--line);background:none;color:var(--mute);border-radius:999px;padding:6px 12px;font-size:13px;white-space:nowrap}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+-webkit-font-smoothing:antialiased;overscroll-behavior-y:contain;
+padding-bottom:calc(88px + var(--safe-bot))}
+header{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--line);
+padding:calc(var(--safe-top) + 10px) 14px 8px}
+.topbar{display:flex;align-items:center;gap:10px;min-height:40px;padding-right:56px}
+.brand-icon{width:34px;height:34px;border-radius:8px;overflow:hidden;border:1px solid rgba(0,212,255,.4);flex:none}
+.brand-icon img{width:100%;height:100%;object-fit:cover;display:block}
+.brand{min-width:0;flex:1}
+.brand-name{font-size:15px;font-weight:700;letter-spacing:.04em;color:var(--acc);line-height:1.1}
+.brand-role{font-size:12px;color:#d0d4e0;letter-spacing:.04em;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand-role .who{color:#d0d4e0}
+.ibtn{flex:none;min-width:40px;min-height:40px;display:inline-flex;align-items:center;justify-content:center;
+background:none;border:1px solid var(--line);border-radius:10px;color:var(--acc);font-size:16px;cursor:pointer;padding:0;
+-webkit-tap-highlight-color:transparent}
+.ibtn svg{width:19px;height:19px}
+.ibtn.spin svg{animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.conn-dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok);flex:none}
+.conn-dot.offline{background:var(--bad);box-shadow:0 0 6px var(--bad)}
+.tabs{display:flex;gap:6px;margin-top:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;
+margin-left:-14px;margin-right:-14px;padding:0 14px 2px}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:none;border:1px solid var(--line);background:none;color:var(--mute);border-radius:999px;padding:8px 14px;font-size:13px;
+white-space:nowrap;min-height:36px;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .tab.on{color:var(--bg);background:var(--acc);border-color:var(--acc)}
 main{padding:12px 14px;max-width:760px;margin:0 auto}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:10px}
@@ -28,37 +55,150 @@ main{padding:12px 14px;max-width:760px;margin:0 auto}
 .chip{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:2px 8px;color:var(--mute)}
 .chip.P1{color:var(--bad);border-color:var(--bad)}.chip.P2{color:var(--warn);border-color:var(--warn)}
 .chip.st{color:var(--acc);border-color:var(--acc)}.chip.late{color:var(--bad);border-color:var(--bad)}
-label{display:block;font-size:12px;color:var(--mute);margin:10px 0 4px}
-input,select,textarea{width:100%;background:#0b0d17;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit}
-textarea{min-height:80px}
-button.b{border:0;border-radius:10px;padding:10px 14px;font:inherit;font-weight:600;background:var(--acc);color:var(--bg);cursor:pointer}
+label{display:block;font-size:12px;color:var(--mute);margin:12px 0 4px;font-weight:600;letter-spacing:.02em}
+/* 16px text in every box: smaller makes iPhones zoom in on tap (and not zoom back) */
+input,select,textarea{width:100%;background:#0a0c14;color:var(--ink);border:1px solid var(--line);border-radius:10px;
+padding:12px;font:inherit;font-size:16px;min-height:46px;outline:none;-webkit-appearance:none;appearance:none}
+input:focus,select:focus,textarea:focus{border-color:var(--acc)}
+input[type=checkbox]{width:22px;height:22px;min-height:0;padding:0;vertical-align:middle;-webkit-appearance:checkbox;appearance:auto;accent-color:var(--acc)}
+select{background-image:linear-gradient(45deg,transparent 50%,var(--mute) 50%),linear-gradient(135deg,var(--mute) 50%,transparent 50%);
+background-position:calc(100% - 18px) 50%,calc(100% - 12px) 50%;background-size:6px 6px;background-repeat:no-repeat;padding-right:32px}
+textarea{min-height:96px;resize:vertical}
+button.b{border:0;border-radius:10px;padding:12px 16px;min-height:46px;font:inherit;font-weight:700;background:var(--acc);color:#04121a;
+cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
 button.b.ghost{background:none;color:var(--acc);border:1px solid var(--acc)}
 button.b.warn{background:var(--warn)}button.b.bad{background:var(--bad);color:#fff}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.row>*{flex:1}
-.fab{position:fixed;right:18px;bottom:calc(18px + env(safe-area-inset-bottom));width:56px;height:56px;border-radius:50%;
-font-size:28px;line-height:56px;padding:0;box-shadow:0 6px 20px rgba(0,212,255,.35)}
-.msg{border-left:3px solid var(--line);padding:6px 10px;margin:8px 0}
+.row>*{flex:1 1 140px;min-width:0}
+.fab{position:fixed;right:18px;bottom:calc(18px + var(--safe-bot));width:58px;height:58px;border-radius:50%;
+font-size:30px;line-height:58px;padding:0;min-height:0;box-shadow:0 6px 20px rgba(0,212,255,.35);z-index:6}
+.msg{border-left:3px solid var(--line);padding:6px 10px;margin:8px 0;overflow-wrap:anywhere}
 .msg.public{border-color:var(--acc)}.msg.internal{border-color:var(--warn)}
 .msg .h{font-size:12px;color:var(--mute)}
+.card p,.card .t{overflow-wrap:anywhere}
 .thumbs{display:flex;flex-wrap:wrap;gap:8px}
 .thumbs a{display:block;width:84px;height:84px;border-radius:8px;overflow:hidden;border:1px solid var(--line);
-background:#0b0d17;color:var(--mute);font-size:11px;text-align:center;text-decoration:none;padding:4px}
+background:#0a0c14;color:var(--mute);font-size:11px;text-align:center;text-decoration:none;padding:4px}
 .thumbs img{width:100%;height:100%;object-fit:cover;margin:-4px}
-.board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(220px,1fr);gap:10px;overflow-x:auto}
+.board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(240px,82vw);gap:10px;overflow-x:auto;
+-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity;padding-bottom:6px}
+@media (min-width:700px){.board{grid-auto-columns:minmax(220px,1fr)}}
+.board>.col{scroll-snap-align:start}
 .col h3{font-size:13px;color:var(--mute);margin:0 0 8px}
-#toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#1c2033;border:1px solid var(--line);
+#toast{position:fixed;left:50%;bottom:calc(92px + var(--safe-bot));transform:translateX(-50%);background:#1c2033;border:1px solid var(--line);
 padding:10px 14px;border-radius:10px;display:none;max-width:90%;z-index:20}
 .banner{background:#14243a;border:1px solid var(--acc);border-radius:10px;padding:8px 12px;margin-bottom:10px;cursor:pointer}
 .muted{color:var(--mute)}.hide{display:none!important}
-.tog{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
-.tog input{width:auto}
+.tog{display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--line);min-height:48px}
+.tog input{width:22px}
+.chip{min-height:26px;display:inline-flex;align-items:center}
+[data-wrm]{display:inline-flex;align-items:center;justify-content:center;min-width:28px;min-height:28px;color:var(--bad);text-decoration:none}
+/* New-version banner — same as the Jobs app */
+#updateBanner{position:fixed;top:calc(var(--safe-top) + 10px);left:12px;right:12px;z-index:9999;background:var(--surface);
+border:1px solid var(--acc);border-radius:14px;padding:12px 14px;box-shadow:0 8px 30px rgba(0,0,0,.5);display:none;
+align-items:center;justify-content:space-between;gap:10px}
+#updateBanner.show{display:flex}
+#updateBanner .msg{font-size:13px;font-weight:600;color:#fff;border:0;margin:0;padding:0}
+#updateBanner .actions{display:flex;gap:8px;flex-shrink:0}
+#updateBanner button{border:none;border-radius:9px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer;min-height:36px}
+#updateBanner .btn-later{background:transparent;border:1px solid var(--line);color:var(--mute)}
+#updateBanner .btn-refresh{background:var(--acc);color:#04121a}
 </style>
 </head>
 <body>
+<!-- ── PWA version badge — same as the Jobs, Remote, HR Admin and HR Portal apps.
+     The server fills in the build at serve time (ai_prowler_mcp.py _stamp_pwa_build).
+     Tap it: green = latest, red = a newer one is waiting (tap again to load). -->
+<style id="apPwaVerCss">
+#apPwaVer{position:fixed;top:calc(env(safe-area-inset-top,0px) + 2px);right:4px;z-index:2147483000;
+  font:600 10px/1.2 -apple-system,Segoe UI,Roboto,Arial,sans-serif;letter-spacing:.2px;
+  padding:2px 6px;border-radius:9px;background:rgba(20,24,40,.72);color:#cfd6e6;
+  border:1px solid rgba(255,255,255,.18);cursor:pointer;user-select:none;-webkit-user-select:none;
+  white-space:nowrap;opacity:.9;-webkit-tap-highlight-color:transparent}
+#apPwaVer.ok{background:#1b5e20;color:#fff;border-color:#2e7d32}
+#apPwaVer.old{background:#b71c1c;color:#fff;border-color:#e53935}
+#apPwaVer.busy{opacity:.55}
+@media print{#apPwaVer{display:none}}
+</style>
+<div id="apPwaVer" title="App version — tap to check for a newer one" data-app="Service Desk"></div>
+<script id="apPwaVerJs">
+(function () {
+  var BUILD = /*AP_PWA_BUILD*/'__AIPROWLER_PWA_BUILD__'/*AP_PWA_BUILD_END*/;
+  var APP_ROOT = '/desk/';
+  var el = document.getElementById('apPwaVer');
+  if (!el) return;
+  var stamped = BUILD.indexOf('__AIPROWLER') !== 0;      // false = file opened without the server
+  var label = stamped ? 'v' + BUILD : 'dev build';
+  el.textContent = label;
+  el.setAttribute('aria-label', el.getAttribute('data-app') + ' app version ' + label);
+  window.AIPROWLER_PWA_BUILD = stamped ? BUILD : '';
+  var newer = null;
+  function serverBuild() {
+    return fetch(APP_ROOT + 'index.html?v=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+      .then(function (t) {
+        var m = t.match(/\/\*AP_PWA_BUILD\*\/'([^']*)'\/\*AP_PWA_BUILD_END\*\//);
+        if (!m) throw new Error('no build stamp');
+        return m[1];
+      });
+  }
+  el.addEventListener('click', function (ev) {
+    ev.stopPropagation();
+    if (newer) {                                        // second tap: load the newer build
+      el.textContent = 'updating…';
+      var go = function () { location.reload(); };
+      try {
+        if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) {
+          navigator.serviceWorker.getRegistration().then(function (reg) {
+            return reg ? reg.update() : null;
+          }).then(go, go);
+          return;
+        }
+      } catch (e) {}
+      go();
+      return;
+    }
+    el.className = 'busy';
+    el.textContent = label + ' · checking…';
+    serverBuild().then(function (srv) {
+      if (srv === BUILD) {
+        el.className = 'ok';
+        el.textContent = label + ' ✓ latest';
+      } else {
+        newer = srv;
+        el.className = 'old';
+        el.textContent = label + ' → v' + srv + ' — tap to update';
+      }
+    }).catch(function () {
+      el.className = '';
+      el.textContent = label + ' · can\'t reach server';
+    }).then(function () {
+      if (!newer) setTimeout(function () { el.className = ''; el.textContent = label; }, 6000);
+    });
+  });
+})();
+</script>
+<div id="updateBanner">
+  <span class="msg">🔄 A new version is available</span>
+  <div class="actions">
+    <button class="btn-later" id="updLater">Later</button>
+    <button class="btn-refresh" id="updNow">Refresh Now</button>
+  </div>
+</div>
 <header>
-  <h1>🎫 Service Desk <span class="who" id="who"></span>
-    <button class="tab hide" id="bell" title="Alerts on this phone" style="margin-left:6px">🔔</button></h1>
+  <div class="topbar">
+    <div class="brand-icon"><img src="/desk/icon-192.png" alt="AI-Prowler"></div>
+    <div class="brand">
+      <div class="brand-name">AI-PROWLER</div>
+      <div class="brand-role">Service Desk<span class="who" id="who"></span></div>
+    </div>
+    <span class="conn-dot" id="connDot" title="Connected"></span>
+    <button class="ibtn hide" id="refreshBtn" title="Refresh" aria-label="Refresh">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+    </button>
+    <button class="ibtn hide" id="bell" title="Alerts on this phone" aria-label="Alerts on this phone">🔔</button>
+    <button class="ibtn hide" id="signOutBtn" title="Sign out" aria-label="Sign out">⎋</button>
+  </div>
   <div class="tabs hide" id="tabs">
     <button class="tab on" data-filter="mine">My tickets</button>
     <button class="tab" data-filter="open">Open</button>
@@ -66,7 +206,7 @@ padding:10px 14px;border-radius:10px;display:none;max-width:90%;z-index:20}
     <button class="tab" data-filter="board">Board</button>
     <button class="tab" data-filter="closed">Closed</button>
     <button class="tab hide" data-filter="reports" id="tabReports">📊 Reports</button>
-    <button class="tab hide" data-filter="settings" id="tabSettings">⚙︎</button>
+    <button class="tab hide" data-filter="settings" id="tabSettings">⚙︎ Settings</button>
   </div>
 </header>
 <main id="app"></main>
@@ -103,7 +243,10 @@ function isLate(t) { return t.due_resolve_at && !['Fixed', 'Closed'].includes(t.
 async function api(method, path, body, isForm) {
   const h = { Authorization: 'Bearer ' + S.token };
   if (body && !isForm) h['Content-Type'] = 'application/json';
-  const r = await fetch(path, { method, headers: h, body: body ? (isForm ? body : JSON.stringify(body)) : undefined });
+  let r;
+  try { r = await fetch(path, { method, headers: h, body: body ? (isForm ? body : JSON.stringify(body)) : undefined }); }
+  catch (e) { setOnline(false); throw new Error('No connection — check your signal and try again.'); }
+  setOnline(true);
   if (r.status === 401) { signOut('Please sign in again.'); throw new Error('signed out'); }
   const ct = r.headers.get('content-type') || '';
   const data = ct.includes('json') ? await r.json() : await r.blob();
@@ -112,8 +255,55 @@ async function api(method, path, body, isForm) {
 }
 
 // ── sign in ────────────────────────────────────────────────────────────────
+// ── new-version banner (same rules as the Jobs app) ─────────────────────────
+// A new sw.js means a new app build. Ask the browser to check now, whenever the
+// app comes back to the front, and every 30 minutes — browsers otherwise check
+// only about once a day. "Later" hides it until the next tab change.
+let _swReg = null, _updatePending = false;
+function initUpdateBanner() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('/desk/sw.js').then(reg => {
+    _swReg = reg;
+    if (reg.waiting && navigator.serviceWorker.controller) showUpdateBanner();
+    reg.addEventListener('updatefound', () => {
+      const w = reg.installing; if (!w) return;
+      w.addEventListener('statechange', () => {
+        if (w.state === 'installed' && navigator.serviceWorker.controller) showUpdateBanner();
+      });
+    });
+    reg.update().catch(() => {});
+  }).catch(() => {});
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && _swReg) _swReg.update().catch(() => {});
+  });
+  setInterval(() => { if (_swReg) _swReg.update().catch(() => {}); }, 30 * 60 * 1000);
+}
+function showUpdateBanner() { _updatePending = true; $('#updateBanner').classList.add('show'); }
+$('#updLater').addEventListener('click', () => $('#updateBanner').classList.remove('show'));
+$('#updNow').addEventListener('click', () => location.reload());
+
+// ── ↻ refresh: reload whatever is on screen ────────────────────────────────
+async function refreshNow() {
+  const b = $('#refreshBtn'); b.classList.add('spin');
+  try {
+    if (S.open) await openTicket(S.open.ticket_id);
+    else if (S.filter === 'settings') await showSettings();
+    else if (S.filter === 'reports') document.querySelector(".tab[data-filter='reports']").click();
+    else await refreshList();
+    loadDirectory(true);
+  } finally { setTimeout(() => b.classList.remove('spin'), 350); }
+}
+$('#refreshBtn').addEventListener('click', refreshNow);
+$('#signOutBtn').addEventListener('click', () => {
+  if (!confirm('Sign out of Service Desk on this device?')) return;
+  signOut('Signed out.');
+});
+function setOnline(on) { const d = $('#connDot'); d.classList.toggle('offline', !on); d.title = on ? 'Connected' : 'Offline — changes will not save'; }
+window.addEventListener('online', () => setOnline(true));
+window.addEventListener('offline', () => setOnline(false));
+
 async function boot() {
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/desk/sw.js').catch(() => {});
+  initUpdateBanner(); setOnline(navigator.onLine !== false);
   try { S.mode = (await (await fetch('/pwa-token')).json()).mode || 'personal'; } catch (_) {}
   S.token = sessionStorage.getItem('desk_token') || '';
   if (S.token) { try { await start(); return; } catch (_) {} }
@@ -121,6 +311,7 @@ async function boot() {
 }
 function showLogin(note) {
   stopPoll(); $('#tabs').classList.add('hide'); $('#fab').classList.add('hide'); $('#who').textContent = '';
+  ['#refreshBtn', '#signOutBtn', '#bell'].forEach(s => $(s).classList.add('hide'));
   const server = S.mode === 'server';
   app.innerHTML = `<div class="card"><h2 style="margin:0 0 6px">Sign in</h2>
     <p class="muted">${server ? 'Use your AI-Prowler name and password (token) from the server\'s Admin tab.'
@@ -157,18 +348,21 @@ function signOut(note) { sessionStorage.removeItem('desk_token'); S.token = ''; 
 async function start() {
   S.me = await api('GET', '/desk-api/me');
   const a = S.me.actor;
-  $('#who').textContent = (a.name || a.id) + ' · ' + (S.me.edition === 'solo' ? 'Solo' : a.role);
+  $('#who').textContent = ' · ' + (a.name || a.id) + ' · ' + (S.me.edition === 'solo' ? 'Solo' : a.role.replace('_', ' '));
   $('#tabs').classList.remove('hide'); $('#fab').classList.remove('hide');
+  $('#refreshBtn').classList.remove('hide'); $('#signOutBtn').classList.remove('hide');
   $('#tabSettings').classList.toggle('hide', a.role !== 'owner');
   $('#tabReports').classList.toggle('hide', !['owner', 'manager'].includes(a.role));
   $('#bell').classList.toggle('hide', !('serviceWorker' in navigator && 'PushManager' in window));
-  await refreshList(); startPoll();
+  await refreshList(); startPoll(); loadDirectory();
 }
 
 // ── list views ─────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
   b.classList.add('on'); S.filter = b.dataset.filter; S.open = null;
+  if (_updatePending) showUpdateBanner();               // "Later" only hides it until the next tab
+  window.scrollTo(0, 0);
   if (S.filter === 'settings') showSettings();
   else if (S.filter === 'reports') showReports();
   else refreshList();
@@ -309,11 +503,19 @@ async function pollOnce() {
 
 // ── ticket detail ──────────────────────────────────────────────────────────
 async function openTicket(id) {
+  // Same ticket re-drawn after a save → stay where you were on the page;
+  // a different ticket → start at the top (phones).
+  const sameTicket = !!(S.open && S.open.ticket_id === id), keepY = window.scrollY;
   let d;
   try { d = await api('GET', '/desk-api/tickets/' + id); } catch (e) { toast(e.message); return; }
   const t = S.open = d.ticket;
+  // The full ticket keeps its clocks under "sla" (as in ticket.json); the list
+  // rows have them at the top. Lift them up so the due chip and the late flag
+  // show here too (found by the time-machine story, 2026-10-27).
+  if (t.sla) for (const k of ['due_response_at', 'due_resolve_at', 'first_response_at'])
+    if (t[k] == null && t.sla[k] != null) t[k] = t.sla[k];
   const role = S.me.actor.role, biz = S.me.edition === 'business';
-  const next = (S.me.transitions[t.state] || []);
+  const next = t.moves || (S.me.transitions[t.state] || []);   // only moves this person may make
   const canAssign = biz && ['owner', 'manager'].includes(role);
   const outside = t.kind !== 'internal';
   app.innerHTML = `
@@ -331,11 +533,12 @@ async function openTicket(id) {
     ${role !== 'customer' ? `<button class="b ghost" id="resEdit">✍ ${t.resolution ? 'Edit' : 'Write'} resolution</button>` : ''}
   </div>
   <div class="card"><div class="row">${next.map(s => `<button class="b ${s === 'Closed' ? 'bad' : s === 'On Hold' ? 'warn' : ''}" data-move="${esc(s)}">${esc(s)}</button>`).join('') || '<span class="muted">No moves from here.</span>'}</div>
-    ${canAssign ? `<label>Assign to (user id)</label><div class="row"><input id="asg" value="${esc(t.assignee || '')}"><button class="b ghost" id="asgGo" style="flex:0">Assign</button></div>` : ''}
+    ${canAssign ? `<label>Assign to (start typing a name)</label><div class="row"><input id="asg" list="dlTeam" value="${esc(t.assignee || '')}"><button class="b ghost" id="asgGo" style="flex:0">Assign</button></div>` : ''}
     ${['owner', 'manager'].includes(role) ? `<div class="row" style="margin-top:10px"><button class="b ghost" id="pdf">📄 PDF</button></div>` : ''}
     ${outside && t.contact_id ? `<div class="row" style="margin-top:10px"><button class="b ghost" id="lnk">🔗 Copy status link</button>
       ${t.kind === 'external' ? '<button class="b ghost" id="redo">🗓 Schedule re-do</button>' : ''}</div>` : ''}
   </div>
+  ${watchersCard(t)}
   <div class="card"><h3 style="margin:0 0 6px">Photos & files</h3>
     <div class="thumbs" id="thumbs">${(t.attachments || []).map(a => `<a href="#" data-att="${esc(a.attachment_id)}" data-name="${esc(a.filename)}" data-kind="${esc(a.kind)}" data-thumb="${a.thumb_path ? 1 : 0}">${esc(a.kind === 'photo' ? '' : a.filename)}</a>`).join('') || '<span class="muted">None yet.</span>'}</div>
     <div class="row" style="margin-top:10px">
@@ -384,6 +587,58 @@ async function openTicket(id) {
   });
   ['#cam', '#file'].forEach(s => $(s).addEventListener('change', e => upload(t, e.target.files)));
   loadThumbs();
+  wireWatchers(t);
+  window.scrollTo(0, sameTicket ? keepY : 0);
+}
+
+// ── address book + watchers (2026-10-28) ───────────────────────────────────
+// One list of every address the team may pick from — team, my saved contacts,
+// Jobs customers, past ticket contacts — offered as people type.
+async function loadDirectory(force) {
+  if (!S.me || (S.dir && !force) || S.me.actor.role === 'customer' || S.me.actor.role === 'subcontractor') return;
+  try { S.dir = await api('GET', '/desk-api/directory'); } catch (_) { S.dir = { entries: [], team: [] }; }
+  const make = (id, opts) => { let d = document.getElementById(id);
+    if (!d) { d = document.createElement('datalist'); d.id = id; document.body.appendChild(d); }
+    d.innerHTML = opts; };
+  make('dlEmail', S.dir.entries.map(e => `<option value="${esc(e.email)}">${esc((e.name ? e.name + ' · ' : '') + e.source)}</option>`).join(''));
+  make('dlTeam', (S.dir.team || []).map(u => `<option value="${esc(u.id)}">${esc(u.name + ' · ' + u.role + (u.email ? ' · ' + u.email : ''))}</option>`).join(''));
+}
+function dirEntry(v) {
+  const x = (v || '').trim().toLowerCase(); if (!x || !S.dir) return null;
+  return S.dir.entries.find(e => e.email === x) || S.dir.entries.find(e => e.name.toLowerCase() === x) || null;
+}
+function canEditWatchers(t) {
+  const a = S.me.actor; return a.role === 'owner' || a.role === 'manager' || t.assignee === a.id;
+}
+function watchersCard(t) {
+  if (!Array.isArray(t.watchers)) return '';                 // outside parties never get the list
+  const me = (S.me.actor.email || '').toLowerCase(), edit = canEditWatchers(t);
+  const watching = t.watchers.some(w => w.email === me);
+  return `<div class="card" id="wCard"><h3 style="margin:0 0 6px">Watchers <span class="muted" style="font-size:12px;font-weight:400">— emailed on every change of state</span></h3>
+    <div id="wList">${t.watchers.map(w => `<span class="chip" data-watcher="${esc(w.email)}">${esc(w.name ? w.name + ' <' + w.email + '>' : w.email)}
+      ${edit || w.email === me ? `<a href="#" data-wrm="${esc(w.email)}" title="Remove" style="margin-left:4px">✕</a>` : ''}</span>`).join(' ') || '<span class="muted">Nobody yet.</span>'}</div>
+    ${edit ? `<div class="row" style="margin-top:8px"><input id="wEmail" list="dlEmail" placeholder="name or email — start typing">
+      <button class="b ghost" id="wAdd" style="flex:0">Add</button></div>` : ''}
+    ${!edit && me ? `<div class="row" style="margin-top:8px"><button class="b ghost" id="wMe">${watching ? 'Stop watching' : '👁 Watch this ticket'}</button></div>` : ''}</div>`;
+}
+function wireWatchers(t) {
+  if (!$('#wCard')) return;
+  const send = async (email, name, remove) => {
+    try { await api('POST', `/desk-api/tickets/${t.ticket_id}/watchers`, { email, name, remove: !!remove });
+          toast(remove ? 'Removed.' : 'Added — they\'ll be emailed when it changes.'); openTicket(t.ticket_id); }
+    catch (e) { toast(e.message); }
+  };
+  if ($('#wAdd')) $('#wAdd').addEventListener('click', () => {
+    const v = $('#wEmail').value.trim(); if (!v) return;
+    const hit = dirEntry(v);
+    if (!hit && !v.includes('@')) { toast('No email on file for that name — type the address.'); return; }
+    send(hit ? hit.email : v, hit ? hit.name : '', false);
+  });
+  if ($('#wMe')) $('#wMe').addEventListener('click', () => {
+    const me = S.me.actor.email, on = t.watchers.some(w => w.email === me.toLowerCase());
+    send(me, S.me.actor.name || '', on);
+  });
+  app.querySelectorAll('[data-wrm]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); send(a.dataset.wrm, '', true); }));
 }
 function needsReason(from, to) { return S.me.needs_reason.some(p => p[0] === from && p[1] === to); }
 async function move(t, to) {
@@ -447,7 +702,7 @@ function showNew() {
     <label>Title</label><input id="nTitle" maxlength="200">
     <label>Details</label><textarea id="nDesc"></textarea>
     <div id="nParty"><label id="nPartyLbl">Customer name</label><input id="nName">
-      <div class="row"><div><label>Phone</label><input id="nPhone" type="tel"></div><div><label>Email</label><input id="nEmail" type="email"></div></div>
+      <div class="row"><div><label>Phone</label><input id="nPhone" type="tel"></div><div><label>Email</label><input id="nEmail" type="email" list="dlEmail" placeholder="start typing — picks from your contacts"></div></div>
       <label>Job id (optional)</label><input id="nJob"></div>
     <div class="row"><div><label>Priority</label><select id="nPri"><option>P3</option><option>P1</option><option>P2</option><option>P4</option></select></div>
       <div><label>Due</label><input id="nDue" type="date"></div></div>
@@ -459,6 +714,12 @@ function showNew() {
     $('#nPartyLbl').textContent = k === 'subcontractor' ? 'Subcontractor name' : 'Customer name';
   };
   $('#nKind').addEventListener('change', syncKind); syncKind();
+  $('#nEmail').addEventListener('change', () => {          // picked from the list: fill the rest
+    const hit = dirEntry($('#nEmail').value);
+    if (!hit) return;
+    if (!$('#nName').value.trim() && hit.name) $('#nName').value = hit.name;
+    if (!$('#nPhone').value.trim() && hit.phone) $('#nPhone').value = hit.phone;
+  });
   $('#back').addEventListener('click', () => refreshList());
   $('#nGo').addEventListener('click', async () => {
     const k = $('#nKind').value;
@@ -480,7 +741,8 @@ async function showSettings() {
                 ['sms_fallback_default', 'New tickets also alert by text (SMS)', true],
                 ['portal_enabled', 'Customers can request service online (/support/new)', true],
                 ['email_intake', 'Read our email account for ticket replies', true],
-                ['csat_enabled', 'Ask customers to rate closed requests', true]].filter(r => r[2]);
+                ['csat_enabled', 'Ask customers to rate closed requests', true],
+                ['customer_status_updates', 'Tell customers (one line) when their request is in progress and when it\'s closed', true]].filter(r => r[2]);
   const modes = `<label>A text that isn't a reply to a ticket</label>
     <select data-mode="sms_new_request_mode">${[['off', 'Do nothing'], ['ask', 'Ask if they want a request opened'],
       ['link', 'Text back the request-form link'], ['create', 'Open a ticket automatically']]
@@ -492,6 +754,9 @@ async function showSettings() {
   app.innerHTML = `<div class="card"><h2 style="margin:0 0 6px">Settings</h2>${rows.map(r =>
     `<div class="tog"><input type="checkbox" data-set="${r[0]}" ${s[r[0]] ? 'checked' : ''}><span>${esc(r[1])}</span></div>`).join('')}
     ${modes}
+    <label>Close a Fixed customer ticket after this many days with no reply (0 = never)</label>
+    <div class="row"><input id="acDays" type="number" min="0" max="60" value="${esc(s.auto_close_days)}">
+      <button class="b ghost" id="acSave" style="flex:0">Save</button></div>
     ${solo ? `<label>Send my alerts to (email)</label><input id="alEmail" type="email" value="${esc(s.alert_email)}">
     <label>My mobile for text alerts</label><input id="alPhone" type="tel" value="${esc(s.alert_phone)}">
     <div class="row" style="margin-top:8px"><button class="b" id="alSave">Save alert contacts</button></div>` : ''}
@@ -512,6 +777,12 @@ async function showSettings() {
     try { await api('POST', '/desk-api/settings', { key: sel.dataset.mode, value: sel.value }); toast('Saved.'); }
     catch (e) { toast(e.message); }
   }));
+  $('#acSave').addEventListener('click', async () => {
+    const n = parseInt($('#acDays').value, 10);
+    if (!(n >= 0 && n <= 60)) { toast('Enter 0 to 60 days.'); return; }
+    try { await api('POST', '/desk-api/settings', { key: 'auto_close_days', value: n }); toast('Saved.'); }
+    catch (e) { toast(e.message); }
+  });
   $('#out').addEventListener('click', () => signOut());
   await renderDataSection();
   if (S.me.edition === 'business') await renderTeamSection();

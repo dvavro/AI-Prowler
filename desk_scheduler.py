@@ -3,6 +3,8 @@ desk_scheduler.py — AI-Prowler Service Desk, Phase 3: the timed jobs.
 
 One background thread (both modes), started by ai_prowler_mcp.py:
   * every 5 minutes (Business): SLA warnings / breaches / escalations
+  * every tick (both): auto-close Fixed customer tickets after
+    "auto_close_days" with no word from the customer
   * once a day at "digest_hour": the morning digest — Business: to the owner
     and managers; Solo: to the owner's alert contacts
   * scheduled backups ("backup_frequency" / "backup_hour"), then retention
@@ -63,6 +65,10 @@ def run_once(db_path: str, *, edition: str, now: datetime.datetime | None = None
             not last_sla or utc - datetime.datetime.fromisoformat(last_sla) >= SLA_EVERY):
         did["sla"] = desk_reports.sla_check(db_path, edition=edition, now=utc)
         _set(db_path, "last_sla_check", utc.isoformat(timespec="seconds"))
+
+    closed = desk_reports.auto_close(db_path, edition=edition, now=utc)
+    if closed:
+        did["auto_closed"] = closed
 
     s = desk_db.get_settings(db_path)
     today = now.date().isoformat()

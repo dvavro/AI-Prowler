@@ -100,6 +100,45 @@ def public_ticket(t: dict, actor) -> dict:
     return out
 
 
+def directory(db: str, actor, services: dict, query: str = "") -> list[dict]:
+    """Every email address the team may pick from (2026-10-28, David: "all
+    emails, including customers, past ticket contacts, saved contacts and team
+    members"): services["directory"](actor) supplies the team, the caller's
+    saved contacts (crew: their own private list) and the Jobs app's customers;
+    past ticket contacts come from the tickets database. One entry per address,
+    first source wins. Outside parties get nothing."""
+    if rules.is_external(actor):
+        raise desk_db.DeskError("only the team can look up addresses")
+    entries = []
+    fn = services.get("directory")
+    if fn:
+        try:
+            entries.extend(fn(actor) or [])
+        except Exception:  # noqa: BLE001 — a lookup must never break the app
+            pass
+    conn = desk_db.get_connection(db)
+    try:
+        for r in conn.execute("SELECT name, email, phone, contact_type FROM customer_contacts "
+                              "WHERE email IS NOT NULL AND email != '' ORDER BY name"):
+            entries.append({"name": r["name"] or "", "email": r["email"], "phone": r["phone"] or "",
+                            "source": "past " + ("customer" if r["contact_type"] == "customer"
+                                                 else "subcontractor")})
+    finally:
+        conn.close()
+    seen, out = set(), []
+    for e in entries:
+        em = str(e.get("email") or "").strip().lower()
+        if not em or em in seen or not desk_db._EMAIL_RE.match(em):
+            continue
+        seen.add(em)
+        out.append({"name": str(e.get("name") or ""), "email": em, "phone": str(e.get("phone") or ""),
+                    "source": str(e.get("source") or ""), "user_id": str(e.get("user_id") or "")})
+    qq = (query or "").strip().lower()
+    if qq:
+        out = [e for e in out if qq in e["email"] or qq in e["name"].lower()]
+    return out[:1000]
+
+
 def route(method: str, path: str, *, query: dict, body: bytes, content_type: str,
           actor, edition: str, db_path: str, services: dict | None = None) -> tuple:
     """Handle one /desk-api request. Returns (status, content_type, body_bytes).
@@ -145,9 +184,33 @@ def _route(method, sub, q, body, ctype, actor, edition, db, services):
             create_job_fn=services["create_job"])
         return _ok(message=text) if text.startswith("✅") else _fail(400, "refused", text.lstrip("❌ ").strip())
 
+    m = re.fullmatch(rf"/tickets/{_TID}/watchers", sub)
+    if m and method in ("GET", "POST"):
+        tid = m.group(1)
+        if rules.is_external(actor):
+            raise desk_db.DeskError("only the team can see who watches a ticket")
+        if desk_db.get_ticket(db, tid, actor=actor, edition=edition) is None:
+            raise desk_db.NotFoundError(f"no ticket {tid} that you can see")
+        if method == "GET":
+            return _ok(watchers=desk_db.list_watchers(db, tid))
+        b = _parse_json(body)
+        return _ok(watchers=desk_db.set_watcher(db, tid, b.get("email", ""), name=b.get("name", ""),
+                                                 remove=bool(b.get("remove")), actor=actor, edition=edition))
+
+    if sub == "/directory" and method == "GET":
+        entries = directory(db, actor, services, q.get("q", ""))
+        team = []
+        try:
+            team = [{"id": u["id"], "name": u.get("name", ""), "role": u.get("role", ""),
+                     "email": u.get("email", "")} for u in (services.get("team") or (lambda: []))()]
+        except Exception:  # noqa: BLE001
+            team = []
+        return _ok(entries=entries, team=team)
+
     if sub == "/me" and method == "GET":
         s = desk_db.get_settings(db)
-        return _ok(actor={"id": a["id"], "role": a["role"], "name": a.get("name", "")},
+        return _ok(actor={"id": a["id"], "role": a["role"], "name": a.get("name", ""),
+                          "email": a.get("email", "")},
                    edition=edition, settings=s,
                    kinds=[k for k in rules.KINDS
                           if rules.can(actor, "create", edition=edition, kind=k,
@@ -198,7 +261,12 @@ def _route(method, sub, q, body, ctype, actor, edition, db, services):
 
     m = re.fullmatch(rf"/tickets/{_TID}", sub)
     if m and method == "GET":
-        return _ok(ticket=desk_db.get_ticket_detail(db, m.group(1), actor=actor, edition=edition))
+        d = desk_db.get_ticket_detail(db, m.group(1), actor=actor, edition=edition)
+        # The moves THIS person may make (2026-10-28: crew saw a Close button
+        # the server then refused). reason="x" so "needs a reason" doesn't hide one.
+        d["moves"] = [s for s in rules.STATES if s in rules.TRANSITIONS.get(d["state"], ())
+                      and rules.can(actor, "change_state", d, edition=edition, to_state=s, reason="x")]
+        return _ok(ticket=d)
 
     m = re.fullmatch(rf"/tickets/{_TID}/(state|assign|update|messages|attachments)", sub)
     if m and method == "POST":

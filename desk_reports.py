@@ -9,6 +9,8 @@ report()      volume, first-response and resolution times, SLA breaches and
               customer ratings for a period, optionally grouped.
 digest_text() the morning list: overdue, due today, unassigned (Business),
               for the owner and managers — or, in Solo, the owner.
+auto_close()  Fixed customer tickets with no customer word for
+              "auto_close_days" (default 3) are Closed by "system".
 """
 from __future__ import annotations
 
@@ -63,6 +65,44 @@ def sla_check(db_path: str, *, edition: str, now: datetime.datetime | None = Non
             desk_db._emit("sla", fresh, None, edition=edition, flag=f)
             raised.append((t["ticket_id"], f))
     return raised
+
+
+def auto_close(db_path: str, *, edition: str, now: datetime.datetime | None = None) -> list[str]:
+    """Close customer tickets that have sat in Fixed with no word from the
+    customer for "auto_close_days" (spec: "only the customer confirming, or 3
+    days of silence, moves Fixed to Closed"). Silence counts from the later of
+    the fix and the customer's last message. 0 days = never. Both editions.
+    Returns the ticket ids it closed."""
+    days = int(desk_db.get_settings(db_path).get("auto_close_days", rules.AUTO_CLOSE_DAYS) or 0)
+    if days <= 0:
+        return []
+    now = now or datetime.datetime.now(UTC)
+    cutoff = now - datetime.timedelta(days=days)
+    closed = []
+    for t in desk_db.list_tickets(db_path, state=rules.FIXED, kind=rules.EXTERNAL, limit=100000):
+        quiet_since = desk_sla.parse(t.get("fixed_at"))
+        if not quiet_since:
+            continue
+        conn = desk_db.get_connection(db_path)
+        try:
+            r = conn.execute("SELECT MAX(at) FROM ticket_messages WHERE ticket_id = ? AND "
+                             "author_kind = 'customer'", (t["ticket_id"],)).fetchone()
+        finally:
+            conn.close()
+        last_word = desk_sla.parse(r[0]) if r and r[0] else None
+        if last_word and last_word > quiet_since:
+            quiet_since = last_word
+        if quiet_since > cutoff:
+            continue
+        try:
+            desk_db.change_state(db_path, t["ticket_id"], rules.CLOSED, actor=None, edition=edition,
+                                 reason=f"closed automatically — no reply from the customer in {days} "
+                                        f"day{'s' if days != 1 else ''} after the fix",
+                                 system=True)
+            closed.append(t["ticket_id"])
+        except desk_db.DeskError:
+            continue
+    return closed
 
 
 def _minutes(a: str | None, b: str | None) -> float | None:

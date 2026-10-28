@@ -67,6 +67,10 @@ Beyond core document search, AI-Prowler includes:
 - **Agentic analysis task queue** — schedule recurring or one-off AI analysis tasks (e.g. "check overdue invoices every Monday") that run autonomously and record their findings as learnings. See **Section 10** and **Section 26**.
 - **Proactive email alerts** — background jobs (morning briefing, overdue invoices, weather watch, etc.) with independent per-job scheduling. See **Section 17**.
 
+### What's New — October 27–28, 2026
+
+**🎫 Service Desk (tickets)** — new, optional, for personal (Solo) and server (team) installs. Customers request service from their phone, every ticket is tracked Open → Closed with one owner and a history, photos and documents ride along, and Claude, Muse or Grok can run it all by chat or voice. Off on new installs — turn it on (or off again) in Settings → MCP Tool Configuration. The Business tab has the phone link with Copy / Email / QR. Watchers on your team are emailed on every change; customers just hear "in progress" and "closed". See **Section 27**.
+
 ### What's New — October 21–22, 2026
 
 **AI routing with any AI chat (Jobs app → Route tab)**
@@ -81,7 +85,7 @@ Beyond core document search, AI-Prowler includes:
 **AI analyses always use the AI-Prowler that's already running** — every Autonomous AI Task Queue run (Claude or Grok, scheduled or ▶ NOW) talks to this PC's running AI-Prowler and never starts a second copy. It needs remote access (a Bearer Token); if AI-Prowler isn't running when a scheduled run fires, the run starts the normal app and waits, or skips and says why (see **Section 12 → Autonomous AI Task Queue**).
 
 **Jobs app**
-- **Version badge** (top-right of the Jobs, Remote, HR Admin and HR Portal apps) — tap it to see whether your phone has the latest app (green) or a newer one is waiting (red — tap again to load it).
+- **Version badge** (top-right of the Jobs, Remote, HR Admin, HR Portal and Service Desk apps) — tap it to see whether your phone has the latest app (green) or a newer one is waiting (red — tap again to load it).
 - **Route map pull-down bar** now works on a PC: drag it down to make the map bigger, up to make it smaller.
 - **"Settings aren't filled out" warning** lists exactly which business settings invoices still need, with a button that opens the Settings card; it disappears once they're saved.
 - **Reports → 📅 Net Revenue (after sales tax)** — a calendar-year card: actual + projected net revenue, with sales tax taken off invoiced jobs once and pre-tax estimates left as they are.
@@ -3118,19 +3122,86 @@ Service Desk tracks requests and problems from **Open → Assigned → In Progre
 
 Service Desk is **not** part of the free Desktop edition.
 
-### Turning it on
+### Turning it on — or off
 
-Settings → **MCP Tool Configuration** → tick **Service Desk (tickets)** → Save. It starts off on new installs (like Job Tracker) and stays on once tickets exist.
+Settings → **MCP Tool Configuration** → tick **Service Desk (tickets)** → Save, then restart AI-Prowler. It starts off on new installs (like Job Tracker) and stays on once tickets exist. Personal and server mode each keep their own choice.
+
+Don't want a help desk? Untick the same group. Then Claude, Muse and Grok are offered none of the ticket tools, the Service Desk app and the customer request pages answer "turned off", and nothing runs in the background (no alerts, digests, email intake or texts). Your tickets stay saved, ready if you turn it back on.
 
 ### The Service Desk app
 
-Open **https://your-tunnel-address/desk/** on your phone and add it to your home screen.
+Open **https://your-tunnel-address/desk/** on your phone and add it to your home screen. The **Business** tab has the link ready under **🎫 Service Desk — Mobile URL for Tickets**: **📋 Copy**, **📧 Email** (with install steps) or **📱 QR** to scan from your screen — and the same for the customer request page, to put on your website.
 
-- **Sign in** — personal install: your Bearer Token. Server: your AI-Prowler name and password.
+- **Sign in** — personal install: your Bearer Token. Server: your AI-Prowler name and token (the same ones as the Jobs app). You're signed out after the same idle time as the Jobs app.
+- **Top bar** — same as the Jobs app: the AI-Prowler icon and your name/role at the left, a green dot while connected (red = offline, changes won't save), **↻** to refresh whatever you're looking at, **🔔** phone alerts and **⎋** sign out. The small **version badge** top-right shows which build the phone is running — tap it to check (green = latest, red = tap again to update). When a new version is installed a **"A new version is available — Refresh Now"** banner appears; **Later** hides it until you change tabs.
+- **On a phone** — every screen fits the width; the tab row and the Board scroll sideways on their own. Boxes use large text so iPhones don't zoom in while you type, and saving a note or a change keeps your place on a long ticket.
 - **Tabs** — My tickets, Open, Overdue, Board (drag cards between columns), Closed, 📊 Reports (owner and managers), ⚙︎ Settings (owner).
 - **A ticket** — move it with the state buttons (a reason is asked for On Hold, reopening, "not fixed" and closing without the customer confirming); add photos with 📷 Camera or files with 📎 File; write an internal note or a reply to the customer or subcontractor; copy the customer's status link; schedule a re-do job in the Jobs app; download a PDF; write the resolution.
 - **🔔 Alerts on this phone** — tap the bell to get alerts even when the app is closed. On iPhone, first add the app to the home screen (Share → Add to Home Screen) and open it from there.
 - If someone else changes a ticket while you have it open, the app tells you instead of overwriting their change.
+
+### How a ticket moves
+
+| From | Can move to | Notes |
+|---|---|---|
+| Open | Assigned, Closed | Assigning someone moves it to Assigned by itself |
+| Assigned | In Progress, On Hold, Fixed, Closed, back to Open | |
+| In Progress | On Hold, Fixed, Closed, back to Assigned | |
+| On Hold | In Progress, Closed | The SLA clock is paused while On Hold |
+| Fixed | Closed, In Progress | Back to In Progress = "not fixed" |
+| Closed | Assigned (reopen) | Goes back to the person who had it |
+
+A written **reason** is required for: anything → On Hold; closing a ticket that wasn't Fixed first; Fixed → In Progress ("not fixed"); and reopening. The reason goes in the history; customers never see it.
+
+The ticket page only shows the buttons **you** are allowed to press.
+
+### Who can do what (team edition)
+
+| | Owner | Manager | Staff | Field crew |
+|---|---|---|---|---|
+| Sees | Every ticket | Their queues + the shared inbox + their own | Unassigned tickets in their queue / shared inbox + their own | Tickets assigned to or filed by them |
+| Assign | Anyone | Anyone | Only take an unassigned ticket themselves | Same as staff |
+| Move state | Any move | Any move | Only on their own tickets; can't close or reopen | Same as staff |
+| Reply to customer / edit / resolution | Yes | Yes | On their own tickets | On their own tickets |
+| Internal notes | Yes | Yes | Yes | Yes |
+| Watchers | Anyone | Anyone | Themselves (anyone, if they're the assignee) | Same as staff |
+| Reports, export, triage | Yes | Yes | — | — |
+| Settings, queues, import, backups, restore, delete | Yes | — | — | — |
+
+**Private** tickets are seen only by whoever filed them and the owner. Customers see only their own requests; subcontractors only tickets shared with them (and can only mark their part done). In **Solo** you are the only internal user, so everything above is yours.
+
+### Who is told what
+
+| What happened | Who hears |
+|---|---|
+| New ticket with an assignee | The assignee |
+| New ticket nobody owns yet | The owner and managers (Solo: your alert email/phone) |
+| Ticket assigned | The new assignee |
+| Customer replied, or says it's **not** fixed | The assignee (or owner and managers if nobody has it) |
+| Reopened | The assignee (or owner and managers) |
+| SLA 75% / overdue | The assignee; at **twice** the target the owner and managers |
+| Any change of state | Every **watcher** — except the person who made the change and anyone already told above |
+| In Progress, Closed (customer tickets) | The customer — one line, by email (or text if no email) |
+| Each morning | Digest of overdue / due today / unassigned to the owner and managers |
+
+Alerts go by email, by text if **Also alert by text** is ticked on the ticket, and to phones that turned on 🔔 alerts.
+
+### A normal day
+
+- **Owner / manager:** read the morning digest; open the **Open** tab and assign anything unowned (or ask Claude: "Triage the tickets"); watch **Overdue**; drag cards on the **Board**; close tickets once the customer confirms (or let auto-close do it); check 📊 Reports weekly.
+- **Staff / field crew:** open **My tickets**; tap a ticket → **In Progress** when you start, add photos and a note, **Fixed** when done (write the resolution — it helps find the fix next time). Need a part or the customer? **On Hold** with the reason. Staff can take an unowned ticket from **Open**.
+- **Solo:** everything comes to you. Use your own tickets as a to-do list with due dates; customer requests come in from the form, texts and email.
+- **By voice while driving:** "What's on my plate?", "Start ticket 42", "Mark 42 fixed — replaced the latch", "Put 42 on hold, waiting on the part".
+
+### When something isn't right
+
+- **Someone can't see a ticket** — check who it's assigned to and its queue (table above). Staff stop seeing a ticket once someone else takes it.
+- **A button is missing** — the page only shows moves your role may make; staff and crew need a manager to close or reopen.
+- **"Someone else changed this ticket"** — reload; the app never overwrites a newer change.
+- **Watcher can't be added** — the address must be a real email, and a ticket's own customer can't be a watcher. A name with no email on file: type the address instead.
+- **Customer didn't get an update** — they only get In Progress and Closed; check their email/phone on the ticket and that **Tell customers (one line)…** is on in ⚙︎ Settings. Each reply shows whether it was sent.
+- **App says "Service Desk is turned off"** — tick **Service Desk (tickets)** in Settings → MCP Tool Configuration and restart.
+- **No phone alerts** — tap 🔔 on that phone again (iPhone: open it from the home-screen icon first).
 
 ### Customers and subcontractors
 
@@ -3141,11 +3212,20 @@ Open **https://your-tunnel-address/desk/** on your phone and add it to your home
 - **Email:** turn on **Read our email account for ticket replies** to add customer email replies (subject contains [T-####]) to their ticket. Uses the email account AI-Prowler already sends from (needs IMAP; Outlook-only setups can't be read). Your other mail stays unread.
 - Update your Twilio A2P campaign description to mention service-request updates before turning on automatic texts.
 
+### Picking addresses, watchers and customer updates
+
+- **Address book:** as you type an email on a new ticket (or a name under Watchers), the app suggests addresses from your team, **your own** saved contacts (on a server each person's saved contacts stay private to them), your Jobs app customers and past ticket contacts. Pick one and the name and phone fill in. **Assign to** suggests your team as you type.
+- **Watchers** (team edition and Solo): people on your side who are emailed whenever the ticket changes state — From → To, the reason, and who did it. Never the person who made the change, and never twice for the same change. The owner, managers and the ticket's assignee can add or remove anyone; everyone else can only **👁 Watch this ticket** / **Stop watching** themselves. Customers and subcontractors never see the list, and a ticket's own customer can't be a watcher.
+- **Customer updates:** the customer hears just two short lines — when work is **in progress** and when it's **closed** (with the reopen link) — by email, or text if there's no email. No reasons, notes or other details, and nothing for changes they made themselves. Turn it off in ⚙︎ Settings → **Tell customers (one line) when their request is in progress and when it's closed**.
+- By voice: "Add Vicki to ticket 42", "Who's watching 42?", "Take Sam off 42".
+
 ### Business features
 
 - **Settings → Team:** queues (members get new tickets round-robin, skipping anyone with PTO or an absence today in the HR apps), assignment rules (first match wins: by keyword, type or customer → a person or a queue) and ticket types. A ticket for a job goes to that job's crew lead.
 - **SLA timers** run in business hours on your Jobs app working days: P1 reply in 1 hour and fixed the same day; P2 4 hours / 2 days; P3 1 day / 5 days; P4 3 days. On Hold pauses the clock. The assignee is warned at 75%, told when it's overdue, and the owner and managers are told at twice the target.
 - **Morning digest** of overdue, due-today and unassigned tickets (7am by default), emailed to the owner and managers — or, in Solo, to your alert email.
+- **Auto-close:** a customer ticket marked **Fixed** closes by itself after **3 days** with no word from the customer (any reply from them starts the 3 days again). Change the number in ⚙︎ Settings, or set **0** to never auto-close. The history shows it was closed by *system*, and the customer can still reopen it from their status link for 7 days. Your own and internal tickets are never auto-closed.
+- **Status links** stop working 30 days after a ticket is closed. A request-form code is good for 10 minutes — the customer taps **Send a new code** if it runs out.
 
 ### Data and backups (Settings → Data, owner)
 
@@ -3158,7 +3238,7 @@ Open **https://your-tunnel-address/desk/** on your phone and add it to your home
 
 Ask in plain language — "File a ticket: Mrs. Lopez says the front windows are streaky", "What tickets do I have?", "Triage the tickets", "Tell the customer on 42 we'll be there Thursday", "Schedule a redo for 42 next Tuesday", "How did support go this week?". Claude previews customer messages before sending, and asks before closing, merging, importing or restoring. Every change Claude makes is recorded as made by Claude and approved by you.
 
-Tools: create_ticket, get_ticket, list_tickets, my_tickets, update_ticket, assign_ticket, set_ticket_state, add_ticket_note, reply_to_customer, create_job_from_ticket, search_tickets, ticket_summary, triage_inbox, apply_triage, link_ticket, merge_tickets, manage_ticket_queues, manage_ticket_rules, ticket_report, export_tickets, import_tickets, tickets_backup_now, backup_tickets_database, list_tickets_backups, tickets_backup_settings, restore_tickets_database, get_ticket_updates, tickets_settings.
+Tools: create_ticket, get_ticket, list_tickets, my_tickets, update_ticket, assign_ticket, set_ticket_state, add_ticket_note, reply_to_customer, create_job_from_ticket, search_tickets, ticket_summary, triage_inbox, apply_triage, link_ticket, merge_tickets, manage_ticket_queues, manage_ticket_rules, ticket_report, export_tickets, import_tickets, tickets_backup_now, backup_tickets_database, list_tickets_backups, tickets_backup_settings, restore_tickets_database, get_ticket_updates, tickets_settings, ticket_watchers.
 
 ---
 

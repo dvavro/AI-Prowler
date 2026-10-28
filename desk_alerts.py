@@ -228,6 +228,68 @@ def deliver_public_message(ticket: dict, msg: dict) -> str:
     return status
 
 
+def notify_watchers(ticket: dict, actor, already: set, **info) -> list:
+    """Every state change -> a short email to the ticket's watchers (internal
+    people), except whoever made the change and anyone already alerted."""
+    a = rules.normalize_actor(actor)
+    skip = {e.lower() for e in already if e} | {(a.get("email") or "").lower()}
+    tid, frm, to = ticket["ticket_id"], info.get("from_state"), ticket["state"]
+    who = a.get("name") or a.get("id") or "someone"
+    if rules.is_external(actor):
+        who = "the customer" if a["role"] == rules.CUSTOMER else "the subcontractor"
+    if a.get("id") == "system":
+        who = "Service Desk (automatic)"
+    reason = info.get("reason") or ""
+    link = _link(tid)
+    sent = []
+    for w in desk_db.list_watchers(_db(), tid):
+        if w["email"].lower() in skip:
+            continue
+        body = (f"{tid} — {ticket['title']}\n{frm} → {to}" + (f"\nReason: {reason}" if reason else "")
+                + f"\nBy: {who}" + (f"\n\nOpen it: {link}" if link else "")
+                + "\n\nYou get this because you're watching this ticket.")
+        if _call("email", w["email"], f"[Service Desk] {tid} is now {to}: {ticket['title'][:70]}", body,
+                 default=False):
+            sent.append(w["email"])
+    return sent
+
+
+def notify_customer_of_state(ticket: dict, actor, **info) -> str:
+    """The customer hears only two things, in a line each (David 2026-10-28:
+    "they just need to be notified when it's in process and closed"):
+    work has started, and it's closed. Not their own moves, never details."""
+    to, frm = ticket["state"], info.get("from_state")
+    if ticket.get("kind") != rules.EXTERNAL or not ticket.get("contact_id") or rules.is_external(actor):
+        return ""
+    if to not in (rules.IN_PROGRESS, rules.CLOSED) or frm == to:
+        return ""
+    if not desk_db.get_settings(_db()).get("customer_status_updates", True):
+        return ""
+    c = desk_db.get_contact(_db(), ticket["contact_id"])
+    if not c:
+        return ""
+    biz = _call("business", default="") or "Service Desk"
+    base = (_call("base_url", default="") or "").rstrip("/")
+    url = ""
+    if base:
+        import desk_portal
+        url = desk_portal.link_url(base, desk_portal.issue_link(_db(), ticket["ticket_id"], c["contact_id"]))
+    tid, title = ticket["ticket_id"], ticket["title"]
+    if to == rules.IN_PROGRESS:
+        line = f"Your request {tid} ({title}) is in progress."
+    else:
+        line = (f"Your request {tid} ({title}) is complete and closed. Not right? You can reopen it "
+                f"within {rules.REOPEN_WINDOW_DAYS} days" + (" from the link." if url else "."))
+    if c.get("email") and _cfg.get("email"):
+        ok = _call("email", c["email"], f"{biz}: request {tid} — {to.lower()}",
+                   line + (f"\n\nSee it here: {url}" if url else "") + f"\n\n— {biz}", default=False)
+        return "email" if ok else ""
+    if c.get("phone") and _cfg.get("sms"):
+        ok = _call("sms", c["phone"], f"{biz}: {line}" + (f" {url}" if url else ""), default=False)
+        return "sms" if ok else ""
+    return ""
+
+
 def on_change(kind: str, ticket: dict, actor, *, edition: str = rules.BUSINESS, **info) -> None:
     def work():
         if kind == "message":
@@ -237,6 +299,9 @@ def on_change(kind: str, ticket: dict, actor, *, edition: str = rules.BUSINESS, 
         people, what = recipients(kind, ticket, actor, edition, **info)
         if people and what:
             _send_alert(people, what, ticket)
+        if kind == "state_changed":
+            notify_watchers(ticket, actor, {p.get("email") for p in (people if what else [])}, **info)
+            notify_customer_of_state(ticket, actor, **info)
 
     if _cfg.get("background"):
         threading.Thread(target=work, name=f"desk-alert-{ticket.get('ticket_id')}",

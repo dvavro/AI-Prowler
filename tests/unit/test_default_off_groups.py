@@ -121,6 +121,63 @@ def test_bad_arguments(tcs):
         m.set_group_enabled("server", "core_kb", False)
 
 
+# ── Service Desk (David 2026-10-28: "make sure that the MCP tools can be turned
+# off if the user decides to not use the helpdesk for both server and personal
+# mode") ─────────────────────────────────────────────────────────────────────
+def _make_tickets_db(d: Path):
+    p = d / "tickets_database"
+    p.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(p / "ai_prowler_tickets.db")
+    con.execute("CREATE TABLE tickets (ticket_id TEXT PRIMARY KEY)")
+    con.execute("INSERT INTO tickets VALUES ('T-0001')")
+    con.commit()
+    con.close()
+
+
+@pytest.mark.parametrize("mode", ["personal", "server"])
+def test_service_desk_is_off_on_a_new_install(tcs, mode):
+    m, _ = tcs
+    assert "service_desk" in m.DEFAULT_OFF_GROUPS
+    assert m.group_enabled(mode, "service_desk") is False
+
+
+@pytest.mark.parametrize("mode", ["personal", "server"])
+def test_service_desk_with_tickets_stays_on_until_the_owner_turns_it_off(tcs, mode):
+    m, d = tcs
+    _make_tickets_db(d)
+    assert m.group_enabled(mode, "service_desk") is True
+    m.set_group_enabled(mode, "service_desk", False)
+    assert m.group_enabled(mode, "service_desk") is False, "tickets in the database overrode 'off'"
+    m.set_group_enabled(mode, "service_desk", True)
+    assert m.group_enabled(mode, "service_desk") is True
+
+
+def test_service_desk_switch_is_per_mode(tcs):
+    m, _ = tcs
+    m.set_group_enabled("server", "service_desk", True)
+    m.set_group_enabled("personal", "service_desk", False)
+    assert m.group_enabled("server", "service_desk") is True
+    assert m.group_enabled("personal", "service_desk") is False
+
+
+def test_every_service_desk_tool_can_be_switched_off_in_both_modes():
+    import mcp_tool_catalog as tc
+    tools = tc.tools_in_category("service_desk")
+    assert len(tools) >= 29
+    locked = [n for n in tools if tc.is_locked(n)]
+    assert not locked, f"locked tools can't be turned off: {locked}"
+    for mode in ("personal", "server"):
+        missing = [n for n in tools if mode not in tc.modes_of(n)]
+        assert not missing, f"not in the {mode} Settings panel, so its switch misses them: {missing}"
+
+
+def test_service_desk_off_also_closes_the_app_scheduler_and_intake():
+    mcp = (ROOT / "ai_prowler_mcp.py").read_text(encoding="utf-8")
+    assert mcp.count("if _desk_app_turned_off():") >= 4        # both routers + portal + SMS intake
+    assert "is_on=lambda: not _desk_app_turned_off(), send_digest" in mcp     # scheduler
+    assert "handle_factory=_handler, is_on=lambda: not _desk_app_turned_off()" in mcp  # email intake
+
+
 def test_server_and_panel_use_the_rule():
     mcp = (ROOT / "ai_prowler_mcp.py").read_text(encoding="utf-8")
     gui = (ROOT / "rag_gui.py").read_text(encoding="utf-8")

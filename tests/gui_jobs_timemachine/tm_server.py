@@ -28,6 +28,9 @@ Control API (127.0.0.1:<control-port>, JSON):
     POST /clock {"date": "YYYY-MM-DD", "time": "HH:MM"}
     POST /run   {"job": "morning_briefing"}  -> the scheduler job's
                  {"subject", "body"} for the simulated day (never emailed)
+    POST /run   {"job": "service_desk"}  -> one Service Desk scheduler pass
+                 (SLA, auto-close, digest, backups) at the simulated time:
+                 {"did": {...}, "now": ...}; its alerts land in the outbox
     GET  /outbox                 -> everything the app tried to send
     POST /stop
 """
@@ -93,9 +96,11 @@ def _prepare_home(home: pathlib.Path, mode: str = "personal", users: dict | None
     # 2026-10-12+: "Job Tracker & Routing" and "SMS & WhatsApp" start OFF on a
     # NEW install, and an empty sandbox looks like one — the Jobs app would
     # refuse sign-in. The sandbox exists to test those features: record both ON.
+    # 2026-10-27: Service Desk (also off on a new install) too — the time
+    # machine walks its SLA clocks, digests, auto-close and backups through days.
     (state / "tool_config.json").write_text(json.dumps({
         "schema_version": 1,
-        "optional_groups": {m: {"job_tracker": True, "sms_whatsapp": True}
+        "optional_groups": {m: {"job_tracker": True, "sms_whatsapp": True, "service_desk": True}
                             for m in ("personal", "server")}}), encoding="utf-8")
     return state
 
@@ -122,8 +127,15 @@ def _block_outbound():
                 if part.get_content_type() == "text/plain":
                     body = part.get_payload(decode=True).decode("utf-8", "replace")
                     break
+            # A subject with non-ASCII text ("Service Desk — today") arrives
+            # RFC 2047-encoded (=?utf-8?...?=); store it the way a mail app shows it.
+            from email.header import decode_header, make_header
+            try:
+                subject = str(make_header(decode_header(str(m.get("Subject", "")))))
+            except Exception:
+                subject = str(m.get("Subject", ""))
             _record("email", to=", ".join(to_addrs) if isinstance(to_addrs, (list, tuple)) else str(to_addrs),
-                    subject=str(m.get("Subject", "")), body=body[:4000])
+                    subject=subject, body=body[:4000])
             return {}
 
         def send_message(self, m, *a, **k):
@@ -171,11 +183,42 @@ def _patch_app(mcp):
         db_write_ops.AUTO_GEOCODE_ENABLED = True          # jobs get map locations like a real install
     except Exception:
         pass
+    # Service Desk's timed jobs (SLA checks, auto-close, morning digest,
+    # scheduled backups) run when a TEST says so — POST /run {"job":
+    # "service_desk"} — at the simulated time, with the app's own hooks
+    # (digest / backup-alert email). Its background thread is never started: on
+    # a moving clock it would fire at random moments in the middle of a step.
+    try:
+        import desk_scheduler
+
+        def _capture_desk_scheduler(**hooks):
+            DESK_SCHEDULER.update(hooks)
+        desk_scheduler.start = _capture_desk_scheduler
+    except Exception:
+        pass
+
+
+DESK_SCHEDULER: dict = {}
+
+
+def _desk_tick(mcp) -> dict:
+    """One Service Desk scheduler pass at the simulated 'now' (what the app's
+    thread does every minute)."""
+    import desk_scheduler
+    mcp._desk_db_path()                         # first use wires alerts + hands us the hooks
+    if not DESK_SCHEDULER:
+        raise RuntimeError("Service Desk's scheduler was never started by the app")
+    h = DESK_SCHEDULER
+    if not h["is_on"]():
+        return {"skipped": "Service Desk is turned off"}
+    return desk_scheduler.run_once(h["get_db"](), edition=h["get_edition"](),
+                                   send_digest=h.get("send_digest"), alert_owner=h.get("alert_owner"))
 
 
 class _Control(BaseHTTPRequestHandler):
     traveller = None
     stop_cb = None
+    mcp = None
 
     def log_message(self, *a):
         pass
@@ -208,6 +251,9 @@ class _Control(BaseHTTPRequestHandler):
                 when = _local(b["date"], b.get("time", "07:00"))
                 _Control.traveller.move_to(when)
                 return self._send(200, {"now": dt.datetime.now().isoformat(timespec="seconds")})
+            if self.path == "/run" and b.get("job") == "service_desk":
+                did = _desk_tick(_Control.mcp)
+                return self._send(200, {"did": did, "now": dt.datetime.now().isoformat(timespec="seconds")})
             if self.path == "/run":
                 import scheduler_jobs
                 meta = scheduler_jobs.JOB_REGISTRY.get(b.get("job", ""))
@@ -259,6 +305,7 @@ def main():
 
     import ai_prowler_mcp as mcp                                         # after the home/clock switch
     _patch_app(mcp)
+    _Control.mcp = mcp
 
     ctl = ThreadingHTTPServer(("127.0.0.1", a.control_port), _Control)
     _Control.stop_cb = lambda: os._exit(0)

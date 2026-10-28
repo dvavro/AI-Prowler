@@ -525,7 +525,12 @@ def test_TQ_14_outputs_landed_in_the_sandbox_and_nothing_got_out(tm):
          f"{[m['subject'] for m in mails]}")
     assert len(mails) == S["emails_expected"], [m["subject"] for m in mails]
     assert all(m.get("to", "").endswith("@time-machine.test") for m in mails)
-    assert not [m for m in outbox if m.get("kind") in ("sms", "whatsapp")]
+    # The queue sends no texts. The outbox is shared by the whole session, and
+    # other stories (Service Desk, 2026-10-27) text made-up +1 555 numbers —
+    # so: no text to anything but a test number, and none from the queue.
+    texts = [m for m in outbox if m.get("kind") in ("sms", "whatsapp")]
+    assert not [m for m in texts if not str(m.get("to", "")).startswith("+1555")], texts
+    assert not [m for m in texts if "ZTEST TQ" in m.get("body", "")], texts
     # The only thing that tried to go out was the learnings' embedding model
     # checking for an update online — and the sandbox blocked it.
     blocked = {m.get("to") for m in outbox if m.get("kind") == "blocked_http"}

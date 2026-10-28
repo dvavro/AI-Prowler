@@ -111,8 +111,8 @@ class Server:
         return http(method, f"{self.base}{path}", payload, token=self.api_token(name))
 
 
-def _start(kind, tmp_path_factory) -> Server:
-    state = tmp_path_factory.mktemp(f"desk_e2e_{kind}")
+def _start(kind, tmp_path_factory, desk_on=True) -> Server:
+    state = tmp_path_factory.mktemp(f"desk_e2e_{kind}{'' if desk_on else '_off'}")
     port = _free_port()
     base = f"http://127.0.0.1:{port}"
     mode = "server" if kind == "business" else "personal"
@@ -129,7 +129,15 @@ def _start(kind, tmp_path_factory) -> Server:
         import importlib
         import tool_config_store
         importlib.reload(tool_config_store)
-        tool_config_store.set_group_enabled(mode, "service_desk", True)
+        tool_config_store.set_group_enabled(mode, "service_desk", desk_on)
+        if not desk_on:                    # the owner said no — and it already holds tickets,
+            import sqlite3                 # so "in use" can't switch it back on by itself
+            (state / "tickets_database").mkdir(exist_ok=True)
+            con = sqlite3.connect(state / "tickets_database" / "ai_prowler_tickets.db")
+            con.execute("CREATE TABLE IF NOT EXISTS tickets (ticket_id TEXT PRIMARY KEY)")
+            con.execute("INSERT OR IGNORE INTO tickets VALUES ('T-0001')")
+            con.commit()
+            con.close()
     finally:
         if old is None:
             os.environ.pop("AIPROWLER_TEST_STATE_DIR", None)
@@ -176,6 +184,22 @@ def business(tmp_path_factory):
 @pytest.fixture(scope="session")
 def solo(tmp_path_factory):
     s = _start("solo", tmp_path_factory)
+    yield s
+    _stop(s)
+
+
+@pytest.fixture(scope="module")
+def business_off(tmp_path_factory):
+    """A team server whose owner switched Service Desk OFF in Settings."""
+    s = _start("business", tmp_path_factory, desk_on=False)
+    yield s
+    _stop(s)
+
+
+@pytest.fixture(scope="module")
+def solo_off(tmp_path_factory):
+    """A personal install whose owner switched Service Desk OFF in Settings."""
+    s = _start("solo", tmp_path_factory, desk_on=False)
     yield s
     _stop(s)
 

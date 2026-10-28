@@ -263,6 +263,17 @@ CREATE TABLE IF NOT EXISTS ticket_relations (
     PRIMARY KEY (ticket_id, kind, target)
 );
 
+-- Internal people (by email) told whenever a ticket changes state (2026-10-28).
+-- Never shown to, or used for, the customer or subcontractor.
+CREATE TABLE IF NOT EXISTS ticket_watchers (
+    ticket_id  TEXT NOT NULL REFERENCES tickets(ticket_id),
+    email      TEXT NOT NULL,
+    name       TEXT NOT NULL DEFAULT '',
+    added_at   TEXT NOT NULL,
+    added_by   TEXT NOT NULL,
+    PRIMARY KEY (ticket_id, email)
+);
+
 -- Import batches (undo within 7 days) and scheduler bookkeeping.
 CREATE TABLE IF NOT EXISTS import_batches (
     batch_id  TEXT PRIMARY KEY,
@@ -355,6 +366,8 @@ SETTING_DEFAULTS = {
     "email_new_request_mode": "off",  # email that isn't a reply: off | create
     "email_intake": False,            # poll the server's mailbox (IMAP) for ticket mail
     "csat_enabled": True,             # ask customers to rate a closed ticket
+    "auto_close_days": rules.AUTO_CLOSE_DAYS,  # Fixed customer ticket, no reply this long -> Closed (0 = never)
+    "customer_status_updates": True,  # tell the customer (one line) when it's In Progress and Closed
     "business_hours": [8, 17],        # SLA clock runs 8:00-17:00 local on working days
     "sla_targets": {},                # {"P2": [respond_min, resolve_min]} overrides
     "digest_hour": 7,                 # morning digest (owner / managers), local hour
@@ -650,9 +663,66 @@ def get_ticket_detail(db_path: str, ticket_id: str, *, actor=None,
         doc["messages"] = [m for m in doc["messages"] if m["visibility"] == "public"]
         doc["attachments"] = [a for a in doc["attachments"] if a["visibility"] == "public"]
         for k in ("events", "state_history", "filed_by", "queue_id", "visibility",
-                  "last_edited_by", "folder"):
+                  "last_edited_by", "folder", "watchers"):
             doc.pop(k, None)
     return doc
+
+
+# ── Watchers: internal people emailed on every state change (2026-10-28) ─────
+
+_EMAIL_RE = __import__("re").compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
+
+
+def list_watchers(db_path: str, ticket_id: str) -> list[dict]:
+    conn = get_connection(db_path)
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT email, name, added_at, added_by FROM ticket_watchers WHERE ticket_id = ? "
+            "ORDER BY added_at, email", (ticket_id,))]
+    finally:
+        conn.close()
+
+
+def set_watcher(db_path: str, ticket_id: str, email: str, *, name: str = "", remove: bool = False,
+                actor=None, edition: str = rules.BUSINESS) -> list[dict]:
+    """Add (or remove) one watcher. The owner, managers and the ticket's
+    assignee may add or remove anyone; anyone else on the team who can see the
+    ticket may add or remove only themselves. Customers and subcontractors
+    can't — and a ticket's own customer/subcontractor address is refused (they
+    get their own short updates, never the internal ones). Returns the list."""
+    a = rules.normalize_actor(actor)
+    email = (email or "").strip().lower()
+    if not _EMAIL_RE.match(email):
+        raise DeskError(f"{email or '(blank)'} is not an email address")
+    if rules.is_external(actor):
+        raise DeskError("only the team can add watchers")
+    with ticket_transaction(db_path) as (conn, touched):
+        row = _load_visible(conn, ticket_id, actor, edition)
+        mine = (a.get("email") or "").strip().lower()
+        if not (a["role"] in (rules.OWNER, rules.MANAGER) or row.get("assignee") == a["id"]
+                or (mine and email == mine)):
+            raise DeskError("only the owner, a manager or the assignee can change who watches a ticket "
+                            "(you can add or remove yourself)")
+        if not remove and row.get("contact_id"):
+            c = conn.execute("SELECT email FROM customer_contacts WHERE contact_id = ?",
+                             (row["contact_id"],)).fetchone()
+            if c and (c["email"] or "").strip().lower() == email:
+                raise DeskError("that's this ticket's customer — customers get their own short "
+                                "updates (in progress, closed), never the internal ones")
+        if remove:
+            n = conn.execute("DELETE FROM ticket_watchers WHERE ticket_id = ? AND email = ?",
+                             (ticket_id, email)).rowcount
+            if n:
+                _event(conn, ticket_id, a["id"], "watcher_removed", email, None)
+        else:
+            n = conn.execute("INSERT OR IGNORE INTO ticket_watchers (ticket_id, email, name, added_at, "
+                             "added_by) VALUES (?, ?, ?, ?, ?)",
+                             (ticket_id, email, (name or "").strip()[:80], utcnow_iso(), a["id"])).rowcount
+            if n:
+                _event(conn, ticket_id, a["id"], "watcher_added", None, email)
+        if n:
+            touched.add(ticket_id)
+    return list_watchers(db_path, ticket_id)
 
 
 def create_ticket(db_path: str, *, title: str, kind: str = rules.EXTERNAL, actor=None,
@@ -807,14 +877,17 @@ def assign_ticket(db_path: str, ticket_id: str, assignee: str, *, actor=None,
 
 def change_state(db_path: str, ticket_id: str, to_state: str, *, actor=None,
                  edition: str = rules.BUSINESS, reason: str = "", expected_version=None,
-                 now=None, approved_by: str | None = None) -> dict:
-    """Move a ticket through the lifecycle, enforcing rules.can()."""
+                 now=None, approved_by: str | None = None, system: bool = False) -> dict:
+    """Move a ticket through the lifecycle, enforcing rules.can().
+    system=True: an automatic change (the scheduler's auto-close) made with the
+    owner's authority but recorded as "system", so the history shows nobody
+    pressed a button."""
     with ticket_transaction(db_path) as (conn, touched):
         row = _load_visible(conn, ticket_id, actor, edition)
         _check(rules.can(actor, "change_state", row, edition=edition, to_state=to_state,
                          reason=reason, now=now))
         _check_version(row, expected_version)
-        who = _actor_id(actor)
+        who = "system" if system else _actor_id(actor)
         ts = utcnow_iso()
         sets = {"state": to_state}
         frm = row["state"]

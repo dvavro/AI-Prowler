@@ -264,6 +264,61 @@ class TimeMachine:
     def outbox(self) -> list[dict]:
         return _json(f"http://127.0.0.1:{self.ctl}/outbox")
 
+    def wait_outbox(self, pred, timeout: float = 20, after: int = 0) -> dict:
+        """The newest caught email/text (from index `after` on) matching pred."""
+        end = time.time() + timeout
+        while True:
+            hits = [m for m in self.outbox()[after:] if pred(m)]
+            if hits:
+                return hits[-1]
+            if time.time() > end:
+                raise AssertionError(f"nothing in the outbox matched; last caught: {self.outbox()[-4:]}")
+            time.sleep(0.4)
+
+    # ── Service Desk (2026-10-27) ──
+    def desk_tick(self) -> dict:
+        """One pass of Service Desk's scheduler (SLA, auto-close, digest,
+        backups) at the simulated time — what its 1-minute timer does."""
+        r = _json(f"http://127.0.0.1:{self.ctl}/run", {"job": "service_desk"})
+        assert "error" not in r, f"Service Desk tick failed: {r}"
+        _log(f"🎫 Service Desk tick @ {r.get('now')}: {r.get('did')}")
+        return r["did"]
+
+    def desk_token(self, key: str = "owner", fresh: bool = False) -> str:
+        """The bearer the Service Desk app holds for this person: personal mode
+        the owner's token; server mode a /desk-api/auth/login session. Server
+        sessions have the Jobs app's idle timeout ON THE MOVING CLOCK, so a jump
+        of days ends them — desk() signs in again on a 401, and the browser
+        always gets a fresh one (fresh=True)."""
+        if self.mode != "server":
+            return self.token
+        cache = self.__dict__.setdefault("_desk_tokens", {})
+        if fresh or key not in cache:
+            u = self.users[key]
+            d = _json(f"{self.origin}/desk-api/auth/login", {"name": u.name, "token": u.token}, timeout=30)
+            assert d.get("access_token"), f"Service Desk sign-in failed for {u}: {d}"
+            cache[key] = d["access_token"]
+        return cache[key]
+
+    def desk(self, method: str, path: str, body=None, key: str = "owner"):
+        """A /desk-api call as this person (JSON in, JSON out)."""
+        url = f"{self.origin}/desk-api{path}"
+        data = None if body is None else json.dumps(body).encode()
+        for attempt in (1, 2):
+            r = urllib.request.Request(url, data=data, method=method)
+            r.add_header("Content-Type", "application/json")
+            r.add_header("Authorization", "Bearer " + self.desk_token(key, fresh=attempt == 2))
+            try:
+                with urllib.request.urlopen(r, timeout=60) as resp:
+                    return resp.status, json.loads(resp.read().decode("utf-8", "replace"))
+            except urllib.error.HTTPError as e:
+                if e.code == 401 and attempt == 1 and self.mode == "server":
+                    continue                          # idled out on the moved clock — sign in again
+                try:
+                    return e.code, json.loads(e.read().decode("utf-8", "replace"))
+                except ValueError:
+                    return e.code, {}
+
 
 class _OpenGuard:
     """No real data exists in the time machine, so nothing to guard — but the
