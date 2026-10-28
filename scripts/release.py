@@ -562,6 +562,9 @@ MANIFEST_FILES = [
     # custom_tasks_manager, subscription_client (each falls back to a plain write
     # if it's missing, but every install must get it).
     "safe_save.py",
+    # Claude connector sign-ins that survive a restart (2026-10-28). Imported by
+    # ai_prowler_mcp when the HTTP server starts - no fallback, it must ship.
+    "oauth_store.py",
     "self_learning.py",
     "RAG_RUN.bat",
     "create_shortcut.py",

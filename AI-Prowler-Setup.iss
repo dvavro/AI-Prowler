@@ -318,6 +318,9 @@ Source: "tool_config_store.py"; DestDir: "{app}"; Flags: ignoreversion
 ; swap) used by rag_gui, ai_prowler_mcp, rag_preprocessor, the task queue and
 ; scheduler for settings, allowlists, the task queue, tokens and licences.
 Source: "safe_save.py"; DestDir: "{app}"; Flags: ignoreversion
+; oauth_store.py (2026-10-28): Claude connector sign-ins that survive a restart.
+; ai_prowler_mcp imports it when the HTTP server starts - without it the server stops.
+Source: "oauth_store.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "self_learning.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "setup_wizard.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "subscription_client.py"; DestDir: "{app}"; Flags: ignoreversion
