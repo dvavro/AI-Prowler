@@ -129,6 +129,8 @@ async function showStatus() {
     <p id="sErr" class="err"></p></div>
   ${t.can_rate ? `<div class="card"><b>How did we do?</b><div class="stars" id="stars">${[1,2,3,4,5].map(n => `<button data-star="${n}" aria-label="${n} stars">☆</button>`).join('')}</div>
     <textarea id="rateNote" placeholder="Anything to add? (optional)"></textarea><div class="row" style="margin-top:8px"><button id="rateGo">Send rating</button></div></div>` : ''}
+  ${t.csat_score != null && !sub ? `<div class="card" id="rated"><b>Your rating</b><div class="stars" style="color:#f5a524;font-size:26px" aria-label="${+t.csat_score} of 5 stars">${'★'.repeat(+t.csat_score)}${'☆'.repeat(5 - +t.csat_score)}</div>
+    ${t.csat_comment ? `<p style="white-space:pre-wrap;margin:6px 0 0">“${esc(t.csat_comment)}”</p>` : ''}<p class="muted" style="margin:6px 0 0">Thank you for the feedback.</p></div>` : ''}
   <div class="card"><b>Messages</b>
     ${(t.messages || []).map(m => `<div class="msg ${m.author_kind === t.who.role ? 'me' : ''}"><div class="h">${m.author_kind === t.who.role ? 'You' : esc(P.business || 'Us')} · ${esc(when(m.at))}</div>${esc(m.body)}</div>`).join('') || '<p class="muted">No messages yet.</p>'}
     ${t.state !== 'Closed' ? `<textarea id="reply" placeholder="Write a reply…"></textarea>

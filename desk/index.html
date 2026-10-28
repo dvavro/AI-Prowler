@@ -486,9 +486,11 @@ function card(t) {
     <div class="t">${esc(t.title)}</div>
     <div class="chips"><span class="chip st">${esc(t.state)}</span><span class="chip ${esc(t.priority)}">${esc(t.priority)}</span>
     ${w ? `<span class="chip wait ${late ? 'late' : ''}" title="Filed ${esc(when(t.created_at))}">⏱ waiting ${w}</span>` : ''}
-    ${t.due_resolve_at && open ? `<span class="chip ${late ? 'late' : ''}">due ${esc(dueDay(t.due_resolve_at))}</span>` : ''}</div>
+    ${t.due_resolve_at && open ? `<span class="chip ${late ? 'late' : ''}">due ${esc(dueDay(t.due_resolve_at))}</span>` : ''}
+    ${t.csat_score != null ? `<span class="chip csat" title="Customer rating">★ ${esc(t.csat_score)}/5</span>` : ''}</div>
   </button>`;
 }
+function stars(n) { n = Math.max(0, Math.min(5, +n || 0)); return '★'.repeat(n) + '☆'.repeat(5 - n); }
 function renderList() {
   const empty = { mine: 'Nothing on your plate.', open: 'No open tickets.', overdue: 'Nothing overdue.',
                   closed: 'No closed tickets yet.' }[S.filter];
@@ -604,6 +606,8 @@ async function openTicket(id) {
       ${t.contact_id ? `<span class="chip">contact ${esc(t.contact_id)}</span>` : ''}</div>
     ${t.description ? `<p style="white-space:pre-wrap">${esc(t.description)}</p>` : ''}
     ${t.resolution ? `<p style="white-space:pre-wrap"><b>Resolution:</b> ${esc(t.resolution)}</p>` : ''}
+    ${t.close_reason ? `<p class="muted" id="closeWhy">Closed: ${esc(t.close_reason)}</p>` : ''}
+    ${t.csat_score != null ? `<p id="csat"><b>Customer rating:</b> <span style="color:#f5a524;font-size:18px">${stars(t.csat_score)}</span> ${esc(t.csat_score)}/5${t.csat_comment ? `<br><span style="white-space:pre-wrap">“${esc(t.csat_comment)}”</span>` : ''}</p>` : ''}
     ${role !== 'customer' ? `<button class="b ghost" id="resEdit">✍ ${t.resolution ? 'Edit' : 'Write'} resolution</button>` : ''}
   </div>
   <div class="card"><div class="row">${next.map(s => `<button class="b ${s === 'Closed' ? 'bad' : s === 'On Hold' ? 'warn' : ''}" data-move="${esc(s)}">${esc(s)}</button>`).join('') || '<span class="muted">No moves from here.</span>'}</div>

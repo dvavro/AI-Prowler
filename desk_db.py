@@ -895,11 +895,19 @@ def change_state(db_path: str, ticket_id: str, to_state: str, *, actor=None,
             sets["fixed_at"] = ts
         if to_state == rules.CLOSED:
             sets["closed_at"] = ts
+            # "confirmed by customer" only when the customer pressed "Yes, all
+            # good" (2026-10-28: the owner closing a Fixed ticket was being
+            # recorded as the customer's confirmation).
+            by_customer = rules.normalize_actor(actor)["role"] == rules.CUSTOMER
             sets["close_reason"] = (reason or "").strip() or ("confirmed by customer"
-                                                               if frm == rules.FIXED else None)
+                                                               if frm == rules.FIXED and by_customer else None)
         if frm == rules.CLOSED:                       # reopen
             sets["closed_at"] = None
             sets["close_reason"] = None
+            # The customer rates the final outcome again; the earlier rating
+            # stays in the event log ("csat" event).
+            sets["csat_score"] = None
+            sets["csat_comment"] = None
         if to_state == rules.ON_HOLD:                 # SLA clock pauses
             sets["hold_started_at"] = ts
         elif frm == rules.ON_HOLD:

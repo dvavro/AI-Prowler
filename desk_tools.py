@@ -147,6 +147,13 @@ def get_ticket(db_path, actor, edition, *, ticket_id) -> str:
             lines.append("Attachments: " + ", ".join(
                 f"{a['filename']} ({a['kind']}{', internal' if a['visibility'] == 'internal' else ''})"
                 for a in d["attachments"]))
+        if d.get("resolution"):
+            lines.append(f"Resolution: {d['resolution']}")
+        if d.get("close_reason"):
+            lines.append(f"Closed: {d['close_reason']}")
+        if d.get("csat_score") is not None:
+            lines.append(f"Customer rating: {d['csat_score']}/5"
+                         + (f" — \"{d['csat_comment']}\"" if d.get("csat_comment") else ""))
         if d.get("state_history"):
             lines.append("History: " + " → ".join(
                 f"{h['to']}" + (f" ({h['reason']})" if h.get("reason") else "")

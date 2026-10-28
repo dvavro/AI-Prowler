@@ -218,8 +218,15 @@ def ticket_pdf(doc: dict, *, include_internal: bool = False) -> bytes:
         for m in msgs:
             L.append((f"{m['at'][:16].replace('T', ' ')}  {m['author']} ({m['visibility']}, {m['channel']})", 9))
             L += [(f"   {l}", 10) for l in _wrap(m["body"], 90)]
+    if doc.get("resolution"):
+        L += [("", 8), ("Resolution", 12)] + [(l, 10) for l in _wrap(doc["resolution"], 95)]
     if doc.get("close_reason"):
-        L += [("", 8), (f"Resolution: {doc['close_reason']}", 10)]
+        L += [("", 8), (f"Closed: {doc['close_reason']}", 10)]
+    if doc.get("csat_score") is not None:
+        L += [(f"Customer rating: {doc['csat_score']}/5", 10)]
+        if doc.get("csat_comment"):
+            L += [(f"   \"{l}\"" if i == 0 else f"   {l}", 10)
+                  for i, l in enumerate(_wrap(doc["csat_comment"], 90))]
     atts = [a for a in doc.get("attachments") or [] if include_internal or a["visibility"] == "public"]
     if atts:
         L += [("", 8), ("Attachments: " + ", ".join(a["filename"] for a in atts), 9)]

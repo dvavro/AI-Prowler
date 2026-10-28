@@ -276,6 +276,10 @@ def set_csat(db_path: str, token: str, score, comment: str = "", *, edition: str
                        reason=(comment or "").strip()[:200] or None)
         desk_db._touch(conn, t["ticket_id"], actor["id"])
         touched.add(t["ticket_id"])
+        row = desk_db._row(conn, t["ticket_id"])
+    # Tell whoever handled it (2026-10-28: ratings were saved but nobody heard).
+    desk_db._emit("rated", row, actor, edition=edition, score=score,
+                  comment=(comment or "").strip()[:1000])
     return {"ok": True}
 
 

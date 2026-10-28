@@ -212,4 +212,9 @@ def test_T2_customer_ticket_three_people_and_the_customer_close_and_reopen(busin
     assert h[4].get("reason") == "ZTEST T2 the left slider still has spots"
     assert h[7].get("reason") == "ZTEST T2 the spots came back after the sprinklers"
     assert h[4]["by"].startswith("contact:") and h[7]["by"].startswith("contact:"), "the customer did those"
-    assert t["csat_score"] == 5
+    # Her 5 stars were for the first close; the reopen cleared the rating so she
+    # rates the final outcome (2026-10-28). The 5 stays in the history.
+    assert t["csat_score"] is None
+    assert any(e["kind"] == "csat" and e["to_value"] == "5" for e in t["events"])
+    cust.page.reload()
+    cust.page.locator("[data-star='5']").wait_for()          # asked again after the final close

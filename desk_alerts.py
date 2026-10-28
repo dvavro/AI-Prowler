@@ -160,6 +160,12 @@ def recipients(kind: str, ticket: dict, actor, edition: str, **info) -> tuple[li
             people = [_person(ticket.get("assignee"), edition)] if ticket.get("assignee") else _leads(edition)
             what = (f"{tid} {clock} is OVERDUE — {title}" if late
                     else f"{tid} {clock} is due soon — {title}")
+    elif kind == "rated":
+        people = [_person(ticket.get("assignee"), edition)] if ticket.get("assignee") else _leads(edition)
+        score = int(info.get("score") or 0)
+        note = (info.get("comment") or "").strip()
+        what = (f"{tid}: the customer rated it {score}/5 {'★' * score}{'☆' * (5 - score)} — "
+                + (f"\"{note[:140]}\"" if note else title))
     elif kind == "message":
         msg = info.get("message") or {}
         if external:

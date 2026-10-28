@@ -92,7 +92,8 @@ def public_ticket(t: dict, actor) -> dict:
     """A ticket row trimmed for list views; outside parties lose internals."""
     keep = ("ticket_id", "title", "kind", "type", "priority", "state", "assignee",
             "contact_id", "customer_id", "job_id", "due_resolve_at", "created_at",
-            "last_edited_at", "version", "sms_fallback", "visibility", "queue_id", "filed_by")
+            "last_edited_at", "version", "sms_fallback", "visibility", "queue_id", "filed_by",
+            "csat_score")
     out = {k: t.get(k) for k in keep}
     if rules.is_external(actor):
         for k in ("assignee", "visibility", "queue_id", "filed_by", "sms_fallback"):
