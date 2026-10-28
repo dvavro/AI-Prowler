@@ -165,3 +165,10 @@ credentials.json
 *.7z
 Output/ 
 seats.json 
+
+
+# ── Per-machine deploy scripts (removed from the repo in fd81228) ──
+# They hard-code this PC's work folder / the server's shared folder and are
+# edited every time the work folder moves - keep them local.
+update_install.bat
+update_install_server.bat
