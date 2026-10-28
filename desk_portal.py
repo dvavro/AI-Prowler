@@ -160,7 +160,9 @@ def start_request(db_path: str, *, name: str = "", phone: str = "", email: str =
     now = _now(now)
     conn = desk_db.get_connection(db_path)
     try:
+        conn.execute("BEGIN IMMEDIATE")     # count + record the hit as one step
         if not _rate_ok(conn, "code", [f"ip:{ip}", f"c:{c['contact_id']}"], now):
+            conn.execute("ROLLBACK")
             raise desk_db.DeskError("too many codes requested — please try again in an hour")
         code = f"{secrets.randbelow(1_000_000):06d}"
         conn.execute(
@@ -169,6 +171,12 @@ def start_request(db_path: str, *, name: str = "", phone: str = "", email: str =
             "expires_at = excluded.expires_at, attempts = 0, sent_at = excluded.sent_at",
             (c["contact_id"], _h(f"{c['contact_id']}:{code}"),
              _iso(now + datetime.timedelta(minutes=CODE_TTL_MINUTES)), _iso(now)))
+        conn.execute("COMMIT")
+    except desk_db.DeskError:
+        raise
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
     finally:
         conn.close()
     channel, to = ("sms", c["phone"]) if c.get("phone") else ("email", c["email"])
@@ -184,25 +192,37 @@ def verify_and_file(db_path: str, *, contact_id: str, code: str, title: str,
     """Step 2: check the code, then file the ticket and return its status link."""
     now = _now(now)
     bad = desk_db.DeskError("that code is not right — check it or ask for a new one")
+    # Check the code and use it up in ONE locked step (2026-10-28): a double-
+    # tapped Submit used to pass the check twice and file two tickets. A
+    # refusal still commits (a wrong try counts; an expired code is cleared).
+    refused = None
     conn = desk_db.get_connection(db_path)
     try:
+        conn.execute("BEGIN IMMEDIATE")
         r = conn.execute("SELECT * FROM verify_codes WHERE contact_id = ?", (contact_id,)).fetchone()
         if r is None:
-            raise bad
-        if r["attempts"] >= CODE_MAX_ATTEMPTS or r["expires_at"] < _iso(now):
+            refused = bad
+        elif r["attempts"] >= CODE_MAX_ATTEMPTS or r["expires_at"] < _iso(now):
             conn.execute("DELETE FROM verify_codes WHERE contact_id = ?", (contact_id,))
-            raise desk_db.DeskError("that code has expired — ask for a new one")
-        if not secrets.compare_digest(r["code_hash"], _h(f"{contact_id}:{(code or '').strip()}")):
+            refused = desk_db.DeskError("that code has expired — ask for a new one")
+        elif not secrets.compare_digest(r["code_hash"], _h(f"{contact_id}:{(code or '').strip()}")):
             conn.execute("UPDATE verify_codes SET attempts = attempts + 1 WHERE contact_id = ?",
                          (contact_id,))
-            raise bad
-        if not _rate_ok(conn, "ticket", [f"ip:{ip}", f"c:{contact_id}"], now):
-            raise desk_db.DeskError("too many requests today — please call or text us")
-        conn.execute("DELETE FROM verify_codes WHERE contact_id = ?", (contact_id,))
-        conn.execute("UPDATE customer_contacts SET verified_at = ? WHERE contact_id = ?",
-                     (_iso(now), contact_id))
+            refused = bad
+        elif not _rate_ok(conn, "ticket", [f"ip:{ip}", f"c:{contact_id}"], now):
+            refused = desk_db.DeskError("too many requests today — please call or text us")
+        else:
+            conn.execute("DELETE FROM verify_codes WHERE contact_id = ?", (contact_id,))
+            conn.execute("UPDATE customer_contacts SET verified_at = ? WHERE contact_id = ?",
+                         (_iso(now), contact_id))
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
     finally:
         conn.close()
+    if refused is not None:
+        raise refused
     contact = desk_db.get_contact(db_path, contact_id)
     actor = actor_for(contact)
     t = desk_db.create_ticket(db_path, title=(title or "").strip()[:200], kind=rules.EXTERNAL,
