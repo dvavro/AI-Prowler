@@ -22,7 +22,7 @@
 /* Update-available banner — see the serviceWorker registration/update
    logic near the init IIFE. Fixed overlay, safe-area-aware, sits above
    everything until dismissed or acted on. */
-#updateBanner{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);left:12px;right:12px;z-index:9999;background:var(--surface);border:1px solid var(--accent);border-radius:14px;padding:12px 14px;box-shadow:0 8px 30px rgba(0,0,0,.5);display:none;align-items:center;justify-content:space-between;gap:10px}
+#updateBanner{position:fixed;top:calc(env(safe-area-inset-top,0px) + 28px);left:12px;right:12px;z-index:9999;background:var(--surface);border:1px solid var(--accent);border-radius:14px;padding:12px 14px;box-shadow:0 8px 30px rgba(0,0,0,.5);display:none;align-items:center;justify-content:space-between;gap:10px}
 #updateBanner.show{display:flex}
 #updateBanner .msg{font-size:13px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
 #updateBanner .actions{display:flex;gap:8px;flex-shrink:0}
@@ -79,7 +79,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 .auth-eye-btn:active{opacity:.6;}
 /* App */
 #app{display:none;flex-direction:column;height:100vh;height:100dvh;}
-.topbar{min-height:var(--topbar-h);padding-top:var(--safe-top);background:var(--surface);
+.topbar{min-height:var(--topbar-h);padding-top:calc(var(--safe-top) + 24px);padding-bottom:6px;background:var(--surface);  /* strip above for the version badge */
   border-bottom:1px solid var(--border);display:flex;align-items:center;
   padding-left:16px;padding-right:16px;gap:12px;flex-shrink:0;}
 .topbar-logo{width:32px;height:32px;border-radius:8px;

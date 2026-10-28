@@ -62,7 +62,7 @@ html, body {
 #top-bar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 16px 10px;
-  padding-top: calc(14px + env(safe-area-inset-top));
+  padding-top: calc(26px + env(safe-area-inset-top));   /* strip above for the version badge */
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -989,7 +989,7 @@ html, body {
 
 /* ─── Update Banner ──────────────────────────────────────────────────── */
 #update-banner {
-  position: fixed; top: env(safe-area-inset-top); left: 0; right: 0;
+  position: fixed; top: calc(env(safe-area-inset-top, 0px) + 24px); left: 0; right: 0;  /* below the version badge */
   background: var(--cyan); color: var(--bg);
   display: flex; align-items: center; justify-content: space-between;
   padding: 10px 16px; z-index: 2000; font-size: 14px; font-weight: 500;
