@@ -421,6 +421,25 @@ def _internet_recheck_ms(online: bool) -> int:
     return INTERNET_RECHECK_MS[bool(online)]
 
 
+# A click on the light shows yellow "Checking…" until the new result is in
+# (2026-10-28, David: "so the user can see that a new check was issued"). A check
+# usually takes ~0.1 s, so yellow is held at least this long to be seen.
+INTERNET_CHECKING_MIN_MS = 700
+
+
+def _internet_light_style(state: str) -> tuple:
+    """(dot colour, label text) for 'online', 'offline' or 'checking'."""
+    return {"online": ("#27ae60", "Online"),
+            "offline": ("#cc0000", "Offline"),
+            "checking": ("#e6a700", "Checking…")}[state]
+
+
+def _internet_checking_hold_ms(elapsed_ms: float) -> int:
+    """How much longer to keep the yellow 'Checking…' up after a check that
+    took elapsed_ms, so it is on screen for at least INTERNET_CHECKING_MIN_MS."""
+    return max(0, int(INTERNET_CHECKING_MIN_MS - elapsed_ms))
+
+
 class SpeechRecorder:
     """
     Manages microphone recording and Whisper transcription.
@@ -16565,11 +16584,13 @@ or from the Help menu."""
                       bg='#0f3460', fg='white',
                       relief='flat', padx=12).pack(side='right', padx=(0, 8))
 
-        def _update_internet_light(online: bool):
-            colour = '#27ae60' if online else '#cc0000'
-            text   = 'Online' if online else 'Offline'
+        def _show_internet_state(state: str):
+            colour, text = _internet_light_style(state)
             _inet_canvas.itemconfig(_inet_dot, fill=colour)
             _inet_lbl.config(text=text, foreground=colour)
+
+        def _update_internet_light(online: bool):
+            _show_internet_state('online' if online else 'offline')
 
         def _update_sub_light(sub_result: dict):
             status    = sub_result.get('status', 'unmanaged')
@@ -16757,29 +16778,43 @@ or from the Help menu."""
         # 60 s while Online. One check at a time; clicking the light checks now.
         _inet_busy = [False]
 
-        def _inet_tick(reschedule=True):
+        def _inet_tick(reschedule=True, manual=False):
             if _inet_busy[0]:
                 if reschedule:            # a click is mid-check: keep the clock running
                     self.root.after(2_000, _inet_tick)
                 return
             _inet_busy[0] = True
+            if manual:                    # show that a new check was issued
+                _show_internet_state('checking')
+            t0 = time.monotonic()
+            result = []                   # filled by the worker; read ONLY on the Tk thread
 
             def _w():
-                online = _check_internet()
+                result.append(_check_internet())
+            threading.Thread(target=_w, daemon=True).start()
+
+            # The window polls for the answer on its own thread (Tk calls from a
+            # worker thread fail whenever the main loop isn't spinning).
+            def _poll():
+                if not result:
+                    self.root.after(50, _poll)
+                    return
+                online = result[0]
+                hold = _internet_checking_hold_ms((time.monotonic() - t0) * 1000) if manual else 0
 
                 def _done():
                     _inet_busy[0] = False
                     _update_internet_light(online)
                     if reschedule:
                         self.root.after(_internet_recheck_ms(online), _inet_tick)
-                try:
-                    self.root.after(0, _done)
-                except Exception:  # noqa: BLE001 — window closed
-                    pass
-            threading.Thread(target=_w, daemon=True).start()
+                self.root.after(hold, _done)
+            try:
+                self.root.after(50, _poll)
+            except Exception:  # noqa: BLE001 — window closed
+                _inet_busy[0] = False
         self.root.after(15_000, _inet_tick)
         for _w_inet in (_inet_canvas, _inet_lbl):
-            _w_inet.bind("<Button-1>", lambda _e: _inet_tick(reschedule=False))
+            _w_inet.bind("<Button-1>", lambda _e: _inet_tick(reschedule=False, manual=True))
             try:
                 _w_inet.configure(cursor="hand2")
             except Exception:  # noqa: BLE001
