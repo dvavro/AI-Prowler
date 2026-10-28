@@ -408,7 +408,9 @@ def test_SD_P05_overdue_todo_shows_late_in_the_app(tm, page):
     app.tab("overdue")
     c = app.card(S["todo"])
     c.wait_for()
-    assert c.locator(".chip.late").count() == 1, "the overdue to-do should carry the late chip"
+    assert c.locator(".chip.late:not(.wait)").count() == 1, "the overdue to-do's due chip should be red"
+    # 2026-10-28: the "⏱ waiting …" chip turns red once it's overdue, too
+    assert c.locator(".chip.wait.late").count() == 1, "the overdue to-do's waiting chip should be red"
     if "cust" in S:
         assert app.card(S["cust"]).count() == 0, "a ticket with no due date is never overdue"
     _done("p_overdue")
@@ -751,7 +753,8 @@ def test_SD_B07_manager_sees_it_overdue_and_two_sla_misses(tm, page):
     mgr.tab("overdue")
     c = mgr.card(S["gutter"])
     c.wait_for()
-    assert c.locator(".chip.late").count() == 1
+    assert c.locator(".chip.late:not(.wait)").count() == 1         # the due chip is red
+    assert c.locator(".chip.wait.late").count() == 1               # and so is "⏱ waiting …"
     mgr.tab("reports")
     row = page.locator("tr", has_text=S["ids"]["alex"]).first
     row.wait_for()
