@@ -32788,6 +32788,31 @@ def _run_server_mode(port: int, token: str,
     for _ut in (users_data.get("users") or {}).keys():
         _srv_access_tokens[_ut] = _ut
 
+    # 2026-10-28: OAuth sign-ins (claude.ai connector) are saved in
+    # ~/.ai-prowler/oauth_tokens_server.json — token hashes + expiry, plus a
+    # hash of the users.json token each sign-in belongs to — so they survive
+    # a restart. A sign-in whose user was removed (or whose users.json token
+    # changed) no longer resolves and is refused. See oauth_store.py.
+    from oauth_store import OAuthStore as _SrvOAuthStore, token_hash as _srv_oauth_hash, \
+        exchange_token as _srv_oauth_exchange
+    _srv_oauth_store = _SrvOAuthStore(Path.home() / ".ai-prowler" / "oauth_tokens_server.json",
+                                      logger=_log)
+    _log.info("OAuth store loaded (server mode): %s", _srv_oauth_store.counts())
+
+    def _srv_user_token_for_hash(user_hash: str, live_users: dict):
+        for _k in (live_users.get("users") or {}).keys():
+            if _srv_oauth_hash(_k) == user_hash:
+                return _k
+        return None
+
+    def _srv_oauth_resolve(tok: str, live_users: dict):
+        """A valid OAuth access token -> its users.json token, or None. Not
+        cached, so expiry and revocation take effect on the next request."""
+        _d = _srv_oauth_store.check_access(tok)
+        if not _d:
+            return None
+        return _srv_user_token_for_hash(_d.get("user_hash", ""), live_users)
+
     # R-043: /pwa-login session -> last time it was used (time.time()).
     _srv_pwa_last_used: dict = {}
     import time as _srv_time
@@ -32830,7 +32855,7 @@ def _run_server_mode(port: int, token: str,
     #      buffering so SSE works.
 
     _SRV_OAUTH_PATHS = {
-        "/health", "/register", "/authorize", "/token",
+        "/health", "/register", "/authorize", "/token", "/revoke",
         "/.well-known/oauth-authorization-server",
         "/.well-known/oauth-protected-resource",
     }
@@ -33117,8 +33142,9 @@ def _run_server_mode(port: int, token: str,
                     "authorization_endpoint": f"{base}/authorize",
                     "token_endpoint": f"{base}/token",
                     "registration_endpoint": f"{base}/register",
+                    "revocation_endpoint": f"{base}/revoke",
                     "response_types_supported": ["code"],
-                    "grant_types_supported": ["authorization_code"],
+                    "grant_types_supported": ["authorization_code", "refresh_token"],
                     "code_challenge_methods_supported": ["S256", "plain"],
                     "token_endpoint_auth_methods_supported": ["none"],
                     "scopes_supported": ["mcp"],
@@ -33136,17 +33162,20 @@ def _run_server_mode(port: int, token: str,
                     reg_body = _rj.loads(body_bytes) if body_bytes else {}
                 except Exception:
                     reg_body = {}
-                client_id = _srv_secrets.token_urlsafe(16)
-                _log.info("OAuth /register: issued client_id=%s…", client_id[:8])
-                await _send_json(send, 201, {
-                    "client_id": client_id,
-                    "client_id_issued_at": int(_time.time()),
-                    "grant_types": reg_body.get("grant_types", ["authorization_code"]),
-                    "response_types": reg_body.get("response_types", ["code"]),
-                    "redirect_uris": reg_body.get("redirect_uris", []),
-                    "token_endpoint_auth_method": "none",
-                    "client_name": reg_body.get("client_name", "Claude"),
-                })
+                _reg_rec = _srv_oauth_store.register_client(
+                    reg_body if isinstance(reg_body, dict) else {})
+                _log.info("OAuth /register: issued client_id=%s…", _reg_rec["client_id"][:8])
+                await _send_json(send, 201, _reg_rec)
+                return
+
+            if path == "/revoke" and method == "POST":
+                # RFC 7009 — revoke the sign-in this access/refresh token belongs
+                # to. Always 200 (no hint whether the token existed).
+                _rv_tok = _parse_qs(await _read_body(receive)).get("token", "")
+                if _srv_oauth_store.revoke(_rv_tok):
+                    _srv_access_tokens.pop(_rv_tok, None)
+                    _log.info("OAuth /revoke: sign-in revoked")
+                await _send_json(send, 200, {})
                 return
 
             if path == "/authorize" or path.startswith("/authorize"):
@@ -33174,6 +33203,7 @@ def _run_server_mode(port: int, token: str,
                             "code_challenge":        code_challenge,
                             "code_challenge_method": code_challenge_method,
                             "user_token":            entered,
+                            "client_id":             params.get("client_id", ""),
                         }
                         sep    = "&" if "?" in redirect_uri else "?"
                         target = (f"{redirect_uri}{sep}code={code}"
@@ -33232,50 +33262,26 @@ def _run_server_mode(port: int, token: str,
                 return
 
             if path == "/token" and method == "POST":
-                # Exchange auth code for an access token (PKCE verified).
-                body_bytes  = await _read_body(receive)
-                form_params = _parse_qs(body_bytes)
-                grant_type    = form_params.get("grant_type", "")
-                code          = form_params.get("code", "")
-                code_verifier = form_params.get("code_verifier", "")
+                # Exchange an auth code (PKCE verified) or a refresh token for a
+                # new access + refresh token pair, saved (hashed) in the OAuth
+                # store with a hash of the user's users.json token — see
+                # oauth_store.exchange_token. Refresh is refused once that user
+                # is gone or no longer active.
+                form_params = _parse_qs(await _read_body(receive))
 
-                if grant_type != "authorization_code":
-                    await _send_json(send, 400, {"error": "unsupported_grant_type"})
-                    return
-                if code not in _srv_auth_codes:
-                    await _send_json(send, 400, {"error": "invalid_grant"})
-                    return
+                def _srv_grant_data(stored):
+                    return {"user_hash": _srv_oauth_hash(stored.get("user_token", ""))}
 
-                stored     = _srv_auth_codes.pop(code)
-                user_token = stored.get("user_token", "")
+                def _srv_refresh_ok(data):
+                    _lu = _hot_reload_users(users_data)
+                    _k = _srv_user_token_for_hash(data.get("user_hash", ""), _lu)
+                    return _k is not None and _resolve_user(_lu, _k) is not None
 
-                # Verify PKCE if code_challenge was stored.
-                if stored.get("code_challenge"):
-                    method_pkce = stored.get("code_challenge_method", "plain")
-                    if method_pkce == "S256":
-                        digest   = _srv_hashlib.sha256(code_verifier.encode()).digest()
-                        computed = _srv_base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
-                    else:
-                        computed = code_verifier
-                    if computed != stored["code_challenge"]:
-                        _log.warning("OAuth /token: PKCE mismatch for code")
-                        await _send_json(send, 400, {
-                            "error": "invalid_grant",
-                            "error_description": "PKCE mismatch",
-                        })
-                        return
-
-                access_token = _srv_secrets.token_urlsafe(48)
-                # Map the new access token back to the original users.json token
-                # so _resolve_user can look up the user on subsequent MCP calls.
-                _srv_access_tokens[access_token] = user_token
-                _log.info("OAuth /token: issued access token for user_token …%s",
-                          user_token[-4:] if user_token else "?")
-                await _send_json(send, 200, {
-                    "access_token": access_token,
-                    "token_type":   "bearer",
-                    "expires_in":   31536000,  # 1 year
-                })
+                _st, _body = _srv_oauth_exchange(
+                    _srv_oauth_store, form_params, _srv_auth_codes,
+                    grant_data=_srv_grant_data, validate_refresh=_srv_refresh_ok,
+                    logger=_log)
+                await _send_json(send, _st, _body)
                 return
 
             # ── Remote Control PWA — not available in server mode (Phase 0) ────
@@ -34288,7 +34294,13 @@ def _run_server_mode(port: int, token: str,
             for _new_tok in (_live_users.get("users") or {}).keys():
                 if _new_tok not in _srv_access_tokens:
                     _srv_access_tokens[_new_tok] = _new_tok
-            raw_user_token = _srv_raw_token_for(tok)      # R-043: None = expired Jobs app session
+            _oauth_ut = None
+            if tok not in _srv_access_tokens:
+                # A claude.ai OAuth sign-in (oauth_store) — checked on every
+                # request so expiry/revocation apply at once, restart or not.
+                _oauth_ut = _srv_oauth_resolve(tok, _live_users)
+            raw_user_token = (_oauth_ut if _oauth_ut is not None
+                              else _srv_raw_token_for(tok))  # R-043: None = expired Jobs app session
             user = None if raw_user_token is None else _resolve_user(_live_users, raw_user_token)
             if user is None:
                 _log.info("Auth rejected for token …%s on %s",
@@ -34862,11 +34874,36 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     else:
         _threading.Thread(target=_periodic_sub_refresh, daemon=True).start()
 
-    # In-memory stores for OAuth codes and issued access tokens
-    # code -> {redirect_uri, code_challenge, code_challenge_method}
+    # OAuth state. One-time /authorize codes stay in memory (they live seconds).
+    # code -> {redirect_uri, code_challenge, code_challenge_method, client_id}
     _auth_codes: dict = {}
-    # access_token -> True
-    _access_tokens: set = set()
+    # 2026-10-28: issued access/refresh tokens and registered clients are kept
+    # in ~/.ai-prowler/oauth_tokens.json (hashes only, with expiry) so the
+    # Claude connector stays signed in across AI-Prowler restarts. The store
+    # is bound to a hash of the owner's Bearer token: changing that token in
+    # Settings signs every client out. See oauth_store.py.
+    from oauth_store import OAuthStore as _OAuthStore, token_hash as _oauth_hash, \
+        exchange_token as _oauth_exchange
+    _oauth_store = _OAuthStore(Path.home() / ".ai-prowler" / "oauth_tokens.json",
+                               binding=_oauth_hash(token), logger=_log)
+    _log.info("OAuth store loaded: %s", _oauth_store.counts())
+
+    class _AccessTokenSet:
+        """Drop-in for the old in-memory set: `tok in _access_tokens` is True for
+        the owner's own Bearer token (memory only, never written) or any valid,
+        unexpired OAuth access token in the persistent store."""
+        def __init__(self):
+            self._mem: set = set()
+        def add(self, tok):
+            if tok:
+                self._mem.add(tok)
+        def discard(self, tok):
+            self._mem.discard(tok)
+            _oauth_store.revoke(tok)
+        def __contains__(self, tok):
+            return bool(tok) and (tok in self._mem or tok in _oauth_store)
+
+    _access_tokens = _AccessTokenSet()
     # Pre-add the user's own bearer token so existing curl/manual clients still work
     _access_tokens.add(token)
 
@@ -34916,8 +34953,11 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             "authorization_endpoint": f"{base}/authorize",
             "token_endpoint": f"{base}/token",
             "registration_endpoint": f"{base}/register",
+            "revocation_endpoint": f"{base}/revoke",
             "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code"],
+            # refresh_token (2026-10-28): lets claude.ai renew its sign-in
+            # instead of giving up when an access token is refused.
+            "grant_types_supported": ["authorization_code", "refresh_token"],
             "code_challenge_methods_supported": ["S256", "plain"],
             "token_endpoint_auth_methods_supported": ["none"],
             "scopes_supported": ["mcp"],
@@ -34925,23 +34965,16 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
 
     # ── Dynamic Client Registration (RFC 7591) ───────────────────────────────
     # Claude.ai POSTs here before starting the OAuth flow to register itself.
-    # We accept any registration and echo back a generated client_id.
+    # We accept any registration, save it (survives restarts) and echo back
+    # a generated client_id.
     async def register_client(request: Request):
-        import secrets as _sec, time as _time
         try:
             body = await request.json()
         except Exception:
             body = {}
-        client_id = _sec.token_urlsafe(16)
-        return JSONResponse({
-            "client_id": client_id,
-            "client_id_issued_at": int(_time.time()),
-            "grant_types": body.get("grant_types", ["authorization_code"]),
-            "response_types": body.get("response_types", ["code"]),
-            "redirect_uris": body.get("redirect_uris", []),
-            "token_endpoint_auth_method": "none",
-            "client_name": body.get("client_name", "Claude"),
-        }, status_code=201)
+        rec = _oauth_store.register_client(body if isinstance(body, dict) else {})
+        _log.info("OAuth /register: issued client_id=%s…", rec["client_id"][:8])
+        return JSONResponse(rec, status_code=201)
 
     # ── Authorization endpoint ────────────────────────────────────────────────
     async def authorize(request: Request):
@@ -35007,6 +35040,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                     "redirect_uri": redirect_uri,
                     "code_challenge": code_challenge,
                     "code_challenge_method": code_challenge_method,
+                    "client_id": params.get("client_id", ""),
                 }
                 sep = "&" if "?" in redirect_uri else "?"
                 target = f"{redirect_uri}{sep}code={code}&state={urllib.parse.quote(state)}"
@@ -35065,49 +35099,35 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
 
     # ── Token endpoint ────────────────────────────────────────────────────────
     async def token_endpoint(request: Request):
-        """Exchange auth code for access token."""
+        """Exchange an auth code (PKCE) or a refresh token for a new access +
+        refresh token pair. Tokens are saved (hashed) in the OAuth store, so
+        they keep working after a restart — see oauth_store.exchange_token."""
         try:
-            form = await request.form()
+            form = dict(await request.form())
         except Exception:
             form = {}
-        grant_type    = form.get("grant_type", "")
-        code          = form.get("code", "")
-        code_verifier = form.get("code_verifier", "")
+        status, body = _oauth_exchange(_oauth_store, form, _auth_codes, logger=_log)
+        return JSONResponse(body, status_code=status,
+                            headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 
-        if grant_type != "authorization_code":
-            return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
-        if code not in _auth_codes:
-            return JSONResponse({"error": "invalid_grant"}, status_code=400)
-
-        stored = _auth_codes.pop(code)
-
-        # Verify PKCE if code_challenge was stored
-        if stored.get("code_challenge"):
-            method = stored.get("code_challenge_method", "plain")
-            if method == "S256":
-                digest = hashlib.sha256(code_verifier.encode()).digest()
-                computed = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
-            else:
-                computed = code_verifier
-            if computed != stored["code_challenge"]:
-                return JSONResponse({"error": "invalid_grant", "error_description": "PKCE mismatch"}, status_code=400)
-
-        import secrets
-        access_token = secrets.token_urlsafe(48)
-        _access_tokens.add(access_token)
-
-        return JSONResponse({
-            "access_token": access_token,
-            "token_type": "bearer",
-            "expires_in": 31536000,  # 1 year
-        })
+    # ── Token revocation (RFC 7009) ───────────────────────────────────────────
+    # Revokes the whole sign-in the presented access or refresh token belongs
+    # to. Always 200, per the RFC (no hint whether the token existed).
+    async def revoke_endpoint(request: Request):
+        try:
+            form = dict(await request.form())
+        except Exception:
+            form = {}
+        if _oauth_store.revoke(str(form.get("token", "") or "")):
+            _log.info("OAuth /revoke: sign-in revoked")
+        return JSONResponse({}, status_code=200)
 
     # ── Pure ASGI auth middleware ─────────────────────────────────────────────
     # IMPORTANT: Must NOT use BaseHTTPMiddleware here — it buffers the entire
     # response body which breaks FastMCP's Server-Sent Events streaming transport
     # causing 500 Internal Server Error on every MCP request.
     # This pure ASGI class passes bytes through directly without any buffering.
-    _PUBLIC_PATHS = {"/health", "/authorize", "/token", "/register",
+    _PUBLIC_PATHS = {"/health", "/authorize", "/token", "/register", "/revoke",
                      "/.well-known/oauth-authorization-server",
                      "/.well-known/oauth-protected-resource",
                      "/sms-webhook", "/whatsapp-webhook"}
@@ -35436,6 +35456,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         Route("/register",  register_client, methods=["POST"]),
         Route("/authorize", authorize, methods=["GET", "POST"]),
         Route("/token",     token_endpoint, methods=["POST"]),
+        Route("/revoke",    revoke_endpoint, methods=["POST"]),
         Route("/sms-webhook",       sms_webhook,       methods=["POST"]),
         Route("/whatsapp-webhook",  whatsapp_webhook,  methods=["POST"]),
         Route("/consent-signup",    consent_signup,    methods=["POST", "OPTIONS"]),
@@ -35469,7 +35490,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     # oauth_only_app, checks Bearer token, then forwards MCP paths to mcp_asgi.
     # Zero buffering — streaming/SSE responses pass through untouched.
 
-    _OAUTH_PATHS = {"/health", "/authorize", "/token", "/register",
+    _OAUTH_PATHS = {"/health", "/authorize", "/token", "/register", "/revoke",
                     "/.well-known/oauth-authorization-server",
                     "/.well-known/oauth-protected-resource",
                     "/sms-webhook", "/whatsapp-webhook", "/consent-signup"}
