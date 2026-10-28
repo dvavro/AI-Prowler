@@ -7404,11 +7404,35 @@ def _desk_configure_alerts() -> None:
                 return False
             return str(send_sms(to, text)).startswith("✅")
 
+        # Which ways the public request page (/support/new) can reach a
+        # customer (2026-10-28, David): email must be set up for the page to
+        # take requests at all; the mobile box shows only when texting is set
+        # up AND switched on. The email / SMS setup is read fresh on every
+        # call; the SMS & WhatsApp on/off switch, like every tool switch,
+        # applies from the next restart.
+        def _channels():
+            try:
+                _em = bool(_email_config_load())
+            except Exception:
+                _em = False
+            try:
+                from sms_backends import get_sms_backend, load_sms_config
+                _sm = (bool(get_sms_backend(load_sms_config()).validate_config()[0])
+                       and "send_sms" not in _USER_DISABLED_TOOLS)
+            except Exception:
+                _sm = False
+            return {"email": _em, "sms": _sm}
+
         # E2E sandboxes only: catch outgoing email/SMS in a file instead of
         # sending. Needs BOTH test_mode in the sandbox config.json AND the
         # DESK_E2E_OUTBOX path, so a real install can never write to it.
         _outbox = os.environ.get("DESK_E2E_OUTBOX", "").strip()
         if _outbox and _desk_sandbox_test_mode():
+            # the outbox catches both; DESK_E2E_CHANNELS ("email", "none", ...)
+            # lets a sandbox play an install without texting or email
+            _spec = os.environ.get("DESK_E2E_CHANNELS", "email,sms").lower()
+            _channels = lambda: {"email": "email" in _spec, "sms": "sms" in _spec}  # noqa: E731
+
             def _catch(kind, to, subject, body):
                 with open(_outbox, "a", encoding="utf-8") as _ob:
                     _ob.write(json.dumps({"kind": kind, "to": to, "subject": subject,
@@ -7433,6 +7457,8 @@ def _desk_configure_alerts() -> None:
         _dal.configure(email=_email, sms=_sms, team=_desk_team if _IS_SERVER_MODE else None,
                        db_path=lambda: _ddb_default_path(), base_url=_base,
                        business=lambda: _get_personal_owner_name() or "")
+        import desk_portal as _dpo
+        _dpo.channels_fn = _channels
     except Exception as _e:
         _log.warning("Service Desk alerts not configured (%s) — tickets still work.", _e)
     _desk_start_email_intake()

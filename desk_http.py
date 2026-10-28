@@ -210,7 +210,9 @@ def _route(method, sub, q, body, ctype, actor, edition, db, services):
 
     if sub == "/me" and method == "GET":
         s = desk_db.get_settings(db)
-        return _ok(actor={"id": a["id"], "role": a["role"], "name": a.get("name", ""),
+        import desk_portal
+        return _ok(portal_channels=desk_portal.channels(),
+                   actor={"id": a["id"], "role": a["role"], "name": a.get("name", ""),
                           "email": a.get("email", "")},
                    edition=edition, settings=s,
                    kinds=[k for k in rules.KINDS

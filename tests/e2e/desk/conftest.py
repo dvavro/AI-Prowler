@@ -111,7 +111,7 @@ class Server:
         return http(method, f"{self.base}{path}", payload, token=self.api_token(name))
 
 
-def _start(kind, tmp_path_factory, desk_on=True) -> Server:
+def _start(kind, tmp_path_factory, desk_on=True, extra_env=None) -> Server:
     state = tmp_path_factory.mktemp(f"desk_e2e_{kind}{'' if desk_on else '_off'}")
     port = _free_port()
     base = f"http://127.0.0.1:{port}"
@@ -145,7 +145,7 @@ def _start(kind, tmp_path_factory, desk_on=True) -> Server:
             os.environ["AIPROWLER_TEST_STATE_DIR"] = old
     outbox = state / "outbox.jsonl"
     env = dict(os.environ, AIPROWLER_TEST_STATE_DIR=str(state), DESK_E2E_OUTBOX=str(outbox),
-               PYTHONIOENCODING="utf-8")
+               PYTHONIOENCODING="utf-8", **(extra_env or {}))
     args = [sys.executable, str(SRC / "ai_prowler_mcp.py"), "--transport", "http", "--port", str(port),
             "--public-base", base]
     if kind == "solo":
@@ -200,6 +200,22 @@ def business_off(tmp_path_factory):
 def solo_off(tmp_path_factory):
     """A personal install whose owner switched Service Desk OFF in Settings."""
     s = _start("solo", tmp_path_factory, desk_on=False)
+    yield s
+    _stop(s)
+
+
+@pytest.fixture(scope="module")
+def solo_email_only(tmp_path_factory):
+    """A personal install with email set up but no texting."""
+    s = _start("solo", tmp_path_factory, extra_env={"DESK_E2E_CHANNELS": "email"})
+    yield s
+    _stop(s)
+
+
+@pytest.fixture(scope="module")
+def solo_no_email(tmp_path_factory):
+    """A personal install with neither email nor texting set up."""
+    s = _start("solo", tmp_path_factory, extra_env={"DESK_E2E_CHANNELS": "none"})
     yield s
     _stop(s)
 

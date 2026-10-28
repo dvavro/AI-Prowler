@@ -829,8 +829,16 @@ async function showSettings() {
     <select data-mode="email_new_request_mode">${[['off', 'Do nothing'], ['create', 'Open a ticket automatically']]
       .map(o => `<option value="${o[0]}" ${s.email_new_request_mode === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>`;
   const solo = S.me.edition === 'solo';
+  // What the customer request page can use (2026-10-28): it needs email set up;
+  // the mobile box shows only when texting is set up and switched on.
+  const pc = S.me.portal_channels || { email: true, sms: true };
+  const portalNote = !pc.email
+    ? 'Set up email in AI-Prowler first — the request form stays off until email works.'
+    : pc.sms ? 'Customers can get their code by text or email.'
+             : 'Customers get their code by email (texting isn\'t set up or is switched off, so the form has no mobile box).';
   app.innerHTML = `<div class="card"><h2 style="margin:0 0 6px">Settings</h2>${rows.map(r =>
-    `<div class="tog"><input type="checkbox" data-set="${r[0]}" ${s[r[0]] ? 'checked' : ''}><span>${esc(r[1])}</span></div>`).join('')}
+    `<div class="tog"><input type="checkbox" data-set="${r[0]}" ${s[r[0]] ? 'checked' : ''}><span>${esc(r[1])}</span></div>` +
+    (r[0] === 'portal_enabled' ? `<p class="muted" id="portalNote" style="margin:-4px 0 8px 30px;font-size:13px">${esc(portalNote)}</p>` : '')).join('')}
     ${modes}
     <label>Close a Fixed customer ticket after this many days with no reply (0 = never)</label>
     <div class="row"><input id="acDays" type="number" min="0" max="60" value="${esc(s.auto_close_days)}">

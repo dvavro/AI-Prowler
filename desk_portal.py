@@ -38,6 +38,22 @@ JSON = b"application/json"
 
 # Injected by ai_prowler_mcp.py through desk_alerts (fn(channel, to, subject, text) -> bool)
 send_fn = None
+# Injected by ai_prowler_mcp.py: fn() -> {"email": bool, "sms": bool} - which ways
+# AI-Prowler can reach a customer right now (2026-10-28, David: no email set up ->
+# no online requests; no texting set up / switched off -> no mobile box).
+channels_fn = None
+
+
+def channels() -> dict:
+    """{"email": bool, "sms": bool}. Without channels_fn (unit tests, tools),
+    both follow whether a sender is installed at all."""
+    if channels_fn is None:
+        return {"email": bool(send_fn), "sms": bool(send_fn)}
+    try:
+        c = channels_fn() or {}
+        return {"email": bool(c.get("email")), "sms": bool(c.get("sms"))}
+    except Exception:  # noqa: BLE001
+        return {"email": False, "sms": False}
 
 
 def _h(token: str) -> str:
@@ -153,8 +169,14 @@ def start_request(db_path: str, *, name: str = "", phone: str = "", email: str =
         raise desk_db.DeskError("online requests are turned off — please call or text us")
     if (honeypot or "").strip():
         return {"ok": True, "contact_id": "", "sent_via": "sms"}      # quietly drop bots
+    ch = channels()
+    if not ch["email"]:
+        raise desk_db.DeskError("online requests aren't available right now — please call or text us")
+    if not ch["sms"]:
+        phone = ""                       # no texting here: the page hides the box; ignore a stray number
     if not (phone or email):
-        raise desk_db.DeskError("enter a mobile number or an email address")
+        raise desk_db.DeskError("enter a mobile number or an email address" if ch["sms"]
+                                else "enter your email address")
     c = desk_db.upsert_contact(db_path, name=(name or "").strip()[:80], phone=phone or None,
                                email=email or None, contact_type="customer",
                                actor={"id": "portal", "role": "customer"})
@@ -247,8 +269,9 @@ def verify_and_file(db_path: str, *, contact_id: str, code: str, title: str,
     url = link_url(base_url, token)
     # Confirmation: text if we can, otherwise email (the page already shows
     # the request, so this is a courtesy - never an error).
+    ch = channels()
     for channel, to in (("sms", contact.get("phone")), ("email", contact.get("email"))):
-        if to and _send(channel, to, f"We got your request [{t['ticket_id']}]",
+        if to and ch[channel] and _send(channel, to, f"We got your request [{t['ticket_id']}]",
                         f"We got your request {t['ticket_id']}: {t['title']}. Track it here: {url}"):
             break
     return {"ok": True, "ticket_id": t["ticket_id"], "token": token, "url": url}
@@ -332,7 +355,12 @@ def route(method: str, path: str, *, query: dict, body: bytes, content_type: str
 def _route(method, sub, q, raw, ctype, ip, db, edition, base_url, business, now):
     if sub == "/info" and method == "GET":
         s = desk_db.get_settings(db)
-        return _j(200, {"ok": True, "business": business or "", "portal_enabled": bool(s.get("portal_enabled"))})
+        ch = channels()
+        # The form takes requests only with the owner's switch on AND email set
+        # up; the mobile box shows only when texting works too.
+        return _j(200, {"ok": True, "business": business or "",
+                        "portal_enabled": bool(s.get("portal_enabled")) and ch["email"],
+                        "sms": ch["sms"]})
     if sub == "/start" and method == "POST":
         b = _body(raw)
         return _j(200, start_request(db, name=b.get("name", ""), phone=b.get("phone", ""),

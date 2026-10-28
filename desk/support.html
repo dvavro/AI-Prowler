@@ -62,7 +62,7 @@ async function call(method, path, body, isForm) {
 function note(id, text, ok) { const e = $(id); e.textContent = text; e.className = ok ? 'okmsg' : 'err'; }
 
 async function boot() {
-  try { const i = await call('GET', '/info'); P.business = i.business || '';
+  try { const i = await call('GET', '/info'); P.business = i.business || ''; P.sms = !!i.sms;
         $('#biz').textContent = P.business; if (!i.portal_enabled && !location.pathname.startsWith('/support/t/')) {
           app.innerHTML = '<div class="card">Online requests are turned off — please call or text us.</div>'; return; } }
   catch (_) {}
@@ -75,10 +75,10 @@ async function boot() {
 function showForm() {
   $('#h1').textContent = 'Request service';
   app.innerHTML = `<div class="card">
-    <p class="muted" style="margin-top:0">Tell us what you need. We'll text or email you a code to confirm it's you.</p>
+    <p class="muted" style="margin-top:0">Tell us what you need. We'll ${P.sms ? 'text or email' : 'email'} you a code to confirm it's you.</p>
     <label>Your name</label><input id="fName" autocomplete="name">
-    <label>Mobile number</label><input id="fPhone" type="tel" autocomplete="tel" placeholder="for a text code">
-    <label>or Email</label><input id="fEmail" type="email" autocomplete="email">
+    ${P.sms ? `<label>Mobile number</label><input id="fPhone" type="tel" autocomplete="tel" placeholder="for a text code">
+    <label>or Email</label>` : '<label>Email</label>'}<input id="fEmail" type="email" autocomplete="email">
     <div class="hp" aria-hidden="true"><label>Website</label><input id="fWeb" tabindex="-1" autocomplete="off"></div>
     <label>What do you need?</label><input id="fTitle" maxlength="200" placeholder="e.g. Streaks on the front windows">
     <label>Details (optional)</label><textarea id="fDesc"></textarea>
@@ -95,9 +95,11 @@ function showForm() {
 }
 async function sendCode() {
   if (!$('#fTitle').value.trim()) { note('#fErr', 'Tell us briefly what you need.'); return; }
-  if (!$('#fPhone').value.trim() && !$('#fEmail').value.trim()) { note('#fErr', 'Enter a mobile number or an email.'); return; }
+  const phone = $('#fPhone') ? $('#fPhone').value.trim() : '';      // no box when texting isn't set up
+  if (!phone && !$('#fEmail').value.trim()) {
+    note('#fErr', P.sms ? 'Enter a mobile number or an email.' : 'Enter your email address.'); return; }
   try {
-    const d = await call('POST', '/start', { name: $('#fName').value.trim(), phone: $('#fPhone').value.trim(),
+    const d = await call('POST', '/start', { name: $('#fName').value.trim(), phone,
       email: $('#fEmail').value.trim(), website: $('#fWeb').value });
     P.contact = d.contact_id; note('#fErr', 'Code sent by ' + (d.sent_via === 'sms' ? 'text' : 'email') + '.', true);
     $('#codeCard').classList.remove('hide'); $('#fCode').focus();
