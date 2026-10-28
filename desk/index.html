@@ -406,13 +406,25 @@ async function refreshList() {
   } catch (e) { if (e.message !== 'signed out') toast(e.message); return; }
   S.filter === 'board' ? renderBoard() : renderList();
 }
+// How long an open ticket has been waiting since it was filed (2026-10-28, David):
+// "waiting 2d" on every card, red once it's past its due date — at a glance,
+// who has waited longest. Fixed / Closed tickets aren't waiting on you.
+function waited(iso) {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!iso || isNaN(ms)) return '';
+  const m = Math.max(0, Math.floor(ms / 60000));
+  if (m < 60) return m + 'm';
+  const h = Math.floor(m / 60);
+  return h < 48 ? h + 'h' : Math.floor(h / 24) + 'd';
+}
 function card(t) {
-  const late = isLate(t);
+  const late = isLate(t), open = !['Fixed', 'Closed'].includes(t.state), w = open ? waited(t.created_at) : '';
   return `<button class="card tk" data-open="${esc(t.ticket_id)}">
     <div class="id">${esc(t.ticket_id)} · ${esc(t.kind === 'external' ? 'customer' : t.kind)}${t.assignee ? ' · ' + esc(t.assignee) : ''}</div>
     <div class="t">${esc(t.title)}</div>
     <div class="chips"><span class="chip st">${esc(t.state)}</span><span class="chip ${esc(t.priority)}">${esc(t.priority)}</span>
-    ${t.due_resolve_at && !['Fixed', 'Closed'].includes(t.state) ? `<span class="chip ${late ? 'late' : ''}">due ${esc(dueDay(t.due_resolve_at))}</span>` : ''}</div>
+    ${w ? `<span class="chip wait ${late ? 'late' : ''}" title="Filed ${esc(when(t.created_at))}">⏱ waiting ${w}</span>` : ''}
+    ${t.due_resolve_at && open ? `<span class="chip ${late ? 'late' : ''}">due ${esc(dueDay(t.due_resolve_at))}</span>` : ''}</div>
   </button>`;
 }
 function renderList() {

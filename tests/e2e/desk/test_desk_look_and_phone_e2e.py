@@ -96,6 +96,40 @@ def test_L2_new_version_banner(business, people):
     o.page.locator("#tabs").wait_for()                       # still signed in after the reload
 
 
+def test_L4_cards_show_how_long_each_ticket_has_waited(business, people):
+    """David 2026-10-28: show how long each open ticket has been waiting on the
+    list cards — red once it's past its due date; Fixed/Closed show none."""
+    import datetime
+    mk = lambda title, pri: business.api("POST", "/desk-api/tickets", {"kind": "internal", "title": title,  # noqa: E731
+                                                                     "priority": pri}, name="Olive Owner")[1]["ticket"]
+    urgent, normal = mk("ZTEST L4 urgent leak", "P1"), mk("ZTEST L4 order squeegees", "P4")
+    done = mk("ZTEST L4 already fixed", "P3")
+    cris = business.api("GET", "/desk-api/me", name="Cris Crew")[1]["actor"]["id"]
+    st, d = business.api("POST", f"/desk-api/tickets/{done['ticket_id']}/assign", {"assignee": cris}, name="Olive Owner")
+    assert st == 200, d
+    st, d = business.api("POST", f"/desk-api/tickets/{done['ticket_id']}/state", {"to_state": "Fixed"}, name="Olive Owner")
+    assert st == 200, d
+    o = people(business, "Olive (owner, phone)", phone=True)
+    # the phone's clock 3 days later: the P1 is now overdue, the P4 isn't yet
+    o.page.clock.install(time=datetime.datetime.now() + datetime.timedelta(days=3, hours=1))
+    o.sign_in("Olive Owner")
+    o.tab("open")
+
+    def chip(tid):
+        c = o.page.locator(f"[data-open='{tid}'] .chip.wait")
+        return c.inner_text() if c.count() else "", (c.get_attribute("class") or "") if c.count() else ""
+
+    o.page.locator(f"[data-open='{urgent['ticket_id']}']").wait_for()
+    text, cls = chip(urgent["ticket_id"])
+    assert text == "⏱ waiting 3d" and "late" in cls, (text, cls)
+    text, cls = chip(normal["ticket_id"])
+    assert text == "⏱ waiting 3d" and "late" not in cls, (text, cls)
+    o.tab("board")                                           # the board's cards show it too
+    o.page.locator(f".board [data-open='{urgent['ticket_id']}'] .chip.wait").wait_for()
+    assert o.page.locator(f".board [data-open='{done['ticket_id']}'] .chip.wait").count() == 0, \
+        "a Fixed ticket isn't waiting on anyone"
+
+
 @pytest.mark.parametrize("device", ["Pixel 7", "iPhone 13"])
 def test_L3_phone_scrolling_and_data_entry(business, browser, pw, device):
     from conftest import Person
