@@ -380,6 +380,47 @@ def _http_server_state(health_alive: bool, proc_alive: bool) -> str:
     return "stopped"
 
 
+# ── Internet status light (2026-10-28, David: "the internet stayed red when the
+# internet was disconnected then reconnected") ────────────────────────────────
+# It used to load github.com once, at start / HTTP-server start, then only every
+# 5 minutes: a server started while the connection was coming back showed
+# Offline for up to 5 minutes, and one slow GitHub answer was enough for red.
+# Now several independent sites are tried (any answer at all = online), and the
+# light re-checks every 15 s while Offline and every 60 s while Online.
+INTERNET_PROBE_URLS = (
+    "https://www.cloudflare.com/cdn-cgi/trace",   # the tunnel's own network
+    "https://api.ai-prowler.com/",
+    "http://www.msftconnecttest.com/connecttest.txt",   # Windows' own check (http only)
+    "https://github.com",
+)
+INTERNET_RECHECK_MS = {True: 60_000, False: 15_000}
+
+
+def _internet_reachable(urls=INTERNET_PROBE_URLS, timeout: float = 4.0, opener=None) -> bool:
+    """True as soon as ANY of the sites answers. An HTTP error page (403, 404,
+    500...) still came over the internet, so it counts as online; only a
+    failure to connect or a timeout counts against."""
+    import urllib.error as _ue
+    import urllib.request as _ur
+    opener = opener or _ur.urlopen
+    for url in urls:
+        try:
+            req = _ur.Request(url, headers={"User-Agent": "AI-Prowler-GUI/1.0"})
+            with opener(req, timeout=timeout):
+                return True
+        except _ue.HTTPError:
+            return True
+        except Exception:  # noqa: BLE001 — DNS, refused, timeout, TLS...
+            continue
+    return False
+
+
+def _internet_recheck_ms(online: bool) -> int:
+    """How long until the light looks again: soon while Offline, so a
+    reconnect shows within seconds; less often while Online."""
+    return INTERNET_RECHECK_MS[bool(online)]
+
+
 class SpeechRecorder:
     """
     Manages microphone recording and Whisper transcription.
@@ -16280,13 +16321,8 @@ or from the Help menu."""
             return _hashlib.sha256(tok.encode()).hexdigest()[:16]
 
         def _check_internet() -> bool:
-            """Quick connectivity check -- tries to reach GitHub."""
-            import urllib.request as _ur
-            try:
-                _ur.urlopen("https://github.com", timeout=4)
-                return True
-            except Exception:
-                return False
+            """Quick connectivity check -- any of several sites answering."""
+            return _internet_reachable()
 
         def _fetch_subs_gui() -> dict | None:
             """
@@ -16710,11 +16746,44 @@ or from the Help menu."""
         # Run an initial check after the UI has settled
         self.root.after(1500, _run_status_check)
 
-        # Re-check every 5 minutes in the background
+        # Re-check the subscription every 5 minutes in the background
         def _schedule_recheck():
             _run_status_check()
             self.root.after(300_000, _schedule_recheck)
         self.root.after(300_000, _schedule_recheck)
+
+        # The Internet light follows the connection on its own, quicker clock:
+        # every 15 s while Offline (a reconnect shows within seconds), every
+        # 60 s while Online. One check at a time; clicking the light checks now.
+        _inet_busy = [False]
+
+        def _inet_tick(reschedule=True):
+            if _inet_busy[0]:
+                if reschedule:            # a click is mid-check: keep the clock running
+                    self.root.after(2_000, _inet_tick)
+                return
+            _inet_busy[0] = True
+
+            def _w():
+                online = _check_internet()
+
+                def _done():
+                    _inet_busy[0] = False
+                    _update_internet_light(online)
+                    if reschedule:
+                        self.root.after(_internet_recheck_ms(online), _inet_tick)
+                try:
+                    self.root.after(0, _done)
+                except Exception:  # noqa: BLE001 — window closed
+                    pass
+            threading.Thread(target=_w, daemon=True).start()
+        self.root.after(15_000, _inet_tick)
+        for _w_inet in (_inet_canvas, _inet_lbl):
+            _w_inet.bind("<Button-1>", lambda _e: _inet_tick(reschedule=False))
+            try:
+                _w_inet.configure(cursor="hand2")
+            except Exception:  # noqa: BLE001
+                pass
 
         # ── HTTP server controls ───────────────────────────────────────────────
         http_ctrl_row = ttk.Frame(remote_frame)
