@@ -9,6 +9,8 @@ S7  Customer (phone) files on /support/new and adds a message; the owner
     "Closed: confirmed by customer".
 S8  The owner closes a Fixed ticket himself: it is not recorded as the
     customer's confirmation, and the customer is asked to rate it.
+S9  The customer's status page updates by itself: the owner replies from the
+    owner app and it appears without a reload, keeping a half-typed reply.
 """
 import re
 import uuid
@@ -130,3 +132,57 @@ def test_S8_owner_closes_fixed_ticket_himself(solo, people):
     cust = people(solo, "customer", phone=True)
     cust.page.goto(solo.base + "/support/" + d["url"].split("/support/", 1)[1])
     cust.page.locator("[data-star='4']").wait_for()     # asked to rate the closed request
+
+
+def test_S9_customer_page_updates_by_itself(solo, people):
+    """The customer's status page is open with a half-typed reply. The owner
+    answers from the owner app: the answer appears on the customer's page
+    WITHOUT a reload ("Updated just now"), and the draft is untouched. A
+    second update while the page stays in front arrives on the 15 s check."""
+    run = uuid.uuid4().hex[:4]
+    title = f"Clean the lanai screens {run}"
+    st, d = solo.api("POST", "/desk-api/tickets", {"kind": "external", "title": title,
+                                                   "contact_name": "Ms Duarte", "contact_phone": "386-555-0473"})
+    assert st == 201, d
+    tid = d["ticket"]["ticket_id"]
+    st, d = solo.api("POST", f"/desk-api/tickets/{tid}/link", {})
+    assert st in (200, 201), d
+
+    cust = people(solo, "customer", phone=True)
+    cust.page.goto(solo.base + "/support/" + d["url"].split("/support/", 1)[1])
+    cust.page.locator("#h1", has_text=tid).wait_for()
+    cust.page.evaluate("window.__s9 = 'same page'")       # gone if the page ever reloads
+    draft = "Could you also do the side gate"
+    cust.type("#reply", draft)                           # half-typed, not sent
+
+    # owner answers from the owner app
+    owner = people(solo, "owner")
+    owner.sign_in()
+    _owner_open(owner, "mine", title)
+    owner.type("#msg", "Yes - we'll be there Friday at 10")
+    owner.page.select_option("#msgVis", "public")
+    owner.click("#msgGo")
+    owner.page.get_by_text("Yes - we'll be there Friday at 10").first.wait_for()
+
+    # customer: no reload — it just shows up (bringing the window forward also
+    # makes a tab that Windows had hidden behind the owner's check at once)
+    cust.page.bring_to_front()
+    cust.page.get_by_text("Yes - we'll be there Friday at 10").wait_for(timeout=25000)
+    cust.page.locator("#live", has_text="Updated just now").wait_for(state="visible", timeout=3000)
+    assert cust.page.evaluate("window.__s9") == "same page"
+    assert cust.page.locator("#reply").input_value() == draft
+
+    # page stays in front: the next change arrives on the regular 15 s check
+    assert cust.page.evaluate("document.visibilityState") == "visible"
+    st, _ = solo.api("POST", f"/desk-api/tickets/{tid}/state", {"to_state": "In Progress"})
+    assert st == 200
+    cust.page.locator(".chip.st", has_text="In Progress").wait_for(timeout=25000)
+    assert cust.page.evaluate("window.__s9") == "same page"
+    assert cust.page.locator("#reply").input_value() == draft
+
+    # and the draft can still be finished and sent normally
+    cust.page.locator("#reply").press("End")
+    cust.page.locator("#reply").press_sequentially(" too?", delay=60)
+    cust.click("#send")
+    cust.page.locator(".msg.me", has_text="side gate too?").wait_for()
+    assert cust.page.locator("#reply").input_value() == ""

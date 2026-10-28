@@ -32,12 +32,14 @@ button.bad{background:var(--bad)}
 .hp{position:absolute;left:-5000px;width:1px;height:1px;overflow:hidden}
 .err{color:var(--bad)}.okmsg{color:var(--ok)}.muted{color:var(--mute)}.hide{display:none!important}
 .stars button{background:none;color:#f5a524;font-size:30px;padding:0 4px}
+.live{margin:-8px 0 10px;font-size:13px;color:var(--ok)}
 </style>
 </head>
 <body>
 <main>
   <h1 id="h1">Service request</h1>
   <p class="biz" id="biz"></p>
+  <p class="live hide" id="live" role="status" aria-live="polite">Updated just now</p>
   <div id="app"></div>
 </main>
 <script>
@@ -114,12 +116,99 @@ async function verify() {
 }
 
 // ── status page ────────────────────────────────────────────────────────────
-async function showStatus() {
-  let d;
+// Live updates (2026-10-28): while the page is visible it checks for news
+// every POLL_MS (paused in a background tab, checked at once when it comes
+// back) and redraws ONLY when something the customer can see changed. A
+// redraw never loses a half-typed reply, a picked star rating or a rating
+// comment, and shows "Updated just now" for a moment.
+const POLL_MS = 15000;
+const L = { timer: 0, inFlight: false, busy: 0, seq: 0, shown: 0, sig: '', flash: 0,
+            on: false, reply: '', note: '', stars: 0, focus: null };
+
+function sigOf(d) {           // everything the page shows, nothing else
+  const t = d.ticket || {};
+  return JSON.stringify([d.business || '', t.ticket_id, t.title, t.description, t.state,
+    t.who && t.who.role, !!t.can_confirm, !!t.can_reject, !!t.can_reopen, !!t.can_mark_done,
+    !!t.can_rate, t.csat_score, t.csat_comment || '',
+    (t.messages || []).map(m => [m.author_kind, m.at, m.body]),
+    (t.attachments || []).map(a => [a.attachment_id, a.kind, a.filename, !!a.thumb_path])]);
+}
+function captureDrafts() {
+  const r = $('#reply'), n = $('#rateNote'), a = document.activeElement;
+  if (r) L.reply = r.value;
+  if (n) L.note = n.value;
+  L.focus = a && (a.id === 'reply' || a.id === 'rateNote') ? [a.id, a.selectionStart, a.selectionEnd] : null;
+}
+function setStars(n) {
+  L.stars = n;
+  document.querySelectorAll('[data-star]').forEach(x => { x.textContent = +x.dataset.star <= n ? '★' : '☆'; });
+}
+function restoreDrafts() {
+  const r = $('#reply'), n = $('#rateNote');
+  if (r) r.value = L.reply;
+  if (n) n.value = L.note;
+  if ($('#stars')) setStars(L.stars);
+  if (L.focus) {
+    const e = $('#' + L.focus[0]);
+    if (e) { e.focus(); try { e.setSelectionRange(L.focus[1], L.focus[2]); } catch (_) {} }
+  }
+}
+function flashUpdated() {
+  const e = $('#live'); e.classList.remove('hide');
+  clearTimeout(L.flash); L.flash = setTimeout(() => e.classList.add('hide'), 4000);
+}
+
+// Load the ticket; draw it if it changed. fromPoll: a background check.
+async function refresh(fromPoll) {
+  const my = ++L.seq; let d;
   try { d = await call('GET', '/t/' + P.token); }
-  catch (e) { app.innerHTML = `<div class="card err">${esc(e.message)}</div>`; return; }
+  catch (e) {
+    if (fromPoll) return false;                    // a blip — keep what's shown, try again later
+    if (!L.sig) app.innerHTML = `<div class="card err">${esc(e.message)}</div>`;
+    else note('#sErr', e.message);
+    return false;
+  }
+  if (my < L.shown || (fromPoll && L.busy)) return false;   // a newer load already drew / an action is mid-way
+  L.shown = my;
+  const s = sigOf(d);
+  if (s === L.sig) return false;
+  const first = !L.sig;
+  L.sig = s;
+  render(d);
+  if (fromPoll && !first) flashUpdated();
+  return true;
+}
+function schedule() {
+  clearTimeout(L.timer); L.timer = 0;
+  if (P.token && !document.hidden) L.timer = setTimeout(poll, POLL_MS);
+}
+async function poll() {
+  clearTimeout(L.timer); L.timer = 0;
+  if (!P.token || document.hidden || L.inFlight) return;   // hidden: resumes on visibilitychange
+  L.inFlight = true;
+  try { await refresh(true); } finally { L.inFlight = false; schedule(); }
+}
+function startPolling() {
+  if (L.on) return;
+  L.on = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { clearTimeout(L.timer); L.timer = 0; } else poll();
+  });
+  schedule();
+}
+async function showStatus() { await refresh(false); startPolling(); }
+
+// A customer action: no background redraw while it's under way.
+async function act(fn) {
+  L.busy++;
+  try { await fn(); } catch (e) { note('#sErr', e.message); } finally { L.busy--; }
+}
+
+function render(d) {
+  captureDrafts();
   const t = d.ticket; if (d.business) $('#biz').textContent = d.business;
   const sub = t.who.role === 'subcontractor';
+  if (!t.can_rate) { L.stars = 0; L.note = ''; }
   $('#h1').textContent = (sub ? 'Job ' : 'Request ') + t.ticket_id;
   app.innerHTML = `
   <div class="card"><h2 style="margin:0 0 8px;font-size:18px">${esc(t.title)}</h2>
@@ -140,29 +229,31 @@ async function showStatus() {
       <label class="ghost" style="margin:0;text-align:center;border:1px solid var(--acc);border-radius:10px;padding:12px;color:var(--acc)">📷 Add photo<input type="file" accept="image/*,.pdf" multiple class="hide" id="up"></label></div>` : ''}</div>
   ${(t.attachments || []).length ? `<div class="card"><b>Photos & files</b><div class="thumbs">${t.attachments.map(a =>
     `<a href="#" data-att="${esc(a.attachment_id)}" data-thumb="${a.thumb_path ? 1 : 0}">${a.kind === 'photo' ? '' : esc(a.filename)}</a>`).join('')}</div></div>` : ''}`;
+  restoreDrafts();
   const on = (id, fn) => { const e = $(id); if (e) e.addEventListener('click', fn); };
   on('#yes', () => move('Closed', ''));
   on('#no', () => { const r = prompt('What still needs fixing?'); if (r && r.trim()) move('In Progress', r.trim()); });
   on('#done', () => move('Fixed', ''));
   on('#reopen', () => { const r = prompt('Why are you reopening it?'); if (r && r.trim()) move('Assigned', r.trim()); });
-  on('#send', async () => {
+  on('#send', () => act(async () => {
     const b = $('#reply').value.trim(); if (!b) return;
-    try { await call('POST', `/t/${P.token}/reply`, { body: b }); showStatus(); } catch (e) { note('#sErr', e.message); }
-  });
-  const up = $('#up');
-  if (up) up.addEventListener('change', async () => {
-    const fd = new FormData(); for (const f of up.files) fd.append('file', f, f.name);
-    try { await call('POST', `/t/${P.token}/attachments`, fd, true); showStatus(); } catch (e) { note('#sErr', e.message); }
-  });
-  let stars = 0;
-  document.querySelectorAll('[data-star]').forEach(b => b.addEventListener('click', () => {
-    stars = +b.dataset.star; document.querySelectorAll('[data-star]').forEach(x => { x.textContent = +x.dataset.star <= stars ? '★' : '☆'; });
+    await call('POST', `/t/${P.token}/reply`, { body: b });
+    L.reply = ''; $('#reply').value = '';          // sent — this draft is done
+    await refresh(false);
   }));
-  on('#rateGo', async () => {
-    if (!stars) return;
-    try { await call('POST', `/t/${P.token}/rating`, { score: stars, comment: $('#rateNote').value.trim() }); showStatus(); }
-    catch (e) { note('#sErr', e.message); }
-  });
+  const up = $('#up');
+  if (up) up.addEventListener('change', () => act(async () => {
+    const fd = new FormData(); for (const f of up.files) fd.append('file', f, f.name);
+    await call('POST', `/t/${P.token}/attachments`, fd, true);
+    await refresh(false);
+  }));
+  document.querySelectorAll('[data-star]').forEach(b => b.addEventListener('click', () => setStars(+b.dataset.star)));
+  on('#rateGo', () => act(async () => {
+    if (!L.stars) return;
+    await call('POST', `/t/${P.token}/rating`, { score: L.stars, comment: $('#rateNote').value.trim() });
+    L.stars = 0; L.note = '';
+    await refresh(false);
+  }));
   for (const a of document.querySelectorAll('[data-att]')) {
     a.addEventListener('click', async e => { e.preventDefault();
       try { const b = await call('GET', `/t/${P.token}/attachments/${a.dataset.att}`); window.open(URL.createObjectURL(b), '_blank'); }
@@ -173,9 +264,8 @@ async function showStatus() {
     }
   }
 }
-async function move(to, reason) {
-  try { await call('POST', `/t/${P.token}/state`, { to_state: to, reason }); showStatus(); }
-  catch (e) { note('#sErr', e.message); }
+function move(to, reason) {
+  return act(async () => { await call('POST', `/t/${P.token}/state`, { to_state: to, reason }); await refresh(false); });
 }
 boot();
 </script>
