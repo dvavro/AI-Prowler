@@ -172,3 +172,4 @@ seats.json
 # edited every time the work folder moves - keep them local.
 update_install.bat
 update_install_server.bat
+update_install_shared_dir.bat
