@@ -146,7 +146,8 @@ def _rate_ok(conn, kind: str, keys: list, now: datetime.datetime) -> bool:
 
 def start_request(db_path: str, *, name: str = "", phone: str = "", email: str = "",
                   ip: str = "", honeypot: str = "", now=None) -> dict:
-    """Step 1: send a 6-digit code to the customer's phone (preferred) or email."""
+    """Step 1: send a 6-digit code to the phone or email the customer typed
+    (phone first when both are given, falling back to email)."""
     s = desk_db.get_settings(db_path)
     if not s.get("portal_enabled"):
         raise desk_db.DeskError("online requests are turned off — please call or text us")
@@ -179,11 +180,23 @@ def start_request(db_path: str, *, name: str = "", phone: str = "", email: str =
         raise
     finally:
         conn.close()
-    channel, to = ("sms", c["phone"]) if c.get("phone") else ("email", c["email"])
+    # Send the code where the customer asked THIS time, not wherever the
+    # contact record points (2026-10-28: a phone number left on the contact by
+    # an earlier try made every email-only request try to text - and fail
+    # where texting isn't set up). Both given: text first, email if that fails.
+    routes = []
+    if (phone or "").strip() and c.get("phone"):
+        routes.append(("sms", c["phone"]))
+    if (email or "").strip() and c.get("email"):
+        routes.append(("email", c["email"]))
     text = f"Your service request code is {code}. It expires in {CODE_TTL_MINUTES} minutes."
-    if not _send(channel, to, "Your service request code", text):
-        raise desk_db.DeskError("we couldn't send a code right now — please call or text us")
-    return {"ok": True, "contact_id": c["contact_id"], "sent_via": channel}
+    for channel, to in routes:
+        if _send(channel, to, "Your service request code", text):
+            return {"ok": True, "contact_id": c["contact_id"], "sent_via": channel}
+    if [ch for ch, _ in routes] == ["sms"]:
+        raise desk_db.DeskError("we couldn't text a code to that number — enter your email "
+                                "address instead, or call or text us")
+    raise desk_db.DeskError("we couldn't send a code right now — please call or text us")
 
 
 def verify_and_file(db_path: str, *, contact_id: str, code: str, title: str,
@@ -232,9 +245,12 @@ def verify_and_file(db_path: str, *, contact_id: str, code: str, title: str,
                               job_id=(job_id or "").strip() or None)
     token = issue_link(db_path, t["ticket_id"], contact_id)
     url = link_url(base_url, token)
-    channel, to = ("sms", contact["phone"]) if contact.get("phone") else ("email", contact["email"])
-    _send(channel, to, f"We got your request [{t['ticket_id']}]",
-          f"We got your request {t['ticket_id']}: {t['title']}. Track it here: {url}")
+    # Confirmation: text if we can, otherwise email (the page already shows
+    # the request, so this is a courtesy - never an error).
+    for channel, to in (("sms", contact.get("phone")), ("email", contact.get("email"))):
+        if to and _send(channel, to, f"We got your request [{t['ticket_id']}]",
+                        f"We got your request {t['ticket_id']}: {t['title']}. Track it here: {url}"):
+            break
     return {"ok": True, "ticket_id": t["ticket_id"], "token": token, "url": url}
 
 
