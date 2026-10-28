@@ -3124,7 +3124,7 @@ Service Desk is **not** part of the free Desktop edition.
 
 ### Turning it on — or off
 
-Settings → **MCP Tool Configuration** → tick **Service Desk (tickets)** → Save, then restart AI-Prowler. It starts off on new installs (like Job Tracker) and stays on once tickets exist. Personal and server mode each keep their own choice.
+Home tab → **➕ Add a service** → tick **🎫 File and track tickets (customer requests, to-dos)** → Save, then restart AI-Prowler. The Setup Center then has a **Service Desk (tickets)** step with the phone app's QR code, Copy and Email links and your customers' request-page link. (It's the same switch as Settings → **MCP Tool Configuration** → **Service Desk (tickets)**, so either place works; unticking it asks before turning Service Desk off.) It starts off on new installs (like Job Tracker) and stays on once tickets exist. Personal and server mode each keep their own choice.
 
 Don't want a help desk? Untick the same group. Then Claude, Muse and Grok are offered none of the ticket tools, the Service Desk app and the customer request pages answer "turned off", and nothing runs in the background (no alerts, digests, email intake or texts). Your tickets stay saved, ready if you turn it back on.
 

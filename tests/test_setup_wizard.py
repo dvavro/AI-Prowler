@@ -15,6 +15,25 @@ if str(ROOT) not in sys.path:
 
 import setup_wizard as sw   # noqa: E402
 
+# The real Service Desk switch (tool_config_store) — kept for the one test that
+# checks it in a sandbox folder; every other test gets the in-memory one below.
+_REAL_DESK_ON, _REAL_SET_DESK = sw.desk_switched_on, sw.set_desk_switch
+
+
+@pytest.fixture(autouse=True)
+def desk_switch(monkeypatch):
+    """Service Desk on/off kept in memory (off), so no test reads or writes the
+    real tool_config.json."""
+    state = {"on": False, "calls": []}
+
+    def _set(on):
+        state["calls"].append(bool(on))
+        state["on"] = bool(on)
+        return True, "Service Desk is " + ("ON" if on else "OFF") + " — restart AI-Prowler to apply it."
+    monkeypatch.setattr(sw, "desk_switched_on", lambda: state["on"])
+    monkeypatch.setattr(sw, "set_desk_switch", _set)
+    return state
+
 
 # ── registry integrity ──────────────────────────────────────────────────────
 def test_module_ids_unique_and_requires_resolve():
@@ -1358,3 +1377,97 @@ def test_lights_update_while_folded(lit_panel, tkroot):
     panel._toggle(False)
     _answer_picker(panel, tkroot, tick=["routes"])           # "➕ Add a service" from the folded header
     assert panel.light_lbl.cget("fg") == sw.LIGHT_COLOR[sw.YELLOW]
+
+
+# ── Service Desk in "What do you want AI-Prowler to do?" (David 2026-10-28) ──
+def test_desk_is_offered_and_needs_phone_access():
+    labels = {sid: label for sid, label, _ in sw.SERVICES}
+    assert "track tickets" in labels["desk"].lower()
+    assert [m.id for m in sw.modules_for(["desk"])] == ["remote", "desk"]
+    assert sw.GUIDED["desk"] is sw.DeskFlow
+    assert sw.BY_ID["desk"].tab == "🏢 Small Business"
+
+
+def test_desk_urls(cfg):
+    assert sw.desk_app_url() == "https://ap-test-123.ai-prowler.com/desk/"
+    assert sw.desk_request_url() == "https://ap-test-123.ai-prowler.com/support/new"
+
+
+@pytest.mark.parametrize("mode", ["personal", "server"])
+def test_real_desk_switch_is_the_mcp_tool_configuration_group(tmp_path, monkeypatch, mode):
+    """Ticking the service flips the same saved switch as Settings → MCP Tool
+    Configuration → Service Desk (tickets), for this mode only."""
+    monkeypatch.setenv("AIPROWLER_TEST_STATE_DIR", str(tmp_path))
+    (tmp_path / "config.json").write_text(json.dumps({"mode": mode}), encoding="utf-8")
+    monkeypatch.setattr(sw, "CONFIG_PATH", tmp_path / "config.json")
+    import tool_config_store as tcs
+    assert sw.desk_mode() == mode
+    assert _REAL_DESK_ON() is False                                   # a new install starts off
+    ok, msg = _REAL_SET_DESK(True)
+    assert ok and "ON" in msg and "restart" in msg
+    assert _REAL_DESK_ON() is True and tcs.saved_group_choice(mode, "service_desk") is True
+    other = "server" if mode == "personal" else "personal"
+    assert tcs.saved_group_choice(other, "service_desk") is not True   # the other mode untouched
+    assert _REAL_SET_DESK(False)[0] and _REAL_DESK_ON() is False
+
+
+def _no_dialogs(monkeypatch, answer_yes=True):
+    from tkinter import messagebox
+    shown = []
+    monkeypatch.setattr(messagebox, "showinfo", lambda *a, **k: shown.append(("info",) + a))
+    monkeypatch.setattr(messagebox, "showerror", lambda *a, **k: shown.append(("error",) + a))
+    monkeypatch.setattr(messagebox, "askyesno", lambda *a, **k: shown.append(("ask",) + a) or answer_yes)
+    return shown
+
+
+def test_ticking_tickets_turns_service_desk_on(lit_panel, tkroot, desk_switch, monkeypatch):
+    panel, p = lit_panel
+    shown = _no_dialogs(monkeypatch)
+    _answer_picker(panel, tkroot, tick=["desk"])
+    assert desk_switch["calls"] == [True] and desk_switch["on"]
+    assert "desk" in p.services and {"remote", "desk"} <= set(_row_lights(panel))
+    assert shown and "restart" in shown[-1][2], "must say a restart applies it"
+
+
+def test_picker_shows_the_real_switch_and_unticking_asks_first(lit_panel, tkroot, desk_switch, monkeypatch):
+    panel, p = lit_panel
+    desk_switch["on"] = True                                # on (e.g. from Settings) but never chosen here
+    shown = _no_dialogs(monkeypatch, answer_yes=False)
+    _answer_picker(panel, tkroot, tick=["email"])           # Save without touching it: stays on, no question
+    assert desk_switch["calls"] == [] and "desk" in p.services
+    _answer_picker(panel, tkroot, untick=["desk"])          # untick → "Turn Service Desk off?" → No
+    assert any(s[0] == "ask" for s in shown) and desk_switch["on"] and desk_switch["calls"] == []
+    shown = _no_dialogs(monkeypatch, answer_yes=True)
+    _answer_picker(panel, tkroot, untick=["desk"])          # → Yes
+    assert desk_switch["calls"] == [False] and not desk_switch["on"] and "desk" not in p.services
+
+
+def test_desk_step_turns_it_on_and_shows_the_phone_links(cfg, tkroot, tmp_path, desk_switch):
+    panel, prog = _panel(tkroot, tmp_path, services=("desk",))
+    flow = sw.DeskFlow(panel)
+    assert prog.states.get("desk") != sw.DONE and "OFF" in flow.state_lbl.cget("text")
+    assert flow.app_url.endswith("/desk/") and flow.req_url.endswith("/support/new")
+    flow.on_btn.invoke()
+    assert desk_switch["calls"] == [True] and prog.states.get("desk") == sw.DONE
+    assert "ON" in flow.state_lbl.cget("text") and "restart" in flow.msg.cget("text")
+    flow._copy(flow.app_url)
+    assert tkroot.clipboard_get() == "https://ap-test-123.ai-prowler.com/desk/"
+    flow.win.destroy()
+
+
+def test_desk_step_without_phone_access(tkroot, tmp_path, monkeypatch):
+    monkeypatch.setattr(sw, "CONFIG_PATH", tmp_path / "missing.json")
+    panel, prog = _panel(tkroot, tmp_path, services=("desk",))
+    flow = sw.DeskFlow(panel)
+    texts = []
+
+    def walk(w):
+        for c in w.winfo_children():
+            try:
+                texts.append(str(c.cget("text")))
+            except Exception:
+                pass
+            walk(c)
+    walk(flow.body)
+    assert any("Set up Phone access first" in t for t in texts)
+    flow.win.destroy()

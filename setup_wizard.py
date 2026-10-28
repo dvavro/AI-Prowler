@@ -303,6 +303,53 @@ def jobs_app_url(domain: str | None = None) -> str:
     return f"https://{d}/jobs/" if d else ""
 
 
+# ── Service Desk (David 2026-10-28: "add the helpdesk question to Add a
+# service — do you want to file and track tickets") ──────────────────────────
+# The switch is the same one as Settings → MCP Tool Configuration → "Service
+# Desk (tickets)" (tool_config_store, saved separately for personal and server
+# mode). The running server reads it at start-up, so a change needs a restart.
+def desk_app_url(domain: str | None = None) -> str:
+    d = tunnel_domain() if domain is None else domain
+    return f"https://{d}/desk/" if d else ""
+
+
+def desk_request_url(domain: str | None = None) -> str:
+    d = tunnel_domain() if domain is None else domain
+    return f"https://{d}/support/new" if d else ""
+
+
+def desk_mode() -> str:
+    """'server' or 'personal' — which of the two saved switches applies here."""
+    try:
+        m = str(json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig")).get("mode", "")).strip().lower()
+    except (OSError, ValueError):
+        m = ""
+    return "server" if m == "server" else "personal"
+
+
+def desk_switched_on() -> bool:
+    try:
+        import tool_config_store as tcs
+        return bool(tcs.group_enabled(desk_mode(), "service_desk"))
+    except Exception:
+        return False
+
+
+def set_desk_switch(on: bool) -> tuple[bool, str]:
+    """Turn Service Desk on or off for this mode. (ok, message)."""
+    try:
+        import tool_config_store as tcs
+        tcs.set_group_enabled(desk_mode(), "service_desk", bool(on))
+    except Exception as e:
+        return False, f"Couldn't change the Service Desk switch: {e}"
+    return True, ("Service Desk is ON" if on else "Service Desk is OFF") + \
+        " — restart AI-Prowler to apply it (the app and Claude's ticket tools follow the switch)."
+
+
+def detect_desk() -> Optional[bool]:
+    return desk_switched_on()
+
+
 PHONE_INSTALL_STEPS = ("iPhone: open it in Safari → Share → Add to Home Screen. If the QR opened in another browser, copy the link into Safari first (or set Safari as the default in Settings → Apps).\n"
                        "Android: open it in Chrome and tap the Install button on the page (or ⋮ → Install app).")
 
@@ -1062,6 +1109,11 @@ MODULES: list[Module] = [
            "appointment times — and send the crew a tap-to-navigate link.", tab="🏢 Small Business",
            requires=("jobs",),
            detect=detect_routes),
+    Module("desk", "Service Desk (tickets)", 3,
+           "Customers request service from their phone and every request, to-do and problem is tracked "
+           "from Open to Closed — one owner, a history, photos, alerts. You and your team work tickets "
+           "in the Service Desk app on your phones, or by asking Claude, Muse or Grok.",
+           tab="🏢 Small Business", requires=("remote",), detect=detect_desk),
     Module("server_info", "About AI-Prowler Server (for teams)", 1,
            "One shared AI-Prowler for a whole company — shared knowledge, one job list for every "
            "crew, roles and per-person privacy. It runs on its own server box and is installed by "
@@ -1077,6 +1129,7 @@ SERVICES: list[tuple[str, str, tuple]] = [
     ("phone",    "📱 Use AI-Prowler from my phone",                ("remote", "remote_pwa")),
     ("business", "🧰 Run my service business (jobs, invoices)",    ("jobs", "payments")),
     ("routes",   "🚚 Plan routes for my crew",                     ("routes",)),
+    ("desk",     "🎫 File and track tickets (customer requests, to-dos)", ("desk",)),
     ("team",     "🏢 A shared AI-Prowler for my whole team",       ("server_info",)),
 ]
 SERVICE_IDS = [s[0] for s in SERVICES]
@@ -1540,6 +1593,11 @@ class SetupCenterPanel:
         ttk.Label(body, text="Tick everything you're interested in — you can change this any time.",
                   foreground="#666").pack(anchor="w", pady=(2, 10))
         current = set(self.progress.services or DEFAULT_SERVICES)
+        desk_was_on = desk_switched_on()            # the box shows the real switch
+        if desk_was_on:
+            current.add("desk")
+        else:
+            current.discard("desk")
         vars_ = {}
         for sid, label, _mods in SERVICES:
             v = tk.BooleanVar(master=win, value=sid in current)
@@ -1561,7 +1619,20 @@ class SetupCenterPanel:
         btns.pack(fill="x", pady=(14, 0))
 
         def save():
+            from tkinter import messagebox
             chosen = [s for s, v in vars_.items() if v.get()] or list(DEFAULT_SERVICES)
+            want_desk = "desk" in chosen
+            if want_desk != desk_was_on:            # tick / untick = turn Service Desk on / off
+                if not want_desk and not messagebox.askyesno(
+                        "Turn Service Desk off?",
+                        "Turn Service Desk off?\n\nThe Service Desk app, the customer request page and "
+                        "Claude's ticket tools stop after the restart. Your tickets are kept — tick it "
+                        "again any time to turn it back on.", parent=win):
+                    return
+                ok, msg = set_desk_switch(want_desk)
+                (messagebox.showinfo if ok else messagebox.showerror)("Service Desk", msg, parent=win)
+                if not ok:
+                    chosen = [s for s in chosen if s != "desk"] if want_desk else chosen + ["desk"]
             self.progress.choose(chosen)
             self.progress.set_collapsed(False)              # show what they just chose
             self._picker_closed()
@@ -3084,6 +3155,94 @@ class RoutesFlow(_SimpleFlow):
             self._done()
 
 
+class DeskFlow(_SimpleFlow):
+    """Service Desk (2026-10-28): 1. the on/off switch (same one as Settings →
+    MCP Tool Configuration), 2. the Service Desk app on your phone (QR, Copy,
+    Email, install steps), 3. the customer request page link. ✅ once it's on."""
+
+    def __init__(self, panel: "SetupCenterPanel"):
+        super().__init__(panel, "Service Desk (tickets)", "desk")
+        tk, ttk = self.tk, self.ttk
+        # 1. on / off
+        box = ttk.LabelFrame(self.body, text=" 1. Turn it on ", padding=8)
+        box.pack(fill="x")
+        self.state_lbl = ttk.Label(box, text="", wraplength=500, justify="left")
+        self.state_lbl.pack(anchor="w")
+        self.on_btn = ttk.Button(box, text="✅ Turn Service Desk on", command=self._turn_on)
+        self.on_btn.pack(anchor="w", pady=(6, 0))
+        # 2. the app on your phone
+        self.app_url, self.req_url = desk_app_url(), desk_request_url()
+        box2 = ttk.LabelFrame(self.body, text=" 2. The Service Desk app on your phone ", padding=8)
+        box2.pack(fill="x", pady=(8, 0))
+        if not self.app_url:
+            ttk.Label(box2, text="Set up Phone access first — the Service Desk app reaches your PC through "
+                      "your secure link.", wraplength=500, justify="left").pack(anchor="w")
+        else:
+            row = ttk.Frame(box2)
+            row.pack(fill="x")
+            left = ttk.Frame(row)
+            left.pack(side="left", fill="x", expand=True)
+            ttk.Label(left, justify="left", wraplength=360, text=(
+                "1. Point your phone's camera at the code → tap the link.\n"
+                f"2. {PHONE_INSTALL_STEPS}\n"
+                "3. Open it from your home screen and sign in — your Bearer Token on a personal "
+                "install, your AI-Prowler name and token on a server.")).pack(anchor="w")
+            b = ttk.Frame(left)
+            b.pack(anchor="w", pady=(8, 0))
+            ttk.Button(b, text="📋 Copy link", command=lambda: self._copy(self.app_url)).pack(side="left")
+            ttk.Button(b, text="📧 Email it to me", command=self._email).pack(side="left", padx=6)
+            qr = qr_png(self.app_url, scale=4)
+            if qr:
+                import base64
+                self._qr_img = tk.PhotoImage(master=self.body, data=base64.b64encode(qr).decode("ascii"))
+                right = ttk.Frame(row)
+                right.pack(side="right", padx=(12, 0))
+                ttk.Label(right, image=self._qr_img).pack()
+                ttk.Label(right, text="📱 Scan to open\nService Desk", justify="center",
+                          font=("Arial", 8)).pack()
+            # 3. customer request page
+            box3 = ttk.LabelFrame(self.body, text=" 3. Your customers' request page ", padding=8)
+            box3.pack(fill="x", pady=(8, 0))
+            ttk.Label(box3, wraplength=500, justify="left", text=(
+                "Customers request service here — no app or sign-in. Put the link on your website, "
+                f"invoices or texts:\n{self.req_url}")).pack(anchor="w")
+            ttk.Button(box3, text="📋 Copy request-page link",
+                       command=lambda: self._copy(self.req_url)).pack(anchor="w", pady=(6, 0))
+        self._footer("", None)
+        self._show_state()
+
+    def _show_state(self):
+        on = desk_switched_on()
+        mode = "server" if desk_mode() == "server" else "personal"
+        self.state_lbl.config(
+            text=(f"✅ Service Desk is ON for this {mode} AI-Prowler." if on else
+                  f"Service Desk is OFF for this {mode} AI-Prowler. Turning it on also switches on "
+                  "Claude's ticket tools (Settings → MCP Tool Configuration → \"Service Desk (tickets)\")."),
+            foreground="#2e7d32" if on else "#333")
+        if on:
+            self.on_btn.pack_forget()
+            self._done()
+
+    def _turn_on(self):
+        ok, msg = set_desk_switch(True)
+        self._say(("✅ " if ok else "❌ ") + msg, ok=ok)
+        self._show_state()
+
+    def _copy(self, url: str):
+        self.win.clipboard_clear()
+        self.win.clipboard_append(url)
+        self._say("✅ Link copied.")
+
+    def _email(self):
+        import webbrowser
+        from urllib.parse import quote
+        body = (f"Open this on your phone to install the AI-Prowler Service Desk app:\n\n{self.app_url}\n\n"
+                "Sign in with your AI-Prowler token (it is NOT in this email).\n\n"
+                f"Customers request service here (no sign-in):\n{self.req_url}\n")
+        webbrowser.open(f"mailto:?subject={quote('My AI-Prowler Service Desk app')}&body={quote(body)}")
+        self._say("📧 Your mail app opened with the link — send it to yourself.")
+
+
 def bearer_token() -> str:
     """The personal Bearer Token (config.json remote_token) — for the desktop's
     own 'Copy Bearer Token' button only."""
@@ -3105,7 +3264,8 @@ GUIDED: dict = {"index": IndexFirstFolderFlow,
                 "remote_pwa": RemotePwaFlow,
                 "jobs": JobsFlow,
                 "payments": PaymentsFlow,
-                "routes": RoutesFlow}
+                "routes": RoutesFlow,
+                "desk": DeskFlow}
 
 
 def build_setup_center(parent, app) -> Optional[SetupCenterPanel]:
