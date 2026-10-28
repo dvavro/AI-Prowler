@@ -613,6 +613,9 @@ def _compute_pwa_sw_cache_version(pwa_root: str, sw_source_bytes: bytes) -> str:
                 # Hash the page as SERVED (version badge filled in), so the
                 # cache name always matches the bytes the phone receives.
                 _data = _stamp_pwa_build(pwa_root, _data)
+            # ...and with icon addresses versioned (2026-10-28): a new icon
+            # is a new app version, so the update banner fires for it too.
+            _data = _version_pwa_icons(pwa_root, _data)
             h.update(_data)
         except Exception:
             pass
@@ -671,19 +674,73 @@ def _stamp_pwa_build(pwa_root: str, body: bytes) -> bytes:
         return body
 
 
+# ── Versioned icon addresses (2026-10-28, David) ────────────────────────────
+# A changed app icon kept showing the OLD picture on iPhone home screens:
+# Cloudflare's edge, Safari and iOS's own home-screen icon cache (which
+# "Clear Website Data" does NOT clear) all key the icon by its address, and
+# /desk/icon-192.png never changed when the picture did. Every reference to an
+# icon*.png in a served page or manifest now carries ?v=<hash of that file>,
+# so a new picture is a new address everywhere. Nothing to bump by hand; the
+# files on disk are never modified.
+_PWA_ICON_REF = None
+_pwa_icon_hash_cache: dict = {}
+
+
+def _pwa_icon_hash(pwa_root: str, name: str) -> str:
+    import hashlib as _pi_hl
+    import os as _pi_os
+    _fp = _pi_os.path.join(pwa_root, name)
+    try:
+        _st = _pi_os.stat(_fp)
+    except OSError:
+        return ""
+    _key = (_fp, _st.st_mtime_ns, _st.st_size)
+    _h = _pwa_icon_hash_cache.get(_key)
+    if _h is None:
+        try:
+            with open(_fp, "rb") as _fh:
+                _h = _pi_hl.sha256(_fh.read()).hexdigest()[:8]
+        except OSError:
+            return ""
+        _pwa_icon_hash_cache[_key] = _h
+    return _h
+
+
+def _version_pwa_icons(pwa_root: str, body: bytes) -> bytes:
+    """Append ?v=<content hash> to every icon*.png reference (not already
+    carrying a query) in a page or manifest. Looks the icon up by file name
+    in pwa_root (all apps ship identical icons). Binary files, unknown icons
+    or any error: body unchanged."""
+    global _PWA_ICON_REF
+    if not body or body[:8] == b"\x89PNG\r\n\x1a\n" or b"icon" not in body:
+        return body
+    try:
+        import re as _pi_re
+        if _PWA_ICON_REF is None:
+            _PWA_ICON_REF = _pi_re.compile(rb"(?<=[/\"'])(icon(?:-\d+)?\.png)(?=[\"'])")
+
+        def _sub(m):
+            _h = _pwa_icon_hash(pwa_root, m.group(1).decode("ascii"))
+            return m.group(1) + (b"?v=" + _h.encode("ascii") if _h else b"")
+        return _PWA_ICON_REF.sub(_sub, body)
+    except Exception:
+        return body
+
+
 def _patch_sw_cache_version(rel_path: str, pwa_root: str, body: bytes) -> bytes:
     """If rel_path is sw.js, returns body with its `const CACHE = '...';`
     line's value replaced by the freshly computed content hash (see
-    _compute_pwa_sw_cache_version). Returns body unchanged for every other
-    file, and falls back to the original body untouched on ANY error
-    (bad encoding, unexpected sw.js contents, etc.) — this must never be
-    the reason the Jobs or Remote PWA fails to load.
+    _compute_pwa_sw_cache_version). Every other file: the version badge is
+    filled in and icon addresses are versioned (_version_pwa_icons). Falls
+    back to the original body untouched on ANY error (bad encoding,
+    unexpected sw.js contents, etc.) — this must never be the reason the
+    Jobs or Remote PWA fails to load.
     """
     if rel_path != "sw.js":
         # 2026-10-21: the four PWA pages carry a version-badge placeholder;
         # fill it in. Keyed on the placeholder, not rel_path, because the
         # SPA fallback can serve index.html under another path.
-        return _stamp_pwa_build(pwa_root, body)
+        return _version_pwa_icons(pwa_root, _stamp_pwa_build(pwa_root, body))
     try:
         import re as _pwa_re
         _version = _compute_pwa_sw_cache_version(pwa_root, body)
@@ -8227,7 +8284,10 @@ async def _desk_portal(scope, receive, send):
     path = scope.get("path", "")
     if not path.startswith("/support-api"):
         import desk_portal as _dp
+        import desk_http as _dh_p
         _st, _ct, _bd = _dp.static_page(path)
+        if _st == 200:     # versioned icon addresses, like the apps (2026-10-28)
+            _bd = _version_pwa_icons(str(_dh_p.APP_DIR), _bd)
         await _desk_send(send, _st, _ct, _bd, b"no-cache")
         return
     _chunks = []

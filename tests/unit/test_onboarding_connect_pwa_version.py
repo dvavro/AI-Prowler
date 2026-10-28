@@ -96,7 +96,8 @@ def test_PV_05_disk_files_never_change(mcp):
 def test_PV_06_all_serving_sites_go_through_the_stamp(mcp):
     src = (_SRC / "ai_prowler_mcp.py").read_text(encoding="utf-8")
     i = src.index("def _patch_sw_cache_version(")
-    assert "return _stamp_pwa_build(pwa_root, body)" in src[i:i + 1500]
+    # 2026-10-28: pages are also icon-versioned on the way out (_version_pwa_icons)
+    assert "return _version_pwa_icons(pwa_root, _stamp_pwa_build(pwa_root, body))" in src[i:i + 1500]
     # jobs (server + personal), HR apps, remote
     assert src.count("_patch_sw_cache_version(") >= 5
 
