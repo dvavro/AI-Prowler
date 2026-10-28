@@ -232,7 +232,7 @@ def reset_disabled_tools(mode):
 # provider set up). A choice saved in Settings → MCP Tool Configuration always
 # wins. Stored as {"optional_groups": {"personal": {group: bool}, "server": …}}
 # in this same tool_config.json, through the same guarded write.
-DEFAULT_OFF_GROUPS = ("job_tracker", "sms_whatsapp")
+DEFAULT_OFF_GROUPS = ("job_tracker", "sms_whatsapp", "service_desk")
 OPTIONAL_GROUPS_KEY = "optional_groups"
 
 
@@ -289,7 +289,24 @@ def _sms_in_use():
         return False
 
 
-_IN_USE = {"job_tracker": _jobs_in_use, "sms_whatsapp": _sms_in_use}
+def _desk_in_use():
+    """True when Service Desk already holds tickets (2026-10-27)."""
+    import sqlite3
+    p = _state_dir() / "tickets_database" / "ai_prowler_tickets.db"
+    if not p.exists():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=2.0)
+        try:
+            return bool(con.execute("SELECT 1 FROM tickets LIMIT 1").fetchone())
+        finally:
+            con.close()
+    except Exception:
+        return False
+
+
+_IN_USE = {"job_tracker": _jobs_in_use, "sms_whatsapp": _sms_in_use,
+           "service_desk": _desk_in_use}
 
 
 def saved_group_choice(mode, group):

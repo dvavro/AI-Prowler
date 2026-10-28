@@ -691,6 +691,14 @@ MANIFEST_FILES = [
     # without editing this list. (The .docx specs in docs\ are dev-only.)
     "hr_portal/docs/*.html",
     "hr_portal/docs/*.pdf",
+    # v9.6.0 Service Desk — mirrors the .iss "desk_*.py" and desk\ lines.
+    "desk_*.py",
+    "desk/index.html",
+    "desk/support.html",
+    "desk/manifest.json",
+    "desk/sw.js",
+    "desk/icon-192.png",
+    "desk/icon-512.png",
     # NOTE: rag_icon.ico and python-3.11.8-amd64.exe are intentionally excluded.
     # rag_icon.ico rarely changes and is large binary noise in the update.
     # python-3.11.8-amd64.exe is the bundled Python installer — it is never

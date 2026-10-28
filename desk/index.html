@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#00d4ff">
+<link rel="manifest" href="/desk/manifest.json">
+<link rel="apple-touch-icon" href="/desk/icon-192.png">
+<title>Service Desk</title>
+<style>
+:root{--bg:#07080f;--card:#11131f;--line:#23263a;--ink:#e8ecf6;--mute:#8d93a8;--acc:#00d4ff;
+--ok:#3ddc84;--warn:#ffb020;--bad:#ff5470;--r:12px}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+padding-bottom:calc(72px + env(safe-area-inset-bottom))}
+header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding:10px 14px}
+header h1{font-size:17px;margin:0;display:flex;align-items:center;gap:8px}
+header .who{margin-left:auto;font-size:12px;color:var(--mute);font-weight:400}
+.tabs{display:flex;gap:6px;margin-top:8px;overflow-x:auto}
+.tab{border:1px solid var(--line);background:none;color:var(--mute);border-radius:999px;padding:6px 12px;font-size:13px;white-space:nowrap}
+.tab.on{color:var(--bg);background:var(--acc);border-color:var(--acc)}
+main{padding:12px 14px;max-width:760px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:10px}
+.tk{display:block;width:100%;text-align:left;color:inherit;font:inherit;cursor:pointer}
+.tk .id{color:var(--mute);font-size:12px}
+.tk .t{font-weight:600;margin:2px 0 6px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:2px 8px;color:var(--mute)}
+.chip.P1{color:var(--bad);border-color:var(--bad)}.chip.P2{color:var(--warn);border-color:var(--warn)}
+.chip.st{color:var(--acc);border-color:var(--acc)}.chip.late{color:var(--bad);border-color:var(--bad)}
+label{display:block;font-size:12px;color:var(--mute);margin:10px 0 4px}
+input,select,textarea{width:100%;background:#0b0d17;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit}
+textarea{min-height:80px}
+button.b{border:0;border-radius:10px;padding:10px 14px;font:inherit;font-weight:600;background:var(--acc);color:var(--bg);cursor:pointer}
+button.b.ghost{background:none;color:var(--acc);border:1px solid var(--acc)}
+button.b.warn{background:var(--warn)}button.b.bad{background:var(--bad);color:#fff}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row>*{flex:1}
+.fab{position:fixed;right:18px;bottom:calc(18px + env(safe-area-inset-bottom));width:56px;height:56px;border-radius:50%;
+font-size:28px;line-height:56px;padding:0;box-shadow:0 6px 20px rgba(0,212,255,.35)}
+.msg{border-left:3px solid var(--line);padding:6px 10px;margin:8px 0}
+.msg.public{border-color:var(--acc)}.msg.internal{border-color:var(--warn)}
+.msg .h{font-size:12px;color:var(--mute)}
+.thumbs{display:flex;flex-wrap:wrap;gap:8px}
+.thumbs a{display:block;width:84px;height:84px;border-radius:8px;overflow:hidden;border:1px solid var(--line);
+background:#0b0d17;color:var(--mute);font-size:11px;text-align:center;text-decoration:none;padding:4px}
+.thumbs img{width:100%;height:100%;object-fit:cover;margin:-4px}
+.board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(220px,1fr);gap:10px;overflow-x:auto}
+.col h3{font-size:13px;color:var(--mute);margin:0 0 8px}
+#toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#1c2033;border:1px solid var(--line);
+padding:10px 14px;border-radius:10px;display:none;max-width:90%;z-index:20}
+.banner{background:#14243a;border:1px solid var(--acc);border-radius:10px;padding:8px 12px;margin-bottom:10px;cursor:pointer}
+.muted{color:var(--mute)}.hide{display:none!important}
+.tog{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.tog input{width:auto}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎫 Service Desk <span class="who" id="who"></span>
+    <button class="tab hide" id="bell" title="Alerts on this phone" style="margin-left:6px">🔔</button></h1>
+  <div class="tabs hide" id="tabs">
+    <button class="tab on" data-filter="mine">My tickets</button>
+    <button class="tab" data-filter="open">Open</button>
+    <button class="tab" data-filter="overdue">Overdue</button>
+    <button class="tab" data-filter="board">Board</button>
+    <button class="tab" data-filter="closed">Closed</button>
+    <button class="tab hide" data-filter="reports" id="tabReports">📊 Reports</button>
+    <button class="tab hide" data-filter="settings" id="tabSettings">⚙︎</button>
+  </div>
+</header>
+<main id="app"></main>
+<button class="b fab hide" id="fab" aria-label="New ticket">+</button>
+<div id="toast"></div>
+
+<script>
+'use strict';
+const S = { mode: 'personal', token: '', me: null, filter: 'mine', tickets: [], cursor: '',
+            open: null, poll: null };
+const $ = s => document.querySelector(s);
+const app = $('#app');
+
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function toast(msg, ms) {
+  const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast._t); toast._t = setTimeout(() => { t.style.display = 'none'; }, ms || 3500);
+}
+function when(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+function dueDay(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+}
+function isLate(t) { return t.due_resolve_at && !['Fixed', 'Closed'].includes(t.state) && new Date(t.due_resolve_at) < new Date(); }
+
+async function api(method, path, body, isForm) {
+  const h = { Authorization: 'Bearer ' + S.token };
+  if (body && !isForm) h['Content-Type'] = 'application/json';
+  const r = await fetch(path, { method, headers: h, body: body ? (isForm ? body : JSON.stringify(body)) : undefined });
+  if (r.status === 401) { signOut('Please sign in again.'); throw new Error('signed out'); }
+  const ct = r.headers.get('content-type') || '';
+  const data = ct.includes('json') ? await r.json() : await r.blob();
+  if (!r.ok) { const e = new Error((data && data.message) || ('Error ' + r.status)); e.status = r.status; throw e; }
+  return data;
+}
+
+// ── sign in ────────────────────────────────────────────────────────────────
+async function boot() {
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/desk/sw.js').catch(() => {});
+  try { S.mode = (await (await fetch('/pwa-token')).json()).mode || 'personal'; } catch (_) {}
+  S.token = sessionStorage.getItem('desk_token') || '';
+  if (S.token) { try { await start(); return; } catch (_) {} }
+  showLogin();
+}
+function showLogin(note) {
+  stopPoll(); $('#tabs').classList.add('hide'); $('#fab').classList.add('hide'); $('#who').textContent = '';
+  const server = S.mode === 'server';
+  app.innerHTML = `<div class="card"><h2 style="margin:0 0 6px">Sign in</h2>
+    <p class="muted">${server ? 'Use your AI-Prowler name and password (token) from the server\'s Admin tab.'
+      : 'Use your AI-Prowler Bearer Token (Settings tab on your PC).'}</p>
+    ${note ? `<p style="color:var(--warn)">${esc(note)}</p>` : ''}
+    ${server ? '<label>Name</label><input id="lgName" autocomplete="username">' : ''}
+    <label>${server ? 'Password' : 'Bearer Token'}</label>
+    <input id="lgTok" type="password" autocomplete="current-password">
+    <div class="row" style="margin-top:12px"><button class="b" id="lgGo">Sign in</button></div></div>`;
+  $('#lgGo').addEventListener('click', doLogin);
+  $('#lgTok').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+}
+async function doLogin() {
+  const tok = $('#lgTok').value.trim();
+  try {
+    if (S.mode === 'server') {
+      const r = await fetch('/desk-api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: $('#lgName').value.trim(), token: tok }) });
+      const d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d.message || 'Name or password not recognized.');
+      S.token = d.access_token;
+    } else {
+      const r = await fetch('/pwa-verify', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: tok }) });
+      if (!r.ok) throw new Error('That token is not right.');
+      S.token = tok;
+    }
+    sessionStorage.setItem('desk_token', S.token);
+    await start();
+  } catch (e) { toast(e.message); }
+}
+function signOut(note) { sessionStorage.removeItem('desk_token'); S.token = ''; showLogin(note); }
+
+async function start() {
+  S.me = await api('GET', '/desk-api/me');
+  const a = S.me.actor;
+  $('#who').textContent = (a.name || a.id) + ' · ' + (S.me.edition === 'solo' ? 'Solo' : a.role);
+  $('#tabs').classList.remove('hide'); $('#fab').classList.remove('hide');
+  $('#tabSettings').classList.toggle('hide', a.role !== 'owner');
+  $('#tabReports').classList.toggle('hide', !['owner', 'manager'].includes(a.role));
+  $('#bell').classList.toggle('hide', !('serviceWorker' in navigator && 'PushManager' in window));
+  await refreshList(); startPoll();
+}
+
+// ── list views ─────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); S.filter = b.dataset.filter; S.open = null;
+  if (S.filter === 'settings') showSettings();
+  else if (S.filter === 'reports') showReports();
+  else refreshList();
+}));
+$('#fab').addEventListener('click', showNew);
+
+// ── web push: alerts on this phone even when the app is closed ──────────────
+function b64ToBytes(s) {
+  const pad = '='.repeat((4 - s.length % 4) % 4);
+  const raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, c => c.charCodeAt(0));
+}
+$('#bell').addEventListener('click', async () => {
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  if (ios && !standalone) { toast('On iPhone, first tap Share → Add to Home Screen, then open Service Desk from the home screen and tap 🔔.', 8000); return; }
+  try {
+    if ((await Notification.requestPermission()) !== 'granted') { toast('Alerts are blocked for this app in the phone settings.'); return; }
+    const reg = await navigator.serviceWorker.ready;
+    const key = (await api('GET', '/desk-api/push/key')).key;
+    const sub = (await reg.pushManager.getSubscription()) ||
+      await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
+    await api('POST', '/desk-api/push/subscribe', { subscription: sub.toJSON() });
+    toast('Alerts are on for this phone.');
+  } catch (e) { toast('Could not turn on alerts: ' + e.message); }
+});
+
+function query() {
+  switch (S.filter) {
+    case 'mine': return '?open_only=1&mine=1';
+    case 'overdue': return '?overdue=1';
+    case 'closed': return '?state=Closed';
+    default: return '?open_only=1';
+  }
+}
+async function refreshList() {
+  try {
+    const d = await api('GET', '/desk-api/tickets' + query());
+    S.tickets = d.tickets;
+    S.cursor = d.cursor || S.cursor;
+  } catch (e) { if (e.message !== 'signed out') toast(e.message); return; }
+  S.filter === 'board' ? renderBoard() : renderList();
+}
+function card(t) {
+  const late = isLate(t);
+  return `<button class="card tk" data-open="${esc(t.ticket_id)}">
+    <div class="id">${esc(t.ticket_id)} · ${esc(t.kind === 'external' ? 'customer' : t.kind)}${t.assignee ? ' · ' + esc(t.assignee) : ''}</div>
+    <div class="t">${esc(t.title)}</div>
+    <div class="chips"><span class="chip st">${esc(t.state)}</span><span class="chip ${esc(t.priority)}">${esc(t.priority)}</span>
+    ${t.due_resolve_at && !['Fixed', 'Closed'].includes(t.state) ? `<span class="chip ${late ? 'late' : ''}">due ${esc(dueDay(t.due_resolve_at))}</span>` : ''}</div>
+  </button>`;
+}
+function renderList() {
+  const empty = { mine: 'Nothing on your plate.', open: 'No open tickets.', overdue: 'Nothing overdue.',
+                  closed: 'No closed tickets yet.' }[S.filter];
+  app.innerHTML = S.tickets.length ? S.tickets.map(card).join('') : `<p class="muted">${empty}</p>`;
+}
+function renderBoard() {
+  const cols = S.me.states.filter(s => s !== 'Closed');
+  app.innerHTML = `<p class="muted" style="margin-top:0">Drag a card to another column to move it.</p>
+    <div class="board">${cols.map(s => `<div class="col" data-col="${esc(s)}"><h3>${esc(s)} (${S.tickets.filter(t => t.state === s).length})</h3>
+    ${S.tickets.filter(t => t.state === s).map(card).join('') || '<p class="muted">—</p>'}</div>`).join('')}</div>`;
+  app.querySelectorAll('.board .tk').forEach(c => {
+    c.draggable = true;
+    c.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', c.dataset.open); });
+  });
+  app.querySelectorAll('.col').forEach(col => {
+    col.addEventListener('dragover', e => { e.preventDefault(); col.style.outline = '2px dashed var(--acc)'; });
+    col.addEventListener('dragleave', () => { col.style.outline = ''; });
+    col.addEventListener('drop', async e => {
+      e.preventDefault(); col.style.outline = '';
+      const t = S.tickets.find(x => x.ticket_id === e.dataTransfer.getData('text/plain'));
+      const to = col.dataset.col;
+      if (!t || t.state === to) return;
+      if (!(S.me.transitions[t.state] || []).includes(to)) { toast(`Can't move from ${t.state} to ${to}.`); return; }
+      let reason = '';
+      if (needsReason(t.state, to)) { reason = prompt(`Reason for moving to ${to}?`) || ''; if (!reason.trim()) return; }
+      try {
+        await api('POST', `/desk-api/tickets/${t.ticket_id}/state`, { to_state: to, reason, expected_version: t.version });
+        toast(`${t.ticket_id} → ${to}`);
+      } catch (err) { toast(err.status === 409 ? 'Someone else just changed it — refreshed.' : err.message); }
+      refreshList();
+    });
+  });
+}
+
+// ── reports (owner, managers) ──────────────────────────────────────────────
+async function showReports(days) {
+  days = days || 30;
+  const since = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+  const group = S.me.edition === 'business' ? 'assignee' : 'type';
+  let d;
+  try { d = await api('GET', `/desk-api/report?since=${since}&group_by=${group}`); } catch (e) { toast(e.message); return; }
+  const row = (k, s) => `<tr><td>${esc(k)}</td><td>${s.tickets}</td><td>${s.open}</td><td>${s.closed}</td>
+    <td>${s.median_first_response_min ?? '—'}</td><td>${s.median_resolution_hours ?? '—'}</td><td>${s.sla_breaches}</td>
+    <td>${s.csat_avg ?? '—'}</td></tr>`;
+  app.innerHTML = `<div class="card"><div class="row">${[7, 30, 90].map(n => `<button class="b ${n === days ? '' : 'ghost'}" data-days="${n}">${n} days</button>`).join('')}</div>
+    <div style="overflow-x:auto"><table style="width:100%;margin-top:12px;font-size:13px;border-collapse:collapse">
+    <tr class="muted"><th align="left">${group === 'assignee' ? 'Person' : 'Type'}</th><th>Tickets</th><th>Open</th><th>Closed</th>
+    <th>First reply (min)</th><th>Fix (h)</th><th>SLA misses</th><th>Rating</th></tr>
+    ${row('All', d.report.total)}${Object.entries(d.report.groups || {}).map(([k, s]) => row(k, s)).join('')}</table></div></div>`;
+  app.querySelectorAll('[data-days]').forEach(b => b.addEventListener('click', () => showReports(+b.dataset.days)));
+}
+
+async function download(path, filename) {
+  try {
+    const blob = await api('GET', path);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  } catch (e) { toast(e.message); }
+}
+app.addEventListener('click', e => {
+  const o = e.target.closest('[data-open]');
+  if (o) { e.preventDefault(); openTicket(o.dataset.open); }
+});
+
+// ── live updates (30 s) ────────────────────────────────────────────────────
+function startPoll() { stopPoll(); S.poll = setInterval(pollOnce, 30000); }
+function stopPoll() { if (S.poll) clearInterval(S.poll); S.poll = null; }
+async function pollOnce() {
+  if (!S.token || document.hidden) return;
+  try {
+    const u = await api('GET', '/desk-api/updates?since=' + encodeURIComponent(S.cursor || ''));
+    S.cursor = u.cursor || S.cursor;
+    if (!u.tickets.length) return;
+    if (S.open) {
+      const mine = u.tickets.find(t => t.ticket_id === S.open.ticket_id);
+      if (mine && mine.version !== S.open.rev && !$('#changed')) {
+        const b = document.createElement('div');
+        b.className = 'banner'; b.id = 'changed'; b.textContent = 'This ticket was just changed — tap to reload.';
+        b.addEventListener('click', () => openTicket(S.open.ticket_id));
+        app.prepend(b);
+      }
+    } else if (S.filter !== 'settings') { refreshList(); }
+  } catch (_) {}
+}
+
+// ── ticket detail ──────────────────────────────────────────────────────────
+async function openTicket(id) {
+  let d;
+  try { d = await api('GET', '/desk-api/tickets/' + id); } catch (e) { toast(e.message); return; }
+  const t = S.open = d.ticket;
+  const role = S.me.actor.role, biz = S.me.edition === 'business';
+  const next = (S.me.transitions[t.state] || []);
+  const canAssign = biz && ['owner', 'manager'].includes(role);
+  const outside = t.kind !== 'internal';
+  app.innerHTML = `
+  <button class="b ghost" id="back">← Back</button>
+  <div class="card" style="margin-top:10px">
+    <div class="id muted">${esc(t.ticket_id)} · ${esc(t.kind === 'external' ? 'customer' : t.kind)} ticket · v${esc(t.rev)}</div>
+    <h2 style="margin:4px 0 8px">${esc(t.title)}</h2>
+    <div class="chips"><span class="chip st">${esc(t.state)}</span><span class="chip ${esc(t.priority)}">${esc(t.priority)}</span>
+      ${t.assignee ? `<span class="chip">→ ${esc(t.assignee)}</span>` : ''}
+      ${t.due_resolve_at ? `<span class="chip ${isLate(t) ? 'late' : ''}">due ${esc(dueDay(t.due_resolve_at))}</span>` : ''}
+      ${t.job_id ? `<span class="chip">job ${esc(t.job_id)}</span>` : ''}
+      ${t.contact_id ? `<span class="chip">contact ${esc(t.contact_id)}</span>` : ''}</div>
+    ${t.description ? `<p style="white-space:pre-wrap">${esc(t.description)}</p>` : ''}
+    ${t.resolution ? `<p style="white-space:pre-wrap"><b>Resolution:</b> ${esc(t.resolution)}</p>` : ''}
+    ${role !== 'customer' ? `<button class="b ghost" id="resEdit">✍ ${t.resolution ? 'Edit' : 'Write'} resolution</button>` : ''}
+  </div>
+  <div class="card"><div class="row">${next.map(s => `<button class="b ${s === 'Closed' ? 'bad' : s === 'On Hold' ? 'warn' : ''}" data-move="${esc(s)}">${esc(s)}</button>`).join('') || '<span class="muted">No moves from here.</span>'}</div>
+    ${canAssign ? `<label>Assign to (user id)</label><div class="row"><input id="asg" value="${esc(t.assignee || '')}"><button class="b ghost" id="asgGo" style="flex:0">Assign</button></div>` : ''}
+    ${['owner', 'manager'].includes(role) ? `<div class="row" style="margin-top:10px"><button class="b ghost" id="pdf">📄 PDF</button></div>` : ''}
+    ${outside && t.contact_id ? `<div class="row" style="margin-top:10px"><button class="b ghost" id="lnk">🔗 Copy status link</button>
+      ${t.kind === 'external' ? '<button class="b ghost" id="redo">🗓 Schedule re-do</button>' : ''}</div>` : ''}
+  </div>
+  <div class="card"><h3 style="margin:0 0 6px">Photos & files</h3>
+    <div class="thumbs" id="thumbs">${(t.attachments || []).map(a => `<a href="#" data-att="${esc(a.attachment_id)}" data-name="${esc(a.filename)}" data-kind="${esc(a.kind)}" data-thumb="${a.thumb_path ? 1 : 0}">${esc(a.kind === 'photo' ? '' : a.filename)}</a>`).join('') || '<span class="muted">None yet.</span>'}</div>
+    <div class="row" style="margin-top:10px">
+      <label class="b ghost" style="text-align:center;margin:0">📷 Camera<input type="file" accept="image/*" capture="environment" class="hide" id="cam"></label>
+      <label class="b ghost" style="text-align:center;margin:0">📎 File<input type="file" multiple class="hide" id="file"
+        accept=".jpg,.jpeg,.png,.heic,.heif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.mp4,.mov"></label>
+    </div>
+    ${outside ? `<label><input type="checkbox" id="attInternal" style="width:auto"> Internal only (customer never sees it)</label>` : ''}
+  </div>
+  <div class="card"><h3 style="margin:0 0 6px">Messages</h3>
+    ${(t.messages || []).map(m => `<div class="msg ${esc(m.visibility)}"><div class="h">${esc(m.author)} · ${esc(m.visibility === 'public' ? 'to/from ' + (t.kind === 'subcontractor' ? 'sub' : 'customer') : 'internal note')} · ${esc(when(m.at))}</div>${esc(m.body)}</div>`).join('') || '<p class="muted">No messages yet.</p>'}
+    <textarea id="msg" placeholder="Write a note…"></textarea>
+    <div class="row" style="margin-top:8px">
+      ${outside ? `<select id="msgVis" style="flex:2"><option value="internal">Internal note</option><option value="public">Reply to ${t.kind === 'subcontractor' ? 'subcontractor' : 'customer'}</option></select>` : ''}
+      <button class="b" id="msgGo" style="flex:1">Add</button></div>
+  </div>
+  <div class="card muted" style="font-size:13px">${(t.state_history || []).map(h => `${esc(when(h.at))} — ${esc(h.to)}${h.reason ? ' (' + esc(h.reason) + ')' : ''} · ${esc(h.by)}`).join('<br>')}</div>`;
+  $('#back').addEventListener('click', () => { S.open = null; refreshList(); });
+  app.querySelectorAll('[data-move]').forEach(b => b.addEventListener('click', () => move(t, b.dataset.move)));
+  if (canAssign) $('#asgGo').addEventListener('click', () => post(t, 'assign', { assignee: $('#asg').value.trim() }));
+  if ($('#resEdit')) $('#resEdit').addEventListener('click', () => {
+    const v = prompt('How was it fixed? (saved on the ticket and used to find past fixes)', t.resolution || '');
+    if (v !== null && v.trim()) post(t, 'update', { fields: { resolution: v.trim() } });
+  });
+  if ($('#pdf')) $('#pdf').addEventListener('click', () =>
+    download(`/desk-api/export?format=pdf&ticket_id=${t.ticket_id}`, `${t.ticket_id}.pdf`));
+  if ($('#lnk')) $('#lnk').addEventListener('click', async () => {
+    try {
+      const d = await api('POST', `/desk-api/tickets/${t.ticket_id}/link`, {});
+      try { await navigator.clipboard.writeText(d.url); toast('Status link copied.'); }
+      catch (_) { prompt('Status link:', d.url); }
+    } catch (e) { toast(e.message); }
+  });
+  if ($('#redo')) $('#redo').addEventListener('click', async () => {
+    const day = prompt('Re-do date (YYYY-MM-DD)?'); if (!day) return;
+    let cust = t.customer_id || '';
+    if (!cust) { cust = prompt('Jobs app customer id (CUST-####)?') || ''; if (!cust) return; }
+    try {
+      const d = await api('POST', `/desk-api/tickets/${t.ticket_id}/job`, { service_date: day.trim(), customer_id: cust.trim() });
+      toast(d.message.replace(/^✅\s*/, '')); openTicket(t.ticket_id);
+    } catch (e) { toast(e.message); }
+  });
+  $('#msgGo').addEventListener('click', () => {
+    const body = $('#msg').value.trim(); if (!body) return;
+    sendMessage(t, body, $('#msgVis') ? $('#msgVis').value : 'internal');
+  });
+  ['#cam', '#file'].forEach(s => $(s).addEventListener('change', e => upload(t, e.target.files)));
+  loadThumbs();
+}
+function needsReason(from, to) { return S.me.needs_reason.some(p => p[0] === from && p[1] === to); }
+async function move(t, to) {
+  let reason = '';
+  if (needsReason(t.state, to)) {
+    reason = prompt(`Reason for moving to ${to}?`) || '';
+    if (!reason.trim()) { toast('A reason is needed for that move.'); return; }
+  } else if (to === 'Closed' && !confirm('Close this ticket?')) { return; }
+  post(t, 'state', { to_state: to, reason });
+}
+async function post(t, action, body) {
+  try {
+    await api('POST', `/desk-api/tickets/${t.ticket_id}/${action}`, { ...body, expected_version: t.rev });
+    toast('Saved.'); openTicket(t.ticket_id);
+  } catch (e) {
+    if (e.status === 409) { toast('Someone else changed this ticket — reloading.'); openTicket(t.ticket_id); }
+    else toast(e.message);
+  }
+}
+async function sendMessage(t, body, visibility) {
+  try { await api('POST', `/desk-api/tickets/${t.ticket_id}/messages`, { body, visibility }); openTicket(t.ticket_id); }
+  catch (e) { toast(e.message); }
+}
+async function upload(t, files) {
+  if (!files || !files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append('file', f, f.name);
+  fd.append('visibility', $('#attInternal') && $('#attInternal').checked ? 'internal' : 'public');
+  toast('Uploading…', 60000);
+  try { await api('POST', `/desk-api/tickets/${t.ticket_id}/attachments`, fd, true); toast('Uploaded.'); openTicket(t.ticket_id); }
+  catch (e) { toast(e.message); }
+}
+async function loadThumbs() {
+  for (const a of app.querySelectorAll('[data-att]')) {
+    a.addEventListener('click', async e => {
+      e.preventDefault();
+      try {
+        const blob = await api('GET', '/desk-api/attachments/' + a.dataset.att);
+        const url = URL.createObjectURL(blob); window.open(url, '_blank');
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      } catch (err) { toast(err.message); }
+    });
+    if (a.dataset.thumb === '1') {
+      try {
+        const blob = await api('GET', '/desk-api/attachments/' + a.dataset.att + '?thumb=1');
+        a.innerHTML = `<img alt="${esc(a.dataset.name)}" src="${URL.createObjectURL(blob)}">`;
+      } catch (_) {}
+    }
+  }
+}
+
+// ── new ticket ─────────────────────────────────────────────────────────────
+function showNew() {
+  S.open = null;
+  const kinds = S.me.kinds;
+  if (!kinds.length) { toast('Filing tickets is switched off.'); return; }
+  const label = { external: 'Customer request', internal: S.me.edition === 'solo' ? 'My own ticket' : 'Internal', subcontractor: 'Subcontractor' };
+  app.innerHTML = `<button class="b ghost" id="back">← Back</button>
+  <div class="card" style="margin-top:10px"><h2 style="margin:0">New ticket</h2>
+    <label>Kind</label><select id="nKind">${kinds.map(k => `<option value="${k}">${label[k]}</option>`).join('')}</select>
+    <label>Title</label><input id="nTitle" maxlength="200">
+    <label>Details</label><textarea id="nDesc"></textarea>
+    <div id="nParty"><label id="nPartyLbl">Customer name</label><input id="nName">
+      <div class="row"><div><label>Phone</label><input id="nPhone" type="tel"></div><div><label>Email</label><input id="nEmail" type="email"></div></div>
+      <label>Job id (optional)</label><input id="nJob"></div>
+    <div class="row"><div><label>Priority</label><select id="nPri"><option>P3</option><option>P1</option><option>P2</option><option>P4</option></select></div>
+      <div><label>Due</label><input id="nDue" type="date"></div></div>
+    <label><input type="checkbox" id="nSms" style="width:auto"> Also alert by text (SMS)</label>
+    <div class="row" style="margin-top:12px"><button class="b" id="nGo">File ticket</button></div></div>`;
+  const syncKind = () => {
+    const k = $('#nKind').value;
+    $('#nParty').classList.toggle('hide', k === 'internal');
+    $('#nPartyLbl').textContent = k === 'subcontractor' ? 'Subcontractor name' : 'Customer name';
+  };
+  $('#nKind').addEventListener('change', syncKind); syncKind();
+  $('#back').addEventListener('click', () => refreshList());
+  $('#nGo').addEventListener('click', async () => {
+    const k = $('#nKind').value;
+    const body = { kind: k, title: $('#nTitle').value.trim(), description: $('#nDesc').value.trim(),
+      priority: $('#nPri').value, due: $('#nDue').value, sms_fallback: $('#nSms').checked };
+    if (k !== 'internal') Object.assign(body, { contact_name: $('#nName').value.trim(),
+      contact_phone: $('#nPhone').value.trim(), contact_email: $('#nEmail').value.trim(), job_id: $('#nJob').value.trim() });
+    if (!body.title) { toast('Give the ticket a title.'); return; }
+    try { const d = await api('POST', '/desk-api/tickets', body); toast('Filed ' + d.ticket.ticket_id); openTicket(d.ticket.ticket_id); }
+    catch (e) { toast(e.message); }
+  });
+}
+
+// ── settings (owner) ───────────────────────────────────────────────────────
+async function showSettings() {
+  const s = (await api('GET', '/desk-api/settings')).settings;
+  const rows = [['own_tickets', 'I can file tickets to myself', S.me.edition === 'solo'],
+                ['subcontractor_tickets', 'I can open tickets about a subcontractor', true],
+                ['sms_fallback_default', 'New tickets also alert by text (SMS)', true],
+                ['portal_enabled', 'Customers can request service online (/support/new)', true],
+                ['email_intake', 'Read our email account for ticket replies', true],
+                ['csat_enabled', 'Ask customers to rate closed requests', true]].filter(r => r[2]);
+  const modes = `<label>A text that isn't a reply to a ticket</label>
+    <select data-mode="sms_new_request_mode">${[['off', 'Do nothing'], ['ask', 'Ask if they want a request opened'],
+      ['link', 'Text back the request-form link'], ['create', 'Open a ticket automatically']]
+      .map(o => `<option value="${o[0]}" ${s.sms_new_request_mode === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>
+    <label>An email that isn't a reply to a ticket</label>
+    <select data-mode="email_new_request_mode">${[['off', 'Do nothing'], ['create', 'Open a ticket automatically']]
+      .map(o => `<option value="${o[0]}" ${s.email_new_request_mode === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>`;
+  const solo = S.me.edition === 'solo';
+  app.innerHTML = `<div class="card"><h2 style="margin:0 0 6px">Settings</h2>${rows.map(r =>
+    `<div class="tog"><input type="checkbox" data-set="${r[0]}" ${s[r[0]] ? 'checked' : ''}><span>${esc(r[1])}</span></div>`).join('')}
+    ${modes}
+    ${solo ? `<label>Send my alerts to (email)</label><input id="alEmail" type="email" value="${esc(s.alert_email)}">
+    <label>My mobile for text alerts</label><input id="alPhone" type="tel" value="${esc(s.alert_phone)}">
+    <div class="row" style="margin-top:8px"><button class="b" id="alSave">Save alert contacts</button></div>` : ''}
+    <div class="row" style="margin-top:12px"><button class="b ghost" id="out">Sign out</button></div></div>`;
+  if (solo) $('#alSave').addEventListener('click', async () => {
+    try {
+      await api('POST', '/desk-api/settings', { key: 'alert_email', value: $('#alEmail').value.trim() });
+      await api('POST', '/desk-api/settings', { key: 'alert_phone', value: $('#alPhone').value.trim() });
+      toast('Saved.');
+    } catch (e) { toast(e.message); }
+  });
+  app.querySelectorAll('[data-set]').forEach(c => c.addEventListener('change', async () => {
+    try { await api('POST', '/desk-api/settings', { key: c.dataset.set, value: c.checked });
+          S.me = await api('GET', '/desk-api/me'); toast('Saved.'); }
+    catch (e) { toast(e.message); c.checked = !c.checked; }
+  }));
+  app.querySelectorAll('[data-mode]').forEach(sel => sel.addEventListener('change', async () => {
+    try { await api('POST', '/desk-api/settings', { key: sel.dataset.mode, value: sel.value }); toast('Saved.'); }
+    catch (e) { toast(e.message); }
+  }));
+  $('#out').addEventListener('click', () => signOut());
+  await renderDataSection();
+  if (S.me.edition === 'business') await renderTeamSection();
+}
+
+// ── Settings → Data: export, import, backups ───────────────────────────────
+async function renderDataSection() {
+  let b;
+  try { b = await api('GET', '/desk-api/backups'); } catch (e) { toast(e.message); return; }
+  const st = b.settings;
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `<h2 style="margin:0 0 6px">Data</h2>
+    <label>Export</label><div class="row">
+      <button class="b ghost" data-exp="xlsx">Excel</button><button class="b ghost" data-exp="csv">CSV</button>
+      <button class="b ghost" data-exp="json">Full (moves to another Service Desk)</button></div>
+    <label>Import (.csv, .xlsx or a full export .zip)</label>
+    <input type="file" id="impFile" accept=".csv,.xlsx,.zip">
+    <div class="row" style="margin-top:8px"><button class="b ghost" id="impDry">Check file (dry run)</button>
+      <button class="b hide" id="impGo">Import now</button></div>
+    <pre id="impOut" class="muted" style="white-space:pre-wrap"></pre>
+    <div class="row"><input id="undoId" placeholder="Batch id to undo (IMP-…)"><button class="b ghost" id="undoGo" style="flex:0">Undo import</button></div>
+    <label>Backups</label>
+    <div class="row"><button class="b" id="bkNow">Back up now</button></div>
+    <div id="bkList" style="margin-top:8px">${b.backups.slice(0, 15).map(x => `<div class="tog" style="flex-wrap:wrap">
+      <span style="flex:1">${esc(x.made_at.replace('T', ' ').slice(0, 16))} · ${esc(x.trigger)} · ${Math.max(1, Math.round(x.bytes / 1024))} KB · ${x.verified ? '✔ verified' : '⚠ not verified'}</span>
+      <button class="b ghost" data-dl="${esc(x.name)}" style="flex:0">Download</button>
+      <button class="b warn" data-rs="${esc(x.name)}" style="flex:0">Restore…</button></div>`).join('') || '<p class="muted">No backups yet.</p>'}</div>
+    <label>Automatic backups</label>
+    <div class="tog"><input type="checkbox" id="bkOn" ${st.backup_enabled ? 'checked' : ''}><span>On</span></div>
+    <div class="row"><div><label>How often</label><select id="bkFreq">${['hourly', 'daily', 'weekly'].map(f => `<option ${st.backup_frequency === f ? 'selected' : ''}>${f}</option>`).join('')}</select></div>
+      <div><label>At hour (0-23)</label><input id="bkHour" type="number" min="0" max="23" value="${st.backup_hour}"></div></div>
+    <div class="row"><div><label>Keep daily</label><input id="bkD" type="number" min="1" value="${st.backup_keep_daily}"></div>
+      <div><label>weekly</label><input id="bkW" type="number" min="1" value="${st.backup_keep_weekly}"></div>
+      <div><label>monthly</label><input id="bkM" type="number" min="1" value="${st.backup_keep_monthly}"></div></div>
+    <div class="tog"><input type="checkbox" id="bkAtt" ${st.backup_attachments ? 'checked' : ''}><span>Include photos and documents</span></div>
+    <label>Second copy to (drive, NAS or synced folder — optional)</label><input id="bkDir" value="${esc(st.backup_second_dir)}">
+    <div class="row" style="margin-top:8px"><button class="b" id="bkSave">Save backup settings</button></div>`;
+  app.appendChild(card);
+  card.querySelectorAll('[data-exp]').forEach(btn => btn.addEventListener('click', () => {
+    const f = btn.dataset.exp;
+    download(`/desk-api/export?format=${f}`, `service-desk-${new Date().toISOString().slice(0, 10)}.${f === 'xlsx' ? 'xlsx' : 'zip'}`);
+  }));
+  const runImport = async dry => {
+    const f = $('#impFile').files[0]; if (!f) { toast('Choose a file first.'); return; }
+    const fd = new FormData(); fd.append('file', f, f.name); fd.append('dry_run', dry ? '1' : '0');
+    try {
+      const r = (await api('POST', '/desk-api/import', fd, true)).result;
+      $('#impOut').textContent = `${r.dry_run ? 'Dry run — nothing imported yet.' : 'Imported as ' + r.batch_id + ' (undo for 7 days).'}
+Rows: ${r.rows}, to add: ${r.to_add}, duplicates: ${r.duplicates.length}, invalid: ${r.invalid.length}` +
+        r.invalid.slice(0, 10).map(x => `\n  row ${x.row}: ${x.problems.join(', ')}`).join('');
+      $('#impGo').classList.toggle('hide', !(r.dry_run && r.to_add));
+    } catch (e) { toast(e.message); }
+  };
+  $('#impDry').addEventListener('click', () => runImport(true));
+  $('#impGo').addEventListener('click', () => { if (confirm('Import now? A backup is taken first.')) runImport(false); });
+  $('#undoGo').addEventListener('click', async () => {
+    const id = $('#undoId').value.trim(); if (!id || !confirm(`Remove every ticket imported in ${id}?`)) return;
+    try { const r = (await api('POST', '/desk-api/import/undo', { batch_id: id })).result; toast(`Removed ${r.removed.length} ticket(s).`); }
+    catch (e) { toast(e.message); }
+  });
+  $('#bkNow').addEventListener('click', async () => {
+    try { const r = (await api('POST', '/desk-api/backups', {})).backup; toast(`Backed up (${r.verified ? 'verified' : 'NOT verified'}).`); showSettings(); }
+    catch (e) { toast(e.message); }
+  });
+  card.querySelectorAll('[data-dl]').forEach(btn => btn.addEventListener('click', () => download(`/desk-api/backups/${btn.dataset.dl}`, btn.dataset.dl)));
+  card.querySelectorAll('[data-rs]').forEach(btn => btn.addEventListener('click', async () => {
+    const one = prompt('Restore ONE ticket? Enter its number (e.g. T-0042), or leave blank to restore EVERYTHING.');
+    if (one === null) return;
+    const what = one.trim() ? `ticket ${one.trim().toUpperCase()}` : 'ALL Service Desk data';
+    if (!confirm(`Replace ${what} with the copy in this backup? A safety backup is taken first.`)) return;
+    try {
+      const r = (await api('POST', '/desk-api/backups/restore', { name: btn.dataset.rs, ticket_id: one.trim(), confirm: true })).result;
+      toast(`Restored ${r.restored}. Safety backup: ${r.safety_backup}`); showSettings();
+    } catch (e) { toast(e.message); }
+  }));
+  $('#bkSave').addEventListener('click', async () => {
+    const vals = { backup_enabled: $('#bkOn').checked, backup_frequency: $('#bkFreq').value, backup_hour: +$('#bkHour').value,
+      backup_keep_daily: +$('#bkD').value, backup_keep_weekly: +$('#bkW').value, backup_keep_monthly: +$('#bkM').value,
+      backup_attachments: $('#bkAtt').checked, backup_second_dir: $('#bkDir').value.trim() };
+    try { for (const [k, v] of Object.entries(vals)) await api('POST', '/desk-api/settings', { key: k, value: v }); toast('Saved.'); }
+    catch (e) { toast(e.message); }
+  });
+}
+
+// ── Settings → Team (Business): queues, rules, types ───────────────────────
+async function renderTeamSection() {
+  let d;
+  try { d = await api('GET', '/desk-api/team'); } catch (e) { toast(e.message); return; }
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `<h2 style="margin:0 0 6px">Team</h2>
+    <label>Queues (new tickets go round-robin to members who aren't on time off)</label>
+    ${d.queues.map(q => `<div class="tog"><span style="flex:1"><b>${esc(q.queue_id)}</b> ${esc(q.name)} — ${esc(q.members.join(', ') || 'no members')}</span>
+      <button class="b ghost" data-qdel="${esc(q.queue_id)}" style="flex:0">Delete</button></div>`).join('') || '<p class="muted">No queues yet.</p>'}
+    <div class="row"><input id="qId" placeholder="queue id (e.g. field)"><input id="qName" placeholder="name"></div>
+    <div class="row" style="margin-top:6px"><input id="qMem" placeholder="member user ids, comma-separated"><button class="b ghost" id="qSave" style="flex:0">Save queue</button></div>
+    <label>Assignment rules (first match wins)</label>
+    ${d.rules.map(r => `<div class="tog"><span style="flex:1">${r.sort_order}. <b>${esc(r.rule_id)}</b> ${esc(JSON.stringify(r.match))} → ${esc(JSON.stringify(r.action))}</span>
+      <button class="b ghost" data-rdel="${esc(r.rule_id)}" style="flex:0">Delete</button></div>`).join('') || '<p class="muted">No rules yet.</p>'}
+    <div class="row"><input id="rId" placeholder="rule id"><select id="rOn"><option value="keyword">if title/details contain</option><option value="type">if type is</option></select><input id="rVal" placeholder="value"></div>
+    <div class="row" style="margin-top:6px"><select id="rTo"><option value="user">send to person</option><option value="queue">send to queue</option></select><input id="rTarget" placeholder="user id or queue id">
+      <input id="rOrder" type="number" value="100" style="max-width:90px"><button class="b ghost" id="rSave" style="flex:0">Save rule</button></div>
+    <label>Ticket types</label>
+    ${d.types.map(t => `<div class="muted">${esc(t.type_id)} — ${esc(t.name)} (${esc(t.kind)}) → ${esc(t.default_queue || 'no queue')}, ${esc(t.default_priority)}</div>`).join('') || '<p class="muted">No types yet.</p>'}
+    <div class="row"><input id="tId" placeholder="type id (e.g. redo)"><input id="tName" placeholder="name"><input id="tQueue" placeholder="default queue"></div>
+    <div class="row" style="margin-top:6px"><button class="b ghost" id="tSave">Save type</button></div>`;
+  app.appendChild(card);
+  const post = async (path, body) => { try { await api('POST', path, body); toast('Saved.'); showSettings(); } catch (e) { toast(e.message); } };
+  $('#qSave').addEventListener('click', () => post('/desk-api/team/queue', { queue_id: $('#qId').value.trim(), name: $('#qName').value.trim(), members: $('#qMem').value }));
+  card.querySelectorAll('[data-qdel]').forEach(b => b.addEventListener('click', () => confirm('Delete this queue?') && post('/desk-api/team/queue/delete', { queue_id: b.dataset.qdel })));
+  $('#rSave').addEventListener('click', () => post('/desk-api/team/rule', { rule_id: $('#rId').value.trim(),
+    match: { [$('#rOn').value]: $('#rVal').value.trim() }, action: { [$('#rTo').value]: $('#rTarget').value.trim() }, order: +$('#rOrder').value || 100 }));
+  card.querySelectorAll('[data-rdel]').forEach(b => b.addEventListener('click', () => confirm('Delete this rule?') && post('/desk-api/team/rule/delete', { rule_id: b.dataset.rdel })));
+  $('#tSave').addEventListener('click', () => post('/desk-api/team/type', { type_id: $('#tId').value.trim(), name: $('#tName').value.trim(), default_queue: $('#tQueue').value.trim() }));
+}
+
+boot();
+</script>
+</body>
+</html>

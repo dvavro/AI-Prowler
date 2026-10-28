@@ -399,6 +399,21 @@ Source: "hr_portal\icon-512.png"; DestDir: "{app}\hr_portal"; Flags: ignoreversi
 Source: "hr_portal\docs\*.html"; DestDir: "{app}\hr_portal\docs"; Flags: ignoreversion
 Source: "hr_portal\docs\*.pdf"; DestDir: "{app}\hr_portal\docs"; Flags: ignoreversion
 
+; --- v9.6.0 Service Desk (2026-10-27) ---
+; desk_*.py : the ticket system (rules, database, per-ticket folders, attachments,
+;             tools, /desk-api, customer portal, inbound SMS/email, SLA, routing,
+;             reports, export/import, backup, scheduler, AI assist, web push).
+; desk\     : the Service Desk app (/desk/) and the customer request / status
+;             page (/support/). Required by ai_prowler_mcp.py once Service Desk
+;             is switched on in Settings -> MCP Tool Configuration.
+Source: "desk_*.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "desk\index.html"; DestDir: "{app}\desk"; Flags: ignoreversion
+Source: "desk\support.html"; DestDir: "{app}\desk"; Flags: ignoreversion
+Source: "desk\manifest.json"; DestDir: "{app}\desk"; Flags: ignoreversion
+Source: "desk\sw.js"; DestDir: "{app}\desk"; Flags: ignoreversion
+Source: "desk\icon-192.png"; DestDir: "{app}\desk"; Flags: ignoreversion
+Source: "desk\icon-512.png"; DestDir: "{app}\desk"; Flags: ignoreversion
+
 ; --- v8.0.0 Analysis Tasks & Scheduling ---
 ; custom_tasks_manager.py  : My Custom Analyses CRUD, scheduling, due-date logic,
 ;                            and schedule advancement. Required by ai_prowler_mcp.py
@@ -2084,11 +2099,14 @@ begin
           '$ErrorActionPreference = "SilentlyContinue"' + #13#10 +
           '$sitePackages = "$env:LOCALAPPDATA\Programs\Python\Python311\Lib\site-packages"' + #13#10 +
           '$appFolder    = "' + ExpandConstant('{app}') + '"' + #13#10 +
+          '$stateFolder  = "$env:USERPROFILE\.ai-prowler"' + #13#10 +
           'try {' + #13#10 +
           '    Add-MpPreference -ExclusionPath $sitePackages' + #13#10 +
           '    Add-MpPreference -ExclusionPath $appFolder' + #13#10 +
+          '    Add-MpPreference -ExclusionPath $stateFolder' + #13#10 +
           '    Write-Host "Defender exclusions added for: $sitePackages"' + #13#10 +
           '    Write-Host "Defender exclusions added for: $appFolder"' + #13#10 +
+          '    Write-Host "Defender exclusions added for: $stateFolder"' + #13#10 +
           '} catch {' + #13#10 +
           '    Write-Host "WARNING: Could not add Defender exclusions: $_"' + #13#10 +
           '    Write-Host "Add these paths manually in Windows Security > Virus & threat protection > Exclusions:"' + #13#10 +

@@ -32,6 +32,7 @@
 24. Heartbeats & Analytics
 25. Jobs PWA App (the mobile app for crews and owners — incl. roles & data access in server mode)
 26. Remote PWA App
+27. Service Desk (tickets)
 
 ---
 
@@ -3096,6 +3097,68 @@ Below the indexed folders is the **Access-Only Folders** section (folders Claude
 ### Personal Mode vs. Server Mode
 
 **Personal mode only — not available in Server mode at all.** This matches the same restriction already documented for the underlying `get_file_download_url()` / `get_file_upload_url()` MCP tools (Section 7 → File Transfer Tools), which are also personal-mode-only for the identical reason: unrestricted file/permission/system access has no safe per-employee scoping story on a shared company server. The Jobs App (Section 25) is the field-crew-facing app for Business Server installs — it has the row-level scoping this app deliberately lacks.
+
+---
+
+## 27. Service Desk (tickets)
+
+Service Desk tracks requests and problems from **Open → Assigned → In Progress → Fixed → Closed**, with **On Hold** as a side state. Customers can file requests from their phone, every ticket has one owner and a history, and Claude, Muse or Grok can run it all by chat or voice.
+
+### Editions
+
+| | Solo (Personal Mobile) | Business (server mode) |
+|---|---|---|
+| Who works tickets | The owner — every ticket goes to you | Owner, managers, staff, field crew |
+| Customer requests (form, text, email, status page) | Yes | Yes |
+| Your own tickets (to-dos) | Yes — can be switched off | Internal tickets for the team |
+| Subcontractor tickets | Yes — can be switched off | Yes |
+| Queues, assignment rules, round-robin | — | Yes |
+| SLA timers with escalation | Simple due dates and reminders | Yes |
+| Photos, documents, export, import, backups | Yes | Yes |
+
+Service Desk is **not** part of the free Desktop edition.
+
+### Turning it on
+
+Settings → **MCP Tool Configuration** → tick **Service Desk (tickets)** → Save. It starts off on new installs (like Job Tracker) and stays on once tickets exist.
+
+### The Service Desk app
+
+Open **https://your-tunnel-address/desk/** on your phone and add it to your home screen.
+
+- **Sign in** — personal install: your Bearer Token. Server: your AI-Prowler name and password.
+- **Tabs** — My tickets, Open, Overdue, Board (drag cards between columns), Closed, 📊 Reports (owner and managers), ⚙︎ Settings (owner).
+- **A ticket** — move it with the state buttons (a reason is asked for On Hold, reopening, "not fixed" and closing without the customer confirming); add photos with 📷 Camera or files with 📎 File; write an internal note or a reply to the customer or subcontractor; copy the customer's status link; schedule a re-do job in the Jobs app; download a PDF; write the resolution.
+- **🔔 Alerts on this phone** — tap the bell to get alerts even when the app is closed. On iPhone, first add the app to the home screen (Share → Add to Home Screen) and open it from there.
+- If someone else changes a ticket while you have it open, the app tells you instead of overwriting their change.
+
+### Customers and subcontractors
+
+- **Request form:** https://your-tunnel-address/support/new — the customer enters a name, mobile number or email, and what they need; a 6-digit code confirms it's them. They get a link to their **status page**.
+- **Status page:** shows only their own request and its public messages. They can reply, add photos, confirm the fix or say it isn't fixed, reopen within 7 days, and rate the job once it's closed. A subcontractor's page also has **My part is done**.
+- **Replies** you send go out by email (or text if there's no email) with the status-page link. Each message shows whether it was sent.
+- **Texts:** a text from someone with an open ticket is added to that ticket. A text from anyone else follows your setting — **Do nothing** (default), **Ask** if they want a request opened (YES / NO), **Text back the form link**, or **Open a ticket automatically**. STOP / START / HELP work exactly as before, and your team's own phones are never treated as customers.
+- **Email:** turn on **Read our email account for ticket replies** to add customer email replies (subject contains [T-####]) to their ticket. Uses the email account AI-Prowler already sends from (needs IMAP; Outlook-only setups can't be read). Your other mail stays unread.
+- Update your Twilio A2P campaign description to mention service-request updates before turning on automatic texts.
+
+### Business features
+
+- **Settings → Team:** queues (members get new tickets round-robin, skipping anyone with PTO or an absence today in the HR apps), assignment rules (first match wins: by keyword, type or customer → a person or a queue) and ticket types. A ticket for a job goes to that job's crew lead.
+- **SLA timers** run in business hours on your Jobs app working days: P1 reply in 1 hour and fixed the same day; P2 4 hours / 2 days; P3 1 day / 5 days; P4 3 days. On Hold pauses the clock. The assignee is warned at 75%, told when it's overdue, and the owner and managers are told at twice the target.
+- **Morning digest** of overdue, due-today and unassigned tickets (7am by default), emailed to the owner and managers — or, in Solo, to your alert email.
+
+### Data and backups (Settings → Data, owner)
+
+- **Export:** Excel, CSV, a full export (with photos) that moves to another Service Desk, and a one-ticket PDF. Exports are copies — editing them never changes your tickets.
+- **Import:** CSV, Excel (with column names like Subject / Status / Priority / Requester / Phone, as other help desks export) or a full export. It always checks the file first; a real import takes a backup, sends no alerts, and can be undone for 7 days.
+- **Backups:** daily at 2am by default (hourly or weekly if you prefer), verified, with 14 daily / 8 weekly / 12 monthly copies kept and an optional second copy to a drive, NAS or synced folder. Restore everything or a single ticket; a safety backup is taken first. Two failed backups in a row email you.
+- Everything lives in **C:\Users\you\.ai-prowler\tickets_database** — the database, one folder per ticket (ticket.json plus its photos and documents), exports, imports and backups.
+
+### With Claude, Muse or Grok
+
+Ask in plain language — "File a ticket: Mrs. Lopez says the front windows are streaky", "What tickets do I have?", "Triage the tickets", "Tell the customer on 42 we'll be there Thursday", "Schedule a redo for 42 next Tuesday", "How did support go this week?". Claude previews customer messages before sending, and asks before closing, merging, importing or restoring. Every change Claude makes is recorded as made by Claude and approved by you.
+
+Tools: create_ticket, get_ticket, list_tickets, my_tickets, update_ticket, assign_ticket, set_ticket_state, add_ticket_note, reply_to_customer, create_job_from_ticket, search_tickets, ticket_summary, triage_inbox, apply_triage, link_ticket, merge_tickets, manage_ticket_queues, manage_ticket_rules, ticket_report, export_tickets, import_tickets, tickets_backup_now, backup_tickets_database, list_tickets_backups, tickets_backup_settings, restore_tickets_database, get_ticket_updates, tickets_settings.
 
 ---
 

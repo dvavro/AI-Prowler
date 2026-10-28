@@ -116,6 +116,15 @@ watchdog==6.0.0
 # ── HTTP / API ──────────────────────────────────────────────────────────────────────────────
 requests==2.34.2
 
+# ── Service Desk web push (v9.6.0, 2026-10-27) ───────────────────────────────
+# pywebpush: sends Service Desk alerts to the Service Desk app on phones even
+# when the app is closed (desk_push.py). py-vapid and http-ece are its own
+# dependencies, pinned per the policy at the top of this file. If missing,
+# push is skipped and email / SMS alerts still work.
+pywebpush==2.5.0
+py-vapid==1.9.6
+http-ece==1.2.1
+
 # ── HTTP MCP server (Remote Access / Cloudflare Tunnel) ──────────────────────
 # mcp: official Anthropic MCP Python SDK — provides FastMCP, the tool decorator,
 # and both stdio and streamable-http transports used by ai_prowler_mcp.py.
