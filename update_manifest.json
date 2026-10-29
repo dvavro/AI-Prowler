@@ -1,11 +1,11 @@
 {
-  "version": "9.5.0",
-  "generated": "2026-10-27T07:54:51",
+  "version": "9.6.0",
+  "generated": "2026-10-28T20:49:56",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "958521e6f82828ba7e8c183e882ac2c3dda5e251b71390fa668f2ee3ec728ae9",
-      "bytes": 1498368
+      "sha256": "0083ba065067e2cec340f4927150cc414fcb245dc2243eb76e42afc4a04cccfe",
+      "bytes": 1504382
     },
     {
       "path": "rag_preprocessor.py",
@@ -14,8 +14,8 @@
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "dedcb1adc7f101f743632a0b3ce2307cfde214c407b3aee914b19a04f6e02b2b",
-      "bytes": 1786316
+      "sha256": "d90480fa70fe2a1b7dace9f4221e781e236e0fe97dc5dedbd53154e985253248",
+      "bytes": 1843758
     },
     {
       "path": "mcp_diagnostics.py",
@@ -24,18 +24,23 @@
     },
     {
       "path": "mcp_tool_catalog.py",
-      "sha256": "eabcd86b1d28e06af2b5046bbac895074ca541bb17d9355474f4ff5b12a56fdb",
-      "bytes": 52331
+      "sha256": "e304d5e331d578353f93087ba65222831964c81ff353b6ab595240768b625c94",
+      "bytes": 58660
     },
     {
       "path": "tool_config_store.py",
-      "sha256": "27837f028e321ce81c59cf081da274e885adba4a89655edf4e283e9971652b7b",
-      "bytes": 14021
+      "sha256": "e882ff3d982d3c4cc391a013e6d2a081293319f4ef697d2336876d192b5d2659",
+      "bytes": 14561
     },
     {
       "path": "safe_save.py",
       "sha256": "4dc096bce8dd952a315e9f55fe56bac761b7777db182cde82d48c3c7743e4149",
       "bytes": 5123
+    },
+    {
+      "path": "oauth_store.py",
+      "sha256": "128b05c51757365512693c10144a9db2912ebb2e40215033c1754cf407caf5d9",
+      "bytes": 14651
     },
     {
       "path": "self_learning.py",
@@ -54,8 +59,8 @@
     },
     {
       "path": "requirements.txt",
-      "sha256": "8a14431fb205fae5c1f0615d7180c5df63b71b9b68682ef41d88f71b680878fe",
-      "bytes": 9059
+      "sha256": "5b9f3263980b94f6b9b4a657a9887ee8692d295c21eeb8cb386a92203400015c",
+      "bytes": 9536
     },
     {
       "path": "subscription_instructions.txt",
@@ -64,12 +69,12 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "8845fe61427d1b3451e4602a8ed422f0a29b866323b89e45d2b3f9c6ae51bf40",
-      "bytes": 312347
+      "sha256": "7e68974e97c2c7be737f2d9dd38ae8ef1c3a7f865567827939c307c64123d845",
+      "bytes": 328116
     },
     {
       "path": "VERSION",
-      "sha256": "c073f1444bd5b84e8b30b29389ecd55c16ffd778c0c899d5eb60893063342a80",
+      "sha256": "8545ee9c098c6187c85a863b827ac41577f6a27b09745b0eaa600f532d5a1ea2",
       "bytes": 6
     },
     {
@@ -214,7 +219,7 @@
     },
     {
       "path": "jobs/index.html",
-      "sha256": "f4e8a88534fea897b66252a6aa51b215ff0e804c1de86ca57d56ed406b76ecca",
+      "sha256": "0069b4ca66e357105bf604cec9c3539d49e80798241e77d84f6c583a85619c2b",
       "bytes": 1111207
     },
     {
@@ -244,8 +249,8 @@
     },
     {
       "path": "remote/index.html",
-      "sha256": "2a729d48231e797d24e15af9c9982719a3dc2141ddd76c7d6f2e1c608b2b6107",
-      "bytes": 137783
+      "sha256": "884ff24237fde63a36733f569f041b84464607f6d85ff76aafcb9b922e8a7cea",
+      "bytes": 137856
     },
     {
       "path": "remote/manifest.json",
@@ -269,8 +274,8 @@
     },
     {
       "path": "setup_wizard.py",
-      "sha256": "66b813a77a2b81bb744cf6c90157eea30abfdab6f4d864db26663b804e0cbfae",
-      "bytes": 149757
+      "sha256": "c303139773021153ad73bc36188a5419170d1054ddc44b849958c77fbe979045",
+      "bytes": 157969
     },
     {
       "path": "startup_log.py",
@@ -299,8 +304,8 @@
     },
     {
       "path": "hr_admin/index.html",
-      "sha256": "e895cdd1b700fafdb8d9f0076f7609adfa1572aeb74a2ab6a58dfd51bc4c5087",
-      "bytes": 925233
+      "sha256": "03cd22ecfbb34a52a8f6dbc50559f5eaa28a5f7793021d9920da030191de5c92",
+      "bytes": 925324
     },
     {
       "path": "hr_admin/manifest.json",
@@ -446,6 +451,131 @@
       "path": "hr_portal/docs/AI_Prowler_Employee_Handbook_2026.pdf",
       "sha256": "65690cff899c9d94cb9067d2a341fc0c09d58d243e49552c3757dca72c43ac46",
       "bytes": 28155
+    },
+    {
+      "path": "desk_ai.py",
+      "sha256": "6e33bdbf3e898fdcd89ba25b49194efff0744637e0d7d1e0aaae56d65ab800b4",
+      "bytes": 21457
+    },
+    {
+      "path": "desk_alerts.py",
+      "sha256": "b2f9686ab803b9c9636133f394ef37f5878389a869747cca0f6971fc86969974",
+      "bytes": 13732
+    },
+    {
+      "path": "desk_attachments.py",
+      "sha256": "12d59531defe9c8684fc89bf7ab4bc3a06e4a8c1751ed9c488b52be84de90f30",
+      "bytes": 7677
+    },
+    {
+      "path": "desk_backup.py",
+      "sha256": "6676f4b805c108ddd39cb98739f1428fe54a17dcb40a10ba34d81305f38cd73a",
+      "bytes": 9910
+    },
+    {
+      "path": "desk_data.py",
+      "sha256": "985e910873c529071d79092714ad76bf2f84161968690980c9a980c203906a6e",
+      "bytes": 23543
+    },
+    {
+      "path": "desk_db.py",
+      "sha256": "849aff356df3cd6b67194ebba9508f2780cdac5cde19f002ec0a9430a9c4021c",
+      "bytes": 50437
+    },
+    {
+      "path": "desk_files.py",
+      "sha256": "ba343397136fa6c50f577c5143bdc88ad56b6eed63eed904d9424368c988b29a",
+      "bytes": 13657
+    },
+    {
+      "path": "desk_gui_links.py",
+      "sha256": "d0012a1253c7146ccc25015cec1433edd72344fbbcfddbb77fb940194b246ad7",
+      "bytes": 7444
+    },
+    {
+      "path": "desk_http.py",
+      "sha256": "e71449fcd8be7738799cecba9bf1dc2373db9ea473074c016e1f939fa92d2e86",
+      "bytes": 23494
+    },
+    {
+      "path": "desk_imap.py",
+      "sha256": "eecc88c8d5a5592cb402a63178c0cc2abb3cc038171b21ba7876a4f79f861e82",
+      "bytes": 5559
+    },
+    {
+      "path": "desk_inbound.py",
+      "sha256": "68a57bc150bc0b5a380adee3f670a50cc55d8b5ae89854921fd5830e7ed30f89",
+      "bytes": 8509
+    },
+    {
+      "path": "desk_portal.py",
+      "sha256": "a92f5c681ccf5b4e77e4cc146d027c4a417d4515de9403e9550470392f52f57c",
+      "bytes": 21398
+    },
+    {
+      "path": "desk_push.py",
+      "sha256": "3bd908d56100a157a6da0ceff642d0791fc2383f0eac166fa87e77b78ebeabc9",
+      "bytes": 5990
+    },
+    {
+      "path": "desk_reports.py",
+      "sha256": "1957af24ddae6968b6957332853e3b19170c1e26d76b4107857bb2d3b259e5ee",
+      "bytes": 9684
+    },
+    {
+      "path": "desk_routing.py",
+      "sha256": "cb783e399ed20b047fcf1f1870f0f5808b265582efb3d9e16cfa5c0319b5f885",
+      "bytes": 12271
+    },
+    {
+      "path": "desk_rules.py",
+      "sha256": "852adca7ea1977ff097d16ccb1e6ab41bed9dc9e348838882b24b9914c00a17f",
+      "bytes": 17948
+    },
+    {
+      "path": "desk_scheduler.py",
+      "sha256": "458d18ca3fdc3db6e91280d248a32fc0c9127c9cb042a04792ccec647fd05306",
+      "bytes": 4818
+    },
+    {
+      "path": "desk_sla.py",
+      "sha256": "aac87e8c13d1578dbc05dd1e39243d90e4b16dcffecdc068b568300aae40c617",
+      "bytes": 7010
+    },
+    {
+      "path": "desk_tools.py",
+      "sha256": "4b77fbbe94f3882b46054b648e2c88890d323812f7236d72d5bcb2bd8591a1e0",
+      "bytes": 35413
+    },
+    {
+      "path": "desk/index.html",
+      "sha256": "3052879a77833df10be7382a7914d5bdc70f5c4a143cbdaba85acddc7ba3908d",
+      "bytes": 66062
+    },
+    {
+      "path": "desk/support.html",
+      "sha256": "f78186aa6ccebe279aa460891b8b0504f43bfe0169209c8904f8053d9e5a302b",
+      "bytes": 15659
+    },
+    {
+      "path": "desk/manifest.json",
+      "sha256": "57f278b9b9e5df3548dd569cd8f0f67f6afea6e849a727b848745df0ec15da1e",
+      "bytes": 592
+    },
+    {
+      "path": "desk/sw.js",
+      "sha256": "da776afc896a664076d382214edb7392193914dcf5f6cd98ed6c4c5a1579d60b",
+      "bytes": 2214
+    },
+    {
+      "path": "desk/icon-192.png",
+      "sha256": "b7eeae056947d15fd7a15b33450fc22573b83b20e5d220cb684a5bf4a0dce5ba",
+      "bytes": 78696
+    },
+    {
+      "path": "desk/icon-512.png",
+      "sha256": "d272bd001dee979426bbaabe167910ea17c603f3cbbd788cc59494ae96fab354",
+      "bytes": 365262
     }
   ]
 }
