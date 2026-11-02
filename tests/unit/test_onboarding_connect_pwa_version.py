@@ -352,20 +352,22 @@ def test_CA_07_desktop_connect_and_subscribe_use_the_app_hooks(host, monkeypatch
         assert hook in src
 
 
-# ══ Scheduled AI analyses: Claude Code CLI + Claude Pro ══════════════════════
+# ══ Scheduled AI analyses: an Agent API Key (2026-11-01 — no Claude CLI, no Claude Pro) ══════
 
 def test_AN_01_requirement_is_spelled_out():
-    t = sw.CLI_NEEDS_TEXT
-    assert "Claude Code CLI" in t and "Claude Pro" in t and "free Claude account can't" in t
+    t = sw.KEY_NEEDS_TEXT
+    assert "Agent API Key" in t and "pay-as-you-go" in t and "No paid Claude plan" in t
+    assert "Claude Code" not in t and "Claude Pro" not in t
     assert "Skip for now" in t
     label = dict((s[0], s[1]) for s in sw.SERVICES)["analyses"]
-    assert "needs Claude Pro" in label
-    assert "Claude Pro" in sw.BY_ID["links"].why
+    assert "API key" in label and "Claude Pro" not in label
+    assert "Agent API Key" in sw.BY_ID["links"].why and "Claude Code" not in sw.BY_ID["links"].why
 
 
-def _links(host, tmp_path, monkeypatch):
+def _links(host, tmp_path, monkeypatch, status=None):
     monkeypatch.setattr(sw, "email_configured", lambda: False)
-    monkeypatch.setattr(sw, "ai_routing_status", lambda: {"cli": False, "token": "no_credentials"})
+    monkeypatch.setattr(sw, "agent_key_status",
+                        lambda: status or {"claude": False, "grok": False, "provider": "claude", "ready": False})
     rendered = []
     panel = SimpleNamespace(frame=host, app=SimpleNamespace(),
                             progress=sw.Progress(path=tmp_path / "p.json"),
@@ -373,24 +375,21 @@ def _links(host, tmp_path, monkeypatch):
     return sw.LinksFlow(panel), panel
 
 
-@pytest.mark.parametrize("status, has, hasnt", [
-    ({"cli": False, "token": "no_credentials"}, "Install Claude Code CLI", "Sign in with Claude Pro"),
-    ({"cli": True, "token": "no_credentials"}, "Sign in with Claude Pro", "Install Claude Code CLI"),
-])
-def test_AN_02_offers_the_next_missing_step(host, tmp_path, monkeypatch, status, has, hasnt):
+def test_AN_02_no_key_says_so_and_offers_the_consoles(host, tmp_path, monkeypatch):
     f, _ = _links(host, tmp_path, monkeypatch)
-    f._show_cli_status(status)
+    f._check_cli()
     texts = " ".join(_texts(f.cli_fix))
-    assert has in texts and hasnt not in texts and "Get Claude Pro" in texts
-    assert f.cli_ready is False
+    assert "Get a Claude key" in texts and "Get a Grok key" in texts
+    assert "Install Claude Code" not in " ".join(_texts(f.win)) and "Sign in with Claude Pro" not in texts
+    assert f.cli_ready is False and "No Agent API Key" in f.cli_lbl.cget("text")
     f.win.destroy()
 
 
-def test_AN_03_ready_shows_green_and_no_buttons(host, tmp_path, monkeypatch):
-    f, _ = _links(host, tmp_path, monkeypatch)
-    f._show_cli_status({"cli": True, "token": "ok"})
-    assert f.cli_ready is True and f.cli_fix.winfo_children() == []
-    assert "signed in" in f.cli_lbl.cget("text")
+def test_AN_03_saved_key_shows_green(host, tmp_path, monkeypatch):
+    f, _ = _links(host, tmp_path, monkeypatch,
+                  status={"claude": True, "grok": False, "provider": "claude", "ready": True})
+    f._check_cli()
+    assert f.cli_ready is True and "Agent API Key saved (Claude)" in f.cli_lbl.cget("text")
     f.win.destroy()
 
 
@@ -402,15 +401,19 @@ def test_AN_04_skip_for_now(host, tmp_path, monkeypatch):
     assert not f.win.winfo_exists()
 
 
-def test_AN_05_sign_in_opens_the_token_window_only_after_ok(host, tmp_path, monkeypatch):
-    f, _ = _links(host, tmp_path, monkeypatch)
+def test_AN_05_save_key_stores_an_agent_key_and_points_the_queue_at_it(host, tmp_path, monkeypatch):
+    import desk_agent_providers as prov
     import task_queue_automation as tqa
-    opened = []
-    monkeypatch.setattr(tqa, "open_setup_token_terminal", lambda: opened.append(1) or (True, "opened"))
-    monkeypatch.setattr("tkinter.messagebox.askokcancel", lambda *a, **k: False)
-    f._sign_in()
-    assert opened == []
-    monkeypatch.setattr("tkinter.messagebox.askokcancel", lambda *a, **k: True)
-    f._sign_in()
-    assert opened == [1]
+    monkeypatch.setattr(tqa, "CONFIG_PATH", tmp_path / "tq.json")
+    monkeypatch.setattr(tqa, "AI_PROWLER_HOME", tmp_path)
+    f, _ = _links(host, tmp_path, monkeypatch)
+    f.key_provider.set("grok")
+    f.key_var.set("xai-test-key")
+    f._save_key()
+    assert prov.load_agent_key("grok") == "xai-test-key" and f.key_var.get() == ""
+    assert tqa.load_config()["provider"] == "grok"
+    f.key_provider.set("claude")
+    f.key_var.set("sk-ant-oat01-cli-token")                     # a CLI token is refused
+    f._save_key()
+    assert not prov.has_agent_key("anthropic")
     f.win.destroy()

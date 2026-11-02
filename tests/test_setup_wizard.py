@@ -1069,8 +1069,8 @@ def test_route_origin_ok(monkeypatch, mode, addr, home, ok):
 
 def _routes_flow(tkroot, tmp_path, monkeypatch, ai=None, home=""):
     monkeypatch.setattr(sw, "home_address", lambda: home)
-    monkeypatch.setattr(sw, "ai_routing_status",
-                        lambda: ai or {"cli": True, "token": "ok", "detail": ""})
+    monkeypatch.setattr(sw, "agent_key_status",
+                        lambda: ai or {"claude": True, "grok": False, "provider": "claude", "ready": True})
     panel, prog = _panel(tkroot, tmp_path, services=("routes",))
     return sw.RoutesFlow(panel), prog
 

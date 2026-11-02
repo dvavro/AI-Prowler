@@ -186,7 +186,8 @@ def test_file_holds_hashes_never_raw_tokens(path, clock):
 def test_file_is_written_safely(path, clock):
     assert OS.atomic_write_json.__module__ == "safe_save"
     _sign_in(restart(path, clock))
-    assert [p.name for p in path.parent.iterdir()] == [path.name]     # no temp files left
+    # no temp files left (folders are other fixtures' sandboxes, e.g. conftest's _tqa_cred_isolation)
+    assert [p.name for p in path.parent.iterdir() if p.is_file()] == [path.name]
 
 
 def test_registered_clients_survive_a_restart(path, clock):

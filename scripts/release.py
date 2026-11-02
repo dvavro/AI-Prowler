@@ -610,6 +610,7 @@ MANIFEST_FILES = [
     # were added to AI-Prowler-Setup.iss's [Files] section but initially
     # missed here too. Caught before a release shipped, this time.
     "task_queue_automation.py",
+    "task_queue_gui.py",            # 2026-11-01: the API-key-only Task Queue panel
     ".claude/settings.json",
     ".claude/hooks/log_tool_call.py",
     ".claude/skills/ai-prowler-tasks/SKILL.md",
@@ -696,6 +697,15 @@ MANIFEST_FILES = [
     "hr_portal/docs/*.pdf",
     # v9.6.0 Service Desk — mirrors the .iss "desk_*.py" and desk\ lines.
     "desk_*.py",
+    # 2026-10-29: the "request service" link on invoices/receipts. The four send
+    # tools import it inside try/except, so without it the link silently never shows.
+    "service_link.py",
+    # 2026-10-30: service booking (booking-spec.md) — engine + Jobs-database layer.
+    "booking_slots.py",
+    "booking_db.py",
+    "booking_flow.py",
+    "booking_calendar.py",
+    "booking_followup.py",
     "desk/index.html",
     "desk/support.html",
     "desk/manifest.json",

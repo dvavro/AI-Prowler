@@ -1,11 +1,11 @@
 {
-  "version": "9.6.0",
-  "generated": "2026-10-28T20:49:56",
+  "version": "9.7.0",
+  "generated": "2026-11-02T16:56:46",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "0083ba065067e2cec340f4927150cc414fcb245dc2243eb76e42afc4a04cccfe",
-      "bytes": 1504382
+      "sha256": "918a9884fd36faa825764c9a16dce0eb6257addb7ae210f70700d26cf191e26f",
+      "bytes": 1343408
     },
     {
       "path": "rag_preprocessor.py",
@@ -14,8 +14,8 @@
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "d90480fa70fe2a1b7dace9f4221e781e236e0fe97dc5dedbd53154e985253248",
-      "bytes": 1843758
+      "sha256": "b6d1101ca289ce0e1722881a507f34a4d88637fb113ea75049f0b9146f77c40d",
+      "bytes": 1877240
     },
     {
       "path": "mcp_diagnostics.py",
@@ -24,8 +24,8 @@
     },
     {
       "path": "mcp_tool_catalog.py",
-      "sha256": "e304d5e331d578353f93087ba65222831964c81ff353b6ab595240768b625c94",
-      "bytes": 58660
+      "sha256": "31da71a9bf4eb47cd05c53e1ada62ba34f1065fd1f9b18a987431fc8437ed5e4",
+      "bytes": 61684
     },
     {
       "path": "tool_config_store.py",
@@ -69,12 +69,12 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "7e68974e97c2c7be737f2d9dd38ae8ef1c3a7f865567827939c307c64123d845",
-      "bytes": 328116
+      "sha256": "21e0e903de57eecef3cdede4c4a8e5beb9ec7692adaa4623e532f71e20bf9520",
+      "bytes": 352292
     },
     {
       "path": "VERSION",
-      "sha256": "8545ee9c098c6187c85a863b827ac41577f6a27b09745b0eaa600f532d5a1ea2",
+      "sha256": "ef783f7660505d903f4bc434fa7ef35627413a9981078f600a2814d3cba7ef25",
       "bytes": 6
     },
     {
@@ -129,23 +129,28 @@
     },
     {
       "path": "custom_tasks_manager.py",
-      "sha256": "a069a2334828236683e6c4e8d5bfef2d5250089274c69fe598dc394cc918cab1",
-      "bytes": 53541
+      "sha256": "11aefdb534cc47e415867b0b430c305fa8685b0da68b0c61af68a0e75980bbb1",
+      "bytes": 66826
     },
     {
       "path": "scheduler_jobs.py",
-      "sha256": "4aa177dec0490c66a812f0c2a84a7a9a12510d30de81377cfba2658277c94425",
-      "bytes": 22121
+      "sha256": "71653425dcf546e952fd4ea83ec9b81c0ac8ec0f2f84054761d18908dbac929e",
+      "bytes": 68567
     },
     {
       "path": "scheduler_engine.py",
-      "sha256": "e9e8610c2fa163b288faaac2c72a8f5fe36c2a30e9e0d8e0a50e381f496b898d",
-      "bytes": 17612
+      "sha256": "cf30c34cc45ec355ff3eefed03cd86eb2e4a883d91bf096e5d70c4d40f91ad26",
+      "bytes": 31136
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "315200e3f3a578767bcd25586c797931f7535dca13af6a25e8a9ce0b00d94eba",
-      "bytes": 179447
+      "sha256": "3c9ba44138999fe277a1a1fe4367d1987a17350c5f5818d70d07c8d75b2cf641",
+      "bytes": 57066
+    },
+    {
+      "path": "task_queue_gui.py",
+      "sha256": "56723391e26353b0d87395e9c47347fc73dc68aab9c21f7871c0720f0e1cc052",
+      "bytes": 49093
     },
     {
       "path": ".claude/settings.json",
@@ -174,18 +179,18 @@
     },
     {
       "path": "db_schema.py",
-      "sha256": "490cd34a16b6f66f2ad696b2f6bd279717b8754e2050187ecb40385417fc3c32",
-      "bytes": 50205
+      "sha256": "fe387defd416b98c6cee9a5b3dee211dc3f5107f021a5e4115f19a6e227eeda8",
+      "bytes": 57212
     },
     {
       "path": "db_read_ops.py",
-      "sha256": "1b6c199a7b6f2e9e315a015d406dad08a05d4b5b95b6990ff1f2639a911b0dfe",
-      "bytes": 40259
+      "sha256": "8738a590ed001910c63bde1bc0ef51bce08ec5df098d00321994926959fab115",
+      "bytes": 40443
     },
     {
       "path": "db_write_ops.py",
-      "sha256": "2099d63224e0f94266a7ffa3a03435c81012b011f2f70c530fbdf184f3252825",
-      "bytes": 231870
+      "sha256": "7a82730e59d30fee26f7f6ec74fb420f1761216e8e3988e0ce2b630123b3b6dd",
+      "bytes": 237407
     },
     {
       "path": "db_route_ops.py",
@@ -219,8 +224,8 @@
     },
     {
       "path": "jobs/index.html",
-      "sha256": "0069b4ca66e357105bf604cec9c3539d49e80798241e77d84f6c583a85619c2b",
-      "bytes": 1111207
+      "sha256": "058aff967a2ef5162a409d143a5650ec8e39aa5d546ae636834bdd1f465b9437",
+      "bytes": 1134751
     },
     {
       "path": "jobs/manifest.json",
@@ -249,8 +254,8 @@
     },
     {
       "path": "remote/index.html",
-      "sha256": "884ff24237fde63a36733f569f041b84464607f6d85ff76aafcb9b922e8a7cea",
-      "bytes": 137856
+      "sha256": "4815eb0edd49b468257e59ffb58c385d343c489db9f51d3de7f1e07d69053f32",
+      "bytes": 136940
     },
     {
       "path": "remote/manifest.json",
@@ -274,8 +279,8 @@
     },
     {
       "path": "setup_wizard.py",
-      "sha256": "c303139773021153ad73bc36188a5419170d1054ddc44b849958c77fbe979045",
-      "bytes": 157969
+      "sha256": "244257a3b12d518ae7568a5ad08893ccceaea28db0f9fbc0fa05a678cdfb85ef",
+      "bytes": 156917
     },
     {
       "path": "startup_log.py",
@@ -304,8 +309,8 @@
     },
     {
       "path": "hr_admin/index.html",
-      "sha256": "03cd22ecfbb34a52a8f6dbc50559f5eaa28a5f7793021d9920da030191de5c92",
-      "bytes": 925324
+      "sha256": "25fabe15eb78158657090fa0413ec88f8752c55f259eae0a31d1d8f60c28a60e",
+      "bytes": 943390
     },
     {
       "path": "hr_admin/manifest.json",
@@ -329,8 +334,8 @@
     },
     {
       "path": "hr_portal/index.html",
-      "sha256": "f3c7fa0b47f2cc9fdd284ef73799af80e82770c6f0d27dd703de5ac305bd9e4b",
-      "bytes": 594840
+      "sha256": "0a0459a9df2cdb3962fa254e7c917e9d5fbcb7ab56580fe80a85c99db41b3596",
+      "bytes": 600101
     },
     {
       "path": "hr_portal/employee_manifest.json",
@@ -453,6 +458,41 @@
       "bytes": 28155
     },
     {
+      "path": "desk_agent.py",
+      "sha256": "f68d225d891237b349fe18fb6d174de59b7fab38ef399a03930fdbe3dca9a5db",
+      "bytes": 72005
+    },
+    {
+      "path": "desk_agent_budget.py",
+      "sha256": "fbc84d444e960d918a25f9e90b205280870fa1fdf1cb80601521e7207baadbf3",
+      "bytes": 24943
+    },
+    {
+      "path": "desk_agent_evidence.py",
+      "sha256": "1a744009e36bacd0afebdcb475f41dff3b1878c59943637c2a1f294e3fc867fc",
+      "bytes": 5859
+    },
+    {
+      "path": "desk_agent_hr_store.py",
+      "sha256": "52f237606c1f36141595770b9d691f947ff749967754e6e259f52c257a69dda2",
+      "bytes": 5043
+    },
+    {
+      "path": "desk_agent_providers.py",
+      "sha256": "97052678144b344305a813c327e2604a13cac82cc404dfe4047c600aacf146db",
+      "bytes": 17323
+    },
+    {
+      "path": "desk_agent_settings.py",
+      "sha256": "d30c2537621c3c37772900b14ff527eeafb003f7b34f21cc7e86868027f32ace",
+      "bytes": 61273
+    },
+    {
+      "path": "desk_agent_store.py",
+      "sha256": "5a56561c9aa05d6b979f83956dbe8691e233292f62e19133c4b3bad616c7279b",
+      "bytes": 4413
+    },
+    {
       "path": "desk_ai.py",
       "sha256": "6e33bdbf3e898fdcd89ba25b49194efff0744637e0d7d1e0aaae56d65ab800b4",
       "bytes": 21457
@@ -469,8 +509,8 @@
     },
     {
       "path": "desk_backup.py",
-      "sha256": "6676f4b805c108ddd39cb98739f1428fe54a17dcb40a10ba34d81305f38cd73a",
-      "bytes": 9910
+      "sha256": "271c79ffbf602664a796bf19266e458a7d668b358a701c49e9041cc9359a65e3",
+      "bytes": 14209
     },
     {
       "path": "desk_data.py",
@@ -479,8 +519,13 @@
     },
     {
       "path": "desk_db.py",
-      "sha256": "849aff356df3cd6b67194ebba9508f2780cdac5cde19f002ec0a9430a9c4021c",
-      "bytes": 50437
+      "sha256": "d320cf7f5d4e0716d632a081035b4939d0eba0f542c22cf1c5cbbb1efb84763a",
+      "bytes": 60505
+    },
+    {
+      "path": "desk_embed.py",
+      "sha256": "acc2164794ec480d03aabad5e245ba9e2b5154f58cf01a4df1bbd7da5509508e",
+      "bytes": 2444
     },
     {
       "path": "desk_files.py",
@@ -488,14 +533,29 @@
       "bytes": 13657
     },
     {
+      "path": "desk_gui_agent.py",
+      "sha256": "47a9c333857b6309659842db3e92c93e89d8bdc6140f7cb2d049f9b5c3a8862d",
+      "bytes": 88035
+    },
+    {
       "path": "desk_gui_links.py",
       "sha256": "d0012a1253c7146ccc25015cec1433edd72344fbbcfddbb77fb940194b246ad7",
       "bytes": 7444
     },
     {
+      "path": "desk_gui_settings.py",
+      "sha256": "759a475cfd11540d72070d6de00b856f2b58e61e6b3cc7a2dcca4d7463eaeb9f",
+      "bytes": 98368
+    },
+    {
+      "path": "desk_hr_agent.py",
+      "sha256": "27969fdfbadbb98d8363f2e8c815edd8ac5bbd0ac3b2adf64503318e20276097",
+      "bytes": 39980
+    },
+    {
       "path": "desk_http.py",
-      "sha256": "e71449fcd8be7738799cecba9bf1dc2373db9ea473074c016e1f939fa92d2e86",
-      "bytes": 23494
+      "sha256": "6830a437a0bc9f56cb5a86b5da75489a0910ec0c8cecd29246448a9134a55273",
+      "bytes": 38515
     },
     {
       "path": "desk_imap.py",
@@ -508,9 +568,24 @@
       "bytes": 8509
     },
     {
+      "path": "desk_jobs_agent.py",
+      "sha256": "81a7565cd4419abe542088d180195ab8dd59d1bc5dbf6aa5f61b8a2c4be45b30",
+      "bytes": 59392
+    },
+    {
+      "path": "desk_page_look.py",
+      "sha256": "65e73bfd004f47005f876c0d1628ea5f89fb1a272b5ca8acd0cbfbe4a1c19247",
+      "bytes": 9473
+    },
+    {
       "path": "desk_portal.py",
-      "sha256": "a92f5c681ccf5b4e77e4cc146d027c4a417d4515de9403e9550470392f52f57c",
-      "bytes": 21398
+      "sha256": "3c139a71c40245bc8a921ed0903f13272e5c90d2176f0ef463981e0041697024",
+      "bytes": 50036
+    },
+    {
+      "path": "desk_product_media.py",
+      "sha256": "bce289c9bcfae975719479465820024f39f3fbe9d7bf90c7ab45fabd87929069",
+      "bytes": 3634
     },
     {
       "path": "desk_push.py",
@@ -529,13 +604,13 @@
     },
     {
       "path": "desk_rules.py",
-      "sha256": "852adca7ea1977ff097d16ccb1e6ab41bed9dc9e348838882b24b9914c00a17f",
-      "bytes": 17948
+      "sha256": "08458b368771243f13f72cbfdc511d5e5df0ac25406629c90c73cbebea23ef96",
+      "bytes": 19265
     },
     {
       "path": "desk_scheduler.py",
-      "sha256": "458d18ca3fdc3db6e91280d248a32fc0c9127c9cb042a04792ccec647fd05306",
-      "bytes": 4818
+      "sha256": "0026b45e514c875d79d55673c2eee64341fd63dc5216f50c57cb404b34c270f6",
+      "bytes": 17439
     },
     {
       "path": "desk_sla.py",
@@ -543,19 +618,54 @@
       "bytes": 7010
     },
     {
+      "path": "desk_staff_booking.py",
+      "sha256": "bf17c0a68e2fa8f5866d35f342c0e945e14012401845deb7c9746f03bf7e572b",
+      "bytes": 17423
+    },
+    {
       "path": "desk_tools.py",
-      "sha256": "4b77fbbe94f3882b46054b648e2c88890d323812f7236d72d5bcb2bd8591a1e0",
-      "bytes": 35413
+      "sha256": "ae3ecb978e43bb09ac04a21b3cbb516d3bbaacdf496ce9969454838cb93a79c7",
+      "bytes": 77241
+    },
+    {
+      "path": "service_link.py",
+      "sha256": "bc9b34c0e52d79c36eaf96a492dcfaaf44b4b59ba892f37cc3bfb8b9d76363bc",
+      "bytes": 5176
+    },
+    {
+      "path": "booking_slots.py",
+      "sha256": "3d03772d2ead7917e1a8cedf7708d83c8616c277c92c48e257323e67ef6e29c6",
+      "bytes": 15042
+    },
+    {
+      "path": "booking_db.py",
+      "sha256": "1cd2dccc028771be6ae9689a78b0d05ae5be9b5d4a61ef7f3c150668e4b07ad6",
+      "bytes": 44733
+    },
+    {
+      "path": "booking_flow.py",
+      "sha256": "463fcb16f21a876962a516c10cd0ed9ff5db9203f192585969966ce1806377a3",
+      "bytes": 48254
+    },
+    {
+      "path": "booking_calendar.py",
+      "sha256": "e0b95f588ba9703825dbfdb2f3f9ec79f3040d5756090a695d032524c66010ff",
+      "bytes": 20869
+    },
+    {
+      "path": "booking_followup.py",
+      "sha256": "d93ef332498d8584e773117a6245b1ba8ccfea748dfe374c553a4bce5acf1d45",
+      "bytes": 20454
     },
     {
       "path": "desk/index.html",
-      "sha256": "3052879a77833df10be7382a7914d5bdc70f5c4a143cbdaba85acddc7ba3908d",
-      "bytes": 66062
+      "sha256": "65f1ab0a633e578f499ac1b1330220fbc1f14b9e3eec8cf692725a04262f0231",
+      "bytes": 141280
     },
     {
       "path": "desk/support.html",
-      "sha256": "f78186aa6ccebe279aa460891b8b0504f43bfe0169209c8904f8053d9e5a302b",
-      "bytes": 15659
+      "sha256": "678c07eb8bcd3bec722c6eb4ae65e0719ed2b9f29d2541385a22ce543f004a44",
+      "bytes": 45466
     },
     {
       "path": "desk/manifest.json",

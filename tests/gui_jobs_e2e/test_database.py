@@ -172,6 +172,11 @@ def test_DB_01_every_tab_opens_with_its_own_controls(db, app):
     _tab(app, page, "Settings")
     expect(page.locator("#sheetContent")).to_contain_text("Business Settings")
     expect(page.locator("#sheetContent")).to_contain_text("Required For Invoicing")
+    # (2026-10-29) the "request service" link on invoices/receipts — its own section;
+    # unset Yes/No rows read "Yes (default)", not the amber "Not set"
+    expect(page.locator("#sheetContent")).to_contain_text("Service Request Link (Invoices & Receipts)")
+    expect(page.locator("#sheetContent")).to_contain_text("Service Link - Text Receipt")
+    expect(page.locator("#sheetContent")).to_contain_text("Yes (default)")
     _tab(app, page, "AI-Prowler-Commands")
     expect(page.locator("#sheetContent")).to_contain_text("Add a service price")
 

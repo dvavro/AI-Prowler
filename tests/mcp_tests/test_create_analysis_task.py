@@ -37,15 +37,21 @@ def mcp_mod():
 
 class TestTierASuppression:
 
-    def test_create_analysis_task_is_tier_a_suppressed(self, mcp_mod):
-        """Must be blocked in server mode, matching its 3 siblings — this
-        whole feature is a personal-install-only GUI-backed capability."""
-        assert "create_analysis_task" in mcp_mod._TIER_A_SUPPRESSED
+    def test_create_analysis_task_is_offered_on_a_server_for_owner_and_managers(self, mcp_mod):
+        """2026-11-02 (David): AI Analysis Tasks on the server for the owner and managers — the tool is
+        no longer hidden there; it refuses staff and field crew itself (_task_tools_denied). The
+        chat-run tools stay hidden (no chat runner on a server)."""
+        assert "create_analysis_task" not in mcp_mod._TIER_A_SUPPRESSED
+        assert "get_pending_analysis_tasks" in mcp_mod._TIER_A_SUPPRESSED
 
     def test_grouped_with_its_siblings(self, mcp_mod):
-        family = {"get_pending_analysis_tasks", "complete_analysis_task",
-                 "save_analysis_report", "create_analysis_task"}
-        assert family.issubset(mcp_mod._TIER_A_SUPPRESSED)
+        # 2026-11-02: the task-managing tools are on a server too; the chat-run ones stay hidden there
+        offered = {"save_analysis_report", "create_analysis_task", "list_analysis_tasks",
+                   "update_analysis_task", "delete_analysis_task"}
+        hidden = {"get_pending_analysis_tasks", "complete_analysis_task", "queue_single_task",
+                  "get_all_queued_tasks"}
+        assert not (offered & mcp_mod._TIER_A_SUPPRESSED)
+        assert hidden.issubset(mcp_mod._TIER_A_SUPPRESSED)
 
 
 class TestSuccessfulCreation:

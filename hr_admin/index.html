@@ -1476,6 +1476,7 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
         <button class="sidebar-item" data-tab="incidents"   onclick="navTo('incidents',this)"><span class="si-icon">🚨</span> Incident Reports<span class="si-badge hidden" id="sb-badge-incidents"></span><span class="tab-alert-dot" id="tab-dot-incidents"></span></button>
         <button class="sidebar-item" data-tab="schedule"    onclick="navTo('schedule',this)"><span class="si-icon">📅</span> Schedule<span class="si-badge hidden" id="sb-badge-schedule"></span></button>
         <div class="sidebar-section">Admin</div>
+        <button class="sidebar-item" data-tab="agent"       onclick="navTo('agent',this)"><span class="si-icon">🤖</span> Agent<span class="si-badge hidden" id="sb-badge-agent"></span></button>
         <button class="sidebar-item" data-tab="reports"     onclick="navTo('reports',this)"><span class="si-icon">📊</span> Reports</button>
         <button class="sidebar-item" data-tab="offboarding" onclick="navTo('offboarding',this)"><span class="si-icon">🚪</span> Offboarding</button>
         <button class="sidebar-item" data-tab="terminations" onclick="navTo('terminations',this)"><span class="si-icon">📋</span> Termination Records</button>
@@ -2249,6 +2250,20 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
         <div id="offboarding-body" style="padding:16px"><div class="loading-spinner"><div class="spinner"></div></div></div>
       </div>
 
+      <!-- ── 🤖 Agent Tab — the HR agent (2026-10-31, hr-agent-spec.md H3) ─────── -->
+      <div id="tab-agent" class="tab-pane" style="display:none">
+        <div class="tab-header"><h2>🤖 HR agent</h2></div>
+        <div style="padding:0 16px 24px">
+          <div id="hrag-status" data-testid="hrag-status" style="margin:8px 0 12px">Loading…</div>
+          <h3 style="font-size:15px;margin:12px 0 6px">Waiting for your OK</h3>
+          <div id="hrag-pending"></div>
+          <h3 id="hrag-practice-head" style="font-size:15px;margin:16px 0 6px;display:none">🟣 Practice mode — what it would have done</h3>
+          <div id="hrag-practice"></div>
+          <h3 style="font-size:15px;margin:20px 0 6px">⚙ Settings</h3>
+          <div id="hrag-settings"></div>
+        </div>
+      </div>
+
       <!-- ── Termination Records Tab — dedicated, company-wide view ─────────── -->
       <div id="tab-terminations" class="tab-pane" style="display:none">
         <div class="tab-header">
@@ -2993,7 +3008,7 @@ function switchTab(tabName, _btn) {
       settings:'Settings', payroll:'Payroll', recruiting:'Recruiting',
       onboarding:'Onboarding', timeoff:'Scheduled Task', benefits:'Benefits',
       performance:'Performance', compliance:'Compliance', locations:'Job Locations',
-      reports:'Reports', offboarding:'Offboarding', terminations:'Termination Records'
+      reports:'Reports', offboarding:'Offboarding', terminations:'Termination Records', agent:'HR agent'
   };
   document.getElementById('top-bar-title-text').textContent = titles[tabName] || 'AI-Prowler HR Admin';
   document.getElementById('btn-add-emp').style.display = tabName === 'employees' ? '' : 'none';
@@ -3030,6 +3045,7 @@ function switchTab(tabName, _btn) {
     if (tabName === 'training')    renderTrainingPortfolios();
     if (tabName === 'offboarding') loadOffboardingTab();
   if (tabName === 'terminations') loadTerminationsTab();
+  if (tabName === 'agent')        loadHrAgent();
 }
 
 // ── Global refresh button (top bar, top right) — reloads whatever tab is
@@ -3061,9 +3077,183 @@ function refreshCurrentTab() {
     case 'training':     loadTraining(); renderTrainingPortfolios(); break;
     case 'offboarding':  loadOffboardingTab(); break;
     case 'terminations': loadTerminationsTab(); break;
+    case 'agent':        loadHrAgent(); break;
     default:             loadEmployees();
   }
   showToast('Refreshed.');
+}
+
+// ── 🤖 Agent Tab — the HR agent (2026-10-31, hr-agent-spec.md H3) ───────────
+// Everything is decided server-side (desk_hr_agent.py through /hr-api/agent…). This screen shows
+// what it suggested, lets HR approve / edit / reject it, and shows its settings and diagram.
+var HRAG = { data: null };
+var HRAG_STAGE = { recruit: 'Recruiting', onboard: 'Onboarding', timeoff: 'Time off', timeclock: 'Timeclock',
+  compliance: 'Compliance', answer: 'Questions', incidents: 'Incidents', offboard: 'Offboarding', learn: 'Learn' };
+function _hragErr(e) { return (e && (e.serverError || e.serverMessage)) || (e && e.message) || 'Something went wrong.'; }
+
+function _hragDetail(p) {
+  var x = p.payload || {}, out = [];
+  if (x.flag) out.push(String(x.flag).replace(/_/g, ' '));
+  if (x.choice) out.push('recommends: ' + x.choice);
+  if (x.title) out.push(x.title);
+  if (x.due) out.push('due ' + x.due);
+  if (x.to_role) out.push('to ' + x.to_role);
+  return out.join(' · ');
+}
+
+function _hragCard(p, practice) {
+  var text = (p.payload && p.payload.body) || '';
+  var act = escapeHtml(String(p.action || '').replace(/^hr_/, '').replace(/_/g, ' '));
+  var btns = practice
+    ? '<button class="btn-secondary" data-hrag="up">👍 Good</button> <button class="btn-secondary" data-hrag="down">👎 Not right</button>' +
+      (p.feedback ? ' <span style="font-size:12px;opacity:.7">you said ' + (p.feedback === 'up' ? '👍' : '👎') + '</span>' : '')
+    : '<button class="btn-primary" data-hrag="approve">✅ Approve</button> ' +
+      (text ? '<button class="btn-secondary" data-hrag="edit">✏️ Edit</button> ' : '') +
+      '<button class="btn-secondary" style="color:#dc2626" data-hrag="reject">✖ Reject</button>';
+  return '<div data-pid="' + escapeHtml(p.proposal_id) + '" data-testid="hrag-card" style="border:1px solid rgba(128,128,128,.35);border-radius:10px;padding:10px 12px;margin-bottom:8px">' +
+    '<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><b>👥 ' + escapeHtml(p.ref) + ' — ' +
+    escapeHtml(HRAG_STAGE[p.stage] || p.stage) + '</b><span style="font-size:12px;border:1px solid rgba(128,128,128,.6);border-radius:10px;padding:1px 8px">' + act + '</span></div>' +
+    (_hragDetail(p) ? '<div style="font-size:13px;opacity:.75">' + escapeHtml(_hragDetail(p)) + '</div>' : '') +
+    (text ? '<div style="white-space:pre-wrap;margin:6px 0;padding:6px 8px;border-left:3px solid rgba(128,128,128,.6)">' + escapeHtml(text) + '</div>' : '') +
+    '<div style="font-size:13px;opacity:.75">Why: ' + escapeHtml(p.why || '—') +
+    (p.confidence != null ? ' · ' + Math.round(p.confidence * 100) + '% sure' : '') +
+    (p.hold_reason && !practice ? ' · waiting because ' + escapeHtml(p.hold_reason) : '') + '</div>' +
+    '<div style="margin-top:8px">' + btns + '</div><p class="hrag-err" style="color:#dc2626;margin:6px 0 0;font-size:13px"></p></div>';
+}
+
+async function loadHrAgent() {
+  var box = document.getElementById('hrag-status');
+  var st, pend, prac;
+  try {
+    st = await apiGet('/agent/status'); pend = await apiGet('/agent/pending'); prac = await apiGet('/agent/practice');
+  } catch (e) { box.textContent = 'The HR agent isn\'t available: ' + _hragErr(e); return; }
+  HRAG.data = { st: st, pending: pend.items || [], practice: prac.items || [] };
+  var runs = st.runner_note ? '⚠ ' + escapeHtml(st.runner_note)
+    : 'Runs on its own (' + escapeHtml(st.provider) + ') · $' + Number(st.spent_usd || 0).toFixed(2) + ' of $' +
+      Number(st.budget_usd || 0).toFixed(0) + ' this month (shared with the other agents)';
+  box.innerHTML = '<b>' + (st.enabled ? (st.practice ? '🟣 HR agent on — practice mode' : '🟢 HR agent on') : '⚪ HR agent off') +
+    '</b> · ' + (st.waiting || 0) + ' waiting in its queue · ' + (st.pending || 0) + ' for your OK' +
+    '<div style="font-size:13px;opacity:.75;margin-top:4px">' + runs + '</div>' +
+    '<div style="font-size:12px;opacity:.65;margin-top:4px">People make every decision about a person. The agent never hires, rejects, disciplines, ' +
+    'terminates, changes pay or balances, edits time, verifies documents or deletes anything — and private details (ID numbers, birth date, ' +
+    'address, phone, pay, bank, medical notes) are never sent to the AI.</div>' +
+    '<button class="btn-secondary" style="margin-top:8px" id="hrag-run">▶ Run now</button>';
+  document.getElementById('hrag-run').onclick = async function () {
+    this.disabled = true;
+    try { var o = await apiPost('/agent/run-now', {}); showToast(o.started ? 'Started — refresh in a minute.' : o.why); }
+    catch (e) { showToast(_hragErr(e), 'error'); } finally { this.disabled = false; }
+  };
+  var badge = document.getElementById('sb-badge-agent');
+  if (badge) { badge.textContent = st.pending || ''; badge.classList.toggle('hidden', !(st.enabled && st.pending)); }
+  _hragDraw();
+  _hragSettings();
+}
+
+function _hragDraw() {
+  var d = HRAG.data; if (!d) return;
+  document.getElementById('hrag-pending').innerHTML = d.pending.length ? d.pending.map(function (p) { return _hragCard(p, false); }).join('')
+    : '<div style="opacity:.7">Nothing waiting.</div>';
+  document.getElementById('hrag-practice-head').style.display = d.practice.length ? '' : 'none';
+  document.getElementById('hrag-practice').innerHTML = d.practice.map(function (p) { return _hragCard(p, true); }).join('');
+  document.querySelectorAll('#tab-agent [data-pid]').forEach(function (c) {
+    c.querySelectorAll('[data-hrag]').forEach(function (b) {
+      b.onclick = async function () {
+        var p = d.pending.concat(d.practice).filter(function (x) { return String(x.proposal_id) === c.dataset.pid; })[0];
+        var what = b.dataset.hrag, body = {};
+        if (what === 'edit') {
+          var t = prompt('Edit the text, then OK to approve it:', (p.payload && p.payload.body) || '');
+          if (t === null) return;
+          body.edits = { body: t };
+        }
+        b.disabled = true;
+        try {
+          var out = await apiPost('/agent/proposals/' + encodeURIComponent(p.proposal_id) + '/' + what, body);
+          showToast(what === 'reject' ? 'Rejected.' : (what === 'up' || what === 'down') ? 'Thanks — noted.' : 'Done: ' + (out.result || 'applied'));
+          loadHrAgent();
+        } catch (e) { c.querySelector('.hrag-err').textContent = _hragErr(e); b.disabled = false; }
+      };
+    });
+  });
+}
+
+// The diagram: the same drawing as Service Desk's renderAgentFlow and the Jobs app's _agFlow.
+function _hragFlow(f, id) {
+  var box = document.getElementById(id); if (!box || !f) return;
+  var PURPLE = '#7c3aed', esc = escapeHtml, arrow = function (c) { return 'url(#' + id + 'Arr' + c.replace('#', '') + ')'; };
+  var colors = f.edges.map(function (e) { return e.color; }).filter(function (c, i, a) { return a.indexOf(c) === i; });
+  var defs = colors.map(function (c) { return '<marker id="' + id + 'Arr' + c.replace('#', '') + '" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="' + c + '"/></marker>'; }).join('');
+  var edges = f.edges.map(function (e) { return '<line x1="' + e.x1 + '" y1="' + e.y1 + '" x2="' + e.x2 + '" y2="' + e.y2 + '" stroke="' + e.color + '" stroke-width="' + (e.kind === 'step' && !e.dash ? 2.5 : 1.5) + '" ' + (e.dash ? 'stroke-dasharray="4 3" ' : '') + 'marker-end="' + arrow(e.color) + '"' + (e.both ? ' marker-start="' + arrow(e.color) + '"' : '') + '/>'; }).join('');
+  var states = f.states.map(function (s) { return '<g><title>' + esc(s.label) + '</title><rect x="' + s.x + '" y="' + s.y + '" width="' + s.w + '" height="' + s.h + '" rx="16" fill="' + s.color + '" fill-opacity="' + (s.lit ? 0.22 : 0) + '" stroke="' + s.color + '" stroke-width="' + (s.lit ? 2.5 : 1) + '"/><text x="' + (s.x + s.w / 2) + '" y="' + (s.y + s.h / 2 + 4) + '" text-anchor="middle" font-size="12" font-weight="' + (s.lit ? 700 : 400) + '" fill="currentColor">' + esc(s.label) + '</text></g>'; }).join('');
+  var steps = f.steps.map(function (p) {
+    var dim = p.mode === 'off' || p.mode === 'inactive';
+    var ring = p.practice ? '<rect x="' + (p.x - 4) + '" y="' + (p.y - 4) + '" width="' + (p.w + 8) + '" height="' + (p.h + 8) + '" rx="11" fill="none" stroke="' + PURPLE + '" stroke-width="1.5" stroke-dasharray="5 3"/>' : '';
+    return '<g style="cursor:help"><title>' + esc(p.label + ' — ' + p.word + (p.practice ? ' (practice mode: shows only)' : '') + '\n\n' + p.help) + '</title>' + ring +
+      '<rect x="' + p.x + '" y="' + p.y + '" width="' + p.w + '" height="' + p.h + '" rx="8" fill="' + p.color + '" fill-opacity="' + (dim ? 0.06 : 0.2) + '" stroke="' + p.color + '" stroke-width="' + (p.mode === 'off' ? 1 : dim ? 1.5 : 2.5) + '"' + (dim ? ' stroke-dasharray="4 3"' : '') + '/>' +
+      '<text x="' + (p.x + p.w / 2) + '" y="' + (p.y + 17) + '" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor">' + esc(p.label) + '</text>' +
+      '<text x="' + (p.x + p.w / 2) + '" y="' + (p.y + 32) + '" text-anchor="middle" font-size="11" font-weight="600" fill="' + p.color + '">' + esc(p.word) + '</text>' +
+      (p.practice ? '<text x="' + (p.x + p.w / 2) + '" y="' + (p.y + 46) + '" text-anchor="middle" font-size="10" font-style="italic" fill="currentColor">practice</text>' : '') + '</g>';
+  }).join('');
+  box.innerHTML = '<div style="font-size:12px;opacity:.75;margin-bottom:4px">How an employee moves — the top and bottom boxes are the agent\'s steps (hover for details)</div>' +
+    '<svg viewBox="-6 -6 ' + (f.w + 12) + ' ' + (f.h + 12) + '" style="width:100%;height:auto;display:block"><defs>' + defs + '</defs>' + edges + states + steps + '</svg>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:10px;font-size:12px;margin:6px 0">' + f.legend.map(function (l) {
+      return '<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;' + (l[0] === 'practice' ? 'border:1.5px dashed ' + l[1] : 'background:' + l[1]) + ';margin-right:4px"></span>' + esc(l[2]) + '</span>'; }).join('') + '</div>' +
+    '<p style="font-size:13px;margin:0">' + esc(f.summary) + '</p>';
+}
+
+async function _hragSettings() {
+  var box = document.getElementById('hrag-settings'), r;
+  try { r = await apiGet('/agent/settings'); } catch (e) { box.textContent = _hragErr(e); return; }
+  var s = r.settings, O = r.options, can = r.can_change_settings, dis = can ? '' : ' disabled', esc = escapeHtml;
+  var modes = [['off', 'Off'], ['suggest', 'Suggest (a person approves)'], ['auto', 'Auto']];
+  var small = function (t) { return '<p style="font-size:12px;opacity:.7;margin:0 0 2px">' + esc(t || '') + '</p>'; };
+  var sel = function (key, opts) {
+    return '<select data-hrk="' + key + '"' + dis + ' style="width:100%;margin:2px 0 8px">' + opts.map(function (m) {
+      return '<option value="' + esc(m[0]) + '"' + (s[key] === m[0] ? ' selected' : '') + '>' + esc(m[1]) + '</option>'; }).join('') + '</select>';
+  };
+  var tog = function (key, label, help) {
+    return '<label style="display:flex;gap:8px;align-items:center;margin:6px 0" title="' + esc(help || '') + '"><input type="checkbox" data-hrk="' + key + '"' +
+      (s[key] ? ' checked' : '') + dis + '> ' + esc(label) + '</label>';
+  };
+  var num = function (id, label, val, lo, hi) {
+    return '<label style="flex:1;font-size:13px">' + esc(label) + '<input id="' + id + '" type="number" min="' + lo + '" max="' + hi + '" value="' + esc(val) + '"' + dis + ' style="width:100%"></label>';
+  };
+  box.innerHTML = (can ? '' : '<p style="font-size:13px;opacity:.75">On an AI-Prowler Server these are changed at the server PC (AI-Prowler → 🏢 Small Business → 👥 HR Agent &amp; settings).</p>') +
+    (r.runner_note ? '<p style="font-size:13px;color:#b45309">⚠ ' + esc(r.runner_note) + '</p>' : '') + small(O.runner_help) +
+    tog('agent_hr_enabled', 'HR agent on') + tog('agent_hr_shadow', 'Practice mode — only show what it would do', O.practice_help) +
+    '<div style="display:flex;flex-wrap:wrap;gap:16px"><div style="flex:1 1 280px;min-width:0">' +
+    O.stages.map(function (st) { return '<b style="font-size:13px">' + esc(st[1]) + '</b>' + small(O.stage_help[st[0]]) + sel('agent_hr_stage_' + st[0], modes); }).join('') +
+    tog('agent_hr_can_approve_timeoff', 'Let the agent approve simple time off (Time off on Auto, practice off)', O.timeoff_help) + small(O.timeoff_help) +
+    '<div style="display:flex;gap:8px">' + num('hragMaxDays', 'Up to (days)', s.agent_hr_timeoff_max_days, 1, 10) +
+    num('hragNotice', 'Notice (days)', s.agent_hr_timeoff_notice_days, 0, 90) + '</div>' +
+    '<div style="display:flex;gap:8px">' + num('hragMaxOff', 'People off a day', s.agent_hr_timeoff_max_off, 1, 20) +
+    num('hragPerDay', 'Approvals a day', s.agent_hr_timeoff_per_day, 1, 50) + '</div>' +
+    '<b style="font-size:13px">Who reviews</b>' + small(O.reviewers_help) + sel('agent_hr_reviewers', O.reviewers) +
+    '<b style="font-size:13px">Incident reports</b>' + small(O.incidents_help) + sel('agent_hr_incidents_access', O.incidents) +
+    '<div style="display:flex;gap:8px">' + num('hragOT', 'Overtime warning (hours/week)', s.agent_hr_overtime_warn_hours, 20, 60) + '</div>' +
+    '<div style="display:flex;gap:8px"><label style="flex:1;font-size:13px">Message employees from–to (hour)<input id="hragQuiet" value="' +
+    esc((s.agent_hr_quiet_hours || []).join(', ')) + '"' + dis + ' style="width:100%"></label>' +
+    '<label style="flex:1;font-size:13px">Expiry warnings at (days)<input id="hragExpiry" value="' + esc((s.agent_hr_expiry_days || []).join(', ')) + '"' + dis + ' style="width:100%"></label></div>' +
+    tog('agent_hr_ack_sensitive', 'Send "HR has your message" to sensitive messages (a person answers them)') +
+    (can ? '<button class="btn-primary" style="margin-top:8px" id="hragSave">Save HR agent settings</button>' : '') +
+    '</div><div style="flex:1 1 320px;min-width:0" id="hragFlow"></div></div>';
+  _hragFlow(r.flow, 'hragFlow');
+  if (!can) return;
+  var save = async function (vals) { var x = await apiPost('/agent/settings', { settings: vals }); _hragFlow(x.flow, 'hragFlow'); showToast('Saved.'); loadHrAgent(); };
+  box.querySelectorAll('[data-hrk]').forEach(function (c) {
+    c.onchange = async function () {
+      var o = {}; o[c.dataset.hrk] = c.type === 'checkbox' ? c.checked : c.value;
+      try { await save(o); } catch (e) { showToast(_hragErr(e), 'error'); if (c.type === 'checkbox') c.checked = !c.checked; }
+    };
+  });
+  var n = function (id) { return parseInt(document.getElementById(id).value, 10); };
+  var list = function (id) { return document.getElementById(id).value.split(/[\s,]+/).filter(Boolean).map(function (x) { return parseInt(x, 10); }); };
+  document.getElementById('hragSave').onclick = async function () {
+    try {
+      await save({ agent_hr_timeoff_max_days: n('hragMaxDays'), agent_hr_timeoff_notice_days: n('hragNotice'),
+        agent_hr_timeoff_max_off: n('hragMaxOff'), agent_hr_timeoff_per_day: n('hragPerDay'),
+        agent_hr_overtime_warn_hours: n('hragOT'), agent_hr_quiet_hours: list('hragQuiet'), agent_hr_expiry_days: list('hragExpiry') });
+    } catch (e) { showToast(_hragErr(e), 'error'); }
+  };
 }
 
 // ── Payroll Tab ────────────────────────────────────────────────────────
@@ -8298,7 +8488,22 @@ async function loadPTORequests() {
     document.getElementById('pto-requests-list').innerHTML = renderEmpty('Could not load PTO requests.');
     return;
   }
+  await _loadHragRecs();
   renderPTORequests();
+}
+
+// HR agent (2026-10-31, hr-agent-spec.md §7): its recommendation on each request card.
+// A recommendation only — HR still taps Approve or Deny.
+let _hragRecs = {};
+async function _loadHragRecs() {
+  try { _hragRecs = (await apiGet('/agent/recommendations')).by_ref || {}; } catch (e) { _hragRecs = {}; }
+}
+function _hragRecLine(ref) {
+  const r = _hragRecs[ref];
+  if (!r) return '';
+  const word = r.choice === 'approve' ? 'approve' : r.choice === 'deny' ? 'deny' : 'ask the employee first';
+  const color = r.choice === 'approve' ? 'var(--green)' : r.choice === 'deny' ? 'var(--red)' : '#d97706';
+  return `<div data-testid="hrag-rec" style="font-size:11px;margin-top:4px;color:${color}">🤖 suggests ${word}${r.practice ? ' (practice)' : ''}${r.why ? ' — ' + escapeHtml(r.why) : ''}</div>`;
 }
 
 function renderPTORequests() {
@@ -8318,6 +8523,7 @@ function renderPTORequests() {
           <div style="font-size:13px;font-weight:700;color:var(--text)">${escapeHtml(r.employee_name || r.employee_id)}</div>
           <div style="font-size:12px;color:var(--text2)">${escapeHtml(r.type)}${r.half_day?` · Half day (${r.half_day_period||'AM'})`:''} · ${days}</div>
           ${r.notes ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${escapeHtml(r.notes)}</div>` : ''}
+          ${_hragRecLine('pto:' + r.id)}
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
           <button onclick="decidePTORequest('${r.id}','approve')" style="padding:6px 12px;border-radius:8px;background:var(--green-dim);border:1px solid var(--green);color:var(--green);font-size:11px;font-weight:700;cursor:pointer">Approve</button>
@@ -8353,6 +8559,7 @@ async function loadScheduleChangeRequests() {
     document.getElementById('schedule-change-requests-list').innerHTML = renderEmpty('Could not load schedule change requests.');
     return;
   }
+  await _loadHragRecs();
   renderScheduleChangeRequests();
 }
 
@@ -8373,6 +8580,7 @@ function renderScheduleChangeRequests() {
           <div style="font-size:12px;color:var(--text2)">Current: ${escapeHtml(r.current_shift)}</div>
           <div style="font-size:12px;color:var(--text)">Requested: ${escapeHtml(r.requested_change)}</div>
           ${r.reason ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${escapeHtml(r.reason)}</div>` : ''}
+          ${_hragRecLine('sched:' + r.id)}
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
           <button onclick="decideScheduleChangeRequest('${r.id}','approve')" style="padding:6px 12px;border-radius:8px;background:var(--green-dim);border:1px solid var(--green);color:var(--green);font-size:11px;font-weight:700;cursor:pointer">Approve</button>
@@ -14541,6 +14749,9 @@ async function loadMessages() {
           const itTag = isITSupport ? `<span style="font-size:9px;background:rgba(63,185,80,.15);color:#3fb950;padding:2px 8px;border-radius:10px;font-weight:700;border:1px solid rgba(63,185,80,.3);margin-right:6px">💻 IT</span>` : '';
           const fbTag = isFeedback ? `<span style="font-size:9px;background:rgba(210,153,34,.15);color:#f0a500;padding:2px 8px;border-radius:10px;font-weight:700;border:1px solid rgba(210,153,34,.3);margin-right:6px">💬 FEEDBACK</span>` : '';
           const sentTag = isOutbound ? `<span style="font-size:9px;background:rgba(88,166,255,.12);color:var(--cyan);padding:2px 8px;border-radius:10px;font-weight:700;border:1px solid rgba(88,166,255,.2);margin-right:6px">📤 HR</span>` : '';
+          // HR agent (2026-10-31): who answered, and who asked for a person
+          const personTag = !isSentView && m.needs_person ? `<span data-testid="msg-needs-person" style="font-size:9px;background:rgba(240,165,0,.15);color:#f0a500;padding:2px 8px;border-radius:10px;font-weight:700;border:1px solid rgba(240,165,0,.35);margin-right:6px">🙋 WANTS A PERSON</span>` : '';
+          const helpTag = m.message_type === 'help_question' ? `<span style="font-size:9px;background:rgba(124,58,237,.12);color:#a78bfa;padding:2px 8px;border-radius:10px;font-weight:700;border:1px solid rgba(124,58,237,.3);margin-right:6px">❓ HELP QUESTION</span>` : '';
           const displayName = escapeHtml(isSentView ? (m.to_name || 'Employee') : (m.sender_name || 'Employee'));
 
           const preview = (m.body||'').replace(/^🚨 INCIDENT REPORT.*?\n─+\n/s,'').substring(0,100);
@@ -14552,13 +14763,13 @@ async function loadMessages() {
               onmouseout="this.style.opacity='.45';this.style.color='var(--text3)';this.style.background='none'">🗑</button>
             <div onclick="${isSentView?'openSentMsg':'openMsg'}('${m.id}')" style="cursor:pointer;padding-right:28px">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-                  <div style="font-weight:${m.read||isSentView?'500':'700'};font-size:14px;color:var(--text);display:flex;align-items:center;flex-wrap:wrap;gap:4px">${incidentTag}${trainingTag}${itTag}${fbTag}${sentTag}${displayName}${newBadge}</div>
+                  <div style="font-weight:${m.read||isSentView?'500':'700'};font-size:14px;color:var(--text);display:flex;align-items:center;flex-wrap:wrap;gap:4px">${personTag}${helpTag}${incidentTag}${trainingTag}${itTag}${fbTag}${sentTag}${displayName}${newBadge}</div>
 
                 <div style="font-size:11px;color:var(--text3);white-space:nowrap">${new Date(m.sent_at).toLocaleString()}</div>
               </div>
               <div style="font-size:12px;color:${isIncident?'#f85149':'var(--text2)'};margin-bottom:4px;font-weight:${isIncident?'600':'400'}">${m.subject||'(No subject)'}</div>
               <div style="font-size:12px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${preview}${(m.body||'').length>100?'…':''}</div>
-                ${m.reply&&!isSentView?`<div style="margin-top:8px;padding:8px 10px;background:var(--surface2);border-radius:6px;font-size:11px;color:var(--text3)">↩ Replied: ${m.reply.substring(0,80)}${m.reply.length>80?'…':''}</div>`:''}
+                ${m.reply&&!isSentView?`<div style="margin-top:8px;padding:8px 10px;background:var(--surface2);border-radius:6px;font-size:11px;color:var(--text3)">↩ ${m.reply_by==='assistant'?'🤖 Assistant replied':'Replied'}: ${escapeHtml(m.reply.substring(0,80))}${m.reply.length>80?'…':''}</div>`:''}
               </div>
             </div>`;
         }).join('');

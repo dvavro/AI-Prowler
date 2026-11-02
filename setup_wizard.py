@@ -765,17 +765,19 @@ def detect_routes() -> Optional[bool]:
     return route_origin_ok()[0]
 
 
-def ai_routing_status() -> dict:
-    """{'cli': bool, 'token': status, 'detail': str} — Claude Code installed?
-    token from Links & Analysis → Get / Renew Token ok? (task_queue_automation's
-    own checks; read-only)."""
+def agent_key_status() -> dict:
+    """{'claude': bool, 'grok': bool, 'provider': 'claude'|'grok', 'ready': bool} — is an Agent API Key saved
+    for the AI the Task Queue runs on? (2026-11-01: scheduled analyses run on the Agent API Key — no Claude
+    CLI, no sign-in token.) Read-only."""
     try:
+        import desk_agent_providers as prov
         import task_queue_automation as tqa
-        cli = bool(tqa.claude_code_cli_installed())
-        tok = tqa.check_token_expiry()
-        return {"cli": cli, "token": tok.get("status", "unknown"), "detail": tok.get("detail", "")}
+        provider = tqa.load_config().get("provider", "claude")
+        st = {"claude": prov.has_agent_key("anthropic"), "grok": prov.has_agent_key("grok"), "provider": provider}
+        st["ready"] = st[provider]
+        return st
     except Exception as e:
-        return {"cli": False, "token": "unknown", "detail": str(e)}
+        return {"claude": False, "grok": False, "provider": "claude", "ready": False, "detail": str(e)}
 
 
 # ── "Index your first folder": the User Guide as the first document ────────
@@ -891,15 +893,19 @@ CLAUDE_DOWNLOAD_URL = "https://claude.ai/download"
 SUBSCRIBE_INFO_URL = "https://www.ai-prowler.com"
 CLAUDE_UPGRADE_URL = "https://claude.ai/upgrade"
 
-# Scheduled AI analyses — what they need (David 2026-10-21)
-CLI_NEEDS_TEXT = (
-    "Scheduled analyses run by themselves on this PC, so they use the Claude Code CLI "
-    "(Anthropic's command-line Claude), not the Claude app.\n"
-    "• Step 1 — Install the Claude Code CLI (free; AI-Prowler installs it for you).\n"
-    "• Step 2 — Sign it in. The sign-in token (the CLI's password) is only available on a PAID "
-    "Claude plan — Claude Pro or higher. A free Claude account can't run scheduled analyses.\n"
-    "No Claude Pro? Click ⏭ Skip for now — everything else in AI-Prowler works without it, and "
-    "you can come back to this step any time.")
+# Scheduled AI analyses — what they need (2026-11-01: an Agent API Key, nothing else)
+CLAUDE_CONSOLE_URL = "https://console.anthropic.com/settings/keys"
+XAI_CONSOLE_URL = "https://console.x.ai"
+KEY_NEEDS_TEXT = (
+    "Scheduled analyses run by themselves on this PC on an API key — the same Agent API Key the "
+    "agents use (🔑 Agent API Key at the top of the Small Business tab). No paid Claude plan is needed: "
+    "the key is pay-as-you-go from the AI company, usually a few cents per run, "
+    "and it counts in the agents' monthly budget.\n"
+    "• Get a key: Claude → console.anthropic.com → API Keys (starts with sk-ant-api…), or "
+    "Grok → console.x.ai (starts with xai-…).\n"
+    "• Paste it below and click Save.\n"
+    "No key yet? Click ⏭ Skip for now — everything else works without it, and you can come back any time.")
+CLI_NEEDS_TEXT = KEY_NEEDS_TEXT                    # older name
 
 
 def _open_web(url: str) -> None:
@@ -1083,8 +1089,8 @@ MODULES: list[Module] = [
            tab="⏰ Schedule", requires=("index",), detect=detect_auto_index),
     Module("links", "Scheduled AI analyses (Links & Analysis)", 5,
            "Your AI can review things for you on a schedule — overdue invoices, a weekly summary — "
-           "and save or email the result. Needs the Claude Code CLI signed in with a Claude Pro "
-           "(paid) account — you can skip this step.", tab="🔗 Links & Analysis", requires=("index",),
+           "and save or email the result. Needs an Agent API Key (Claude or Grok, pay-as-you-go) — "
+           "you can skip this step.", tab="🔗 Links & Analysis", requires=("index",),
            detect=detect_links),
     Module("learnings", "Teach AI-Prowler (Learnings)", 2,
            "Learnings are facts and preferences your AI should always remember.",
@@ -1124,7 +1130,7 @@ BY_ID = {m.id: m for m in MODULES}
 # "What do you want AI-Prowler to do?" → modules (dependencies are added on top)
 SERVICES: list[tuple[str, str, tuple]] = [
     ("files",    "🔎 Ask questions about my own files",            ("connect_ai", "index", "auto_index", "learnings")),
-    ("analyses", "🤖 Have AI review things for me on a schedule  (needs Claude Pro)",  ("links",)),
+    ("analyses", "🤖 Have AI review things for me on a schedule  (needs an API key)",  ("links",)),
     ("email",    "✉️ Send emails and reports",                     ("email",)),
     ("phone",    "📱 Use AI-Prowler from my phone",                ("remote", "remote_pwa")),
     ("business", "🧰 Run my service business (jobs, invoices)",    ("jobs", "payments")),
@@ -2287,7 +2293,7 @@ class LinksFlow(_SimpleFlow):
     def __init__(self, panel: "SetupCenterPanel"):
         super().__init__(panel, "Scheduled AI analyses", "links")
         tk, ttk = self.tk, self.ttk
-        self._cli_box()                                # what it needs: Claude Code + a Claude Pro sign-in
+        self._cli_box()                                # what it needs: an Agent API Key (Claude or Grok)
         ttk.Label(self.body, text="Pick the analyses to schedule:", font=("Arial", 10, "bold")
                   ).pack(anchor="w", pady=(10, 2))
         business = "business" in panel.progress.services
@@ -2305,113 +2311,69 @@ class LinksFlow(_SimpleFlow):
             e.state(["disabled"])
             ttk.Label(self.body, text="(Set up Email first to use this.)", foreground="#888"
                       ).pack(anchor="w", padx=(24, 0))
-        ttk.Label(self.body, text="Results are saved as Learnings your AI can use. Each run uses your AI "
-                  "plan's usage. Due analyses wait until you run them — or until you switch on the "
+        ttk.Label(self.body, text="Results are saved as Learnings your AI can use. Each run is billed to your "
+                  "Agent API Key (a few cents) and counts in the agents' monthly budget. Due analyses wait until you run them — or until you switch on the "
                   "Autonomous AI Task Queue on the Links & Analysis tab (it's off unless you turn it on).",
                   wraplength=500, justify="left", foreground="#666").pack(anchor="w", pady=(8, 0))
         self._footer("✅ Add these", self.add)
         ttk.Button(self._footer_bar, text="⏭ Skip for now", command=self._skip).pack(side="left")
 
-    # ── what scheduled analyses need (David 2026-10-21) ────────────────────
-    # They run on this PC through the Claude Code CLI, signed in with a token
-    # from `claude setup-token` — which needs a PAID Claude plan (Pro or
-    # higher). Say so up front, help set both up, or let them skip.
+    # ── what scheduled analyses need (2026-11-01: an Agent API Key) ────────
+    # They run on AI-Prowler's own scheduler on the Agent API Key (the same key
+    # the agents use). No Claude CLI, no sign-in token, no paid Claude plan.
     def _cli_box(self):
-        ttk = self.ttk
+        tk, ttk = self.tk, self.ttk
         box = ttk.LabelFrame(self.body, text=" 🔑 What this needs ", padding=10)
         box.pack(fill="x")
-        ttk.Label(box, text=CLI_NEEDS_TEXT, wraplength=500, justify="left").pack(anchor="w")
+        ttk.Label(box, text=KEY_NEEDS_TEXT, wraplength=500, justify="left").pack(anchor="w")
         self.cli_lbl = ttk.Label(box, text="Checking…", font=("Arial", 9, "bold"))
         self.cli_lbl.pack(anchor="w", pady=(8, 4))
+        row = ttk.Frame(box)
+        row.pack(anchor="w", fill="x")
+        self.key_provider = tk.StringVar(master=self.body, value="claude")
+        for val, lab in (("claude", "Claude"), ("grok", "Grok")):
+            ttk.Radiobutton(row, text=lab, variable=self.key_provider, value=val).pack(side="left", padx=(0, 6))
+        self.key_var = tk.StringVar(master=self.body)
+        ttk.Entry(row, textvariable=self.key_var, show="•", width=38).pack(side="left", padx=(4, 6))
+        ttk.Button(row, text="💾 Save key", command=self._save_key).pack(side="left")
         self.cli_fix = ttk.Frame(box)
-        self.cli_fix.pack(anchor="w")
+        self.cli_fix.pack(anchor="w", pady=(6, 0))
+        ttk.Button(self.cli_fix, text="🌐 Get a Claude key", command=lambda: _open_web(CLAUDE_CONSOLE_URL)
+                   ).pack(side="left", padx=(0, 6))
+        ttk.Button(self.cli_fix, text="🌐 Get a Grok key", command=lambda: _open_web(XAI_CONSOLE_URL)
+                   ).pack(side="left")
         self.cli_ready = None
         self.win.after(150, self._check_cli)
 
     def _check_cli(self):
-        import threading
-        box = {}
-        threading.Thread(target=lambda: box.setdefault("s", ai_routing_status()), daemon=True).start()
-
-        def collect():
-            try:
-                if not self.win.winfo_exists():
-                    return
-            except self.tk.TclError:
-                return
-            if "s" not in box:
-                return self.win.after(200, collect)
-            self._show_cli_status(box["s"])
-        self.win.after(200, collect)
+        self._show_cli_status(agent_key_status())
 
     def _show_cli_status(self, st: dict):
-        ttk = self.ttk
-        cli, tok = bool(st.get("cli")), st.get("token")
-        self.cli_ready = cli and tok in ("ok", "expiring_soon")
+        self.cli_ready = bool(st.get("ready"))
+        have = [n for n, k in (("Claude", "claude"), ("Grok", "grok")) if st.get(k)]
         self.cli_lbl.config(
-            text=("✅ Claude Code CLI installed" if cli else "❌ Step 1: Claude Code CLI not installed")
-            + "   ·   " + ("✅ signed in" if tok in ("ok", "expiring_soon")
-                           else "❌ Step 2: not signed in with Claude Pro yet"),
-            foreground="#2e7d32" if self.cli_ready else "#b35900")
-        for w in self.cli_fix.winfo_children():
-            w.destroy()
-        if self.cli_ready:
-            return
-        if not cli:
-            ttk.Button(self.cli_fix, text="1️⃣ Install Claude Code CLI", command=self._install_cli
-                       ).pack(side="left", padx=(0, 6))
-        else:
-            ttk.Button(self.cli_fix, text="2️⃣ Sign in with Claude Pro", command=self._sign_in
-                       ).pack(side="left", padx=(0, 6))
-        ttk.Button(self.cli_fix, text="💳 Get Claude Pro", command=lambda: _open_web(CLAUDE_UPGRADE_URL)
-                   ).pack(side="left", padx=(0, 6))
-        ttk.Button(self.cli_fix, text="🔄 Check again", command=self._check_cli).pack(side="left")
+            text=("✅ Agent API Key saved (" + ", ".join(have) + ")" if have
+                  else "❌ No Agent API Key saved yet"),
+            foreground="#2e7d32" if have else "#b35900")
+        if have and not st.get(st.get("provider", "claude")):
+            self.key_provider.set("grok" if st.get("grok") else "claude")
 
-    def _install_cli(self):
-        import threading
-        self.cli_lbl.config(text="⏳ Installing Claude Code (Anthropic's official installer) — about a minute…",
-                            foreground="#b35900")
-        box = {}
-
-        def work():
-            try:
-                import task_queue_automation as tqa
-                box["r"] = tqa.install_claude_code_cli()
-            except Exception as e:
-                box["r"] = (False, str(e))
-
-        def collect():
-            try:
-                if not self.win.winfo_exists():
-                    return
-            except self.tk.TclError:
-                return
-            if "r" not in box:
-                return self.win.after(500, collect)
-            ok, msg = box["r"]
-            if not ok:
-                self._say("❌ " + str(msg)[:200], ok=False)
-            self._check_cli()
-        threading.Thread(target=work, daemon=True).start()
-        self.win.after(500, collect)
-
-    def _sign_in(self):
-        from tkinter import messagebox
-        if not messagebox.askokcancel(
-                "Sign in with Claude Pro",
-                "A small black window opens and your browser goes to Claude.\n\n"
-                "1. Log in with your Claude Pro (or Max) account and click Authorize.\n"
-                "2. The black window shows a long code — you don't need to copy it; "
-                "AI-Prowler picks it up by itself.\n"
-                "3. Close the black window and click 🔄 Check again here.\n\n"
-                "A free Claude account can't do this step.", parent=self.win):
-            return
+    def _save_key(self):
+        """Save the key as an Agent API Key and point the Task Queue at that AI."""
+        prov = self.key_provider.get()
         try:
+            import desk_gui_agent as dga
             import task_queue_automation as tqa
-            ok, msg = tqa.open_setup_token_terminal()
+            ok, msg = dga.save_agent_key("anthropic" if prov == "claude" else "grok", self.key_var.get())
+            if ok:
+                cfg = tqa.load_config()
+                cfg["provider"] = prov
+                tqa.save_config(cfg)
+                self.key_var.set("")
         except Exception as e:
             ok, msg = False, str(e)
         self._say(("✅ " if ok else "❌ ") + str(msg)[:200], ok=ok)
+        self._check_cli()
 
     def _skip(self):
         """Skip for now: nothing is added; the step shows ⏭ and can be undone
@@ -2456,7 +2418,7 @@ class LinksFlow(_SimpleFlow):
         if skipped:
             parts.append("Already there: " + ", ".join(skipped))
         note = "" if getattr(self, "cli_ready", None) else (
-            " ⚠️ They won't run until Claude Code is installed and signed in with Claude Pro "
+            " ⚠️ They won't run on their own until an Agent API Key is saved "
             "(see “What this needs” above).")
         self._say(". ".join(parts) + ". See them on the Links & Analysis tab." + note, ok=not note)
         self._done()

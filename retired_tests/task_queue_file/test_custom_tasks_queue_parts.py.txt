@@ -1,0 +1,450 @@
+# ---------------------------------------------------------------------------
+# TC-CTASK-012  get_pending_analysis_tasks MCP tool
+# ---------------------------------------------------------------------------
+
+class TestGetPendingAnalysisTasks:
+    """Tests for the get_pending_analysis_tasks() MCP tool in ai_prowler_mcp.py.
+
+    The tool returns:
+      - A JSON string (dict with pending_count / tasks / instruction) when tasks exist
+      - A plain informational string when the queue is empty or an error occurs
+    """
+
+    def _make_pending_file(self, tmp_path, tasks):
+        import json
+        p = tmp_path / "pending_tasks.json"
+        p.write_text(json.dumps(tasks, indent=2), encoding="utf-8")
+        return p
+
+    def _make_task_entry(self, task_id="task_001", status="pending",
+                         label="Test", prompt="Analyze.", type_="custom"):
+        import datetime
+        return {
+            "task_id":    task_id,
+            "type":       type_,
+            "label":      label,
+            "prompt":     prompt,
+            "scope_dirs": [],
+            "created_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "status":     status,
+        }
+
+    def _call(self, mcp, tmp_path, tasks):
+        """Call get_pending_analysis_tasks with a patched pending file."""
+        import json
+        p = self._make_pending_file(tmp_path, tasks)
+        with patch("ai_prowler_mcp._load_pending_tasks",
+                   return_value=[t.copy() for t in tasks]):
+            raw = mcp.get_pending_analysis_tasks()
+        # If it's a JSON string, parse it; otherwise return as-is (plain message)
+        try:
+            return json.loads(raw), True   # (result_dict, is_json)
+        except (json.JSONDecodeError, TypeError):
+            return raw, False              # (plain_string, is_json=False)
+
+    def test_TC_CTASK_012_returns_pending_tasks_only(self, tmp_path):
+        import ai_prowler_mcp as mcp
+        tasks = [
+            self._make_task_entry("t1", status="pending",   label="Pending One"),
+            self._make_task_entry("t2", status="completed", label="Already Done"),
+            self._make_task_entry("t3", status="pending",   label="Pending Two"),
+        ]
+        result, is_json = self._call(mcp, tmp_path, tasks)
+        assert is_json, f"Expected JSON result, got plain string: {result!r}"
+        assert result["pending_count"] == 2
+        labels = [t["label"] for t in result["tasks"]]
+        assert "Pending One" in labels
+        assert "Pending Two" in labels
+        assert "Already Done" not in labels
+
+    def test_TC_CTASK_012_missing_file_returns_empty(self, tmp_path):
+        import ai_prowler_mcp as mcp
+        with patch("ai_prowler_mcp._load_pending_tasks", return_value=[]):
+            raw = mcp.get_pending_analysis_tasks()
+        # Empty queue → plain informational string, not JSON
+        assert isinstance(raw, str)
+        assert len(raw) > 0
+
+    def test_TC_CTASK_012_empty_queue_returns_plain_message(self, tmp_path):
+        import ai_prowler_mcp as mcp
+        with patch("ai_prowler_mcp._load_pending_tasks", return_value=[]):
+            raw = mcp.get_pending_analysis_tasks()
+        assert isinstance(raw, str)
+        # Should not be parseable as JSON with pending_count
+        import json as _j
+        try:
+            parsed = _j.loads(raw)
+            # If it IS json, pending_count must be 0
+            assert parsed.get("pending_count", 0) == 0
+        except (_j.JSONDecodeError, TypeError):
+            pass  # plain string is fine
+
+    def test_TC_CTASK_012_all_completed_returns_empty_message(self, tmp_path):
+        import ai_prowler_mcp as mcp
+        tasks = [self._make_task_entry(f"t{i}", status="completed") for i in range(3)]
+        with patch("ai_prowler_mcp._load_pending_tasks",
+                   return_value=[t.copy() for t in tasks]):
+            raw = mcp.get_pending_analysis_tasks()
+        result, is_json = raw, False
+        try:
+            import json as _j
+            result = _j.loads(raw)
+            is_json = True
+        except Exception:
+            pass
+        if is_json:
+            assert result.get("pending_count", 0) == 0
+        else:
+            assert isinstance(raw, str) and len(raw) > 0
+
+    def test_TC_CTASK_012_task_fields_present(self, tmp_path):
+        import ai_prowler_mcp as mcp
+        tasks = [self._make_task_entry("t1", label="My Task", prompt="Do it.")]
+        result, is_json = self._call(mcp, tmp_path, tasks)
+        assert is_json, f"Expected JSON, got: {result!r}"
+        t = result["tasks"][0]
+        assert t["task_id"] == "t1"
+        assert t["label"] == "My Task"
+        assert t["prompt"] == "Do it."
+        assert "created_at" in t
+        assert "queued_ago" in t
+
+    def test_TC_CTASK_012_scope_dirs_included_in_result(self, tmp_path):
+        import ai_prowler_mcp as mcp
+        entry = self._make_task_entry("t1")
+        entry["scope_dirs"] = [r"C:\Invoices", r"C:\Jobs"]
+        result, is_json = self._call(mcp, tmp_path, [entry])
+        assert is_json
+        t = result["tasks"][0]
+        assert t["scope_dirs"] == [r"C:\Invoices", r"C:\Jobs"]
+
+    def test_TC_CTASK_012_corrupt_json_returns_error_string(self, tmp_path):
+        import ai_prowler_mcp as mcp
+        # Simulate load error by having _load_pending_tasks raise
+        def _raise():
+            raise ValueError("corrupt")
+        with patch("ai_prowler_mcp._load_pending_tasks", side_effect=_raise):
+            raw = mcp.get_pending_analysis_tasks()
+        assert isinstance(raw, str)
+        assert "❌" in raw or "error" in raw.lower() or "could not" in raw.lower()
+
+
+# ---------------------------------------------------------------------------
+# TC-CTASK-013  complete_analysis_task MCP tool
+# ---------------------------------------------------------------------------
+
+class TestCompleteAnalysisTask:
+    """Tests for the complete_analysis_task() MCP tool in ai_prowler_mcp.py."""
+
+    def _pending_entry(self, task_id, label="Test", type_="custom", source_id=None):
+        import datetime
+        return {
+            "task_id":    task_id,
+            "source_id":  source_id or task_id,
+            "type":       type_,
+            "label":      label,
+            "prompt":     "Analyze my data.",
+            "scope_dirs": [],
+            "created_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "status":     "pending",
+        }
+
+    def _run(self, mcp, entries, task_id, summary="", custom_tasks=None):
+        """Call complete_analysis_task with fully mocked storage."""
+        import custom_tasks_manager as ctm
+        saved = {"tasks": list(entries), "custom": custom_tasks or []}
+
+        def _load():
+            return [e.copy() for e in saved["tasks"]]
+
+        def _save(tasks):
+            saved["tasks"] = tasks
+            return True
+
+        def _load_custom():
+            return [t.copy() for t in saved["custom"]]
+
+        def _save_custom(tasks):
+            saved["custom"] = tasks
+            return True
+
+        with patch("ai_prowler_mcp._load_pending_tasks", side_effect=_load), \
+             patch("ai_prowler_mcp._save_pending_tasks", side_effect=_save), \
+             patch("custom_tasks_manager.load_custom_tasks", side_effect=_load_custom), \
+             patch("custom_tasks_manager.save_custom_tasks", side_effect=_save_custom):
+            result = mcp.complete_analysis_task(task_id=task_id, summary=summary)
+
+        return result, saved
+
+    def test_TC_CTASK_013_marks_task_completed(self):
+        import ai_prowler_mcp as mcp
+        entry = self._pending_entry("t1")
+        result, saved = self._run(mcp, [entry], "t1", summary="Found 3 issues.")
+        done = next(t for t in saved["tasks"] if t["task_id"] == "t1")
+        assert done["status"] == "completed"
+        assert "completed_at" in done
+        assert done.get("completion_summary") == "Found 3 issues."
+        assert "completed" in result.lower() or "t1" in result
+
+    def test_TC_CTASK_013_completed_at_is_iso_timestamp(self):
+        import ai_prowler_mcp as mcp, datetime
+        entry = self._pending_entry("t1")
+        _, saved = self._run(mcp, [entry], "t1")
+        ts = next(t for t in saved["tasks"] if t["task_id"] == "t1")["completed_at"]
+        datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
+
+    def test_TC_CTASK_013_summary_optional(self):
+        import ai_prowler_mcp as mcp
+        entry = self._pending_entry("t1")
+        _, saved = self._run(mcp, [entry], "t1")
+        done = next(t for t in saved["tasks"] if t["task_id"] == "t1")
+        assert done["status"] == "completed"
+
+    def test_TC_CTASK_013_other_tasks_untouched(self):
+        import ai_prowler_mcp as mcp
+        entries = [
+            self._pending_entry("t1", label="Complete Me"),
+            self._pending_entry("t2", label="Leave Me"),
+        ]
+        _, saved = self._run(mcp, entries, "t1")
+        by_id = {t["task_id"]: t for t in saved["tasks"]}
+        assert by_id["t1"]["status"] == "completed"
+        assert by_id["t2"]["status"] == "pending"
+
+    def test_TC_CTASK_013_unknown_task_id_returns_error(self):
+        import ai_prowler_mcp as mcp
+        entry = self._pending_entry("t1")
+        result, _ = self._run(mcp, [entry], "nonexistent")
+        assert "not found" in result.lower() or "⚠" in result
+
+    def test_TC_CTASK_013_custom_task_advances_next_due(self):
+        """Completing a scheduled custom task should auto-advance its next_due."""
+        import ai_prowler_mcp as mcp
+        import custom_tasks_manager as ctm
+        import datetime
+
+        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        custom_task = ctm.create_task(
+            label="Weekly Report", prompt="Analyze weekly.",
+            schedule="weekly", first_due=yesterday)
+        custom_task["next_due"] = yesterday  # anchor for advance
+
+        # Pending entry references the custom task via source_id
+        entry = self._pending_entry(
+            "entry_001", label="Weekly Report", type_="custom",
+            source_id=custom_task["task_id"])
+
+        _, saved = self._run(mcp, [entry], "entry_001",
+                             summary="Done.", custom_tasks=[custom_task])
+
+        updated_custom = saved["custom"]
+        assert len(updated_custom) == 1
+        next_due = updated_custom[0]["next_due"]
+
+        # Anchor = yesterday; weekly → yesterday + 7 = today + 6
+        expected = (datetime.date.today() + datetime.timedelta(days=6)).isoformat()
+        assert next_due == expected, f"Expected {expected}, got {next_due}"
+
+
+
+# ---------------------------------------------------------------------------
+# TC-CTASK-016  complete_analysis_task advances next_due for built-in tasks
+# ---------------------------------------------------------------------------
+
+class TestBuiltInScheduleAdvancement:
+    """
+    complete_analysis_task() must advance next_due for built-in scheduled
+    tasks (schedule != "none", no source_id) using _advance_date() anchored
+    to the current next_due value.
+    """
+
+    def _pending_builtin(self, task_id, schedule, next_due):
+        import datetime
+        return {
+            "task_id":          task_id,
+            "type":             "analyze_business",
+            "label":            "📊 Analyze My Business",
+            "prompt":           "Analyze.",
+            "scope_dirs":       [],
+            "output_learnings": True,
+            "output_report":    False,
+            "report_folder":    "C:\\Users\\david\\Documents\\AI-Prowler_tasks_reports",
+            "schedule":         schedule,
+            "first_due":        next_due,
+            "next_due":         next_due,
+            "created_at":       datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "status":           "pending",
+            "source_id":        None,   # no source_id = built-in, not custom
+        }
+
+    def _run_complete(self, mcp, entries, task_id):
+        """Call complete_analysis_task with fully mocked storage."""
+        saved = {"tasks": list(entries)}
+
+        def _load():
+            return [e.copy() for e in saved["tasks"]]
+
+        def _save(tasks):
+            saved["tasks"] = tasks
+            return True
+
+        with patch("ai_prowler_mcp._load_pending_tasks", side_effect=_load), \
+             patch("ai_prowler_mcp._save_pending_tasks", side_effect=_save):
+            result = mcp.complete_analysis_task(task_id=task_id,
+                                                summary="Test complete.")
+        return result, saved
+
+    def test_TC_CTASK_016_weekly_next_due_advanced(self):
+        """v8.1.5: use an anchor only mildly overdue (less than one full
+        interval) so a single _advance_date() step already lands after
+        today — this is the 'simple, single-overdue' case, which must
+        behave identically to the pre-catchup single-step advance. Anchor
+        and expected are both computed relative to real 'today' rather than
+        a hardcoded literal, so this test doesn't silently rot as time
+        passes (which is exactly what broke this test against the v8.1.5
+        catch-up change — it hardcoded "2026-06-24" -> "2026-07-01" with no
+        relationship to whatever "today" happens to be when the suite runs)."""
+        import ai_prowler_mcp as mcp
+        import datetime
+        import custom_tasks_manager as ctm
+        anchor = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+        expected = ctm._advance_date(anchor, "weekly")
+        entry = self._pending_builtin("t1", "weekly", anchor)
+        result, saved = self._run_complete(mcp, [entry], "t1")
+        done = next(t for t in saved["tasks"] if t["task_id"] == "t1")
+        # v8.1.9: recurring built-in entries now re-arm to "pending"
+        # (identical treatment to recurring custom tasks) instead of
+        # closing permanently — see TestUnifiedReArmBehavior below for
+        # dedicated coverage of this design decision.
+        assert done["status"] == "pending"
+        assert done.get("next_due") == expected
+
+    def test_TC_CTASK_016_weekly_catchup_when_severely_overdue(self):
+        """v8.1.5 NEW BEHAVIOR: a task overdue by MULTIPLE intervals (here,
+        weekly but last due ~30 days ago — 4+ missed weeks) must resync
+        fully to the next occurrence after today in a single completion,
+        not just advance by one week and remain overdue. Asserted as a
+        property (next_due is strictly in the future, and differs from the
+        naive single-step result) rather than a hardcoded date, since the
+        exact number of steps needed depends on when the suite runs."""
+        import ai_prowler_mcp as mcp
+        import datetime
+        import custom_tasks_manager as ctm
+        anchor = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+        naive_single_step = ctm._advance_date(anchor, "weekly")
+        entry = self._pending_builtin("t1", "weekly", anchor)
+        result, saved = self._run_complete(mcp, [entry], "t1")
+        done = next(t for t in saved["tasks"] if t["task_id"] == "t1")
+        next_due = done.get("next_due")
+        today_str = datetime.date.today().isoformat()
+        assert next_due > today_str, (
+            f"next_due {next_due} should be strictly after today {today_str}")
+        assert next_due != naive_single_step, (
+            "expected catch-up to skip past the naive single-step result "
+            f"({naive_single_step}) since the task was overdue by several weeks")
+
+    def test_TC_CTASK_016_monthly_next_due_advanced(self):
+        """See test_TC_CTASK_016_weekly_next_due_advanced docstring — same
+        dynamic-date fix, single-overdue simple case."""
+        import ai_prowler_mcp as mcp
+        import datetime
+        import custom_tasks_manager as ctm
+        anchor = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+        expected = ctm._advance_date(anchor, "monthly")
+        entry = self._pending_builtin("t1", "monthly", anchor)
+        result, saved = self._run_complete(mcp, [entry], "t1")
+        done = next(t for t in saved["tasks"] if t["task_id"] == "t1")
+        assert done.get("next_due") == expected
+
+    def test_TC_CTASK_016_next_due_in_return_message(self):
+        import ai_prowler_mcp as mcp
+        entry = self._pending_builtin("t1", "weekly", "2026-06-24")
+        result, _ = self._run_complete(mcp, [entry], "t1")
+        assert "Next scheduled run" in result or "2026-07-01" in result
+
+    def test_TC_CTASK_016_monthly_next_due_advanced(self):
+        # v9.0.2: quarterly removed — replaced with monthly equivalent test.
+        # Use a future anchor so catchup doesn't skip past one interval.
+        import ai_prowler_mcp as mcp
+        import datetime
+        future = (datetime.date.today() + datetime.timedelta(days=60)).isoformat()
+        entry = self._pending_builtin("t1", "monthly", future)
+        result, saved = self._run_complete(mcp, [entry], "t1")
+        done = next(t for t in saved["tasks"] if t["task_id"] == "t1")
+        # next_due must be advanced by ~1 month past the anchor
+        assert done.get("next_due") > future
+
+    def test_TC_CTASK_016_completed_at_stamped(self):
+        import ai_prowler_mcp as mcp, datetime
+        entry = self._pending_builtin("t1", "weekly", "2026-06-24")
+        _, saved = self._run_complete(mcp, [entry], "t1")
+        done = next(t for t in saved["tasks"] if t["task_id"] == "t1")
+        assert "completed_at" in done
+        datetime.datetime.strptime(done["completed_at"], "%Y-%m-%dT%H:%M:%SZ")
+
+
+# ---------------------------------------------------------------------------
+# TC-CTASK-017  one-shot built-in tasks are NOT rescheduled
+# ---------------------------------------------------------------------------
+
+class TestBuiltInOneShot:
+    """
+    When schedule="none", complete_analysis_task() must NOT advance next_due.
+    The task record should have next_due=None after completion.
+    """
+
+    def _pending_oneshot(self, task_id):
+        import datetime
+        return {
+            "task_id":   task_id,
+            "type":      "find_problems",
+            "label":     "⚠️ Find Problems",
+            "prompt":    "Find problems.",
+            "scope_dirs": [],
+            "output_learnings": True,
+            "output_report":    False,
+            "report_folder":    "C:\\Users\\david\\Documents\\AI-Prowler_tasks_reports",
+            "schedule":  "none",
+            "first_due": None,
+            "next_due":  None,
+            "created_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "status":    "pending",
+            "source_id": None,
+        }
+
+    def _run_complete(self, mcp, entries, task_id):
+        saved = {"tasks": list(entries)}
+
+        def _load():
+            return [e.copy() for e in saved["tasks"]]
+
+        def _save(tasks):
+            saved["tasks"] = tasks
+
+        with patch("ai_prowler_mcp._load_pending_tasks", side_effect=_load), \
+             patch("ai_prowler_mcp._save_pending_tasks", side_effect=_save):
+            result = mcp.complete_analysis_task(task_id=task_id)
+        return result, saved
+
+    def test_TC_CTASK_017_oneshot_completes_without_next_due(self):
+        import ai_prowler_mcp as mcp
+        entry = self._pending_oneshot("t1")
+        result, saved = self._run_complete(mcp, [entry], "t1")
+        done = next(t for t in saved["tasks"] if t["task_id"] == "t1")
+        assert done["status"] == "completed"
+        assert done.get("next_due") is None
+
+    def test_TC_CTASK_017_no_next_scheduled_in_message(self):
+        import ai_prowler_mcp as mcp
+        entry = self._pending_oneshot("t1")
+        result, _ = self._run_complete(mcp, [entry], "t1")
+        assert "Next scheduled run" not in result
+
+    def test_TC_CTASK_017_completed_at_still_stamped(self):
+        import ai_prowler_mcp as mcp, datetime
+        entry = self._pending_oneshot("t1")
+        _, saved = self._run_complete(mcp, [entry], "t1")
+        done = next(t for t in saved["tasks"] if t["task_id"] == "t1")
+        assert "completed_at" in done
+        datetime.datetime.strptime(done["completed_at"], "%Y-%m-%dT%H:%M:%SZ")
+

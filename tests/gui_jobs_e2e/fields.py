@@ -307,6 +307,11 @@ def fill_customer_form(page: Page, values: dict, log=lambda *a: None):
 def read_customer_form(page: Page) -> dict:
     shown = {}
     names = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+    # The reopened editor draws its fields a moment after the spinner goes (slower against the
+    # server); el.count() below doesn't wait, so wait for the customer fields first (2026-10-31).
+    first = next(col for col, kind, _a, _b in CUSTOMER_FIELDS
+                 if kind != "prefdays" and col not in ("Pref. Time Start", "Pref. Time End"))
+    _cust_el(page, first).wait_for(state="attached", timeout=20_000)
     for col, kind, _a, _b in CUSTOMER_FIELDS:
         if kind == "prefdays":
             days = [names[i] for i in range(7) if page.locator(f"#jfPrefDay_{i}").is_checked()]

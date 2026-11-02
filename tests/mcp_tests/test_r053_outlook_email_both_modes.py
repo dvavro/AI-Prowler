@@ -127,6 +127,80 @@ def test_send_path_routes_outlook_backend_regardless_of_mode(mcp_mod):
     assert ol.call_args.kwargs["from_account_email"] == "company@biz.com"
 
 
+class _FakeCom:
+    def __init__(self):
+        self.calls = []
+
+    def CoInitialize(self):
+        import threading
+        self.calls.append(("init", threading.current_thread().name))
+
+    def CoUninitialize(self):
+        import threading
+        self.calls.append(("uninit", threading.current_thread().name))
+
+
+class _FakeOutlook:
+    """Outlook that, like the real one, refuses to work on a thread whose COM isn't set up."""
+    def __init__(self, com):
+        self.com, self.sent = com, []
+
+    def Dispatch(self, _name):
+        import threading
+        me = threading.current_thread().name
+        inits = sum(1 for k, t in self.com.calls if t == me and k == "init")
+        outs = sum(1 for k, t in self.com.calls if t == me and k == "uninit")
+        if inits <= outs:
+            raise RuntimeError("(-2147221008, 'CoInitialize has not been called.', None, None)")
+        test = self
+
+        class _Mail:
+            To = Subject = Body = HTMLBody = ""
+
+            class ReplyRecipients:
+                @staticmethod
+                def Add(_x):
+                    pass
+
+            class Attachments:
+                @staticmethod
+                def Add(_x):
+                    pass
+
+            def Send(self):
+                test.sent.append(self.To)
+
+        class _App:
+            def GetNamespace(self, _n):
+                return type("NS", (), {"Accounts": []})()
+
+            def CreateItem(self, _k):
+                return _Mail()
+        return _App()
+
+
+def test_outlook_send_works_from_a_background_thread(mcp_mod):
+    """2026-11-02 (live bug): every Service Desk reply to a customer failed with "CoInitialize has
+    not been called" — replies are sent from worker threads, where COM was never set up."""
+    import threading
+    import types
+    com = _FakeCom()
+    ol = _FakeOutlook(com)
+    client = types.ModuleType("win32com.client")
+    client.Dispatch = ol.Dispatch
+    pkg = types.ModuleType("win32com")
+    pkg.client = client
+    out = {}
+    with patch.dict(sys.modules, {"pythoncom": com, "win32com": pkg, "win32com.client": client}):
+        th = threading.Thread(target=lambda: out.update(r=mcp_mod._send_via_outlook(
+            "cust@example.com", "Re: test web 1 [T-0002]", "we are still looking at it.")), name="desk-worker")
+        th.start()
+        th.join(10)
+    assert out["r"][0] is True, out["r"]
+    assert ol.sent == ["cust@example.com"]
+    assert com.calls == [("init", "desk-worker"), ("uninit", "desk-worker")]     # set up, then tidied
+
+
 def test_claude_side_outlook_config_tools_stay_personal_only(mcp_mod):
     assert "list_outlook_accounts" in mcp_mod._TIER_A_SUPPRESSED
     assert "configure_email" in mcp_mod._TIER_A_SUPPRESSED

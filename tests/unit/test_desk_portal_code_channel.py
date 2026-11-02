@@ -47,18 +47,18 @@ def _code(state, to):
 
 def test_davids_case_email_works_after_a_failed_text_try(desk):
     db, state = desk
-    # 1. first request by email - fine
-    s = p.start_request(db, name="David Vavro", email=EMAIL, ip="1.1.1.1")
+    # 1. first request, code by email (2026-10-30: the phone is always required now)
+    s = p.start_request(db, name="David Vavro", phone=PHONE, email=EMAIL, send_by="email", ip="1.1.1.1")
     assert s["sent_via"] == "email"
     p.verify_and_file(db, contact_id=s["contact_id"], code=_code(state, EMAIL.lower()), title="fix window",
                       ip="1.1.1.1", edition=r.SOLO)
-    # 2. from the phone, mobile number AND email - texting isn't set up; it used
-    #    to fail here, now the code falls back to the email
+    # 2. code by text (the default) — texting isn't set up; it used to fail here,
+    #    now the code falls back to the email
     s2 = p.start_request(db, name="David Vavro", phone=PHONE, email=EMAIL, ip="2.2.2.2")
     assert s2["sent_via"] == "email" and s2["contact_id"] == s["contact_id"]
-    assert desk_db.get_contact(db, s["contact_id"])["phone"] == E164     # number now on the contact
-    # 3. back to email only - used to try the number on file and fail
-    s3 = p.start_request(db, name="David Vavro", email=EMAIL, ip="3.3.3.3")
+    assert desk_db.get_contact(db, s["contact_id"])["phone"] == E164     # number on the contact
+    # 3. back to email — never tries the number on file
+    s3 = p.start_request(db, name="David Vavro", phone=PHONE, email=EMAIL, send_by="email", ip="3.3.3.3")
     assert s3["sent_via"] == "email" and s3["contact_id"] == s["contact_id"]
     out = p.verify_and_file(db, contact_id=s3["contact_id"], code=_code(state, EMAIL.lower()),
                             title="test web ticket file", description="testing web", ip="3.3.3.3",
@@ -81,12 +81,12 @@ def test_both_given_text_works_uses_text(desk):
     assert s["sent_via"] == "sms" and state["sent"][-1][1] == E164
 
 
-def test_email_only_never_texts_a_number_on_file_even_when_texting_works(desk):
+def test_choosing_email_never_texts_even_when_texting_works(desk):
     db, state = desk
     state["sms_works"] = True
     p.start_request(db, phone=PHONE, email=EMAIL, ip="6.6.6.6")
     state["sent"].clear()
-    s = p.start_request(db, email=EMAIL, ip="6.6.6.7")
+    s = p.start_request(db, phone=PHONE, email=EMAIL, send_by="email", ip="6.6.6.7")
     assert s["sent_via"] == "email" and [ch for ch, _, _ in state["sent"]] == ["email"]
 
 
@@ -100,4 +100,4 @@ def test_nothing_works_says_so(desk):
     db, state = desk
     p.send_fn = lambda *a: False
     with pytest.raises(desk_db.DeskError, match="couldn't send a code right now"):
-        p.start_request(db, email=EMAIL, ip="7.7.7.7")
+        p.start_request(db, phone=PHONE, email=EMAIL, send_by="email", ip="7.7.7.7")

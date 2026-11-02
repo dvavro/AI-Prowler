@@ -26,7 +26,9 @@ def _tracked_py():
     try:
         out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "*.py"], capture_output=True,
                              text=True, encoding="utf-8", check=True).stdout
-        return [f for f in out.splitlines() if f]
+        # 2026-11-02: a file deleted from the work folder stays in `git ls-files` until the
+        # deletion is committed (tests/analysis/test_ai_analysis.py) — only check what's there
+        return [f for f in out.splitlines() if f and (ROOT / f).is_file()]
     except Exception:
         return [p.relative_to(ROOT).as_posix() for p in ROOT.rglob("*.py")
                 if "__pycache__" not in p.parts and ".git" not in p.parts]

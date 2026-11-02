@@ -84,25 +84,42 @@ if __name__ == "__main__":
     if manifest_files is None:
         problems.append("MANIFEST_FILES not found in scripts/release.py")
     else:
+        # 2026-10-31: expand globs ("desk_*.py", "hr_portal/docs/*.html") exactly as
+        # release.py's write_update_manifest() does - the old literal check reported every
+        # glob as missing and every file it ships as "not in MANIFEST_FILES".
+        expanded = []
         for rel in manifest_files:
-            if not (ROOT / rel).exists():
-                problems.append(f"release list file missing: {rel}")
-                print(f"  MISSING  {rel}")
+            if any(c in rel for c in "*?["):
+                hits = sorted(p.relative_to(ROOT).as_posix() for p in ROOT.glob(rel) if p.is_file())
+                if not hits:
+                    problems.append(f"release list glob matches nothing: {rel}")
+                    print(f"  MISSING  {rel}")
+                expanded += hits
+            else:
+                if not (ROOT / rel).exists():
+                    problems.append(f"release list file missing: {rel}")
+                    print(f"  MISSING  {rel}")
+                expanded.append(rel)
         for r in REMOVED:
-            if r in manifest_files:
+            if r in expanded:
                 problems.append(f"release list still has removed file: {r}")
-        print(f"  {len(manifest_files)} release-list file(s) checked")
+        print(f"  {len(manifest_files)} release-list entr(ies) -> {len(expanded)} file(s) checked")
     try:
         man = json.loads((ROOT / "update_manifest.json").read_text(encoding="utf-8"))
         paths = [e["path"] for e in man.get("files", [])]
-        print(f"  update_manifest.json: valid JSON, {len(paths)} file(s)")
+        print(f"  update_manifest.json: valid JSON, version {man.get('version')}, {len(paths)} file(s)")
         for r in REMOVED:
             if r in paths:
                 problems.append(f"update_manifest.json still lists removed file: {r}")
         if manifest_files is not None:
-            extra = [p for p in paths if p not in manifest_files]
-            for p in extra:
+            for p in [p for p in paths if p not in expanded]:
                 problems.append(f"update_manifest.json lists a file not in MANIFEST_FILES: {p}")
+            for p in [p for p in expanded if p not in paths]:
+                problems.append(f"update_manifest.json is stale - missing {p} (re-run release.py)")
+            ver = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+            if man.get("version") != ver:      # normal between releases: release.py bumps VERSION and rewrites it
+                print(f"  note: update_manifest.json is for {man.get('version')}, VERSION is {ver} "
+                      "(release.py rewrites both when it bumps)")
     except Exception as e:
         problems.append(f"update_manifest.json unreadable: {e}")
 

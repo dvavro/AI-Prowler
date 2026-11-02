@@ -158,6 +158,23 @@ def test_D2_ticket_page_every_box(business, people, tmp_path):
     assert t["state_history"][-1].get("reason") == "ZTEST D2 waiting on the mesh delivery"
 
 
+def test_D3b_server_has_no_settings_tab_and_refuses_setup(business, people):
+    """2026-10-30 (David, security): on a server the app has no ⚙ Settings tab and its API
+    refuses every setup change — even from the owner. They're made in AI-Prowler on the server
+    (🏢 Small Business tab), covered by tests/unit/test_desk_gui_settings.py."""
+    o = people(business, "owner")
+    o.sign_in("Olive Owner")
+    o.page.locator("#tabs").wait_for()
+    assert o.page.locator("#tabSettings").is_hidden(), "a server's app must not show Settings"
+    st, d = business.api("POST", "/desk-api/settings", {"key": "auto_close_days", "value": 9}, name="Olive Owner")
+    assert st == 403 and "AI-Prowler on the server" in d["message"]
+    st, d = business.api("POST", "/desk-api/team/queue", {"queue_id": "ztest_q", "name": "q"}, name="Olive Owner")
+    assert st == 403
+
+
+@pytest.mark.skip(reason="2026-10-30: a server's app has no Settings tab — these settings moved to "
+                         "AI-Prowler's Small Business tab (tests/unit/test_desk_gui_settings.py, "
+                         "test_desk_server_lock.py); D3b checks the tab is gone")
 def test_D3_settings_switches_dropdowns_autoclose_backups(business, people, tmp_path):
     o = people(business, "owner")
     o.sign_in("Olive Owner")
@@ -204,6 +221,9 @@ def test_D3_settings_switches_dropdowns_autoclose_backups(business, people, tmp_
         business.api("POST", "/desk-api/settings", {"key": k, "value": v}, name="Olive Owner")
 
 
+@pytest.mark.skip(reason="2026-10-30: a server's app has no Settings tab — Team, import and undo moved to "
+                         "AI-Prowler's Small Business tab (tests/unit/test_desk_gui_settings.py, "
+                         "test_desk_server_lock.py)")
 def test_D4_team_boxes_and_import_undo(business, people, tmp_path):
     sam = _me(business, "Sam Staff")
     o = people(business, "owner")
@@ -295,9 +315,11 @@ def test_D6_customer_pages_every_box(solo, people, tmp_path):
     c.page.locator("#fErr", has_text="Tell us").wait_for()            # no title
     c.type("#fTitle", "ZTEST D6 patio pavers stained")
     c.click("#fSend")
-    c.page.locator("#fErr", has_text="mobile number or an email").wait_for()
+    c.page.locator("#fErr", has_text="phone number").wait_for()       # phone always required (2026-10-30)
     c.type("#fName", "ZTEST Ms Park")
-    c.type("#fEmail", "park@example.test")                            # the email-code path
+    c.type("#fPhone", "386-555-0166")
+    c.page.locator("input[name=by][value=email]").check()             # the email-code path
+    c.type("#fEmail", "park@example.test")
     c.type("#fDesc", "Rust marks by the grill")
     c.click("#fSend")
     msg = solo.wait_message(lambda x: x["kind"] == "email" and x["to"] == "park@example.test"

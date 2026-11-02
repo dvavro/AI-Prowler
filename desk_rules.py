@@ -151,6 +151,26 @@ DEFAULT_OPTIONS = {"own_tickets": True, "subcontractor_tickets": True}
 TEAM_ONLY_TOOLS = frozenset({"manage_ticket_queues"})
 
 
+# ── Server lock on Service Desk setup (David 2026-10-30, security) ──────────
+# "In server mode … users can't make configuration changes that should be made only
+# in the AI-Prowler Server GUI business tab." On a server (Business edition) every
+# change to Service Desk setup — settings (agent included), the agent's photo, queues,
+# assignment rules, ticket types, backup settings, restores and imports — is refused
+# when it arrives from outside: Claude / Muse / Grok tools (desk_tools.py) and the
+# Service Desk app's API (desk_http.py), whoever the caller is, owner included.
+# AI-Prowler's own Small Business tab (desk_gui_settings.py) writes straight to the
+# database on the server itself, so it is the one place these changes can be made.
+# Reading the settings, exporting and "back up now" stay allowed (they change nothing).
+SERVER_LOCK_MSG = ("🔒 On an AI-Prowler Server, Service Desk settings and setup can only be changed "
+                   "in AI-Prowler on the server itself — 🏢 Small Business tab → Service Desk Agent & "
+                   "settings. Ask whoever runs your AI-Prowler Server.")
+
+
+def server_locked(edition: str) -> bool:
+    """True when Service Desk setup may only be changed in AI-Prowler on the server."""
+    return edition == BUSINESS
+
+
 def edition_for_mode(mode: str) -> str:
     """personal mode -> Solo, server mode -> Business."""
     m = (mode or "").strip().lower()

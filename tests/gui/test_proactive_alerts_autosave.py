@@ -420,3 +420,159 @@ class TestOldControlsRemoved:
         # Presence is verified indirectly: _al_btn_row should exist and
         # contain at least one child button (View Log).
         assert alerts_env.app._al_btn_row.winfo_children()
+
+
+class TestClearLog:
+    """2026-11-02 (David): a Clear Log button next to View Log."""
+
+    def _seed_log(self, tmp_path):
+        p = tmp_path / "scheduler_log.txt"          # alerts_env points LOG_PATH here
+        p.write_text("[2026-11-02 06:44:54] Scheduler started\n[2026-11-02 06:44:55] Scheduler stopped\n",
+                     encoding="utf-8")
+        return p
+
+    def test_button_sits_next_to_view_log(self, alerts_env, tmp_path):
+        _write_config(tmp_path, enabled_jobs=set())
+        alerts_env.app.create_query_tab()
+        alerts_env.pump()
+        texts = [w.cget("text") for w in alerts_env.app._al_btn_row.winfo_children()]
+        assert texts.index("🧹 Clear Log") == texts.index("📋 View Log") + 1
+
+    def test_yes_empties_the_log(self, alerts_env, dialogs, tmp_path):
+        _write_config(tmp_path, enabled_jobs=set())
+        log = self._seed_log(tmp_path)
+        alerts_env.app.create_query_tab()
+        alerts_env.pump()
+        dialogs.set_response("askyesno", True)
+        alerts_env.app._al_clear_log_btn.invoke()
+        alerts_env.pump()
+        text = log.read_text(encoding="utf-8")
+        assert "Scheduler started" not in text and "Log cleared" in text
+        assert dialogs.last_call("askyesno")["title"] == "Clear Log"
+
+    def test_no_keeps_the_log(self, alerts_env, dialogs, tmp_path):
+        _write_config(tmp_path, enabled_jobs=set())
+        log = self._seed_log(tmp_path)
+        alerts_env.app.create_query_tab()
+        alerts_env.pump()
+        dialogs.set_response("askyesno", False)
+        alerts_env.app._al_clear_log_btn.invoke()
+        alerts_env.pump()
+        assert "Scheduler started" in log.read_text(encoding="utf-8")
+
+    def test_clearing_leaves_alert_settings_alone(self, alerts_env, dialogs, tmp_path):
+        import scheduler_jobs as sj
+        first = next(iter(sj.JOB_REGISTRY))
+        _write_config(tmp_path, enabled_jobs={first})
+        self._seed_log(tmp_path)
+        alerts_env.app.create_query_tab()
+        alerts_env.pump()
+        dialogs.set_response("askyesno", True)
+        alerts_env.app._al_clear_log_btn.invoke()
+        alerts_env.pump()
+        assert _read_config(tmp_path)["jobs"][first]["enabled"] is True
+
+
+class TestTimeDropdown:
+    """2026-11-02 (David): "make the time boxes a drop down selection for time and every N hours"."""
+
+    def _build(self, alerts_env, tmp_path, times=None):
+        import scheduler_jobs as sj
+        cfg = _write_config(tmp_path, enabled_jobs=set())
+        for jid, t in (times or {}).items():
+            cfg["jobs"][jid]["time"] = t
+        (tmp_path / "scheduler_config.json").write_text(json.dumps(cfg), encoding="utf-8")
+        alerts_env.app.create_query_tab()
+        alerts_env.pump()
+        return sj
+
+    def test_every_job_has_a_readonly_dropdown_with_friendly_labels(self, alerts_env, tmp_path):
+        sj = self._build(alerts_env, tmp_path)
+        combos = alerts_env.app._job_time_combos
+        assert set(combos) == set(sj.jobs_for_mode(False))       # personal: no server-only alerts
+        for jid, cb in combos.items():
+            assert str(cb.cget("state")) == "readonly"
+            values = list(cb.cget("values"))
+            assert "7:00 AM" in values and "6:30 PM" in values and "Every 2 hours" in values
+        assert combos["morning_briefing"].get() == "7:00 AM"
+        assert combos["sms_reply_monitor"].get() == "Every 2 hours"
+
+    def test_picking_a_time_saves_the_engine_form(self, alerts_env, tmp_path):
+        self._build(alerts_env, tmp_path)
+        cb = alerts_env.app._job_time_combos["morning_briefing"]
+        cb.set("6:30 AM")
+        cb.event_generate("<<ComboboxSelected>>")
+        alerts_env.pump()
+        assert _read_config(tmp_path)["jobs"]["morning_briefing"]["time"] == "06:30"
+
+    def test_picking_every_n_hours_saves_interval(self, alerts_env, tmp_path):
+        self._build(alerts_env, tmp_path)
+        cb = alerts_env.app._job_time_combos["sms_reply_monitor"]
+        cb.set("Every 4 hours")
+        cb.event_generate("<<ComboboxSelected>>")
+        alerts_env.pump()
+        assert _read_config(tmp_path)["jobs"]["sms_reply_monitor"]["time"] == "every_4h"
+        cb2 = alerts_env.app._job_time_combos["morning_briefing"]
+        cb2.set("Every hour")
+        cb2.event_generate("<<ComboboxSelected>>")
+        alerts_env.pump()
+        assert _read_config(tmp_path)["jobs"]["morning_briefing"]["time"] == "every_1h"
+
+    def test_hand_typed_older_value_is_kept(self, alerts_env, tmp_path):
+        """A time typed by hand before the dropdown (07:15, every_45m) shows as its own choice and
+        isn't changed just by opening the screen or saving another field."""
+        self._build(alerts_env, tmp_path, times={"morning_briefing": "07:15",
+                                                 "sms_reply_monitor": "every_45m"})
+        combos = alerts_env.app._job_time_combos
+        assert combos["morning_briefing"].get() == "7:15 AM"
+        assert combos["sms_reply_monitor"].get() == "Every 45 minutes"
+        alerts_env.app._job_toggle_btns["weather_watch"].invoke()       # some other save
+        alerts_env.pump()
+        saved = _read_config(tmp_path)["jobs"]
+        assert saved["morning_briefing"]["time"] == "07:15"
+        assert saved["sms_reply_monitor"]["time"] == "every_45m"
+
+
+class TestEmailTextSwitches:
+    """2026-11-02 (David): "send individual alerts to SMS when enabled ... per Alert along with email
+    enable in each proactive alert row"."""
+
+    def _build(self, alerts_env, tmp_path, monkeypatch, ready=True, sms_to=""):
+        import scheduler_engine as se
+        monkeypatch.setattr(se, "texting_ready", lambda: ready)
+        cfg = _write_config(tmp_path, enabled_jobs=set())
+        cfg["sms_to"] = sms_to
+        (tmp_path / "scheduler_config.json").write_text(json.dumps(cfg), encoding="utf-8")
+        alerts_env.app.create_query_tab()
+        alerts_env.pump()
+
+    def test_every_row_has_email_on_and_text_off(self, alerts_env, tmp_path, monkeypatch):
+        import scheduler_jobs as sj
+        self._build(alerts_env, tmp_path, monkeypatch)
+        app = alerts_env.app
+        assert set(app._job_email_checks) == set(app._job_sms_checks) == set(sj.jobs_for_mode(False))
+        assert all(v.get() for v in app._job_email_vars.values())
+        assert not any(v.get() for v in app._job_sms_vars.values())
+
+    def test_ticking_text_and_unticking_email_saves(self, alerts_env, tmp_path, monkeypatch):
+        self._build(alerts_env, tmp_path, monkeypatch)
+        app = alerts_env.app
+        app._job_sms_checks["morning_briefing"].invoke()
+        app._job_email_checks["morning_briefing"].invoke()
+        alerts_env.pump()
+        saved = _read_config(tmp_path)["jobs"]["morning_briefing"]
+        assert saved["sms"] is True and saved["email"] is False
+        assert _read_config(tmp_path)["jobs"]["weather_watch"]["email"] is True
+
+    def test_texts_go_to_number_saves(self, alerts_env, tmp_path, monkeypatch):
+        self._build(alerts_env, tmp_path, monkeypatch, sms_to="386-555-0100")
+        app = alerts_env.app
+        assert app._al_sms_to_var.get() == "386-555-0100"
+        app._al_sms_to_var.set("386-555-0199")
+        app._al_save_sms_to()
+        alerts_env.pump()
+        assert _read_config(tmp_path)["sms_to"] == "386-555-0199"
+
+    def test_warns_when_texting_is_not_set_up(self, alerts_env, tmp_path, monkeypatch):
+        self._build(alerts_env, tmp_path, monkeypatch, ready=False)
+        assert "Texting isn't set up" in alerts_env.app._al_sms_info_var.get()

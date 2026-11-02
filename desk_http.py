@@ -88,6 +88,11 @@ def parse_multipart(body: bytes, content_type: str) -> tuple[dict, list]:
     return fields, files
 
 
+# How a customer reached the team when someone files a customer request for
+# them in the app (2026-10-29). "pwa" = not said.
+PWA_SOURCES = ("phone", "sms", "email", "walk_in", "pwa")
+
+
 def public_ticket(t: dict, actor) -> dict:
     """A ticket row trimmed for list views; outside parties lose internals."""
     keep = ("ticket_id", "title", "kind", "type", "priority", "state", "assignee",
@@ -157,8 +162,17 @@ def route(method: str, path: str, *, query: dict, body: bytes, content_type: str
         return _fail(403 if "only" in str(e) or "cannot" in str(e) else 400, "refused", str(e))
 
 
+# Setup changes the app's API refuses on a server (desk_rules.SERVER_LOCK_MSG) — they're
+# made in AI-Prowler on the server only. /import is checked in its route (a dry run is fine).
+SERVER_LOCKED_POSTS = ("/settings", "/agent/photo", "/agent/photo/delete", "/import/undo",
+                       "/backups/restore")
+
+
 def _route(method, sub, q, body, ctype, actor, edition, db, services):
     a = rules.normalize_actor(actor)
+    if method == "POST" and rules.server_locked(edition) and (
+            sub in SERVER_LOCKED_POSTS or sub.startswith("/team/")):
+        raise desk_db.DeskError(rules.SERVER_LOCK_MSG)
 
     m = re.fullmatch(rf"/tickets/{_TID}/(link|job)", sub)
     if m and method == "POST":
@@ -208,10 +222,149 @@ def _route(method, sub, q, body, ctype, actor, edition, db, services):
             team = []
         return _ok(entries=entries, team=team)
 
+    # ── Service Desk Agent: settings card + its virtual-assistant photo (2026-10-29)
+    if sub.startswith("/agent"):
+        import desk_agent_settings as das
+        if rules.is_external(actor):
+            raise desk_db.NotFoundError("not found")
+        if sub == "/agent" and method == "GET":
+            import desk_agent_store
+            s = desk_db.get_settings(db)
+            shown = {k: s[k] for k in das.DEFAULTS}
+            shown["agent_provider"] = das.effective_provider(s, edition)   # no Claude CLI on a server
+            jb = desk_agent_store.settings()                               # the Jobs agent's own database
+            shown.update(jb)
+            return _ok(settings=shown,
+                       persona=das.persona(s, services.get("business", "")),
+                       options=das.ui_options(edition), flow=das.flow(shown, edition),
+                       bk_options=das.bk_ui_options(), bk_flow=das.booking_flow(shown, edition),
+                       jb_options=das.jb_ui_options(), jb_flow=das.jobs_flow(jb, edition),
+                       rt_flow=das.route_flow(jb, edition),
+                       prompt_identity=das.prompt_identity(s, services.get("business", "")))
+        # The Jobs agent's settings live in their own database (jobs-agent-spec, decision 4).
+        if sub == "/agent/jobs" and method == "POST":
+            import desk_agent_store
+            if a["role"] != rules.OWNER:
+                raise desk_db.DeskError("only the owner can change the Jobs agent's settings")
+            if rules.server_locked(edition):
+                raise desk_db.DeskError(rules.SERVER_LOCK_MSG)
+            b = _parse_json(body)
+            vals = b.get("settings") if isinstance(b.get("settings"), dict) else {b.get("key"): b.get("value")}
+            for k, val in vals.items():
+                desk_agent_store.set_setting(str(k), val, actor=actor, edition=edition)
+            jb = desk_agent_store.settings()
+            return _ok(settings=jb, jb_flow=das.jobs_flow(jb, edition), rt_flow=das.route_flow(jb, edition))
+        if sub == "/agent/jobs/flow" and method == "POST":            # redraw for unsaved choices
+            import desk_agent_store
+            b = _parse_json(body)
+            o = b.get("settings") or {}
+            return _ok(jb_flow=desk_agent_store.flow(edition, overrides=o),
+                       rt_flow=desk_agent_store.flow(edition, overrides=o, which="route"))
+        if sub == "/agent/photo" and method == "GET":
+            data = das.photo_bytes(db)
+            if data is None:
+                raise desk_db.NotFoundError("no agent photo")
+            return 200, b"image/jpeg", data
+        if sub == "/agent/photo" and method == "POST":
+            fields, files = parse_multipart(body, ctype)
+            if not files:
+                raise desk_db.DeskError("no picture in the upload")
+            das.set_photo(db, files[0][1], actor=actor, edition=edition)
+            return _ok(persona=das.persona(desk_db.get_settings(db)))
+        if sub == "/agent/photo/delete" and method == "POST":
+            das.clear_photo(db, actor=actor, edition=edition)
+            return _ok(persona=das.persona(desk_db.get_settings(db)))
+        # 🤖 Agent inbox (desk_agent.py, 2026-10-30): what the agent suggested, approve / edit / reject.
+        if sub in ("/agent/inbox", "/agent/proposals") or sub.startswith("/agent/proposals/"):
+            import desk_agent
+            if a["role"] not in (rules.OWNER, rules.MANAGER):
+                raise desk_db.DeskError("only the owner or a manager can review the agent's work")
+            import desk_tools as _dt
+            adb = _dt._jobs_agent_db()                 # the Jobs agent's suggestions, ids "J…"
+            hdb = _dt._hr_agent_db()                   # the HR agent's, ids "H…" (decision 2: who may see them)
+            if sub == "/agent/inbox" and method == "GET":
+                pend, prac = desk_agent.inbox(db, status="pending"), desk_agent.inbox(db, status="practice", limit=40)
+                st = desk_agent.status(db)
+                if adb:
+                    pend += [dict(x, proposal_id=f"J{x['proposal_id']}") for x in desk_agent.inbox(adb, status="pending")]
+                    prac += [dict(x, proposal_id=f"J{x['proposal_id']}")
+                             for x in desk_agent.inbox(adb, status="practice", limit=40)]
+                    js = desk_agent.status(adb)
+                    st = dict(st, jobs_enabled=True, jobs_waiting=js["waiting"], jobs_pending=js["pending"])
+                if hdb:
+                    mine = _dt._hr_reviewable(hdb, actor, desk_agent.inbox(hdb, status="pending"))
+                    pend += [dict(x, proposal_id=f"H{x['proposal_id']}") for x in mine]
+                    st = dict(st, hr_enabled=True, hr_pending=len(mine))
+                return _ok(pending=pend, practice=prac, status=st)
+            m = re.fullmatch(r"/agent/proposals/([JH]?)(\d{1,9})/(approve|edit|reject|up|down)", sub)
+            if sub == "/agent/proposals/run-now" and method == "POST":
+                if a["role"] != rules.OWNER:
+                    raise desk_db.DeskError("only the owner can start the agent")
+                desk_agent.retry_errors(db)
+                why = desk_agent.why_not_run(db, desk_db.get_settings(db), edition=edition,
+                                             now=desk_agent._now(), force=True)
+                jstarted = False
+                if adb:
+                    import desk_agent_store
+                    js = desk_agent_store.sync_shared(db, adb)
+                    desk_agent.retry_errors(adb)
+                    if not desk_agent.why_not_run(adb, js, edition=edition, now=desk_agent._now(), force=True):
+                        jstarted = desk_agent.run_in_background(adb, edition=edition, force=True,
+                                                                business=services.get("business", ""))
+                if why:
+                    return _ok(started=jstarted, why="" if jstarted else why, jobs_started=jstarted)
+                started = desk_agent.run_in_background(db, edition=edition, business=services.get("business", ""),
+                                                       force=True)
+                return _ok(started=started, why="" if started else "a run is already going", jobs_started=jstarted)
+            if m and method == "POST":
+                b = _parse_json(body)
+                if m.group(1) == "J" and not adb:
+                    raise desk_db.NotFoundError("the Jobs agent is off")
+                if m.group(1) == "H" and not hdb:
+                    raise desk_db.NotFoundError("the HR agent is off")
+                target = {"J": adb, "H": hdb}.get(m.group(1), db)
+                out = desk_agent.review(target, int(m.group(2)), m.group(3), actor_=actor,
+                                        edition=edition,
+                                        edits=b.get("edits") if isinstance(b.get("edits"), dict) else None,
+                                        business=services.get("business", ""))
+                return _ok(**out)
+
+    # ── 📅 Bookings to approve (booking-spec.md §7a, Phase 2) ───────────────────
+    if sub.startswith("/bookings"):
+        return _route_bookings(method, sub, q, body, actor, edition, db, services)
+    # ── + → Customer request → Book a visit / New service request (§9.2, Phase 3) ──
+    if sub == "/book" or sub.startswith("/book/"):
+        import desk_staff_booking as dsb
+        if rules.is_external(actor):
+            raise desk_db.DeskError("customers book from the booking page")
+        if sub == "/book" and method == "GET":
+            return _ok(**dsb.options(db, actor=actor, edition=edition, team=services.get("team")))
+        if sub == "/book/windows" and method == "GET":
+            return _ok(windows=dsb.windows(db, q.get("service", ""), actor=actor, edition=edition,
+                                           from_date=q.get("from") or None))
+        if sub == "/book" and method == "POST":
+            b = _parse_json(body)
+            custom = b.get("custom") if isinstance(b.get("custom"), dict) else None
+            out = dsb.book(db, actor=actor, edition=edition, path=str(b.get("path") or "book"),
+                           name=str(b.get("name") or ""), phone=str(b.get("phone") or ""),
+                           email=str(b.get("email") or ""),
+                           address=b.get("address") if isinstance(b.get("address"), dict) else {},
+                           service_code=str(b.get("service_code") or ""), service=str(b.get("service") or ""),
+                           window_key=str(b.get("window_key") or ""), custom=custom,
+                           crew=str(b.get("crew") or ""),
+                           notify=(bool(b["notify"]) if "notify" in b else None),
+                           description=str(b.get("description") or ""), preferred=str(b.get("preferred") or ""),
+                           source=str(b.get("source") or "phone"), base_url=services.get("base_url") or "")
+            return 201, b"application/json", json.dumps(dict(out, ok=True)).encode()
+
     if sub == "/me" and method == "GET":
         s = desk_db.get_settings(db)
+        import booking_flow
         import desk_portal
         return _ok(portal_channels=desk_portal.channels(),
+                   can_approve_bookings=(("book" in desk_portal.page_paths(s) or bool(s.get("staff_booking")))
+                                         and booking_flow.can_approve(actor, edition, s)),
+                   can_book_for_customers=__import__("desk_staff_booking").can_book(actor, edition, s),
                    actor={"id": a["id"], "role": a["role"], "name": a.get("name", ""),
                           "email": a.get("email", "")},
                    edition=edition, settings=s,
@@ -250,11 +403,20 @@ def _route(method, sub, q, body, ctype, actor, edition, db, services):
                 email=b.get("contact_email"),
                 contact_type="subcontractor" if kind == rules.SUBCONTRACTOR_KIND else "customer",
                 actor=actor)["contact_id"]
+        if kind == rules.EXTERNAL and not rules.is_external(actor) and not (
+                cid or b.get("customer_id")):
+            raise desk_db.DeskError("add the customer's phone or email so they can get updates")
+        # 2026-10-29: the owner (Solo) or anyone on the team (Business) files a
+        # customer request for a customer who phoned, texted, emailed or walked
+        # in. Record how they reached us; anything else stays "pwa".
+        src = str(b.get("source") or "").strip().lower()
+        if rules.is_external(actor) or kind != rules.EXTERNAL or src not in PWA_SOURCES:
+            src = "pwa"
         import desk_tools
         t = desk_db.create_ticket(
             db, title=b.get("title", ""), kind=kind, actor=actor, edition=edition,
             description=b.get("description", ""), type=b.get("type", ""),
-            priority=(b.get("priority") or "P3").upper(), source="pwa", contact_id=cid,
+            priority=(b.get("priority") or "P3").upper(), source=src, contact_id=cid,
             customer_id=b.get("customer_id") or None, job_id=b.get("job_id") or None,
             visibility="private" if b.get("private") else "normal",
             assignee=b.get("assignee") or None,
@@ -320,6 +482,9 @@ def _route(method, sub, q, body, ctype, actor, edition, db, services):
         return _ok(settings=desk_db.get_settings(db))
     if sub == "/settings" and method == "POST":
         b = _parse_json(body)
+        if b.get("key") in desk_db.LOCAL_ONLY_SETTINGS:
+            raise desk_db.DeskError("the backup folder can only be changed in AI-Prowler on this PC "
+                                    "(🏢 Small Business tab → Service Desk → Data & backups)")
         return _ok(settings=desk_db.set_setting(db, b.get("key", ""), b.get("value"),
                                                 actor=actor, edition=edition))
 
@@ -340,6 +505,67 @@ def _route(method, sub, q, body, ctype, actor, edition, db, services):
     if out is not None:
         return out
     return _fail(404, "unknown_route", f"no Service Desk route {method} {sub}")
+
+
+def _route_bookings(method, sub, q, body, actor, edition, db, services):
+    """GET /bookings · GET /bookings/windows · POST /bookings/<job>/(approve|suggest|decline).
+    Only approvers (the owner; managers on a server when allowed) — everyone else gets 403."""
+    import booking_flow
+    import desk_portal
+    s = desk_db.get_settings(db)
+    if rules.is_external(actor) or not booking_flow.can_approve(actor, edition, s):
+        raise desk_db.DeskError("only the owner" + (" or a manager" if edition == rules.BUSINESS
+                                                    and s.get("booking_approve_managers", True) else "")
+                                + " can see and approve bookings")
+    jobs_db = desk_portal._jobs_db()
+    if not jobs_db:
+        raise desk_db.DeskError("the Jobs app is not available on this AI-Prowler")
+    try:
+        if sub == "/bookings" and method == "GET":
+            crews = []
+            if edition == rules.BUSINESS:
+                names = {}
+                try:
+                    names = {u["id"]: u.get("name") or u["id"] for u in (services.get("team") or (lambda: []))()}
+                except Exception:  # noqa: BLE001
+                    names = {}
+                crews = [{"id": c.crew_id, "name": names.get(c.crew_id, c.crew_id)}
+                         for c in booking_flow.crews_for(jobs_db, edition) if c.crew_id != "team"]
+            rows = booking_flow.to_approve(jobs_db)
+            try:                                          # 🤖 suggests … / flags (booking agent)
+                import desk_agent
+                for r in rows:
+                    r["agent"] = desk_agent.for_booking(db, r["job_id"])
+            except Exception:  # noqa: BLE001
+                pass
+            return _ok(bookings=rows, crews=crews,
+                       upcoming=booking_flow.upcoming(jobs_db),
+                       crew_mode=s.get("booking_crew_mode", "approver"), approval=s.get("booking_approval"))
+        if sub == "/bookings/windows" and method == "GET":
+            import datetime as _dt
+            frm = _dt.date.fromisoformat(q["from"]) if q.get("from") else None
+            return _ok(windows=booking_flow.windows(jobs_db, s, q.get("service", ""), edition, online_only=False,
+                                                   from_date=frm,
+                                                   to_date=(frm + _dt.timedelta(days=13)) if frm else None))
+        m = re.fullmatch(r"/bookings/([A-Za-z0-9_-]{1,40})/(approve|suggest|decline)", sub)
+        if m and method == "POST":
+            jid, what = m.group(1), m.group(2)
+            b = _parse_json(body)
+            if what == "approve":
+                out = booking_flow.approve(jobs_db, db, jid, actor=actor, edition=edition, settings=s,
+                                           window_key=str(b.get("window_key") or ""),
+                                           crew=(str(b["crew"]) if b.get("crew") else None))
+            elif what == "suggest":
+                out = booking_flow.suggest(jobs_db, db, jid, str(b.get("window_key") or ""), actor=actor,
+                                           edition=edition, settings=s, note=str(b.get("note") or ""))
+            else:
+                out = booking_flow.decline(jobs_db, db, jid, actor=actor, edition=edition, settings=s,
+                                           message=str(b.get("message") or ""),
+                                           keep_request=bool(b.get("keep_request")))
+            return _ok(**out)
+    except (booking_flow.BookingError, ValueError) as e:
+        raise desk_db.DeskError(str(e)) from None
+    raise desk_db.NotFoundError("not found")
 
 
 def _route_phase3(method, sub, q, body, ctype, actor, edition, db):
@@ -376,6 +602,8 @@ def _route_phase3(method, sub, q, body, ctype, actor, edition, db):
         if not files:
             raise desk_db.DeskError("choose a file to import")
         name, data = files[0]
+        if rules.server_locked(edition) and not _truthy(fields.get("dry_run", "1")):
+            raise desk_db.DeskError(rules.SERVER_LOCK_MSG)
         cmap = json.loads(fields["column_map"]) if fields.get("column_map") else None
         out = desk_data.import_tickets(db, data, name, actor=actor, edition=edition,
                                        dry_run=_truthy(fields.get("dry_run", "1")), column_map=cmap,
@@ -391,7 +619,8 @@ def _route_phase3(method, sub, q, body, ctype, actor, edition, db):
         if sub == "/backups" and method == "GET":
             s = desk_db.get_settings(db)
             return _ok(backups=desk_backup.list_backups(db),
-                       settings={k: s[k] for k in s if k.startswith("backup_")})
+                       settings={k: s[k] for k in s if k.startswith("backup_")},
+                       folder=str(desk_backup.backup_dir(db)), help=desk_backup.BACKUP_HELP)
         if sub == "/backups" and method == "POST":
             return _ok(backup=desk_backup.backup_now(db, "manual"))
         if sub == "/backups/restore" and method == "POST":

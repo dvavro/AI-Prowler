@@ -92,6 +92,10 @@ CUSTOMERS_HEADER_MAP = {
     "Gate Code / Access Notes": "gate_code_notes",
     "On-Site Contact": "onsite_contact",
     "Status Active/Inactive": "status",
+    # 2026-11-02: per-customer message switches — Off = never email / text this customer
+    # (e.g. a customer who requires you to use their own system).
+    "Email Messages On/Off": "email_messages",
+    "Text Messages On/Off": "sms_messages",
     "Created By": "created_by",
     "Last Edited By": "last_edited_by",
     "Last Edited At": "last_edited_at",
@@ -531,6 +535,14 @@ _CHOICE_FIELDS = {
         "In Progress": ("inprogress", "started", "working", "ongoing", "underway", "onsite", "wip"),
         "Complete":    ("complete", "completed", "done", "finished", "closed", "compete"),
         "Cancelled":   ("cancelled", "canceled", "cancel", "cancelledbycustomer", "void"),
+        # Service booking states (2026-10-30, booking-spec.md §7). A job in one of
+        # these has NO service_date until it's approved — the held window lives in
+        # booking_holds — so routing / Calendar / mileage never see it. Their words
+        # are distinct from Scheduled's ("pending" still means Scheduled, as before).
+        "Pending Approval": ("pendingapproval", "awaitingapproval", "toapprove", "needsapproval"),
+        "Suggested":   ("suggested", "timesuggested", "proposed", "newtimesuggested"),
+        "Requested":   ("requested", "servicerequested", "quoterequested", "callback"),
+        "Declined":    ("declined", "rejected", "turneddown", "notbooked"),
     },
     ("jobs", "payment_status"): _PAYMENT_CHOICES,
     ("invoices", "payment_status"): _PAYMENT_CHOICES,
@@ -563,6 +575,12 @@ _CHOICE_FIELDS[("jobs", "actual_duration_unit")] = _CHOICE_FIELDS[("jobs", "est_
 # 2026-10-04: customers.schedule_type shares the jobs schedule_type choice set
 # (Hard/Soft canonical) — server-side validation for the new customer column.
 _CHOICE_FIELDS[("customers", "schedule_type")] = _CHOICE_FIELDS[("jobs", "schedule_type")]
+# 2026-11-02: per-customer Email / Text switches. Blank counts as On (see customer_messages_on).
+_ON_OFF = {"On":  ("on", "yes", "y", "true", "1", "enabled", "enable", "allow", "allowed", "ok"),
+           "Off": ("off", "no", "n", "false", "0", "disabled", "disable", "none", "never", "block",
+                   "blocked", "donotcontact", "dnc", "stop", "optout", "ownsystem", "theirsystem")}
+_CHOICE_FIELDS[("customers", "email_messages")] = _ON_OFF
+_CHOICE_FIELDS[("customers", "sms_messages")] = _ON_OFF
 
 # Settings rows whose Value is a fixed choice (keyed by the lower-cased setting name).
 _TOGGLE = {"Enabled": ("enabled", "enable", "on", "yes", "true", "1", "y"),
@@ -797,7 +815,7 @@ def day_unit_end_date(service_date, est_duration, days=None) -> str:
 # Cancelled). Looking forward it reaches the "overrun horizon" (today and the
 # next working day, so tonight's plan for tomorrow includes it); past working
 # days after the planned end count too (the job was still open then).
-_CLOSED_JOB_STATUSES = ("complete", "completed", "cancelled", "canceled")
+_CLOSED_JOB_STATUSES = ("complete", "completed", "cancelled", "canceled", "declined")
 
 
 def job_is_open(status) -> bool:
@@ -805,7 +823,7 @@ def job_is_open(status) -> bool:
     if s.lower() in _CLOSED_JOB_STATUSES:
         return False
     canon = _match_choice(_CHOICE_FIELDS[("jobs", "job_status")], s) if s else None
-    return canon not in ("Complete", "Cancelled")
+    return canon not in ("Complete", "Cancelled", "Declined")
 
 
 def overrun_today() -> datetime.date:
@@ -4662,8 +4680,7 @@ def db_find_stale_customers(db_path: str, days_threshold: "int | None" = None) -
     conn = get_connection(db_path)
     try:
         customers = conn.execute(
-            "SELECT customer_id, company_name, first_name, last_name, onsite_contact, email, phone "
-            "FROM customers WHERE LOWER(TRIM(status)) = 'active'"
+            "SELECT * FROM customers WHERE LOWER(TRIM(status)) = 'active'"
         ).fetchall()
         out = []
         for c in customers:
@@ -4691,6 +4708,9 @@ def db_find_stale_customers(db_path: str, days_threshold: "int | None" = None) -
                 "customer_id": c["customer_id"], "name": name, "contact_name": contact_name,
                 "email": (c["email"] or "").strip(), "phone": (c["phone"] or "").strip(),
                 "last_service_date": last, "days_since": days_since,
+                # 2026-11-02: per-customer switches (Off = they use their own system)
+                "email_on": customer_messages_on(c["email_messages"] if "email_messages" in c.keys() else ""),
+                "sms_on": customer_messages_on(c["sms_messages"] if "sms_messages" in c.keys() else ""),
             })
     finally:
         conn.close()
@@ -4699,6 +4719,79 @@ def db_find_stale_customers(db_path: str, days_threshold: "int | None" = None) -
     # serviced at all (that one's a sales question, not a check-in reminder).
     out.sort(key=lambda r: (r["days_since"] is None, -(r["days_since"] or 0)))
     return out
+
+
+# ── Per-customer Email / Text switches (2026-11-02, David: "We need a way to turn off email and SMS to
+# a given customer because some customers have their own system and require the contractor to use it")
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# Customers → "Email Messages On/Off" / "Text Messages On/Off". Off means AI-Prowler never emails / texts
+# that customer — appointment reminders, check-in reminders, invoices and receipts, the Jobs agent. The
+# OWNER's own alerts still list the customer's jobs (marked "uses their own system"), so nothing is
+# forgotten — only the message to the customer is held back. Blank / unknown counts as On.
+
+def customer_messages_on(value) -> bool:
+    """One switch value → allowed? Only an explicit Off (or its words) turns messages off."""
+    return _match_choice(_ON_OFF, value) != "Off"
+
+
+def _digits(s) -> str:
+    d = "".join(ch for ch in str(s or "") if ch.isdigit())
+    return d[-10:]
+
+
+def db_customer_message_switches(db_path_or_conn, customer_id: str = "", *, email: str = "",
+                                 phone: str = "") -> dict:
+    """{"email": bool, "sms": bool, "customer_id", "name", "found"} for one customer — found by
+    CustomerID, else by email address, else by phone number (last 10 digits). Not found → both On
+    (an address that isn't a customer is never blocked here)."""
+    out = {"email": True, "sms": True, "customer_id": "", "name": "", "found": False}
+    own = isinstance(db_path_or_conn, str)
+    try:
+        conn = get_connection(db_path_or_conn) if own else db_path_or_conn
+    except Exception:
+        return out
+    try:
+        row = None
+        if customer_id:
+            row = conn.execute("SELECT * FROM customers WHERE customer_id = ?",
+                               (str(customer_id).strip(),)).fetchone()
+        if row is None and email and "@" in str(email):
+            row = conn.execute("SELECT * FROM customers WHERE LOWER(TRIM(email)) = ?",
+                               (str(email).strip().lower(),)).fetchone()
+        if row is None and _digits(phone):
+            want = _digits(phone)
+            for r in conn.execute("SELECT * FROM customers WHERE phone IS NOT NULL AND TRIM(phone) != ''"):
+                if _digits(r["phone"]) == want:
+                    row = r
+                    break
+        if row is None:
+            return out
+        keys = row.keys()
+        out.update(
+            found=True, customer_id=row["customer_id"],
+            name=((row["company_name"] or "").strip()
+                  or f"{row['first_name'] or ''} {row['last_name'] or ''}".strip()),
+            email=customer_messages_on(row["email_messages"] if "email_messages" in keys else ""),
+            sms=customer_messages_on(row["sms_messages"] if "sms_messages" in keys else ""))
+        return out
+    except Exception:
+        return out
+    finally:
+        if own:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def customer_blocked_message(name: str, channel: str) -> str:
+    """The one wording every sender uses when a customer's switch is Off."""
+    what = "emails" if channel == "email" else "text messages"
+    col = "Email Messages On/Off" if channel == "email" else "Text Messages On/Off"
+    who = name or "This customer"
+    return (f"❌ {who} is set to receive no {what} from AI-Prowler (Customers → {col} = Off — e.g. they use "
+            f"their own system). Nothing was sent. Turn it back On in the Jobs app (Database → Customers → "
+            f"Edit) if this one should go.")
 
 
 _CUSTOMER_DIGEST_MARKER_KEY = "internal_customer_reminder_digest_last_run"

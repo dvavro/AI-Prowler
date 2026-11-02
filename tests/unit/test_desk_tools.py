@@ -155,5 +155,6 @@ def test_mode_settings_keep_off_as_a_word(db):
 def test_settings_show_and_owner_only(db):
     shown = dt.tickets_settings(db, None, SOLO)
     assert "own_tickets = on" in shown and "Solo" in shown
-    assert dt.tickets_settings(db, MANAGER, BIZ, setting="own_tickets",
-                               value=False).startswith("❌")
+    # 2026-10-30 server lock: on a server nobody changes settings through the tools
+    assert dt.tickets_settings(db, MANAGER, BIZ, setting="own_tickets", value=False).startswith("🔒")
+    assert dt.tickets_settings(db, None, BIZ, setting="own_tickets", value=False).startswith("🔒")

@@ -36,16 +36,21 @@ def test_C1_texting_and_email_show_both_boxes(solo, people):
     assert "text or email" in cust.page.locator(".card").first.inner_text()
 
 
-def test_C2_email_only_hides_the_mobile_box_and_files_by_email(solo_email_only, people):
+def test_C2_email_only_sends_codes_by_email_and_still_asks_for_a_phone(solo_email_only, people):
+    """2026-10-30 (booking-spec.md §3.1): the phone box is always there now — a phone number
+    is required so the team can call back — but with no texting the code goes by email and
+    there's no "send my code by" choice."""
     srv = solo_email_only
     run = uuid.uuid4().hex[:4]
     title = f"Screens torn on the lanai {run}"
     cust = people(srv, "customer", phone=True)
     cust.page.goto(f"{srv.base}/support/new")
     cust.page.locator("#fEmail").wait_for()
-    assert cust.page.locator("#fPhone").count() == 0, "mobile box shown with no texting set up"
-    assert "We'll email you a code" in cust.page.locator(".card").first.inner_text()
+    assert cust.page.locator("#fPhone").count() == 1, "the phone box must always be there"
+    assert cust.page.locator("input[name=by]").count() == 0, "a text option shown with no texting set up"
+    assert "we'll email you a code" in cust.page.locator(".card").first.inner_text().lower()
     cust.type("#fName", "Mrs Okafor")
+    cust.type("#fPhone", "386-555-0177")
     cust.type("#fEmail", f"okafor.{run}@example.test")
     cust.type("#fTitle", title)
     cust.click("#fSend")

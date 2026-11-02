@@ -345,7 +345,11 @@ class TestFeature1_AppShell:
         # after Clock, at the owner's request ("make the Mileage screen live
         # in its own bottom-nav tab"). It is hidden when mileage tracking is
         # turned off in settings, but the markup is always present = 11.
-        assert 4 <= count <= 11, f"Expected 4-11 nav tabs, got {count}"
+        # 2026-10-31: widened from 4-11 to 4-12 -- the Jobs agent's "🤖 Agent" tab
+        # (jobs-agent-spec.md J3: its suggestions, approve / edit / reject, its settings
+        # and diagrams). Shown to the owner and managers only; the markup is always
+        # present = 12.
+        assert 4 <= count <= 12, f"Expected 4-12 nav tabs, got {count}"
         for label in ["Jobs", "Calendar", "Clock", "Photos", "Profile"]:
             assert label in nav_section, f"Nav tab '{label}' missing"
 

@@ -379,13 +379,119 @@ SETTING_DEFAULTS = {
     "backup_keep_monthly": 12,
     "backup_attachments": True,       # include photos and documents
     "backup_second_dir": "",          # optional second destination (drive, NAS, synced folder)
+    "backup_dir": "",                 # where backups are saved; "" = <tickets root>/backups (2026-10-30)
+    # The one customer page (booking-spec.md §3, §9.1). Paths shown: "book" (Phase 2),
+    # "new" (request a new service → a Requested job), "problem" (as today). Default =
+    # "problem" only, so the page works exactly as before until the owner turns more on.
+    "booking_paths": ["problem"],
+    "booking_welcome": "",            # one optional line at the top of the page
+    "booking_area_zips": [],          # service area ZIP codes; [] = everywhere (booking-spec.md §5)
+    "booking_area_miles": 0,          # …and/or miles from the Start/End Address; 0 = no radius
+    # Service booking rules (booking-spec.md §9.1; read by booking_db.rules_for)
+    "booking_window_minutes": 120,    # arrival window length
+    "booking_lead_hours": 24,         # nothing bookable sooner than this
+    "booking_horizon_days": 21,       # nothing bookable later than this
+    "booking_max_per_day": 0,         # online bookings per day; 0 = no limit
+    "booking_full_pct": 85,           # a day this full shows no windows
+    # Approving bookings (booking-spec.md §7a). David 2026-10-30: configurable, default
+    # "every booking waits for an approver"; managers approve on a server by default.
+    "booking_approval": "approve_all",    # approve_all | preapprove | auto
+    "booking_approve_managers": True,     # server: managers can approve too
+    "booking_crew_mode": "approver",      # approver | suggested | office (server)
+    "booking_backups": 2,                 # backup windows a customer may pick
+    "booking_hold_hours": 48,             # remind approvers after this long
+    "booking_release_hours": 72,          # then free the window and call the customer
+    "booking_suggest_hours": 48,          # a suggested time waits this long for the customer
+    "booking_customer_changes": True,     # customers can reschedule / cancel from their page
+    "booking_change_hours": 24,           # … until this many hours before the visit
+    # Instant booking limits (booking_approval = "preapprove"; Phase 4, §7a.1). All off = any open time.
+    "booking_pre_returning": False,       # only customers who've had a job before
+    "booking_pre_services": [],           # only these service codes ([] = every bookable service)
+    "booking_pre_min_days": 0,            # only times at least this many days away
+    "booking_pre_per_day": 0,             # at most this many instant bookings a day (0 = no limit)
+    "booking_reschedule_approval": True,  # customers' reschedules wait for an approver
+    # Booking for customers from the app's + (booking-spec.md §9.2, Phase 3)
+    "staff_booking": False,               # + → Customer request offers Book a visit / New service
+    "staff_booking_roles": ["manager", "staff"],   # server: who besides the owner may book
+    "staff_booking_approval": True,       # staff bookings wait for an approver (approvers' don't)
+    "staff_booking_override": "approvers",    # nobody | approvers | everyone: book outside the rules
+    "staff_booking_double_book": False,   # an override may put a crew on two visits at once
+    "staff_booking_all_services": True,   # any Services & Pricing item, not only online ones
+    "staff_booking_notify": True,         # "Send the customer a confirmation" starts ticked
+    # The one business Google Calendar, synced by Claude / Muse / Grok — personal installs only
+    # (booking-spec.md §6, Phase 5; booking_calendar.py). A server never uses Google Calendar.
+    "calendar_sync": "off",               # off | ai
+    "calendar_name": "",                  # e.g. "Blue Wave Jobs"
+    "calendar_days": 0,                   # days to sync; 0 = the booking horizon
+    "calendar_fresh_hours": 4,            # older than this → every booking waits for approval
+    # Share & embed, waitlist, reminders (booking-spec.md §4, §9.4, Phase 6)
+    "booking_allowed_sites": [],          # websites that may show the page in a frame; [] = none
+    "booking_waitlist": False,            # customers can ask to hear about an earlier opening
+    "booking_waitlist_hold_hours": 2,     # an offered opening is held this long
+    "booking_waitlist_approval": True,    # a taken opening waits for an approver
+    "booking_reminders": "email",         # off | email | text | both (text falls back to email)
+    "booking_reminder_hour": 17,          # the day before, at this local hour
+    "booking_reminder_morning": False,    # …and a short one the morning of the visit
 }
+STAFF_BOOKING_ROLES = ("manager", "staff", "field_crew")
+# Folder settings change where files are written on this PC, so they're set only in
+# AI-Prowler on this PC — never from the app's API or by Claude/Muse/Grok (2026-10-30).
+# Allowed websites changes what other sites may do with the page, so it's local-only too (§10).
+LOCAL_ONLY_SETTINGS = ("backup_dir", "booking_allowed_sites")
+# Service Desk Agent (2026-10-29): agent_* settings, checked by desk_agent_settings.validate
+import desk_agent_settings as _agent_settings  # noqa: E402
+SETTING_DEFAULTS.update(_agent_settings.DEFAULTS)
+# Customer page look (2026-10-30): page_* settings, checked by desk_page_look.validate
+import desk_page_look as _page_look  # noqa: E402
+SETTING_DEFAULTS.update(_page_look.DEFAULTS)
 
 SETTING_CHOICES = {
     "sms_new_request_mode": ("off", "create", "ask", "link"),
     "email_new_request_mode": ("off", "create"),
     "backup_frequency": ("hourly", "daily", "weekly"),
+    "booking_approval": ("approve_all", "preapprove", "auto"),
+    "booking_crew_mode": ("approver", "suggested", "office"),
+    "staff_booking_override": ("nobody", "approvers", "everyone"),
+    "calendar_sync": ("off", "ai"),
+    "booking_reminders": ("off", "email", "text", "both"),
 }
+
+
+# booking-spec.md §3, in page order. "buy" (2026-11-02): buy a product online — shipping &
+# handling added, paid by the Stripe / Square checkout link.
+BOOKING_PATHS = ("book", "buy", "new", "problem")
+BOOKING_RANGES = {                    # booking-spec.md §9.1
+    "booking_area_miles": (0, 250),
+    "booking_pre_min_days": (0, 60),
+    "booking_pre_per_day": (0, 50),
+    "booking_window_minutes": (30, 480),
+    "booking_lead_hours": (0, 336),
+    "booking_horizon_days": (1, 180),
+    "booking_max_per_day": (0, 200),
+    "booking_full_pct": (10, 100),
+    "booking_backups": (0, 3),
+    "booking_hold_hours": (1, 336),
+    "booking_release_hours": (2, 720),
+    "booking_suggest_hours": (1, 336),
+    "booking_change_hours": (0, 336),
+    "calendar_days": (0, 180),
+    "calendar_fresh_hours": (1, 168),
+    "booking_waitlist_hold_hours": (1, 48),
+    "booking_reminder_hour": (6, 21),
+}
+
+
+def clean_site(text) -> str:
+    """'https://www.BlueWave.com/book' → 'www.bluewave.com'. A leading '*.' is kept (any
+    subdomain). Raises DeskError for anything that isn't a plain website name."""
+    import re as _re
+    t = str(text or "").strip().lower()
+    if not t:
+        return ""
+    t = _re.sub(r"^[a-z]+://", "", t).split("/")[0].split("?")[0]
+    if not _re.fullmatch(r"(\*\.)?([a-z0-9-]+\.)+[a-z]{2,}(:\d{1,5})?", t):
+        raise DeskError(f"{str(text).strip()!r} isn't a website name like bluewavewindows.com")
+    return t
 
 
 def get_settings(db_path: str) -> dict:
@@ -414,6 +520,68 @@ def set_setting(db_path: str, key: str, value, *, actor=None,
         raise DeskError(f"{key} must be {type(SETTING_DEFAULTS[key]).__name__}")
     if key in SETTING_CHOICES and value not in SETTING_CHOICES[key]:
         raise DeskError(f"{key} must be one of: {', '.join(SETTING_CHOICES[key])}")
+    if key == "booking_paths":
+        if not value or any(p not in BOOKING_PATHS for p in value) or len(set(value)) != len(value):
+            raise DeskError(f"booking_paths must list one or more of: {', '.join(BOOKING_PATHS)}")
+        value = [p for p in BOOKING_PATHS if p in value]          # keep a fixed order
+    if key == "booking_welcome":
+        value = value.strip()
+        if len(value) > 300:
+            raise DeskError("booking_welcome must be 300 characters or fewer")
+    if key == "booking_area_zips":
+        clean = []
+        for z in value:
+            z5 = str(z).strip()[:5]
+            if not (len(z5) == 5 and z5.isdigit()):
+                raise DeskError(f"booking_area_zips: {str(z).strip()!r} isn't a 5-digit ZIP code")
+            if z5 not in clean:
+                clean.append(z5)
+        if len(clean) > 500:
+            raise DeskError("booking_area_zips can list at most 500 ZIP codes")
+        value = clean
+    if key == "booking_pre_services":
+        value = list(dict.fromkeys(str(x).strip()[:40] for x in value if str(x).strip()))
+        if len(value) > 200:
+            raise DeskError("booking_pre_services can list at most 200 services")
+    if key == "staff_booking_roles":
+        bad = [x for x in value if x not in STAFF_BOOKING_ROLES]
+        if bad:
+            raise DeskError(f"staff_booking_roles can list: {', '.join(STAFF_BOOKING_ROLES)} (the owner always can)")
+        value = [x for x in STAFF_BOOKING_ROLES if x in value]
+    if key == "calendar_sync" and value != "off" and edition == rules.BUSINESS:
+        raise DeskError("the server uses the Jobs app calendar only — Google Calendar isn't used there")
+    if key == "calendar_name":
+        value = value.strip()
+        if len(value) > 120:
+            raise DeskError("calendar_name must be 120 characters or fewer")
+    if key == "booking_allowed_sites":
+        value = [clean_site(x) for x in value]
+        value = list(dict.fromkeys(x for x in value if x))
+        if len(value) > 20:
+            raise DeskError("booking_allowed_sites can list at most 20 websites")
+    if key in BOOKING_RANGES:
+        lo, hi = BOOKING_RANGES[key]
+        if not lo <= value <= hi:
+            raise DeskError(f"{key} must be {lo}–{hi}")
+    if key == "backup_dir" and value.strip():
+        from pathlib import Path as _P
+        if not _P(value.strip()).is_absolute():
+            raise DeskError("backup_dir must be a full folder path")
+        value = value.strip()
+    if key.startswith("page_"):
+        try:
+            _page_look.validate(key, value, edition)
+        except ValueError as e:
+            raise DeskError(str(e)) from e
+        if key in ("page_bg_color", "page_accent"):
+            value = value.lower()
+    if key.startswith("agent_"):
+        try:
+            _agent_settings.validate(key, value, edition)
+        except ValueError as e:
+            raise DeskError(str(e)) from e
+        if isinstance(value, str):
+            value = value.strip()
     conn = get_connection(db_path)
     try:
         conn.execute(

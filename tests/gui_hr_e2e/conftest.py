@@ -46,10 +46,20 @@ def _free_port() -> int:
 
 
 def _fingerprint(folder: Path):
+    """Every file's name, size and time. 2026-11-02: SQLite's -shm / -wal side files get a new time
+    whenever ANY program merely opens the database — the AI-Prowler running on this PC checks its HR
+    agent database every couple of minutes, which failed this check with no test involved. Their
+    times are left out; a real write still shows (the database file itself, or the -wal size).
+    Same day, second full run: the side files also come and go (SQLite makes them on open and
+    deletes them on close), so they're left out entirely — except a -wal holding data, which
+    is a write not yet copied into the database."""
     if not folder.exists():
         return None
-    return sorted((str(p.relative_to(folder)), p.stat().st_size, int(p.stat().st_mtime))
-                  for p in folder.rglob("*") if p.is_file())
+    return sorted((str(p.relative_to(folder)), p.stat().st_size,
+                   None if p.name.endswith("-wal") else int(p.stat().st_mtime))
+                  for p in folder.rglob("*") if p.is_file()
+                  and not p.name.endswith("-shm")
+                  and not (p.name.endswith("-wal") and p.stat().st_size == 0))
 
 
 class Sandbox:

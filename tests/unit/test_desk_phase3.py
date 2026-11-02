@@ -398,17 +398,22 @@ def test_auto_close_zero_days_means_never_and_business_works_too(db):
     assert did["auto_closed"] == [tid]
     with pytest.raises(desk_db.DeskError):
         desk_db.set_setting(db, "auto_close_days", "3", actor=OWNER_S)       # type is checked
-    assert "auto_close_days = 5" in desk_tools.tickets_settings(db, OWNER_S, r.BUSINESS,
+    # 2026-10-30 server lock: changing settings through Claude/Muse/Grok is refused on a server
+    assert "🔒" in desk_tools.tickets_settings(db, OWNER_S, r.BUSINESS, setting="auto_close_days", value="5")
+    assert "auto_close_days = 5" in desk_tools.tickets_settings(db, None, r.SOLO,
                                                                 setting="auto_close_days", value="5")
 
 
 # ── tools ────────────────────────────────────────────────────────────────────
 
 def test_phase3_tools_text(db):
-    assert "Saved queue field" in desk_tools.manage_ticket_queues(
+    # 2026-10-30 server lock: queues and rules are set up in AI-Prowler on the server
+    assert "🔒" in desk_tools.manage_ticket_queues(
         db, OWNER_S, r.BUSINESS, action="save", queue_id="field", name="Field", members="ann, bob")
+    import desk_routing as rt
+    rt.upsert_queue(db, "field", name="Field", members=["ann", "bob"], edition=r.BUSINESS)
     assert "ann, bob" in desk_tools.manage_ticket_queues(db, OWNER_S, r.BUSINESS)
-    assert "Saved rule" in desk_tools.manage_ticket_rules(
+    assert "🔒" in desk_tools.manage_ticket_rules(
         db, OWNER_S, r.BUSINESS, action="save_rule", rule_id="b", match='{"keyword": "invoice"}',
         send_to_user="dave")
     desk_db.create_ticket(db, title="x", kind="internal", actor=OWNER_S)
@@ -420,5 +425,6 @@ def test_phase3_tools_text(db):
     assert "DRY RUN" in desk_tools.import_tickets(db, OWNER_S, r.BUSINESS, filename="a.csv")
     assert "verified" in desk_tools.tickets_backup_now(db, OWNER_S, r.BUSINESS)
     assert ".zip" in desk_tools.list_tickets_backups(db, OWNER_S, r.BUSINESS)
-    assert "backup_hour = 3" in desk_tools.tickets_backup_settings(db, OWNER_S, r.BUSINESS, backup_hour="3")
+    assert "🔒" in desk_tools.tickets_backup_settings(db, OWNER_S, r.BUSINESS, backup_hour="3")
+    assert "backup_hour = 3" in desk_tools.tickets_backup_settings(db, None, r.SOLO, backup_hour="3")
     assert desk_tools.tickets_backup_now(db, CREW, r.BUSINESS).startswith("❌")

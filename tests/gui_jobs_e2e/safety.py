@@ -122,6 +122,13 @@ NEVER = {"restore_job_database", "record_learning", "update_learning",
          # 2026-10-25: on the Jobs app's allow-list but never classified here —
          # stopping a real indexing run is never a test's business.
          "cancel_indexing"}
+# 2026-10-31: the 🤖 Agent tab (the Jobs agent). The app reads its status at every page load
+# (the tab badge); status / list / practice / settings / flow only read. Approving, settings,
+# Run now act on the REAL agent queue — never in a test (Guard.check below).
+JOBS_AGENT_READS = {"status", "list", "practice", "settings", "flow"}
+NEVER |= {"jobs_agent"}
+# 2026-10-31: the HR agent's chat tool (counts only); status reads, run_now acts — never in a test.
+NEVER |= {"hr_agent"}
 READ |= {"indexing_status",
          # 2026-10-25: the server suite's SRV-API-12 lists the owner's ztest learnings
          "list_learnings"}
@@ -523,6 +530,14 @@ class Guard:
         a = args or {}
         if tool in MILEAGE_TOOLS:
             return self._mileage_decision(tool, a)
+        if tool == "jobs_agent":
+            act = str(a.get("action") or "status").strip().lower()
+            return (("allow", f"jobs_agent {act} (read)") if act in JOBS_AGENT_READS
+                    else ("block", f"jobs_agent {act} acts on the real agent queue / settings"))
+        if tool == "hr_agent":
+            act = str(a.get("action") or "status").strip().lower()
+            return (("allow", "hr_agent status (read)") if act == "status"
+                    else ("block", f"hr_agent {act} starts the real HR agent"))
         if tool == "delete_learning":
             # 2026-10-25: SRV-API-12's learnings are removed by the owner over
             # /mcp — only ones titled "ZTEST E2E …" (looked up, never guessed).

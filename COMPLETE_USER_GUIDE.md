@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 9.6.0 — updated October 22, 2026
+## Version 9.7.0 — updated October 22, 2026
 
 ---
 
@@ -33,6 +33,7 @@
 25. Jobs PWA App (the mobile app for crews and owners — incl. roles & data access in server mode)
 26. Remote PWA App
 27. Service Desk (tickets)
+28. AI Agents — Service Desk, Booking & scheduling, Jobs (with Route flow) and HR
 
 ---
 
@@ -318,6 +319,7 @@ Two phone/desktop web apps for running HR on an AI-Prowler server. Turn them on 
 
 - **HR Admin** (`/hr_admin/`) — for owners and managers: employee records, onboarding tasks, documents, time off, schedules and compliance. Sign in with your **name and AI-Prowler token** (the same ones you use for the Jobs app).
 - **HR Portal** (`/hr_portal/`) — for employees: their own profile, pay, time off, schedule, tasks, trainings, documents, company news and messages. Employees sign in with **their own AI-Prowler name and token** — the ones in the server's **Admin** tab.
+- **🤖 HR agent** (v9.6.1) — an optional AI assistant that watches HR deadlines, prepares paperwork and drafts answers for HR to approve in HR Admin → **🤖 Agent**. People make every decision about a person, and private details are never sent to the AI. See **§28.6**.
 - **Sharing the apps** — on the **Small Business** tab, each app's row has **📋 Copy**, **📧 Email to user** and **📱 QR** (scan the code from your screen with a phone to open the app).
 
 **First-time setup.** The first time HR Admin opens, the **Company Setup** wizard asks for your company details, EIN, payroll and tax registrations, and **Work States** — every state plus DC is listed (hover over a code to see the state's name). The states you pick decide which state registrations and tasks are created.
@@ -761,9 +763,9 @@ Every prompt carries a one-time **code** (`RT-XXXXXX` for a day's route, `WK-XXX
 | `apply_week_moves` | **✅ Approve selected**: moves the ticked jobs to their suggested dates. Each move is checked again first — a job that changed since the AI looked is skipped, never forced. Then route each day as usual. | Personal + Server |
 | `dismiss_week_proposal` | **Dismiss**: closes the suggestion without moving anything. | Personal + Server |
 
-#### Agentic Analysis Tools (Personal Only)
+#### Agentic Analysis Tools (Personal; the task tools also on a Server for owner + managers)
 
-These tools power the **Common Business AI Analysis** and **My Custom AI Analyses** sections in the Quick Links tab. Not available in server mode.
+These tools power the **🧠 AI Analysis Tasks** section in the Links & Analysis tab. On an AI-Prowler Server (2026-11-02) the task tools (create / list / update / delete, and saving a report) are for the owner and managers — a manager sees only their own tasks — and the chat-run tools (`get_pending_analysis_tasks`, `complete_analysis_task`) aren't offered, because a server runs every task itself.
 
 | Tool | What It Does | Mode |
 |---|---|---|
@@ -794,6 +796,28 @@ Full detail, decision table ("which one do I want?"), and the Small Business tab
 | `export_to_quickbooks_csv` | Customers/Invoices CSVs pre-labeled with QuickBooks Online's own field names — QBO's own "map your fields" import screen still appears, but the mapping is fast since the column names already match. | Personal + Server (not field crew) |
 | `backup_job_database` | Lossless, round-trippable full-database backup via SQLite's own online Backup API — safe to run while the database is being actively written to. Defaults to `backup/AI-Prowler-Backup-<timestamp>.db` next to the live database. | Personal + Server (not field crew) |
 | `restore_job_database` | Replaces the live database with a backup file — meant for **moving to a new PC**. Requires `confirm=True`; an unconfirmed call changes nothing and shows how many jobs, customers, invoices, quotes, time entries and route stops are live now and how many are in the backup. Always validates the incoming file and takes a safety backup of whatever's live before overwriting it. **Server mode:** if the live database already has records, a confirmed restore is still refused unless `replace_existing=True` is also passed — Claude, Muse, or Grok should only do that after you have seen both counts and said plainly that you want the current data wiped. | Personal + Server (not field crew) |
+
+---
+
+#### AI Agents, Bookings & Calendar Sync (v9.6.1)
+
+The four AI agents (Service Desk, Booking & scheduling, Jobs with its Route flow, HR) — how they work, what they may never do, and every setting: **§28 AI Agents.** Turn these tools on with the **Service Desk** group in Settings → 🧩 MCP Tool Configuration (the Jobs agent's tool is in **Job Tracker & Routing**, the HR agent's in **HR apps**).
+
+| Tool | What It Does | Mode |
+|---|---|---|
+| `desk_agent_next` | Claims the next item(s) in the agent queue — tickets, bookings and Jobs agent items (ids like `J12`) — and returns the context pack, the allowed actions and the rules. Never returns HR items (HR data never goes to a chat). Owner or manager. | Personal + Server |
+| `desk_agent_submit` | Finishes one item: a JSON list of actions, each with `why` and `confidence`. AI-Prowler checks each against the owner's settings and applies it (Auto), holds it for a person (Suggest, risky or a safety rule) or only records it (practice mode). Owner or manager. | Personal + Server |
+| `desk_agent_review` | `list` / `practice` / `approve` / `edit` (edits = JSON like `{"body": "…"}`) / `reject` / `up` / `down`, optionally filtered by `kind` (ticket, booking, job, route). Owner or manager; approves only after a clear yes. | Personal + Server |
+| `desk_agent_status` | On/off for tickets, bookings and jobs, the runner, how many items wait in the queue and for a person. Owner or manager. | Personal + Server |
+| `desk_agent_run_now` | Starts the self-running agent now (Claude API key, Claude subscription on personal installs, or the Grok bot) and the Jobs agent if it's on; retries failed items. Owner. | Personal + Server |
+| `jobs_agent` | The Jobs agent: `status`, `list`, `practice`, `approve` / `edit` / `reject` / `up` / `down` (ids like `J12`), `run_now`, `settings` (with both diagrams), `set` (owner; personal installs — on a server at the server PC), `flow`. Returns JSON. Owner or manager. | Personal + Server |
+| `hr_agent` | The HR agent from a chat — **counts only**: `status` (on/off, runner, how many waiting) and `run_now`. Its suggestions are reviewed in HR Admin → 🤖 Agent; no HR details are returned. Owner. | Server only (with HR apps on) |
+| `review_booking` | Website bookings waiting in 📅 To approve: `list`, `windows`, `approve`, `suggest` (another window), `decline`. Owner; managers on a server when allowed. | Personal + Server |
+| `calendar_sync_busy` | Calendar sync step 1: the busy times Claude, Muse or Grok read from the one business Google Calendar (no titles). Owner. | Personal only |
+| `calendar_pending_events` | Step 2: confirmed bookings to add, change or delete on that calendar. Owner. | Personal only |
+| `calendar_mark_synced` | Step 3: the Google event ids (or errors) for what was written. Owner. | Personal only |
+| `calendar_sync_status` | Last sync, stale warning, waiting items, errors, clashes and the sync prompt. | Personal only |
+
 
 
 
@@ -2082,230 +2106,89 @@ The Quick Links tab is a one-click launcher for the AI apps that connect to AI-P
 
 Optional — MCP finds AI-Prowler's tools on its own. To check the connection, click **📋 Copy Command**, paste it into a Claude, Muse, or Grok chat and press Enter: it verifies the MCP link is live and lists all available AI-Prowler tools.
 
-### 🤖 Autonomous AI Task Queue
+### 🧠 AI Analysis Tasks
 
-The **Autonomous AI Task Queue** runs your queued analysis tasks — both **Common Business AI Analysis** and **My Custom AI Analyses**, below — on a schedule via Claude Code, without you opening a chat and pasting the run command yourself.
+**AI Analysis Tasks** are analyses you set up once — a name, what the AI should do, and when — that AI-Prowler then runs for you. Up to **25** tasks.
 
-These are AI-assisted tasks that can be queued and stored for repeated and/or future execution. Claude, Muse, or Grok has tools to manage, add, and run these task queues via AI-Prowler MCP tools remotely, in addition to the manual configuration described here.
+> **On an AI-Prowler Server (2026-11-02): for the owner and managers.** The server program runs every task itself on the 🔑 Agent API Key (shared monthly budget with the agents) — there's no "Copy for chat" and Auto-run is always on. Tasks made in the server's own window belong to the owner; a manager can make their own from a chat (Claude, Muse or Grok) and only sees and changes their own. **Each task runs signed in as the person it belongs to**, so it sees exactly what that person can see — an owner's task can include HR (HR Admin is server-only, so this is the one place an analysis can cover jobs, invoices, Service Desk *and* HR together). A task's emailed result goes to that person. Staff and field crew can't use AI Analysis Tasks. Reports are saved in the server's own reports folder.
 
-> **Not available in server mode.**
+> **No queue (2026-11-01).** Every task has **its own schedule**. The old **Common Business AI Analysis** buttons, the **▶ Show Queue** panel and the **🤖 Autonomous AI Task Queue** panel are gone — they're all one section now. Anything that was still queued when you updated was moved into the tasks themselves the first time the new version started (the old file is kept as `pending_tasks.json.retired`). If the Task Queue was switched on, your scheduled tasks keep running on their own.
 
-> **Unattended runs work with Claude and Grok.** Claude runs use the Claude Code CLI (via your subscription or an Anthropic API key). Grok runs call the xAI API directly with a Grok API key — no CLI needed. Muse has no API key released yet, so unattended Muse runs aren't possible; with Muse, queue the tasks (**▶ Queue**), then open a Muse chat and paste the run command (**Ctrl+V**).
+#### How a task runs
 
-> **Requires a Claude Pro subscription or higher** to use Claude Code CLI — the free Claude tier does not include Claude Code access. Not required if you use an API Key instead (see Auth, below).
+- **⏱ Auto-run on (the default for scheduled tasks):** AI-Prowler runs the task itself when it's due — **one AI call per task** — on your **Agent API Key** (🔑 Agent API Key at the top of the Small Business tab), the same key the agents use. A typical run costs a few cents. AI-Prowler checks the tasks once a minute while it's running; checking is free.
+- **⏱ Auto-run off:** the task is run from a chat. When it's due, ask Claude, Muse or Grok to **"run my due analysis tasks"** (the chat calls `get_pending_analysis_tasks()`), or use the task's **📋 Copy for chat** button and paste it into a chat. Use this with Muse, which has no API key yet.
+- **A missed run** (AI-Prowler was closed) runs once when it next starts. Missed runs never pile up — the task then moves to its next time.
+- **A run that can't start** (no key saved, budget used up, AI-Prowler's local connection off) isn't counted: the task stays due and AI-Prowler tries again an hour later. The task row shows **"waiting: …"** with the reason.
+- **Which AI:** each task uses the **Default AI** (Claude or Grok, chosen in the Automatic runs bar — Claude runs use the agents' **complex & customer** model) unless the task picks its own AI and model.
+- **One budget.** Every run's cost is recorded on the task (**Last: ✅ Nov 1 9:00 AM · $0.0123**), counts in the agents' **Monthly budget** and shows in **📊 Cost analysis…** as "Task Queue". A run doesn't start when the budget is used up, and a single run stops at $1.00.
+- **Tools:** the AI uses AI-Prowler's own tools over this PC's local connection (`localhost:8000`, with this install's Bearer Token — **Settings → Remote Access** must be set up). It's never offered tools that write files, run scripts or change tasks. Claude runs may use web search (1¢ per search).
 
-#### The On/Off toggle
+#### The Automatic runs bar
 
-A single large button — reading **"Toggle On/Off"** with **"Autonomous AI Task Queue OFF"** beneath it in red, or **"Autonomous AI Task Queue ON"** in green — is the entire control for turning automation on and off. Click it and it flips color and state immediately: green/ON installs (or updates) a Windows Scheduled Task at the time and frequency you've set below; red/OFF genuinely removes the real Windows Scheduled Task (`schtasks /delete`), not just a soft disable. There's no separate checkbox to keep in sync — the button's color and text are always the real, currently-applied state.
+| Control | What it does |
+|---|---|
+| **🟢 Automatic runs ON / ⏸ PAUSED** | Pauses or resumes every auto-run task at once. The status line shows how many tasks run on their own and which is next, or **"but nothing can run yet: …"** when something is missing. |
+| **Default AI** | Claude or Grok — the AI tasks use unless they pick their own. The line under it says whether that key is saved and which model runs. |
+| **Text me when a run finishes** | Optional SMS/WhatsApp summary after each run. |
+| **Claude may search the web** | Untick to turn web search off. |
+| **📄 Run log / 🗑 Clear log** | **Run log** shows the newest 300 lines: each task run's start, tool calls, cost and result — plus a line for every AI-Prowler tool any of your apps used (Claude Desktop, the phone, the Jobs app). It looks after its own size: past 512 KB it starts a new file and keeps the 2 before it, so it never takes more than about 1.5 MB. **Clear log** asks first, then empties it and its 2 older files; your tasks, schedules and results aren't changed. |
 
-Below the toggle, a live status line shows the *actual* Windows-reported state — e.g. **🟢 Armed — Daily at 06:00:00 (next: 7/27/2026 6:00:00 AM)** or **🔴 Not armed** — read directly from `schtasks /query`, not just echoed back from what's typed into the fields above it. This ensures the GUI's own fields never silently drift from what Windows actually has scheduled; you can always tell at a glance whether real automated runs are currently armed.
+**Coming from the CLI version:** the old Task Queue keys, Claude CLI token and wrapper files are removed automatically — save your key in **🔑 Agent API Key**. If Windows needs admin rights to remove the old **AI-Prowler-QueueRunner** task, a one-time **Remove old Windows task** button appears (it does nothing any more either way).
 
-#### Setup
+#### Starting from a common business analysis
+
+The four starter buttons — **📊 Analyze My Business**, **💡 Weekly Business Advisor**, **⚠️ Find Problems**, **📈 Growth Opportunities** — open the task editor already filled in with that analysis. Pick a schedule (or leave it a one-off), change anything you like and **Save**. Nothing runs until you save.
+
+> **🔌 QuickBooks:** with the QuickBooks Online connector connected, these analyses use QuickBooks as the main financial source (P&L, margins, AR/AP aging, cash flow) when run from a chat; otherwise they use the job tracker.
+
+**Importing from QuickBooks into the job tracker.** With the QuickBooks connector connected in Claude.ai, you can also ask Claude, Muse, or Grok to pull data from QuickBooks into the Jobs database — for example *"Import new customers from QuickBooks"* or *"Import QuickBooks payments and update job payment statuses."* Customers are matched by phone, then name + email; invoices link to jobs by customer + date; payments update invoice and job status. Claude, Muse, or Grok always previews counts and matches before writing anything.
+
+#### The task editor (+ New Task / ✎ Edit)
 
 | Field | Description |
 |---|---|
-| **Scheduled time** | 24-hour `HH:MM` — the time of the single daily run when **Check queue** (below) is set to 1×/day. Click **💾 Apply** right next to the field to push a change to the real Windows Scheduled Task immediately — editing the field alone has no effect until Apply is clicked or the toggle is cycled. Apply works whether automation is currently on or off, and **flashes green** on click as visual confirmation it took effect. |
-| **Check queue: N times/day** | How often the queue itself gets checked for due work — independent of any individual task's own schedule. **1** (default) keeps the classic once-a-day check at Scheduled time above. **>1** switches to an hourly-interval Windows trigger instead (e.g. 10×/day ≈ every 2 hours), checking around the clock. A task still only actually *runs* when it's due per its own schedule — this field only controls how often AI-Prowler looks. |
-| **Credit-usage warning** | Appears automatically next to the times/day field once it's set above 1 — a reminder that each automatic check draws from your Claude subscription's usage pool (or metered API billing, if configured that way). Not shown at 1×/day, since a single daily check barely costs anything. |
-| **Text me when a run finishes** | Optional SMS/WhatsApp notification, sent to whichever method is selected. |
-| **Auth** | **Subscription (OAuth)** — uses your Claude Pro/Max plan; click **🔑 Get / Renew Token** to sign in. **Anthropic API Key (metered billing)** — Claude only; a separate pay-as-you-go account; paste a key from console.anthropic.com and click **Save Key** (and **Clear Key** to remove one). **Grok API Key (xAI)** — Grok only; paste a key from console.x.ai and click **Save Key**. Muse has no API key released yet. |
-| **🧪 Test Setup (Dry Run)** | Runs a checklist (Claude Code CLI installed, **Remote access (Bearer Token)** set up, **Running AI-Prowler (local connection)** answering, MCP config current, token/key valid) without actually running any tasks, so you can confirm everything is wired up before turning it on. It never starts anything. |
-| **📄 View Audit Log** | Read-only history of past autonomous runs. |
+| **Name** | Short label shown on the task row. |
+| **What should the AI do?** | The full instructions — be as specific as you like. |
+| **Scope** | Tick indexed folders to focus on; leave all unticked to search everything. |
+| **Schedule / Starting** | Manual only (a one-off) / Daily / Weekly / Every 2 weeks / Monthly, and the first date (`YYYY-MM-DD`). |
+| **Time of day / Day** (weekly, every 2 weeks, monthly) | When it runs (24-hour `HH:MM`, default 09:00) and, optionally, which weekday — e.g. *every Monday at 08:00*. |
+| **Start time / End time / Times per day** (daily) | 1 = once a day at Start time; more spreads the runs evenly from Start to End (max 24 — 24× from 00:00 to 23:00 is hourly). A live **"Runs at: …"** line shows the result. More runs cost more. |
+| **⏱ Auto-run** | AI-Prowler runs it when due on the Agent API Key. Off = a chat runs it. |
+| **AI / Model** | Default AI, or Claude / Grok with an optional model just for this task. |
+| **Output** | 💡 Learnings, 📄 Word document (.docx), ✉️ Email — at least one. |
+| **Report folder** | Where `.docx` reports go (default `~/Documents/AI-Prowler_tasks_reports`). |
 
-Turning automation on for the first time (off → on) automatically resyncs any overdue custom-task backlog to start from today, rather than firing every accumulated overdue occurrence at once.
+**Save** saves it; **Save & ▶ Run now** saves and runs it once right away.
 
-**Always uses the AI-Prowler that's already running (2026-10-22).** Every queue run — scheduled or **▶ NOW**, Claude or Grok — talks to this computer's running AI-Prowler over its local connection (`localhost:8000`, never the internet), signed in with this install's Bearer Token so AI-Prowler knows the run is yours. A run **never starts a second copy of AI-Prowler** (two copies on the same database used to make runs slow or hang). What that means for you:
+#### Task rows
 
-- **Remote access must be set up.** The local connection only exists when there's a Bearer Token (**Settings → Remote Access**). Without one, the queue can't be turned on and **🧪 Test Setup** says so.
-- **AI-Prowler starts with your PC.** The installer sets AI-Prowler to start when you sign in to Windows, so it's normally already running when a scheduled run fires.
-- **If it isn't running** when a scheduled run fires, the run starts the normal AI-Prowler app (the same way signing in does — on your desktop, never a hidden copy), waits up to **5 minutes** for it, then runs. If it still doesn't answer, the run is **skipped** and says why in the status line, the run log and the audit log — nothing is lost: the tasks stay due and the next run does them. Windows only starts the app while you're signed in. **▶ NOW** never starts anything — the app with the button is the running AI-Prowler.
-- The run uses **only** AI-Prowler's own connection, never other MCP servers set up in your Claude account (which might include a second AI-Prowler).
-- **Missed runs don't pile up.** If the PC was off for a day, each overdue task runs **once** at the next run and its next due time moves to the next slot after now.
+Each task shows its schedule (e.g. *Weekly · Mon · 08:00 · Default AI*), when it's due, its last run with the cost, and:
 
----
+- **⏱ Auto-run** — tick to let AI-Prowler run it on its schedule.
+- **▶ Run now** — runs it once now on the Agent API Key and shows the result and its cost. With no key saved it offers to copy it for a chat instead. A Run now of a task that isn't due keeps its schedule.
+- **📋 Copy for chat** — copies a prompt that runs this task in Claude, Muse or Grok and records it (`complete_analysis_task`).
+- **✎ Edit** / **🗑** delete.
 
-### 🧠 Common Business AI Analysis
+Tasks a chat creates or changes (`create_analysis_task`, `update_analysis_task`) show up here by themselves within a few seconds.
 
-The **Common Business AI Analysis** section provides five one-click analysis commands that use Claude/Muse/Grok's full reasoning capability over your local data — no API key required, no cloud uploads.
+#### From a chat or the phone
 
-> **Not available in server mode.** This section and My Custom AI Analyses are hidden automatically when AI-Prowler detects `mode=server` in config.json.
+- `create_analysis_task` / `update_analysis_task` take the same fields, including `auto_run`, `run_time`, `ai_provider` and `ai_model`.
+- `list_analysis_tasks` lists every task; `get_pending_analysis_tasks` lists what **a chat** should run now (due tasks with Auto-run off, or ones asked to run from a chat); `complete_analysis_task(task_id, summary)` records a chat run and moves the task to its next time.
+- `queue_single_task(task_id)` (name kept for older apps) asks AI-Prowler to run one task now. The Remote App's **▶ Run now** button does the same, and its **⏱ Up next** card shows what's due or about to run.
 
-An explanatory **💡 How AI Analysis Tasks Work** info card is displayed directly below the section header. It explains the queue-and-paste workflow and directs users to My Custom AI Analyses for scheduling.
+#### Scheduling details
 
-Hovering any button shows a one-line tooltip in the status bar describing what that analysis does.
-
-#### How it works
-
-1. Click an analysis button (e.g. **📊 Analyze My Business**)
-2. A **Configure** popup opens — set scope, output, schedule, and report folder (see popup fields below). For **🧠 Run Pending Analysis**, no popup appears — the command is copied immediately.
-3. Click **Queue Analysis →** — AI-Prowler writes the task to `~/.ai-prowler/pending_tasks.json` and copies the run command to your clipboard
-4. Open a new Claude, Muse, or Grok chat and press **Ctrl+V** — **the command runs ALL tasks currently in the queue**
-5. Claude, Muse, or Grok calls `get_pending_analysis_tasks()`, reads every queued task, and executes each full analysis using all available AI-Prowler tools
-6. Claude, Muse, or Grok records findings as learnings via `record_learning()`
-7. Claude, Muse, or Grok calls `complete_analysis_task(task_id, summary)` to mark each task done and auto-advance the next due date if a schedule was set
-
-This approach works entirely within the MCP architecture — Claude, Muse, or Grok is the reasoning engine, AI-Prowler is the data server. No Anthropic API key is needed in AI-Prowler itself.
-
-#### Analysis buttons
-
-| Button | What it does |
-|---|---|
-| 🧠 **Run Pending Analysis** | Copies the run-queue command to clipboard immediately — no popup. Opens a small info box reminding you to press Ctrl+V in Claude, Muse, or Grok. Each queued task already has its own scope, output, and schedule from when it was created. |
-| 📊 **Analyze My Business** | Full business health check. Uses QuickBooks (invoices, payments, customers, P&L, AR aging) if connected; otherwise reads job tracker data (the same data shown in the Jobs PWA App). Searches indexed documents and learnings. Records 3–5 `business_insight` learnings. |
-| 💡 **Weekly Business Advisor** | End-of-week debrief. Uses QuickBooks (invoices/payments this week, cash in vs out, overdue this week) if connected; otherwise reads the job tracker. Also checks weather for next week's scheduling. Records `weekly_review` learnings. |
-| ⚠️ **Find Problems** | Scans for overdue invoices by aging bucket (using QuickBooks AR/AP aging if connected, otherwise AI-Prowler AR report), jobs over estimate by >20%, unanswered customer SMS, unresolved problem flags. Records each as a `problem_flag` learning. |
-| 📈 **Growth Opportunities** | Mines financial data for growth signals. With QuickBooks: P&L by service type, net margin per service, seasonal revenue trends, customer value rankings. Without QuickBooks: job history, fast-paying customers, geographic clusters, upsell pairs. Records 3–5 `growth_opportunity` learnings. |
-
-> **🔌 QuickBooks Integration:** If you connect the QuickBooks Online MCP connector in Claude.ai (Settings → Connectors), Claude, Muse, or Grok will automatically detect it when executing any of these analyses and use QuickBooks as the primary financial data source — giving you real P&L, true net margins, expense ratios, AP aging, and cash flow data that goes beyond what the job tracker can provide on its own. No configuration change needed in AI-Prowler; the prompts detect and use QuickBooks automatically at runtime.
-
-**Importing from QuickBooks into the job tracker.** With the QuickBooks connector connected in Claude.ai, you can also ask Claude, Muse, or Grok conversationally to pull data from QuickBooks into the Jobs database — for example: *"Import new customers from QuickBooks,"* *"Import this month's QuickBooks invoices and link them to jobs,"* or *"Import QuickBooks payments and update job payment statuses."* What Claude, Muse, or Grok does:
-
-- **Customers:** queries QuickBooks customers, matches against the Jobs DB (by phone, then name + email), and creates only the new ones (`CUST-####`, never reusing numbers). On matched customers it fills in blank fields only — never overwrites your service preferences (frequency, time windows, pricing).
-- **Invoices:** imports QuickBooks invoices, links each to its job by customer + date, and writes the invoice ID back onto the job. Already-imported invoices are skipped, so re-running is safe.
-- **Payments:** applies QuickBooks payments to their invoices (`amount paid`, `payment date`, `payment method`, Paid/Partial status) and cascades the status to the linked jobs.
-- **Receipts (sales receipts):** creates paid-in-full invoice records and stamps the job's receipt-sent date.
-
-Claude, Muse, or Grok always previews counts and matches before writing anything, so you can review before it commits. (There are no QuickBooks buttons in the app itself — that would require building Intuit OAuth into AI-Prowler, which isn't included; the conversational path above is the supported workflow.)
-
-#### Configure Popup
-
-When you click any button except 🧠 Run Pending Analysis, a scrollable **Configure** popup opens (806×980). All fields are always reachable by scrolling with the mouse wheel.
-
-| Field | Description |
-|---|---|
-| **Analysis** | Read-only — shows the button name |
-| **What this does** | Green info box explaining what data will be read and what output will be produced |
-| **Prompt (auto)** | Collapsed by default. Click **▶ Show prompt** to expand and read the full Claude, Muse, or Grok instruction (read-only). |
-| **Scope directories** | Scrollable checklist of all indexed directories. Check one or more to restrict the analysis. Leave all unchecked to search everything. |
-| **Output — 💡 Save key insights to Learnings** | Default ✅. Appends `record_learning()` instruction to the prompt. |
-| **Output — 📄 Save full analysis as Word document (.docx)** | Default ☐. Appends `save_analysis_report()` instruction with the report folder path. |
-| **Output — ✉️ Email the analysis** | Default ☐. Sends the finished analysis via AI-Prowler's own configured SMTP account (`send_email`) — if a Word document is also checked, the report is attached automatically. **At least one of the three outputs must be selected** — a task with none checked has nowhere for its results to go when run unattended, since there's no chat window in a headless run to display them in. |
-| **Schedule** | **Manual only** (default) = one-shot, runs once. Choose Daily / Weekly / Every 2 weeks / Monthly / Quarterly / Yearly to make this a recurring task. AI-Prowler tracks when it's next due and surfaces it automatically. |
-| **Start time / End time / Times per day** (Daily only) | Shown only when **Daily** is selected. Times per day = 1 (default) runs once, at Start time. Greater than 1 spreads that many runs evenly across the day, landing exactly on Start time and exactly on End time (e.g. Start 08:00, End 20:00, 3×/day → 08:00, 14:00, 20:00). Max 24/day — "24× between 00:00–23:00" is how an hourly cadence is expressed; there's no separate Hourly option. A live **"Runs at: ..."** preview below the fields shows exactly what your settings produce, and the credit-usage warning (below) appears automatically once times/day is set above 1. |
-| **First due date** | YYYY-MM-DD. Enabled when a schedule is selected. Defaults to today if left blank. The anchor date for schedule advancement — e.g. a "Weekly" task due June 24 will next be due July 1, then July 8, etc. |
-| **Report folder** | Where `.docx` reports are saved. Defaults to `~/Documents/AI-Prowler_tasks_reports`. Click **Browse…** to change. |
-| **Ctrl+V reminder** | Italic reminder: *"After clicking Queue Analysis → open a new Claude, Muse, or Grok chat and press Ctrl+V to run all queued tasks."* |
-
-> **Autonomous AI Task Queue usage note:** a static reminder appears in this popup — *"If the Autonomous AI Task Queue is enabled, each automatic check uses Claude subscription usage credits."* This is plain GUI text, not something Claude, Muse, or Grok says in conversation.
-
-> **Scheduling built-in tasks:** When you set a schedule on a Common Business button, `complete_analysis_task()` automatically advances `next_due` after Claude, Muse, or Grok finishes — anchored to the original due date (not the completion date). The entry re-arms — `status` resets to `"pending"` and it stays in the queue permanently, resurfacing in `get_pending_analysis_tasks()` on its own once the new `next_due` arrives. You don't need to re-queue it manually each cycle; only one-shot (`schedule: none`) buttons complete permanently. The next due date is reported back to Claude, Muse, or Grok as `Next scheduled run: YYYY-MM-DD`.
-
-#### Task queue JSON schema
-
-Tasks are stored in `~/.ai-prowler/pending_tasks.json`. The full schema:
-
-```json
-{
-"task_id":          "analyze_business_20260624_143022",
-"type":             "analyze_business",
-"label":            "📊 Analyze My Business",
-"prompt":           "Analyze my business data...",
-"scope_dirs":       ["C:\\Users\\david\\OneDrive\\Documents\\Invoices"],
-"output_learnings": true,
-"output_report":    false,
-"output_email":     false,
-"report_folder":    "C:\\Users\\david\\Documents\\AI-Prowler_tasks_reports",
-"schedule":         "daily",
-"first_due":        "2026-06-24",
-"next_due":         "2026-06-25T09:00:00",
-"daily_start_time":    "09:00",
-"daily_end_time":      "17:00",
-"daily_times_per_day": 1,
-"created_at":       "2026-06-24T14:30:22Z",
-"status":           "pending"
-}
-```
-
-`next_due` is a full date+time (`YYYY-MM-DDTHH:MM:SS`) for `"daily"` schedule entries — it carries the actual next run time, not just the date — and stays a plain date (`YYYY-MM-DD`) for every other schedule (weekly, monthly, etc.), which have no time-of-day granularity.
-
-When Claude, Muse, or Grok completes the task, a one-shot entry (`schedule: "none"`) has `status` change to `"completed"` permanently — `completed_at` and `completion_summary` are added, and it's kept for audit rather than deleted. A recurring entry instead has `next_due` advanced and `status` reset back to `"pending"` (re-armed) — it stays live in the queue and resurfaces on its own next cycle rather than needing to be re-queued manually.
-
-The collapsible **▶ Show Queue** panel (below the analysis buttons) lets you see what's waiting, remove individual items (✕), or clear everything (🗑 Clear Queue). Each recurring item shows a due badge — 🟢 **Due now** if it's actually ready to run, or ⏳ **Due YYYY-MM-DD** if it's queued but the date hasn't arrived yet — so you can tell at a glance whether something sitting in the queue is about to fire or just waiting. The list also refreshes live the moment a new task is saved & queued while the panel is already expanded, instead of requiring a manual collapse/re-expand.
-
-#### Tips
-
-- Queue multiple analyses before opening Claude, Muse, or Grok — click several buttons in sequence, paste the command once. Claude, Muse, or Grok runs all pending tasks in sequence.
-- Findings are stored as learnings and immediately searchable in future Claude, Muse, or Grok conversations via `search_learnings()`.
-- Use **🧠 Run Pending Analysis** as a batch shortcut — just click it, press Ctrl+V in Claude, Muse, or Grok, and everything in the queue runs.
-- For recurring analyses (weekly review, monthly AR check), set a **Schedule** in the popup instead of clicking the button manually each time.
-- **Connect QuickBooks Online** in Claude.ai for richer financial analysis — Claude, Muse, or Grok automatically detects it and uses QuickBooks P&L, true margins, AP/AR aging, and cash flow data without any extra setup.
-
----
-
-### 📋 My Custom AI Analyses
-
-**My Custom AI Analyses** lets you define your own analysis tasks — with a custom name, prompt, optional directory scope, schedule, and output format. Up to **25** custom tasks are supported.
-
-These user custom-defined tasks are AI-assisted tasks that can be queued and stored for repeated and/or future execution. In addition to manual configuration here, Claude, Muse, or Grok can also create and add these via AI-Prowler MCP tools remotely.
-
-> **Not available in server mode.** Hidden automatically when `mode=server` is detected.
-
-> **AI Route Optimizer task retired (2026-10-22).** The Small Business tab used to create an **"AI Route Optimizer (full reasoning)"** custom analysis here. Route planning is now done from the Jobs app with **📋 Copy AI Route** (Section 25), so that button is gone and the task is removed automatically (with any queued run of it) the first time the new version starts. Your other custom analyses are not touched — and a copy you renamed yourself is kept.
-
-#### Creating a Custom Task
-
-Click **+ New Custom Analysis** to open the task editor (scrollable, 806×884). All fields are always reachable by scrolling with the mouse wheel.
-
-| Field | Description |
-|---|---|
-| **Name** | Short label shown on the task card (e.g. "Monthly Customer Review") |
-| **Prompt** | Full instruction for Claude, Muse, or Grok — describe what to analyze and what to produce. Be specific: mention which tools to use, which learning categories to record under, and any report preferences. |
-| **Scope directories** | Scrollable checklist. Only absolute directory paths shown — metadata fields filtered out automatically. Leave all unchecked to search everything. |
-| **Schedule** | Manual only / Daily / Weekly / Every 2 weeks / Monthly / Quarterly / Yearly |
-| **Start time / End time / Times per day** (Daily only) | Shown only when **Daily** is selected. Times per day = 1 (default) runs once, at Start time. Greater than 1 spreads that many runs evenly across the day, landing exactly on Start time and exactly on End time (e.g. Start 08:00, End 20:00, 3×/day → 08:00, 14:00, 20:00). Max 24/day — "24× between 00:00–23:00" is how an hourly cadence is expressed; there's no separate Hourly option. A live **"Runs at: ..."** preview shows exactly what your settings produce. |
-| **First due date** | YYYY-MM-DD. When the first scheduled run should occur. Leave blank for manual-only tasks. Auto-populates with today when you select a schedule. |
-| **Output — 💡 Save key insights to Learnings** | Claude/Muse/Grok's prompt instructs it to call `record_learning()` with key findings |
-| **Output — 📄 Save full analysis as Word document (.docx)** | Claude/Muse/Grok's prompt instructs it to call `save_analysis_report()` and save a `.docx` report |
-| **Output — ✉️ Email the analysis** | Sends the finished analysis via AI-Prowler's own configured SMTP account — attaches the Word document automatically if that output is also checked. **At least one of the three outputs must be selected.** |
-| **Report folder** | Defaults to `~/Documents/AI-Prowler_tasks_reports`. Click **Browse…** to change. |
-
-A static reminder — *"If the Autonomous AI Task Queue is enabled, each automatic check uses Claude subscription usage credits"* — appears in this dialog too, matching the Common Business Configure popup.
-
-#### Save / Save & Queue
-
-- **Save** — saves the task definition. It appears in the My Custom AI Analyses list for future use.
-- **Save & Queue** — saves the task AND immediately queues it in `pending_tasks.json` and copies the run-all command to clipboard. Paste into Claude, Muse, or Grok to run it right away.
-
-#### Task Cards
-
-Each saved task appears as a card in the list showing:
-
-- Task name and schedule badge (e.g. `Monthly`)
-- Due status — e.g. `⚠ Overdue`, `Due today`, `Due in 3 days`, or `Manual only`
-- Output badges — `💡 Learnings` and/or `📄 Report`
-- **▶ Queue** — adds the task to the pending queue and copies the run-all command to clipboard
-- **✎ Edit** — opens the task editor pre-filled with the current settings
-- **🗑** — deletes the task (with confirmation dialog)
-
-#### Automatic execution
-
-There is no longer a manual "Run Due Tasks" batch button in this panel — running the whole pending queue unattended on a schedule is now handled by the **🤖 Autonomous AI Task Queue** panel above once turned on, which supersedes it. Individual tasks can still be queued manually at any time via each card's **▶ Queue** button.
+- **Anchor-based:** the next time is worked out from the schedule, not from when it last ran — a Monday task stays on Mondays.
+- **Schedules:** Manual only, Daily (up to 24 runs between a start and end time), Weekly, Every 2 weeks, Monthly; weekly/every-2-weeks/monthly can be pinned to a weekday and have a time of day.
+- Tasks live in `~/.ai-prowler/custom_analysis_tasks.json`; each keeps `next_due`, `auto_run`, `run_time`, `ai_provider`, `ai_model` and its last run (`last_run_at`, `last_status`, `last_summary`, `last_cost_usd`).
 
 #### Custom Task Prompt Example
 
-Here is a well-formed custom prompt for a monthly customer review:
+> Review all customers in my job tracker. Identify: (1) customers with no jobs in the last 60 days, (2) customers with 3 or more completed jobs this quarter, (3) any unpaid invoices over 30 days old. Call `read_job_spreadsheet()` for the Jobs_Schedule and Invoices sheets. Record each finding as a learning with category `client_preference` or `problem_flag` as appropriate.
 
-> Review all customers in my job tracker. Identify: (1) customers with no jobs in the last 60 days, (2) customers with 3 or more completed jobs this quarter, (3) any unpaid invoices over 30 days old. Call `read_job_spreadsheet()` for the Jobs_Schedule and Invoices sheets. Record each finding as a learning with category `client_preference` or `problem_flag` as appropriate. Save the full analysis as a Word document via `save_analysis_report()`. Then call `complete_analysis_task(task_id, summary)` with a one-sentence summary of what was found.
-
-#### Custom Task Lifecycle
-
-1. Task created → saved in `~/.ai-prowler/custom_analysis_tasks.json`
-2. Task queued via **▶ Queue** (in the GUI, or the same **▶ Queue / ▶ Re-Queue** button in the Remote App, or `queue_single_task()`) — written to `pending_tasks.json` with `status: pending` and its own self-describing `schedule`/`next_due`. Tasks are queued one at a time only; there's no bulk "queue everything that's due" step, since one tap could otherwise start several AI runs (and spend credits) at once.
-3. `get_pending_analysis_tasks()` returns it once `next_due` is today or earlier (`is_queue_entry_ready()`) — a task queued ahead of time stays hidden until then
-4. Claude, Muse, or Grok picks it up and executes the prompt
-5. Claude, Muse, or Grok calls `complete_analysis_task(task_id, summary)` → for a recurring task, `next_due` advances and `status` resets back to `pending` (re-armed, not closed) — same entry surfaces again automatically next cycle. A one-shot (`schedule: none`) task closes permanently instead.
-6. Next scheduled run date is auto-advanced from the original anchor date (e.g. Monthly June 24 → July 24, not "30 days from completion")
-7. `update_analysis_task()` and `delete_analysis_task()` let Claude, Muse, or Grok edit or remove a task from chat without opening the GUI
-
-#### Shared Scheduling Behaviour (Common Business + Custom)
-
-Both Common Business buttons and Custom Analyses share the same scheduling engine:
-
-- **Anchor-based advancement** — `next_due` advances from the previous `next_due`, not from the completion date. A weekly task due Monday stays on Mondays even if Claude, Muse, or Grok runs it on Wednesday.
-- **`complete_analysis_task()` unified re-arm** — built-in and custom recurring tasks are handled by the exact same code path and behave identically: `next_due` advances and `status` resets to `pending`, so the queue entry stays alive and resurfaces on its own next cycle. Custom tasks additionally sync the advanced `next_due` back to `custom_analysis_tasks.json` so the GUI's task list stays accurate. Only one-shot (`schedule: none`) tasks — built-in or custom — close permanently.
-- **Queueing is manual, one task at a time** — `queue_single_task()` (or ▶ Queue in the GUI / Remote App) puts one specific task in the run queue now. The old `sync_due_tasks_to_queue()`, which pushed every due custom task in at once, was removed so a single tap can't start several AI runs together.
-- **Schedules available:** Manual only, Daily (once a day, or up to 24 evenly spaced runs between a start and end time), Weekly, Every 2 weeks, Monthly. Weekly, every-2-weeks and monthly tasks can be pinned to a weekday. (Quarterly and Yearly were removed — use Monthly.)
-- **Default report folder** for all outputs: `~/Documents/AI-Prowler_tasks_reports` (created automatically if it doesn't exist)
+> **AI Route Optimizer task retired (2026-10-22).** Route planning is done from the Jobs app with **📋 Copy AI Route** (Section 25); the old route task was removed automatically.
 
 ---
 
@@ -2313,35 +2196,90 @@ Both Common Business buttons and Custom Analyses share the same scheduling engin
 
 **Proactive Alerts** is a background scheduler built into AI-Prowler that pushes email alerts to you automatically — no Claude, Muse, or Grok session needed, zero API cost. It runs as a daemon thread inside the AI-Prowler process and checks every 60 seconds whether any job is due.
 
-> **Personal mode only.** The Proactive Alerts section is automatically hidden in server mode — same suppression as Common Business AI Analysis.
+> **Personal and Server (2026-11-02).** On an AI-Prowler Server they run inside the server program and can go to managers and crew too — see **On an AI-Prowler Server** below.
 
 #### How it works
 
-1. Enable Proactive Alerts in the Quick Links tab — check the **Enable proactive alerts** checkbox and enter your email address
-2. Configure which jobs run and when — each job has a checkbox (enable/disable), time field, and days dropdown
-3. Click **💾 Save Config** — settings saved to `~/.ai-prowler/scheduler_config.json`
-4. Click **▶/■ Start/Stop** to start the scheduler engine
-5. At the configured time, AI-Prowler runs the job directly (calling its own Python functions — no API, no MCP hop), formats the results as HTML email, and sends it via your configured email
+1. In the Links & Analysis tab, click an alert's **○ OFF** to turn it **● ON** — it saves at once and the alerts start by themselves
+2. Pick its **Time** (a time of day, or Every N hours) and **Days** — each choice saves the moment you pick it (`~/.ai-prowler/scheduler_config.json`)
+3. At the set time AI-Prowler runs the alert directly (its own Python functions — no AI, no API cost), formats the results as an HTML email, and sends it via Settings → Email Configuration
 
-The status indicator top-right shows **● Running** (green) or **● Stopped** (red).
+The status line top-right shows **● Running** (green), or a grey **○ Off** when no alert is turned on.
 
 #### Available Jobs
 
 | Job | Default Time | Default Days | Sends | Silent if? |
 |---|---|---|---|---|
-| ☀️ **Morning Briefing** | 07:00 | Weekdays | Today's jobs, weather, overdue invoices, unanswered SMS, due analysis tasks | Never (always sends) |
+| ☀️ **Morning Briefing** | 07:00 | Weekdays | Today's jobs (start time, town, ⚠️ rain flag when rain is forecast for *today* in that town), overdue invoices, bookings waiting for approval, overdue and new Service Desk tickets, quotes 14+ days old with no answer, unread customer texts, mileage, due analysis tasks | Never (always sends) |
 | ⚠️ **Overdue Invoice Alert** | 08:00 | Daily | AR aging buckets 31–60, 61–90, 90+ days | Nothing overdue |
-| 🧠 **Due Analysis Tasks** | 08:05 | Daily | Pending scheduled tasks with Ctrl+V run command | No tasks due |
-| 💬 **SMS Reply Monitor** | every_2h | Daily | Unanswered customer messages | Inbox clean |
-| 🌤️ **Weekly Weather Watch** | 19:00 | Sunday | 5-day forecast — flags rain days with outdoor jobs | Error only |
-| 🌙 **End of Day Summary** | 18:00 | Daily | Jobs completed vs open today, missing time entries | Never |
+| 🧠 **Due Analysis Tasks** | 08:05 | Daily | Tasks due that a chat should run (Auto-run tasks run themselves and aren't listed) | No tasks due |
+| 💬 **SMS Reply Monitor** | every_2h | Daily | Customer text conversations with unread replies — emails only when a new one comes in | Nothing unread, nothing new, or texting is off |
+| 🎫 **Service Desk & Bookings** | every_2h | Daily | Overdue tickets, new tickets nobody has picked up, website bookings waiting for your approval — emails only when the list changed | Nothing to report, nothing new, or Service Desk is off |
+| 🌤️ **Weekly Weather Watch** | 19:00 | Sunday | 7-day forecast for your home address, plus the jobs booked on each rain-risk day so you can move them | No home address set, or the weather lookup failed |
+| 🌙 **End of Day Summary** | 18:00 | Daily | Today's jobs completed vs still open, jobs worked today with no time logged, tomorrow's schedule | Jobs app is off |
+| 🚗 **Mileage Reminders** | 19:00 | Daily | Mileage gaps to fix, weekly review, crew reimbursements, odometer readings | Nothing to do |
+| 💸 **Work Done, Not Invoiced** | 08:15 | Weekdays | Completed jobs (last 60 days) with no invoice — with the hours logged and the quoted amount | Everything invoiced |
+| 📊 **Weekly Scorecard** | 07:30 | Monday | Last week vs the week before: invoiced, collected, jobs completed vs scheduled, crew hours logged vs on invoiced jobs, quote win rate (30 days), tickets opened/closed and average first response | Jobs app off |
+| 📨 **Customer Appointment Reminders** | 15:00 | Daily | Emails (✉) and/or texts (📱) each customer booked for tomorrow (date, time window, address, your phone/email to reschedule) — once per job; never texts anyone who replied STOP; you get the list, plus anyone who couldn't be reached to call. **Writes to customers — off until you turn it on** | Nobody booked tomorrow |
+| 📝 **Quote Follow-up** *(server)* | 08:30 | Weekdays | Quotes sent 14+ days ago with no answer, each mentioned at most once a week — to the owner, or to whoever wrote each quote | No old quotes |
+| 🧰 **Crew "My Day"** *(server)* | 06:30 | Weekdays | Each person gets only their own jobs today: times, addresses with map links, job notes, rain flags | Nobody has jobs today |
 
-#### Time Field Format
+All of these read the job database directly — **no AI, no API cost**. On a personal install, SMS Reply Monitor and Due Analysis Tasks are also offered; on a server they aren't (texts are read per person in the Jobs app, and a server runs every analysis task itself).
 
-- **Fixed time:** `HH:MM` in 24-hour format — e.g. `07:00`, `18:30`
-- **Interval:** `every_Nh` or `every_Nm` — e.g. `every_2h` (every 2 hours), `every_30m` (every 30 minutes)
+Each alert only reports on apps you have switched on (Settings → MCP Tool Configuration): the Jobs app, Service Desk, and texting. HR isn't covered by Proactive Alerts — the HR app runs on the AI-Prowler Server and has its own scheduled reminders there. The two every-2-hours alerts remember what they last emailed (in `~/.ai-prowler/scheduler_alert_state.json`), so you get one email per change instead of the same list six times a day.
 
-The SMS Reply Monitor defaults to `every_2h` — it checks repeatedly throughout the day rather than at one fixed time.
+#### On an AI-Prowler Server
+
+- **Runs inside the server program.** The alerts (and AI Analysis Tasks) run in the AI-Prowler Server program itself, so they work with nobody signed in. The server's desktop window shows and saves the settings — it never runs a second copy.
+- **Owner only, unless you say otherwise.** Every alert goes to the owner by default (the email on the owner's user in the Admin tab, or Settings → Email Configuration if the owner has none). Each alert has a **Sends to** choice:
+
+| Sends to | Who gets it |
+|---|---|
+| **Owner only** | The owner (the default for every alert) |
+| **Owner + managers** | The owner and each manager |
+| **Everyone (their own part)** | Everyone on the server with an email address |
+| **Whoever wrote each quote** | Quote Follow-up only — each person gets the quotes they wrote |
+| **Each crew member (own jobs)** | Crew "My Day" only |
+| **Customers (summary to owner)** | Appointment Reminders only |
+
+- **Everyone gets only what they can already see in the apps.** Each person's email is built *as that person*, with the same rules the Jobs app uses:
+
+| Role | Gets |
+|---|---|
+| **Owner, managers** | Everything — including invoices, quotes, billing, the scorecard, mileage and an "HR: N items due" line (the HR reminder emails themselves still come from HR's own scheduler, so nothing is sent twice) |
+| **Staff** | Every crew's jobs, rain flags and the Service Desk — no money |
+| **Field crew** | **Only their own jobs** (where their name is in the job's Crew / Technician) — nothing else. No jobs that day → no email. |
+
+  Money alerts (Overdue Invoices, Work Done Not Invoiced, Weekly Scorecard, Mileage) can only be set to Owner or Owner + managers.
+- **Weather** on a server uses each job's own town (a server has no single home address).
+
+#### Email and Text (📱 SMS) for each alert
+
+Every alert row has two tick boxes: **✉ Email** (on by default) and **📱 Text** (off by default). Tick either or both — an alert can go by email, by text, or both. This works on a personal install and on a server.
+
+- **Texting must be set up first:** turn on SMS in **Settings → MCP Tool Configuration** and set up an SMS provider. Until then the panel shows a warning and 📱 Text is skipped (email still goes).
+- **A text is short:** the alert's title plus its first few lines, up to two text messages long (320 characters). The full detail stays in the email. The usual "Reply STOP to opt out" line is added automatically.
+- **Where the numbers come from:**
+
+| Who | Personal install | AI-Prowler Server |
+|---|---|---|
+| **You / the owner** | The **📱 Texts go to** number at the top of Proactive Alerts | Each owner's **cell phone** in the Admin tab (the 📱 Texts go to number is used for an owner with none) |
+| **Managers, staff, crew** | — | Each person's **cell phone** in the Admin tab |
+| **Customers** (Appointment Reminders) | The customer's phone in the **Customers** list | The customer's phone in the **Customers** list |
+
+- **Customers who texted STOP are never texted** — the same opt-out list the Jobs agent uses. Your summary lists anyone who couldn't be reached (no email/phone on file, or opted out) so you can call them.
+- With **✉ Email** off and **📱 Text** on, a person with no email on file can still get the alert by text.
+
+#### Choosing a Time
+
+Each alert's **Time** is a dropdown — pick one of:
+
+- **A time of day**, every half hour from 12:00 AM to 11:30 PM (e.g. *7:00 AM*, *6:30 PM*). The alert runs once that day.
+- **Every hour / Every 2, 3, 4, 6, 8 or 12 hours.** The alert repeats through the day, **between 8:00 AM and 8:00 PM only** — never overnight.
+
+Your choice saves the moment you pick it. (Behind the scenes it's stored in `scheduler_config.json` as `07:00` or `every_2h`; a time typed by hand in an older version, such as `07:15`, is kept and shows up as its own choice.)
+
+The SMS Reply Monitor and Service Desk & Bookings default to **Every 2 hours** — they check repeatedly through the day rather than at one fixed time.
 
 #### Days Options
 
@@ -2653,14 +2591,14 @@ For always-on remote access, activate the Named Tunnel as a Windows service via 
 
 Proactive Alerts sends scheduled email briefings and alerts without needing an active Claude, Muse, or Grok session — a background daemon thread inside the AI-Prowler desktop process ticks every 60 seconds and fires any job whose configured time/day has arrived. Configured from the Links & Analysis tab.
 
-**Six built-in jobs:** Morning Briefing, Overdue Invoice Alert, Due Analysis Tasks, SMS Reply Monitor, Weather Watch, End-of-Day Summary. Each has its own ON/OFF toggle, a time field (`HH:MM` 24-hour, or `every_Nh`/`every_Nm` for interval jobs), and a days selector (daily / weekdays / weekends / a specific day).
+**Eight built-in jobs:** Morning Briefing, Overdue Invoice Alert, Due Analysis Tasks, SMS Reply Monitor, Service Desk & Bookings, Weather Watch, End-of-Day Summary, Mileage Reminders. Each has its own ON/OFF toggle, a Time dropdown (a time of day, or Every 1–12 hours between 8 AM and 8 PM), and a days selector (daily / weekdays / weekends / a specific day).
 
 **Recipient and location come from Settings, not this panel.** This panel shows two read-only lines — "📧 Sends to: ..." and "📍 Weather location: ..." — confirming what will actually be used, but neither is editable here. There is exactly one place to change each:
 
 - **Recipient:** set the default recipient in **Settings → Email Configuration** — the same SMTP setup used for every other emailing feature in AI-Prowler.
 - **Location:** set your home address (Street/City/State/ZIP) in **Settings → Owner Name → Home Address**. If you've never set one, the panel shows "(not set — ...)" instead of guessing a town.
 
-**Per-job weather:** Morning Briefing looks up weather for **each job's own City/State** (read directly from the Jobs_Schedule table — the same data shown in the Jobs PWA App), since a real day's jobs are often scattered across several towns — rather than one fixed location for the whole day. Weather is fetched once per unique town among the day's jobs, not once per job, so having five jobs in the same town doesn't trigger five lookups. A job with no rain risk shows plainly; a job with a rainy forecast gets a **⚠️ Rain risk** flag right next to it. Your Settings home address is only used as a fallback — when a specific job has no City on file, or when there are no jobs scheduled at all for the day. Weekly Weather Watch always uses your Settings home address, since it's a general week-ahead outlook rather than a per-job breakdown; with no address configured, it simply produces nothing that week rather than reporting on a guessed town.
+**Per-job weather:** Morning Briefing looks up weather for **each job's own City/State** (read directly from the Jobs_Schedule table — the same data shown in the Jobs PWA App), since a real day's jobs are often scattered across several towns — rather than one fixed location for the whole day. Weather is fetched once per unique town among the day's jobs, not once per job, so having five jobs in the same town doesn't trigger five lookups. A job with no rain risk shows plainly; a job whose town has rain forecast for **today** gets a **⚠️ Rain risk** flag right next to it (rain later in the week doesn't flag today's job). Your Settings home address is only used as a fallback — when a specific job has no City on file, or when there are no jobs scheduled at all for the day. Weekly Weather Watch uses your Settings home address for a 7-day outlook, then lists the jobs already booked on each rain-risk day; with no address configured, it simply produces nothing that week rather than reporting on a guessed town.
 
 **Auto-save, no manual Save/Start/Stop:** every field saves the instant it changes — clicking a job's toggle, tabbing out of the time field, or selecting a day all save immediately. There is no separate "Save Config" button and no master "Enable proactive alerts" checkbox. The background engine starts automatically the moment any single job is switched ON, and stops automatically the moment the last enabled job is switched OFF — the engine's running/stopped state is fully derived from the job toggles, never a separate thing to manage.
 
@@ -2668,7 +2606,7 @@ Proactive Alerts sends scheduled email briefings and alerts without needing an a
 
 **Run any job immediately:** each job has a "▶ Now" button that runs it on demand, regardless of its schedule — useful for testing a new configuration without waiting for the next scheduled time.
 
-**View Log:** the one remaining manual control — opens the last 200 lines of `~/.ai-prowler/scheduler_log.txt` in a read-only popup.
+**View Log / Clear Log:** the log is the history of what Proactive Alerts did — when the engine started and stopped, each alert that ran, whether it emailed you ("sent … OK" / "FAILED") or had nothing to report, and any errors or warnings (such as no email recipient set). **View Log** opens the newest 200 lines of `~/.ai-prowler/scheduler_log.txt` in a read-only popup. The log looks after its own size — it keeps only the newest 500 lines. **Clear Log** empties it (after asking) and leaves one "Log cleared" line; your alerts and their settings aren't changed.
 
 ---
 
@@ -3240,6 +3178,214 @@ Alerts go by email, by text if **Also alert by text** is ticked on the ticket, a
 Ask in plain language — "File a ticket: Mrs. Lopez says the front windows are streaky", "What tickets do I have?", "Triage the tickets", "Tell the customer on 42 we'll be there Thursday", "Schedule a redo for 42 next Tuesday", "How did support go this week?". Claude previews customer messages before sending, and asks before closing, merging, importing or restoring. Every change Claude makes is recorded as made by Claude and approved by you.
 
 Tools: create_ticket, get_ticket, list_tickets, my_tickets, update_ticket, assign_ticket, set_ticket_state, add_ticket_note, reply_to_customer, create_job_from_ticket, search_tickets, ticket_summary, triage_inbox, apply_triage, link_ticket, merge_tickets, manage_ticket_queues, manage_ticket_rules, ticket_report, export_tickets, import_tickets, tickets_backup_now, backup_tickets_database, list_tickets_backups, tickets_backup_settings, restore_tickets_database, get_ticket_updates, tickets_settings, ticket_watchers.
+
+### Online booking (v9.6.1)
+
+The customer page (**/book**, also **/support/new**) can offer up to four choices. Turn them on in AI-Prowler → Service Desk → **🌐 Web forms**. With one choice the page goes straight to it. Every choice asks for a phone number, and each one shows a line under its name saying what it's for:
+
+| Choice | What the customer sees under it | Use it for |
+|---|---|---|
+| 📅 **Book a service** | Pick a service and an open time — booked online in a minute. | Services with a set length you're happy to have booked straight into your schedule |
+| 🛒 **Shop products** | Equipment and parts we sell — see photos and specs, order and pay online, shipped to you. | Products you sell and ship |
+| ✨ **Get a quote** (was "Request a new service") | Not sure what you need, a bigger job, or no time that suits you? Tell us and we'll call to quote and schedule it. | Anything that needs a conversation first — it lands in the Jobs app as a **Requested** job with no date |
+| 🛠 **Report a problem** | Something not right after a visit, or with something you bought from us. | Complaints and call-backs about past work |
+
+**Services and products are kept apart.** Book a service and Get a quote list your **services**; your **products** are in the Shop. If the Shop is switched off, products can still be asked for in Get a quote (listed under Products). Only the Shop takes money, through your own Stripe or Square account.
+
+**Where Book a service gets its open times:** they're worked out fresh every time the page loads, so a cancelled or moved job frees its time at once. On a **server** they come only from the Jobs app (its jobs, Working Days and hours). On a **personal install** your business Google Calendar's busy times also block times, as of its last sync.
+
+- **Shop products (2026-11-02):** each product is a card with its main photo (tap the small photos to switch), the price, **shipping & handling** (or "free shipping"), a short description and a **Specs** list the customer can open. **Buy** opens the order: how many, the total and the **shipping address**, then a code to confirm.
+  - **Photos and specs:** Web forms → Services offered online → **Details…** on the product's row. Add up to **4 photos** (any phone photo works — it's resized, and location data is removed), remove one, or pick the main one. Write specs one per line, like `Storage: 0.5 TB SSD` — the part before the colon shows in bold.
+  - **What can be bought:** a product (Type = **Product**) that is ticked **Online** and has a **Base Price** in the Jobs app → Database → **Services & Pricing**. A product with no price still shows in the Shop as "Price on request" with an **Ask about it** button, which opens Get a quote with the product's name filled in. Up to 20 at a time.
+  - **Shipping & handling:** set per product in Web forms → Services offered online → **Ship & handling $**. This is the amount for **one** item and is charged for each one ordered (2 ordered = twice the amount). 0 means free shipping. Services can't have it.
+  - **Sales tax:** the Jobs app's **Tax Rate**, on the items plus shipping. This is the same calculation every invoice uses.
+  - **What you get:** in the Jobs app, an order job ("Order: …", status **Requested**, no date, so it is never routed) and an **Unpaid** invoice for the total. You also get a ticket in the Service Desk app with the details and the ship-to address.
+  - **Paying:** the customer's order page has a **💳 Pay now** button. Each tap makes a fresh checkout for the amount still owed on the invoice, using the Stripe or Square keys in **Settings → Small Business → Online Payment Links**. After paying, the customer comes back to their order page. When the money arrives, mark the invoice **Paid** in the Jobs app. The order page then shows **✅ Paid** and you ship it. AI-Prowler doesn't learn about the payment by itself.
+  - **No payment keys?** Orders are still taken. The customer is told you'll send the invoice, and Web forms shows an orange reminder.
+
+- **Book a service:** the customer picks a service and an arrival window (plus backups), confirms with a code, and the booking lands in the app's **📅 To approve**. It works out open windows from the Jobs app's Working Days and hours, the jobs already booked, lunch, travel buffer, lead time, how far ahead, a daily limit, extra openings and closed days, and your service area (ZIP codes and/or miles).
+- **Approving:** by default every booking waits for you (on a server, for managers too). You can **Approve**, **Suggest another time** (the customer accepts, picks another or asks for a call) or **Decline**. Or choose **Pre-approve** (instant booking within limits you set: returning customers, certain services, days ahead, per day) or **Confirm automatically**. Undecided bookings remind you at 48 h and free the time at 72 h.
+- **For a caller:** the app's **+ → Customer request → Book a visit** makes the same booking for someone who phoned (Web forms → Employee-facing form).
+- **Services and products (2026-11-02):** Web forms → **Services offered online** lists everything in the Jobs app's **Services & Pricing**. For each one: **Online** (on the page or not — the "N of M shown on the page" line updates as you tick), **Type** and **Price shown** (none / from / exact).
+  - **Type = Service** — customers can **book a time** for it ("Book a service") and ask for it ("Request a new service").
+  - **Type = Product** — something you sell (a part, a device). Customers can **buy it** ("Buy a product", when it has a price) or **ask for it** in "Request a new service" (listed under **Products**), but it is **never offered for booking** — there's no time slot; you follow up. The server refuses a booking for a product even if one is sent to it directly.
+  - **Outdoor** (services only) — tick it for weather-dependent work (windows, pressure washing, roofs…). The booking agent then checks tomorrow's weather for those visits and offers the customer a new time if rain or high wind is likely; the visit stays unless they accept. Leave it off for indoor work. Every service starts **off**, so each business turns on only what applies to it. The whole check is switched on or off for the business in **🤖 Agent → "Check the weather for outdoor services"**. A product can't be Outdoor (switching a service to Product clears the tick).
+  - The old **Takes (min)** column is gone from this list. Services keep their saved length (60 minutes for new ones), which the booking times still use.
+- **Page look:** your logo, background and button colour (Web forms → Page look) — used on the booking, request and status pages.
+- **Your business name** on the customer pages, replies and texts is the **Business Name** in the Jobs app → Database → Settings (your own name only if that's blank).
+- **The request page vs a request's status page:** the welcome line, the choices and the services show on the **request page** — the **Customer requests** link (`/support/new` or `/book`). A customer's **status page** (`/support/t/…`, the link in their emails and texts) shows just that one request and its messages, with a **➕ Make another request** link back to the request page.
+- **Share & embed:** copy the link, a "Book online" button or an embed for your own website (optionally with a service picked, e.g. a "Book gutter cleaning" button). The embed only shows on the websites you list in **Allowed websites** — that list can be changed only in AI-Prowler on this PC.
+- **Waitlist:** with it on, a customer with a booking can tap **Tell me if an earlier time opens**. When one opens, the first one waiting has it held for them (2 hours by default) and is told; taking it waits for your OK (or follows your approval setting). Not taken → it passes to the next person.
+- **Reminders:** the day before each confirmed visit (5 pm by default), and optionally the morning of it, by email, text or both. Text falls back to email when texting isn't set up.
+
+### Your business Google Calendar (personal installs)
+
+AI-Prowler never connects to Google itself. Instead, Claude, Muse or Grok — with its own Google Calendar connector — keeps **one** business calendar in step: its busy times block bookings, and confirmed bookings are written to it as "Job: <service> — <first name>". Pending bookings are never written.
+
+1. Web forms → **Calendar & openings** → tick **Sync one business Google Calendar**, type the calendar's name, Save.
+2. Sync now with **📋 Copy sync prompt** (paste it into Claude, Muse or Grok), or say "sync my calendar". **⏱ Create scheduled sync** adds an hourly 7:00–19:00 task to the Autonomous AI Task Queue (its AI needs the Google Calendar connector).
+3. Safety: if the calendar hasn't synced for 4 hours (you can change it), every booking waits for your approval until it does — the morning digest says so. A calendar event that lands on a booked visit opens a **Calendar clash** ticket; nothing is moved for you. Events that couldn't be written are tried again next sync.
+
+On a server Google Calendar isn't used at all: the Jobs app's schedule, extra openings and closed days are the whole picture.
+
+Tools: calendar_sync_busy, calendar_pending_events, calendar_mark_synced, calendar_sync_status, review_booking.
+
+### The 🤖 Agent
+
+Service Desk has an AI assistant that can triage tickets, answer customers, handle bookings and more. It is one of four agents — see **§28 AI Agents** for all of them, how they run, what they may and may never do, and their tools.
+
+---
+
+## 28. AI Agents (v9.6.1)
+
+AI-Prowler has **four AI agents**. They are one assistant — the same name, photo, AI runner, working hours and monthly budget — working four areas, each with its own on/off switch, its own practice mode and its own steps:
+
+| Agent | Works on | Where you review it | Its database |
+|---|---|---|---|
+| **🎫 Service Desk agent** | Tickets | Service Desk app → 🤖 Agent | the tickets database |
+| **📅 Booking & scheduling agent** | Online bookings and the schedule | Service Desk app → 🤖 Agent (and 📅 To approve) | the tickets database |
+| **🧰 Jobs agent** (with its **🗺 Route flow**) | Quotes, jobs, invoices, payment reminders, routes | Jobs app → 🤖 Agent (also in Service Desk's 🤖 tab) | its own: `~/.ai-prowler/agent_database/agent.db` |
+| **👥 HR agent** | HR Admin and HR Portal | HR Admin → 🤖 Agent (the owner also sees them in Service Desk's 🤖 tab) | its own, inside the HR data folder: `<HR data folder>\agent\hr_agent.db` |
+
+### 28.1 How every agent works
+
+1. **Something happens** — a ticket arrives, a booking waits, a quote goes quiet, a licence is about to expire. A timer (every few minutes; every 15 minutes for HR) puts the item in the agent's **queue**.
+2. **The AI reads a context pack** — only the facts it needs for that one item, plus the actions it may use at that step. It never browses your data on its own.
+3. **It proposes actions** (a reply, a note, a date, a reminder…), each with a one-line reason and how sure it is.
+4. **AI-Prowler — not the AI — decides what happens** to each action, from your settings:
+   - **Off** — that step is skipped.
+   - **Suggest** (the default for almost every step) — the action waits in the 🤖 Agent tab until a person taps **✅ Approve**, **✏️ Edit** (change the text, then approve) or **✖ Reject**.
+   - **Auto** — done straight away, unless a safety rule holds it for a person (it is less than 60 % sure, a message breaks a rule, it's a risky action, or the step's own checks fail).
+   - **Practice mode** (each agent has its own switch, **on** for a new agent) — the agent works every step that isn't Off but only **shows** what it would have done, with 👍 / 👎 for you to judge it. Nothing is changed and nothing is sent. Turn it off once you trust it.
+   - Notes, flags and saved recommendations change nothing, so they are recorded even on Suggest.
+5. **Everything is logged** — who approved what, when, and what the agent said and why.
+
+**Diagrams.** Each agent's settings show a diagram of its flow, coloured by your choices: **green = Auto**, **amber = Suggest (waits for your OK)**, **purple dashed ring = practice mode**, **grey = Off**. Hover (or long-press) a step to read what it does. The diagram redraws as you change a setting.
+
+**The assistant is never presented as a person.** It always signs as a named *virtual assistant* (e.g. "— Sam (virtual assistant), Blue Wave Window Cleaning") and says so if asked.
+
+### 28.2 Running the agents — chat or on their own
+
+Choose the runner in AI-Prowler → 🏢 Small Business → Service Desk Agent & settings → 🤖 Agent (or Service Desk app → ⚙︎ Settings → 🤖 Agent). With Service Desk off, choose it in 🧰 Jobs App Agent & settings instead. Each agent has its own section on the Small Business tab: Service Desk + Booking under the Service Desk links, 🧰 Jobs under the Jobs App link, 👥 HR under the HR apps (server).
+
+| Runner | How it runs | Service Desk / Booking / Jobs | HR |
+|---|---|---|---|
+| **Chat** (Claude.ai, Muse or Grok.com — no key) | Someone pastes *"Run the AI-Prowler agent…"* (📋 Copy in the 🤖 tab) and the chat works the queue with `desk_agent_next` / `desk_agent_submit` | ✅ | ❌ never |
+| **Claude API key** | On its own, when work arrives | ✅ | ✅ |
+| **Grok bot** (xAI API key) | On its own | ✅ | ✅ |
+| **Claude subscription** (this PC's Claude CLI) | On its own — **personal installs only** (a server has no single Claude login) | ✅ | — (HR is server-only) |
+
+Keys go in Task Queue → **Auth**. A runner that works on its own:
+- works only in the agent's **hours** (default: any time) and stops for the month at the **monthly budget** (default $20, shared by all four agents);
+- waits a moment (90 s by default) so a burst of messages is handled together, up to 10 items a run;
+- retries an item that failed up to 3 times, then shows it as failed. **▶ Run now** (owner) in any 🤖 Agent tab retries failures and starts a run straight away;
+- shows in its 🤖 tab what it spent this month.
+
+The morning digest includes a line for each agent that is on (for HR: counts only).
+
+### 28.3 🎫 The Service Desk agent (tickets)
+
+Turn on in Service Desk → ⚙︎ Settings → 🤖 Agent (**Agent on**). Its steps:
+
+| Step | What it does |
+|---|---|
+| **Intake** | Reads each new ticket, sets type and priority, flags duplicates, notes what's missing. On a team it also picks who the ticket goes to (Solo: every ticket stays yours). It never lowers a priority, and a person sees every P1 first. |
+| **First reply** | Writes the first message to the customer: what we understood, what happens next, and the link to follow their request. |
+| **Resolution help** | Searches past fixed tickets and saved learnings, then leaves an **internal** note with the likely cause and fix. It may suggest a re-do job, which always needs a person's OK. |
+| **Follow-through** | Spots tickets going quiet — a customer waiting, On Hold past its date, a question after Fixed — and nudges whoever has it or drafts a check-in. |
+| **Learn** | When a ticket closes with a fix, suggests a learning. A person always accepts or rejects it. |
+
+Always held for a person, even on Auto: merges, re-do jobs, learnings, anything on a P1 or private ticket, and anything it is less than 60 % sure of.
+
+**Its identity:** name (optional), label (*Virtual assistant*, *AI assistant* or *Digital assistant* — always shown), photo, and the sign-off after its name (blank = your business name).
+
+### 28.4 📅 The Booking & scheduling agent
+
+The **Booking & scheduling** section of the same 🤖 Agent settings (needs the Service Desk agent on). Its own on/off and practice switch.
+
+| Step | What it does |
+|---|---|
+| **Check** | Address found and in your service area, duplicate bookings, the customer's history, anything missing — as one internal note with flags. |
+| **Decide** | For each booking in 📅 To approve: recommends Approve (their time or a backup), Suggest a better time (near that day's other jobs) or Decline, and the crew. You see "🤖 suggests…" on the card with one tap to use it. |
+| **Offer times** | For requests with no date, offers the customer 1–3 good open times on their request page. |
+| **Answer** | Answers customers' questions about their visit, files details like a gate code or pets on the job, and turns "can you come earlier?" into an offer. |
+| **Keep on track** | Chases unanswered suggestions, reminds approvers before a booking is released, offers freed-up times to the waitlist, and (if on) checks tomorrow's weather for outdoor services — offering a new time if rain (60 %+) or wind (25 mph+) is forecast. The visit stays unless the customer accepts. |
+| **Learn** | Compares real time on site with the service's "Takes" minutes and proposes an update once there's a pattern; proposes customer notes like "prefers mornings". A person always decides. |
+
+**Confirming bookings itself** happens only if you tick **Let the agent confirm bookings**, with Decide on Auto and practice off — and only when every check passes: the time is still open and is the customer's own choice or backup, your instant-booking limits allow it, the address is in your area, nothing was flagged, it is at least 80 % sure, and it is under its daily limit (5 by default). Otherwise you confirm.
+
+### 28.5 🧰 The Jobs agent and 🗺 Route flow
+
+Turn it on in AI-Prowler → 🏢 Small Business → **🧰 Jobs App Agent & settings** (its own section, right under the Jobs App link), or in the Jobs app → **🤖 Agent** tab → ⚙️ settings. It keeps its own database, so it works even with Service Desk off. In that case the section also has its own **Which AI runs it**, because the Service Desk Agent tab isn't there; that choice is shared by every agent. Two diagrams, each with **its own on/off and practice switch**:
+
+- **Jobs flow** — switched by **Jobs agent on** and **Practice mode for jobs**. *Quotes* (a friendly follow-up when a quote is still open after a few days; the job from an approved quote) · *Schedule* (suggests a date for an unscheduled job, next to that day's other jobs) · *Prep the day* (tomorrow: a missing address, bad weather for outdoor work, an overfull day) · *On site* (a job running long, a crew still clocked in) · *Close out* (drafts the invoice from the job's price; sends the receipt after you mark it paid) · *Get paid* (reminders at 7, 14 and 30 days — the last one firmer — then a note to call) · *Repeat & win back* (the next visit for recurring customers; a "time for your next service?" note to quiet customers) · *Learn* (a new usual job time once 5+ timed jobs show it).
+- **Route flow** — switched by **Route flow on** and **Practice mode for routes** (separate from the jobs switches, so you can run routes in practice while jobs are live, or the other way round). *Sort the week* (on Fridays, which day each flexible job goes on — it shows up in 🗓️ Plan Week) · *Schedule the week* · *Route* (each day, or the whole week) · *Send routes* (crews get tomorrow's route at 6 pm) · *Re-plan the day* (after a cancellation).
+
+The section header shows both switches as saved, e.g. *(jobs on · routes on — practice mode)* or *(jobs off · routes off)*; it updates as soon as you press Save. The Jobs app's 🤖 Agent tab shows the same two at the top. Likewise the **🤖 Service Desk Agent & settings** header shows, next to *(enabled)*, the Service Desk agent's own switch — *🤖 agent off*, *🤖 agent on — practice mode* or *🤖 agent on* — and, when it's on, *📅 booking …* for Booking & scheduling.
+
+Everything starts on **Suggest**. Its suggestions (ids like **J12**) wait in the Jobs app's 🤖 Agent tab and in Service Desk's 🤖 tab. It **never** moves a fixed-time job or anything today, takes or records a payment, marks anything paid, changes a price, time or mileage entry, deletes or cancels anything, or messages a customer who opted out. Amounts in its messages always come from the invoice or quote. It may send invoices itself only if you tick **Let the agent send invoices** (with Close out on Auto and practice off) — and only its own unchanged drafts, under your amount and daily limits.
+
+### 28.6 👥 The HR agent
+
+For the HR apps (HR Admin + HR Portal — AI-Prowler Server only). It **watches deadlines, prepares paperwork and drafts answers — people make every decision about a person.** It has **no** action to hire, reject, score or rank a candidate, discipline, terminate, change pay or a time-off balance, edit or delete a time entry, verify a document, change anyone's access, or delete anything.
+
+**Turning it on.** At the server PC: AI-Prowler → 🏢 Small Business → **👥 HR Agent & settings** (its own section, under the HR Admin and HR Portal links). HR Admin → **🤖 Agent** shows the same settings and diagram (read-only from the app, like every server setting). It starts **off**, in **practice mode**, with every step on Suggest except *Time clock* (Auto — it only leaves notes).
+
+**It runs only on a key you control.** HR data is never sent to a chat AI (Claude.ai, Muse, Grok.com): the HR agent runs only with a **Claude API key** or the **Grok bot** (xAI API key). (The Claude subscription/CLI runner is for personal installs, and the HR apps run on a server.) If the runner is set to Chat, the HR agent doesn't run and its 🤖 tab says why. Its queue is never handed to `desk_agent_next`, so a chat can't see it.
+
+**What the AI is never given** (enforced in code — it receives only an allow-list of fields): ID numbers (SSN, licence numbers), date of birth, home address, phone, email, pay rate, bank or direct-deposit details, emergency contacts, medical notes, photos, PINs, protected traits, the text of a sensitive message, and — unless you choose otherwise — the text of an incident report. It sees things like first and last name, title, department, manager, status, start date, work state and whether they're hourly.
+
+| Step | What it does | Default |
+|---|---|---|
+| **Recruit** | Drafts an acknowledgement to new applicants, reminds HR about candidates waiting 5+ days, drafts interview-time emails. Never scores, ranks, rejects or advances anyone. | Suggest |
+| **Onboard** | Watches each new hire's checklist (I-9 by the 3rd business day, W-4, state new-hire report, direct deposit, handbook acknowledgement, training), says what's missing and drafts the nudge. A person always verifies documents. | Suggest |
+| **Time off** | For each time-off request, shift swap or schedule change: checks the balance, notice, blackout dates, who else in the team is off and (with the Jobs app) booked jobs, then **recommends** approve / deny / ask with the reason. Denials are always a person. | Suggest |
+| **Time clock** | Flags missed clock-outs, someone still clocked in late, and hourly (non-exempt) staff heading for overtime (36 h a week by default). Notes only — never edits a time entry. | Auto |
+| **Docs & training** | Licences, certifications and work authorization expiring (warnings at 60 / 30 / 7 days), training past due. Drafts the reminder and the HR task. | Suggest |
+| **Questions** | Drafts answers to HR Portal messages **from your handbook and policies only**. Anything sensitive — harassment, injury, medical, leave, pay disputes, resignations and similar — is never shown to the AI; a person answers it (the agent can send only the standard *"HR has your message and a person will get back to you"*). | Suggest |
+| **Incidents** | Makes sure every incident report is acknowledged and assigned to HR within a business day and tracks its deadlines. Never investigates and never contacts anyone named in a report. | Suggest |
+| **Offboard** | After HR starts a termination: your state's final-pay deadline, equipment to return, access to turn off (a person does it), COBRA and other notices — as HR tasks and drafts. | Suggest |
+| **Learn** | Weekly: questions the handbook doesn't answer, steps that are always late — as suggestions for HR. Never changes a policy. | Suggest |
+
+**Your three HR choices:**
+1. **Let the agent approve time off** (off by default). Only with Time off on Auto and practice off, and only when *every* check holds: paid time off or sick days (never unpaid, FMLA, jury duty, bereavement or "other"), the balance covers it, at most the **max days** (2), at least the **notice days** (14; sick days are exempt), no blackout date, no more than the **people off a day** limit (1) in their team, no booked jobs for them, nothing flagged on them, and under the **approvals a day** limit (5). Everything else stays a recommendation.
+2. **Who reviews:** *the owner and HR Admin users* (default), or *…and managers, for their own team's time off and swaps* — managers then see only time off, swaps and schedule changes for people they manage, never documents, incidents or offboarding, and never their own requests.
+3. **Incident reports:** *Type only* (default — the AI learns a report arrived, its type and dates, never what it says) or *Read the report* (so it can judge urgency and deadlines).
+
+**Messages to employees** go only between the hours you set (8 am–6 pm weekdays by default), never twice about the same thing within 2 days, never to a former employee (HR writes to them), and never to an anonymous report. Each is signed by the assistant and says how to reach a person.
+
+**In the HR Portal (what employees see).**
+- **Answers in Messages** — the assistant's answers arrive in the employee's **Messages**, marked *🤖 HR's virtual assistant* and signed with its name.
+- **🙋 Talk to a person** — on every answer from the assistant. One tap hands the message to HR: it goes back to the top of HR Admin → Messages marked **🙋 WANTS A PERSON**, HR is emailed (without the message text), and the assistant never answers that message again. When HR replies, the employee sees HR's answer, with the assistant's earlier answer kept above it.
+- **Help → Ask HR's assistant** — the Help page's quick answers stay instant. When the assistant is answering questions (HR agent on, practice mode off, *Questions* on Suggest or Auto, and a key-based runner), each quick answer also offers **📨 Ask HR's assistant**. The question becomes the employee's own message; the assistant drafts the answer from your handbook and policies, and it arrives in Messages — after HR checks it if *Questions* is on Suggest. A sensitive question (harassment, injury, medical, pay disputes, resignations and similar) is never sent to the AI: it goes straight to HR as 🙋, and the employee is told a person will answer.
+
+**In HR Admin.** Messages shows **❓ HELP QUESTION**, **🙋 WANTS A PERSON** and *🤖 Assistant replied* tags. On **Time & Attendance**, each pending time-off and schedule-change request shows the assistant's recommendation (*🤖 suggests approve — 3 days left, nobody else off*). It is a recommendation only; HR still taps Approve or Deny.
+
+**Reviewing.** HR Admin → **🤖 Agent** shows its status, what waits for your OK (✅ Approve · ✏️ Edit · ✖ Reject), practice results (👍 / 👎), **▶ Run now**, and the settings with the employee-flow diagram (Candidate → Hired → Onboarding → Active ⇄ On leave → Offboarding → Former). Suggestions have ids like **H7**.
+
+**Backups.** The HR agent's database lives in the HR data folder (`agent\hr_agent.db`), so HR permissions cover it and every HR backup includes it.
+
+### 28.7 Agent tools for Claude, Muse or Grok
+
+| Tool | What it does | Who |
+|---|---|---|
+| `desk_agent_next` | Claims the next item(s) in the agent queue — tickets, bookings and Jobs agent items (ids like `J12`) — with the context pack, allowed actions and rules. Never returns HR items. | Owner, manager |
+| `desk_agent_submit` | Sends the actions for one item; AI-Prowler applies, holds or practises each one according to your settings. | Owner, manager |
+| `desk_agent_review` | Lists what waits for a person (or practice results) and approves, edits, rejects or rates them. `kind` filters ticket / booking / job / route. | Owner, manager |
+| `desk_agent_status` | On/off, runner, queue size and how many suggestions wait — for Service Desk, Booking and the Jobs agent. | Owner, manager |
+| `desk_agent_run_now` | Starts the self-running agent now (and the Jobs agent, if on); retries failures. | Owner |
+| `jobs_agent` | The Jobs agent: `status`, `list`, `practice`, `approve` / `edit` / `reject` / `up` / `down` (ids like `J12`), `run_now`, `settings`, `set`, `flow`. | Owner, manager (settings: owner) |
+| `hr_agent` | The HR agent from a chat — **counts only**: `status` (on/off, runner, how many waiting) and `run_now`. Reviewing happens in HR Admin; HR details never go to a chat. Server only, with the HR apps on. | Owner |
+| `review_booking` | Bookings waiting in 📅 To approve: `list`, `windows`, `approve`, `suggest`, `decline`. | Owner (managers on a server, if allowed) |
+| `calendar_sync_busy` | Calendar sync step 1: the busy times read from your one business Google Calendar. | Owner, personal installs |
+| `calendar_pending_events` | Step 2: confirmed bookings to add, change or delete on that calendar. | Owner, personal installs |
+| `calendar_mark_synced` | Step 3: reports the Google event ids (or errors) back. | Owner, personal installs |
+| `calendar_sync_status` | Last sync, stale warning, waiting items, clashes and the sync prompt. | Personal installs |
+
+By voice: *"Run the AI-Prowler agent"*, *"What is the agent waiting on?"*, *"Approve jobs agent suggestion J12"*, *"Is the HR agent on?"*, *"Run the HR agent now"*, *"Any bookings to approve?"*, *"Sync my calendar"*. Claude, Muse or Grok reads an item back and approves only after a clear yes.
+
+**Rules every agent keeps** (none of these can be switched off): no money handling — it never takes or records a payment or marks anything paid; it never changes prices or settings; never deletes or cancels; never edits mileage or time entries; never messages a customer who opted out; a phone number is always required on customer forms; no Google Calendar on a server; and on a server, managers approve by default.
+
 
 ---
 

@@ -300,10 +300,10 @@ class TestHRAppsGuideIntegration:
         assert "hr_list_employees" not in result.split("THIS CONNECTION")[1]
 
     def test_hr_catalog_category_is_server_only(self, mcp_mod):
-        """All 20 hr_* tools sit in the 'hr' catalog category, SERVER mode."""
+        """All 21 hr_* tools (20 + hr_agent, 2026-10-31) sit in the 'hr' catalog category, SERVER mode."""
         cat = mcp_mod._tool_catalog
         hr_tools = cat.tools_in_category("hr")
-        assert len(hr_tools) == 20
+        assert len(hr_tools) == 21
         assert set(hr_tools) == set(mcp_mod._HR_TOOLS)
         avail_server = cat.tools_available_in_mode("server")
         avail_personal = cat.tools_available_in_mode("personal")

@@ -276,15 +276,18 @@ class TestCleanupBackups:
         in server mode can ever queue a task — these tools must not be
         registered with MCP clients in server mode either.
         """
+        # 2026-11-02 (David: AI Analysis Tasks on the server for the owner and managers): the server runs
+        # tasks itself, so its runs need save_analysis_report — offered there now (owner/manager only).
+        # The chat-run tools stay suppressed: a server has no paste-into-chat runner.
         for tool_name in (
             "get_pending_analysis_tasks",
             "complete_analysis_task",
-            "save_analysis_report",
         ):
             assert tool_name in mcp_module._TIER_A_SUPPRESSED, (
                 f"{tool_name} must be Tier A suppressed in server mode — "
-                f"the analysis task queue it drives has no server-mode caller"
+                f"a server has no chat runner"
             )
+        assert "save_analysis_report" not in mcp_module._TIER_A_SUPPRESSED
 
     def test_CB_07c_schedule_next_recurring_job_not_suppressed(self, mcp_module):
         """

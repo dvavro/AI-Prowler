@@ -893,6 +893,14 @@ class RAGGui:
                 import task_queue_automation as _tqa_retire
                 for _msg in _tqa_retire.retire_cli_ai_routing():
                     print(f"[AI routing cleanup] {_msg}")
+                # 2026-11-01: the Task Queue is API-key only — remove the old CLI queue's
+                # key files, Claude CLI token, wrappers and its Windows task (once).
+                for _msg in _tqa_retire.retire_legacy_queue():
+                    print(f"[Task Queue cleanup] {_msg}")
+                # 2026-11-01: no queue — each task has its own schedule. Move whatever was
+                # still queued into the tasks themselves (once) before the panel is built.
+                for _msg in _tqa_retire.retire_queue():
+                    print(f"[Task Queue retired] {_msg}")
             except Exception as _e_retire:
                 print(f"[AI routing cleanup] skipped: {_e_retire}")
 
@@ -5690,6 +5698,7 @@ or from the Help menu."""
                     # in-place update (manifest fetch failed → these files
                     # left at the old version → import error on next start).
                     'task_queue_automation.py',
+                    'task_queue_gui.py',          # 2026-11-01: the Task Queue panel
                     'custom_tasks_manager.py',
                     'scheduler_jobs.py',
                     'scheduler_engine.py',
@@ -7359,1860 +7368,47 @@ or from the Help menu."""
 
         _in_server_mode = _is_server_mode_gui()
 
-        # ── AI Analysis section ──────────────────────────────────────────────
-        # Five one-click analysis commands. Each button:
-        #   1. Opens a scope-directory picker (optional)
-        #   2. Writes a task record to ~/.ai-prowler/pending_tasks.json
-        #      with any selected scope_dirs included in the task record
-        #   3. Copies the run-queue command to the clipboard
-        #   4. User pastes into Claude, Muse, or Grok → Claude, Muse, or Grok calls get_pending_analysis_tasks()
-        #      → executes the analysis → records findings as learnings
-        #      → calls complete_analysis_task() to mark done.
-        # Not available in server mode (GUI-suppressed).
-        # No API key required. Works entirely within the MCP architecture.
-        if _in_server_mode:
-            tk.Label(query_frame,
-                     text="🔒  AI Analysis & Custom Analyses are not available in Server mode.",
-                     bg='#1a1a1a', fg='#6a6a6a',
-                     font=('Arial', 8, 'italic')).pack(anchor='w', padx=24, pady=4)
-            # Nothing else to build — skip the rest of Quick Links UI
-            query_frame.update_idletasks()
-            return
+        # ── 🧠 AI Analysis Tasks (2026-11-01) ───────────────────────────────
+        # David: "get rid of the task queue and make every task have its own
+        # schedule." One section replaces Common Business AI Analysis (now
+        # starter buttons that open a pre-filled task), Show Queue and the
+        # Autonomous AI Task Queue panel (now the "Automatic runs" bar). Each
+        # task has its own schedule, ⏱ Auto-run and optional AI; AI-Prowler
+        # runs auto-run tasks itself on the Agent API Key. Built by
+        # task_queue_gui.build_section().
+        # 2026-11-02 (David): on a server too — for the owner and managers, run by the server program
+        # itself on the Agent API Key (no chat runner on a server). Proactive Alerts below likewise.
+        self._in_server_mode_links = _in_server_mode
 
-        _analysis_banner = tk.Frame(query_frame, bg='#1a2530',
-                                    highlightthickness=1,
-                                    highlightbackground='#2e4a62')
-        _analysis_banner.pack(fill='x', padx=20, pady=(0, 8))
-
-        _an_inner = tk.Frame(_analysis_banner, bg='#1a2530')
-        _an_inner.pack(fill='x', padx=14, pady=10)
-
-        # Header row
-        _an_hdr = tk.Frame(_an_inner, bg='#1a2530')
-        _an_hdr.pack(fill='x', pady=(0, 4))
-
-        tk.Label(_an_hdr,
-                 text="🧠  Common Business AI Analysis",
-                 bg='#1a2530', fg='#ffffff',
-                 font=('Arial', 11, 'bold'),
-                 anchor='w').pack(side='left')
-
-        # v8.1.6 fix: removed the "Click a button → queues task & copies
-        # command · Paste into Claude, Muse, or Grok to run ALL queued tasks" hint here —
-        # stale leftover from the copy/paste workflow this panel no
-        # longer uses (see the bottom hint label below the button rows
-        # for the current, accurate explanation).
-
-        # Analysis task definitions
-        # Each entry includes a "description" shown in the popup so the user
-        # knows exactly what will happen before they click Queue Analysis.
-        # Analysis task definitions
-        # Each entry includes a "description" shown in the popup so the user
-        # knows exactly what will happen before they click Queue Analysis.
-        # Prompts are QuickBooks-aware: if the QB MCP connector is active,
-        # Claude, Muse, or Grok uses it as the primary financial data source; otherwise falls
-        # back to read_job_spreadsheet() and get_ar_aging_report().
-        _ANALYSIS_TASKS = [
-            {
-                "type":    "analyze_business",
-                "label":   "📊 Analyze My Business",
-                "color":   "#1a5276",
-                "hover":   "#21618c",
-                "description": (
-                    "Full business health check. Reads your Job Tracker spreadsheet\n"
-                    "(or QuickBooks if connected) for jobs, invoices, AR aging, and\n"
-                    "customers. Searches indexed documents and reviews learnings.\n"
-                    "Records 3–5 actionable 'business_insight' learnings."
-                ),
-                "prompt":  (
-                    "QUICKBOOKS INTEGRATION: First, check whether QuickBooks tools are available by looking for tools whose names contain 'quickbooks' or 'qbo' in your tool list. If QuickBooks is connected, prefer its data (invoices, payments, customers, P&L, balance sheet, cash flow) over the AI-Prowler Job Tracker spreadsheet wherever the data overlaps — QuickBooks is the authoritative financial source. If QuickBooks is NOT connected, fall back to read_job_spreadsheet() and get_ar_aging_report() as described below.\n\n"
-                    "Analyze my business data comprehensively using all available tools:\n"
-                    "IF QuickBooks is connected:\n"
-                    "  1. Query QuickBooks for: open invoices, payments received this month,\n"
-                    "     customer list with balances, Profit & Loss summary (current quarter\n"
-                    "     vs prior quarter), top 10 customers by revenue, and AR aging report.\n"
-                    "  2. Note which services or items drive the most revenue in QuickBooks.\n"
-                    "IF QuickBooks is NOT connected:\n"
-                    "  1. Call read_job_spreadsheet() for Jobs_Schedule, Invoices, Customers.\n"
-                    "  2. Call get_ar_aging_report() for invoice aging buckets.\n"
-                    "BOTH PATHS:\n"
-                    "  3. Call search_documents() for indexed contracts, proposals, agreements.\n"
-                    "  4. Call search_learnings() for recent business insights or known issues.\n"
-                    "  5. Identify: top 3 customers by revenue, most profitable services,\n"
-                    "     any invoices overdue 30+ days, jobs over estimate, recurring patterns.\n"
-                    "  6. Record 3-5 actionable findings as learnings with category 'business_insight'.\n"
-                    "  7. Call complete_analysis_task(task_id) with a one-sentence summary."
-                ),
-            },
-            {
-                "type":    "weekly_advisor",
-                "label":   "💡 Weekly Business Advisor",
-                "color":   "#1a6b3a",
-                "hover":   "#1e8449",
-                "description": (
-                    "Your end-of-week debrief. Reviews this week's completed jobs,\n"
-                    "time entries (actual vs estimated hours), outstanding invoices\n"
-                    "(from QuickBooks if connected, otherwise Job Tracker), new customer\n"
-                    "activity, weather patterns for scheduling, and any learnings added\n"
-                    "this week. Gives a performance summary and 2–3 priorities for next week."
-                ),
-                "prompt":  (
-                    "QUICKBOOKS INTEGRATION: First, check whether QuickBooks tools are available by looking for tools whose names contain 'quickbooks' or 'qbo' in your tool list. If QuickBooks is connected, prefer its data (invoices, payments, customers, P&L, balance sheet, cash flow) over the AI-Prowler Job Tracker spreadsheet wherever the data overlaps — QuickBooks is the authoritative financial source. If QuickBooks is NOT connected, fall back to read_job_spreadsheet() and get_ar_aging_report() as described below.\n\n"
-                    "Act as my weekly business advisor using all available tools:\n"
-                    "IF QuickBooks is connected:\n"
-                    "  1. Query QuickBooks for: invoices created this week, payments received\n"
-                    "     this week, any invoices that became overdue this week, and expenses\n"
-                    "     posted this week. Compare cash in vs cash out for the week.\n"
-                    "  2. Pull QuickBooks P&L for the current week vs last week if available.\n"
-                    "IF QuickBooks is NOT connected:\n"
-                    "  1. Call read_job_spreadsheet() for Jobs_Schedule and Invoices —\n"
-                    "     focus on jobs updated or invoices created in the last 7 days.\n"
-                    "  2. Call get_ar_aging_report() to flag any invoices that became overdue.\n"
-                    "BOTH PATHS:\n"
-                    "  3. Call search_learnings() for learnings added this week.\n"
-                    "  4. Call search_documents() for new contracts or correspondence this week.\n"
-                    "  5. Call get_weather() for my area for next week's scheduling outlook.\n"
-                    "  6. Summarize: jobs completed vs scheduled, actual vs estimated hours,\n"
-                    "     invoices sent and paid, any new problems or wins this week.\n"
-                    "  7. Suggest 2-3 specific priorities for next week.\n"
-                    "  8. Record key findings as learnings with category 'weekly_review'.\n"
-                    "  9. Call complete_analysis_task(task_id) with a one-sentence summary."
-                ),
-            },
-            {
-                "type":    "find_problems",
-                "label":   "⚠️ Find Problems",
-                "color":   "#7d3c00",
-                "hover":   "#a04000",
-                "description": (
-                    "Scans all your data for things needing attention: overdue invoices\n"
-                    "(by aging bucket, from QuickBooks if connected), jobs over budget,\n"
-                    "unanswered SMS from customers, unresolved expense anomalies, and\n"
-                    "recurring patterns that signal risk. Each finding recorded as a\n"
-                    "'problem_flag' learning."
-                ),
-                "prompt":  (
-                    "QUICKBOOKS INTEGRATION: First, check whether QuickBooks tools are available by looking for tools whose names contain 'quickbooks' or 'qbo' in your tool list. If QuickBooks is connected, prefer its data (invoices, payments, customers, P&L, balance sheet, cash flow) over the AI-Prowler Job Tracker spreadsheet wherever the data overlaps — QuickBooks is the authoritative financial source. If QuickBooks is NOT connected, fall back to read_job_spreadsheet() and get_ar_aging_report() as described below.\n\n"
-                    "Scan all my data for problems that need attention:\n"
-                    "IF QuickBooks is connected:\n"
-                    "  1. Query QuickBooks AR aging — flag every invoice 31-60, 61-90,\n"
-                    "     and 90+ days overdue as a separate problem.\n"
-                    "  2. Query QuickBooks for unpaid vendor bills overdue (AP aging).\n"
-                    "  3. Query QuickBooks expenses for any unusual or duplicate charges.\n"
-                    "  4. Check QuickBooks for customers with credit limits exceeded.\n"
-                    "IF QuickBooks is NOT connected:\n"
-                    "  1. Call get_ar_aging_report() — flag every invoice in 31-60,\n"
-                    "     61-90, and 90+ day buckets as a separate problem.\n"
-                    "  2. Call read_job_spreadsheet() for Jobs_Schedule — identify jobs\n"
-                    "     where actual hours or cost exceeded estimate by more than 20%%.\n"
-                    "BOTH PATHS:\n"
-                    "  3. Call check_sms_replies() or list_sms_contacts_with_replies()\n"
-                    "     for unanswered customer messages older than 24 hours.\n"
-                    "  4. Call search_learnings(category='problem_flag') to review\n"
-                    "     previously flagged issues — check if any are still unresolved.\n"
-                    "  5. Call search_documents() for complaints, disputes, or unresolved\n"
-                    "     issues mentioned in indexed documents.\n"
-                    "  6. Look for recurring patterns: same customer or job type appearing\n"
-                    "     in multiple problem categories.\n"
-                    "  7. Record each distinct problem as a learning with category\n"
-                    "     'problem_flag' and outcome 'negative'.\n"
-                    "  8. Call complete_analysis_task(task_id) with a count of problems found."
-                ),
-            },
-            {
-                "type":    "growth_opportunities",
-                "label":   "📈 Growth Opportunities",
-                "color":   "#1a4a6b",
-                "hover":   "#1f5c85",
-                "description": (
-                    "Mines your job history and financial data (QuickBooks if connected)\n"
-                    "for growth signals: most profitable services, best-paying customers,\n"
-                    "geographic clustering, seasonal patterns, and upsell opportunities.\n"
-                    "QuickBooks adds P&L by service type, expense ratios, and true net\n"
-                    "margin per job type. Records 3–5 'growth_opportunity' learnings."
-                ),
-                "prompt":  (
-                    "QUICKBOOKS INTEGRATION: First, check whether QuickBooks tools are available by looking for tools whose names contain 'quickbooks' or 'qbo' in your tool list. If QuickBooks is connected, prefer its data (invoices, payments, customers, P&L, balance sheet, cash flow) over the AI-Prowler Job Tracker spreadsheet wherever the data overlaps — QuickBooks is the authoritative financial source. If QuickBooks is NOT connected, fall back to read_job_spreadsheet() and get_ar_aging_report() as described below.\n\n"
-                    "Analyze my business data to identify growth opportunities:\n"
-                    "IF QuickBooks is connected:\n"
-                    "  1. Query QuickBooks P&L by service/product line — identify which\n"
-                    "     services have highest revenue AND best net margin (revenue minus\n"
-                    "     associated expenses/COGS). High margin = priority growth target.\n"
-                    "  2. Query QuickBooks customer list sorted by total revenue —\n"
-                    "     identify top 10 customers and their payment speed.\n"
-                    "  3. Query QuickBooks for seasonal revenue pattern — compare monthly\n"
-                    "     revenue for the past 12 months to identify peaks and troughs.\n"
-                    "  4. Check QuickBooks for services with growing vs declining revenue\n"
-                    "     trend over the last 3 quarters.\n"
-                    "IF QuickBooks is NOT connected:\n"
-                    "  1. Call read_job_spreadsheet() for Jobs_Schedule, Invoices, Customers.\n"
-                    "  2. Call get_ar_aging_report() — fast payers are best clients.\n"
-                    "  3. Call geocode_address() on top customer addresses to identify\n"
-                    "     geographic clusters for route efficiency.\n"
-                    "BOTH PATHS:\n"
-                    "  4. Call search_documents() for proposals, pricing sheets, market data.\n"
-                    "  5. Call search_learnings(category='growth_opportunity') for prior leads.\n"
-                    "  6. Identify: (a) most profitable services, (b) highest-value customers,\n"
-                    "     (c) geographic revenue clusters, (d) seasonal patterns,\n"
-                    "     (e) service upsell pairs, (f) re-engagement targets (60+ day lapse).\n"
-                    "  7. Record 3-5 specific actionable insights as learnings with category\n"
-                    "     'growth_opportunity'.\n"
-                    "  8. Call complete_analysis_task(task_id) with a one-sentence summary."
-                ),
-            },
-        ]
-
-        # Helper — load tracked dirs from ~/.rag_auto_update_dirs.json
-        # The file format is {"directories": [...], "last_updated": "..."}
-        # Fall back gracefully if the format is a flat dict or plain list.
-        def _load_tracked_dirs_for_scope():
+        def _tasks_status(text):
             try:
-                from pathlib import Path as _P2
-                import json as _j2, os as _o2
-                _df = _P2.home() / ".rag_auto_update_dirs.json"
-                if not _df.exists():
-                    return []
-                _raw = _j2.loads(_df.read_text(encoding="utf-8"))
-                # Primary format: {"directories": [...], "last_updated": "..."}
-                if isinstance(_raw, dict):
-                    _dirs = _raw.get("directories", [])
-                    if isinstance(_dirs, list):
-                        return [k for k in _dirs if isinstance(k, str) and
-                                (_o2.path.isabs(k) or k.startswith("\\\\") or k.startswith("//"))]
-                    # Legacy flat-dict format: keys are paths
-                    return [k for k in _raw.keys()
-                            if _o2.path.isabs(k) or k.startswith("\\\\") or k.startswith("//")]
-                elif isinstance(_raw, list):
-                    return [k for k in _raw if isinstance(k, str) and
-                            (_o2.path.isabs(k) or k.startswith("\\\\") or k.startswith("//"))]
-                return []
-            except Exception:
-                return []
-
-        # v8.1.6 redesign: the built-in analyses now persist their own
-        # Queue/NOW settings (scope, output, schedule, report folder) via
-        # custom_tasks_manager.get/save_builtin_analysis_settings(),
-        # mirroring how custom tasks already work — a saved definition
-        # you can Queue/NOW directly from without reopening a popup every
-        # time, with Edit as the one place that changes those settings.
-        # _build_builtin_prompt() is the single place scope/output
-        # injection happens, shared by Queue, NOW, and Edit's own
-        # preview, so all three ways of running an analysis stay in sync.
-
-        def _build_builtin_prompt(task_def, settings):
-            prompt = task_def["prompt"].rstrip()
-            scope_dirs = settings.get("scope_dirs") or []
-            if scope_dirs:
-                prompt += (
-                    f"\n\nScope restriction: focus your analysis only on "
-                    f"these indexed directories: {', '.join(scope_dirs)}. "
-                    f"Use search_within_directory() for each scope directory "
-                    f"rather than search_documents() across the full index."
-                )
-            out_learnings = settings.get("output_learnings", True)
-            out_report    = settings.get("output_report", False)
-            out_email     = settings.get("output_email", False)
-            report_folder = settings.get("report_folder") or ""
-
-            # v8.1.10: added Email as a third output option — mirrors
-            # custom_tasks_manager.build_task_prompt()'s generic action-list
-            # approach rather than hand-enumerating combinations.
-            actions = []
-            if out_learnings:
-                actions.append(
-                    "record key insights as learnings via record_learning() "
-                    "with category 'business_insight'"
-                )
-            if out_report:
-                actions.append(
-                    f"save the full analysis as a Word document via "
-                    f"save_analysis_report() to folder '{report_folder}'"
-                )
-            if out_email:
-                if out_report:
-                    actions.append(
-                        "email the full analysis via send_email() — leave "
-                        "'to' blank to use the configured default "
-                        "recipient, use a clear subject line naming the "
-                        "analysis, and attach the report saved above via "
-                        "attachment_path"
-                    )
-                else:
-                    actions.append(
-                        "email the full analysis via send_email() — leave "
-                        "'to' blank to use the configured default "
-                        "recipient, and use a clear subject line naming "
-                        "the analysis"
-                    )
-            if actions:
-                # v8.1.10 fix: NOT .capitalize() — that lowercases every
-                # character after the first, which corrupted embedded
-                # mixed-case content like report_folder paths (e.g.
-                # "C:\Reports" became "c:\reports"). Just uppercase the
-                # first letter, leave everything else untouched.
-                def _cap_first(s):
-                    return s[0].upper() + s[1:] if s else s
-                numbered = " ".join(f"({i + 1}) {_cap_first(a)}."
-                                     for i, a in enumerate(actions))
-                prompt += f"\n\nOutput: {numbered}"
-            return prompt
-
-        def _queue_builtin_task(task_def):
-            """Writes one queue entry using the CURRENTLY SAVED settings
-            for this built-in type — no popup, matches My Custom Analyses'
-            own ▶ Queue button. Returns (ok, error_or_None)."""
-            import custom_tasks_manager as _ctm_bq
-            import json as _json_bq
-            from pathlib import Path as _Path_bq
-            import datetime as _dt_bq
-
-            settings = _ctm_bq.get_builtin_analysis_settings(task_def["type"])
-            prompt = _build_builtin_prompt(task_def, settings)
-
-            tasks_path = _Path_bq.home() / ".ai-prowler" / "pending_tasks.json"
-            try:
-                # Unreadable queue -> raise (reported as "Task queue error"),
-                # never save it back as just this one task (2026-10-19).
-                existing = _ss_read_list_for_update(tasks_path)
-
-                ts = _dt_bq.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                schedule_key  = settings.get("schedule", "none")
-                first_due_val = settings.get("first_due")
-                _due_anchor   = first_due_val or _dt_bq.date.today().isoformat()
-                # v8.1.11: daily tasks now need a datetime next_due (date +
-                # first run-time slot), same as My Custom AI Analyses —
-                # matches _first_daily_datetime()'s logic exactly.
-                if schedule_key == "daily":
-                    next_due_val = _ctm_bq._first_daily_datetime(
-                        _due_anchor,
-                        settings.get("daily_start_time", "09:00"),
-                        settings.get("daily_end_time", "17:00"),
-                        settings.get("daily_times_per_day", 1))
-                elif schedule_key != "none":
-                    next_due_val = _due_anchor
-                else:
-                    next_due_val = None
-
-                task = {
-                    "task_id":          f"{task_def['type']}_{ts}",
-                    "type":             task_def["type"],
-                    "label":            task_def["label"],
-                    "prompt":           prompt,
-                    "scope_dirs":       settings.get("scope_dirs") or [],
-                    "output_learnings": settings.get("output_learnings", True),
-                    "output_report":    settings.get("output_report", False),
-                    "output_email":     settings.get("output_email", False),
-                    "report_folder":    settings.get("report_folder") or _ctm_bq.DEFAULT_REPORT_FOLDER,
-                    "schedule":         schedule_key,
-                    "first_due":        first_due_val,
-                    "next_due":         next_due_val,
-                    "daily_start_time":    settings.get("daily_start_time", "09:00"),
-                    "daily_end_time":      settings.get("daily_end_time", "17:00"),
-                    "daily_times_per_day": settings.get("daily_times_per_day", 1),
-                    "created_at":       _dt_bq.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "status":           "pending",
-                }
-                existing.append(task)
-                tasks_path.parent.mkdir(parents=True, exist_ok=True)
-                _ss_write_json(tasks_path, existing, ensure_ascii=False)   # atomic (safe_save)
-                return True, None
-            except Exception as _e:
-                return False, str(_e)
-
-        def _queue_task_row(task_def):
-            ok, err = _queue_builtin_task(task_def)
-            if not ok:
-                self.status_var.set(f"Task queue error: {err}")
-                return
-            self.status_var.set(
-                f"✅ {task_def['label']} queued — will run on the next "
-                f"scheduled Autonomous AI Task Queue pass.")
-            self.root.after(4000, lambda: self.status_var.set("Ready"))
-            _refresh_queue_count()
-            if _queue_expanded.get():
-                _refresh_queue_list()
-
-        # Helper — Edit popup. Pre-fills every field from the currently
-        # saved settings for this analysis type; Save Settings persists
-        # them (via save_builtin_analysis_settings) WITHOUT queuing or
-        # running anything — that's what the row's own ▶ Queue / ▶ NOW
-        # buttons are for. Same 806x980 scrollable layout as before.
-        def _open_builtin_editor(task_def):
-            import custom_tasks_manager as _ctm_q
-            from pathlib import Path as _Path
-            tracked_dirs = _load_tracked_dirs_for_scope()
-            saved = _ctm_q.get_builtin_analysis_settings(task_def["type"])
-
-            _win = tk.Toplevel(self.root)
-            _win.title(f"Edit: {task_def['label']}")
-            _win.geometry("806x980")
-            _win.resizable(True, True)
-            _win.grab_set()
-            _win.focus_set()
-
-            _win_canvas = tk.Canvas(_win, highlightthickness=0)
-            _win_vsb    = ttk.Scrollbar(_win, orient='vertical', command=_win_canvas.yview)
-            _win_vsb.pack(side='right', fill='y')
-            _win_canvas.pack(side='left', fill='both', expand=True)
-            _win_canvas.configure(yscrollcommand=_win_vsb.set)
-            _pad = tk.Frame(_win_canvas, padx=16, pady=12)
-            _pad_id = _win_canvas.create_window((0, 0), window=_pad, anchor='nw')
-            def _win_cfg(e):
-                _win_canvas.configure(scrollregion=_win_canvas.bbox('all'))
-                _win_canvas.itemconfig(_pad_id, width=_win_canvas.winfo_width())
-            _pad.bind('<Configure>', _win_cfg)
-            def _win_mw(e):
-                _win_canvas.yview_scroll(int(-1*(e.delta/120)), 'units')
-            _win_canvas.bind('<MouseWheel>', _win_mw)
-            _pad.bind('<MouseWheel>', _win_mw)
-
-            tk.Label(_pad, text="Analysis:", font=('Arial', 9, 'bold'),
-                     anchor='w').pack(anchor='w')
-            tk.Label(_pad, text=task_def['label'],
-                     font=('Arial', 10), anchor='w').pack(anchor='w', pady=(0, 4))
-
-            _desc_frame = tk.Frame(_pad, bg='#e8f4e8', bd=1, relief='solid')
-            _desc_frame.pack(fill='x', pady=(0, 8))
-            tk.Label(_desc_frame, text="What this does:",
-                     font=('Arial', 8, 'bold'), bg='#e8f4e8', fg='#1a4a1a',
-                     anchor='w').pack(anchor='w', padx=8, pady=(6, 2))
-            tk.Label(_desc_frame, text=task_def.get('description', ''),
-                     font=('Arial', 8), bg='#e8f4e8', fg='#1a3a1a',
-                     anchor='w', justify='left',
-                     wraplength=728).pack(anchor='w', padx=8, pady=(0, 6))
-
-            _prompt_hdr = tk.Frame(_pad)
-            _prompt_hdr.pack(fill='x')
-            tk.Label(_prompt_hdr, text="Prompt (auto):",
-                     font=('Arial', 9, 'bold'), anchor='w').pack(side='left')
-            _prompt_toggle_lbl = tk.StringVar(value="▶ Show prompt")
-            _prompt_box = tk.Text(_pad, height=5, width=60, wrap='word',
-                                  font=('Arial', 8), fg='gray',
-                                  state='disabled', bg='#f0f0f0')
-            _prompt_box.configure(state='normal')
-            _prompt_box.insert('1.0', task_def['prompt'])
-            _prompt_box.configure(state='disabled')
-
-            def _toggle_prompt():
-                if _prompt_box.winfo_ismapped():
-                    _prompt_box.pack_forget()
-                    _prompt_toggle_lbl.set("▶ Show prompt")
-                else:
-                    _prompt_box.pack(fill='x', pady=(2, 6))
-                    _prompt_toggle_lbl.set("▼ Hide prompt")
-
-            ttk.Button(_prompt_hdr, textvariable=_prompt_toggle_lbl,
-                       command=_toggle_prompt,
-                       width=14).pack(side='left', padx=(8, 0))
-
-            tk.Label(_pad, text="Scope directories (optional):",
-                     font=('Arial', 9, 'bold'), anchor='w').pack(anchor='w', pady=(8, 0))
-            tk.Label(_pad,
-                     text="Check directories to focus this analysis on.  "
-                          "Leave all unchecked to search everything.",
-                     font=('Arial', 8), fg='gray',
-                     wraplength=728, justify='left').pack(anchor='w')
-
-            _scope_outer = tk.Frame(_pad, bd=1, relief='sunken')
-            _scope_outer.pack(fill='x', pady=(2, 8))
-            _scope_canvas = tk.Canvas(_scope_outer, highlightthickness=0, bg='white')
-            _scope_vsb    = ttk.Scrollbar(_scope_outer, orient='vertical',
-                                          command=_scope_canvas.yview)
-            _scope_inner  = tk.Frame(_scope_canvas, bg='white')
-            _scope_inner_id = _scope_canvas.create_window(
-                (0, 0), window=_scope_inner, anchor='nw')
-
-            def _scope_on_configure(e):
-                _scope_canvas.configure(scrollregion=_scope_canvas.bbox('all'))
-                _scope_canvas.itemconfig(_scope_inner_id,
-                                         width=_scope_canvas.winfo_width())
-            _scope_inner.bind('<Configure>', _scope_on_configure)
-
-            _scope_canvas.configure(yscrollcommand=_scope_vsb.set)
-            _scope_vsb.pack(side='right', fill='y')
-            _scope_canvas.pack(side='left', fill='both', expand=True)
-
-            def _scope_mousewheel(e):
-                _scope_canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
-            _scope_canvas.bind('<MouseWheel>', _scope_mousewheel)
-            _scope_inner.bind('<MouseWheel>', _scope_mousewheel)
-
-            _saved_scope_set = set(saved.get("scope_dirs") or [])
-            _scope_vars = {}
-            if tracked_dirs:
-                for _d in tracked_dirs:
-                    _sv = tk.BooleanVar(value=(_d in _saved_scope_set))
-                    _scope_vars[_d] = _sv
-                    _cb = ttk.Checkbutton(_scope_inner, text=_d, variable=_sv)
-                    _cb.pack(anchor='w', padx=4, pady=1)
-                    _cb.bind('<MouseWheel>', _scope_mousewheel)
-                _scope_canvas.update_idletasks()
-                _content_h = _scope_inner.winfo_reqheight()
-                _scope_canvas.configure(height=min(_content_h + 4, 150))
-            else:
-                tk.Label(_scope_inner,
-                         text="No indexed directories found. Index some documents first.",
-                         font=('Arial', 8), fg='gray', bg='white').pack(padx=4, pady=4)
-                _scope_canvas.configure(height=30)
-
-            tk.Label(_pad, text="Output:", font=('Arial', 9, 'bold'),
-                     anchor='w').pack(anchor='w')
-            _out_row = tk.Frame(_pad)
-            _out_row.pack(anchor='w', pady=(2, 4))
-
-            _learn_var  = tk.BooleanVar(value=saved.get("output_learnings", True))
-            _report_var = tk.BooleanVar(value=saved.get("output_report", False))
-            _email_var  = tk.BooleanVar(value=saved.get("output_email", False))
-
-            ttk.Checkbutton(_out_row,
-                            text="💡 Save key insights to Learnings",
-                            variable=_learn_var).pack(anchor='w')
-            ttk.Checkbutton(_out_row,
-                            text="📄 Save full analysis as Word document (.docx)",
-                            variable=_report_var).pack(anchor='w')
-            # v8.1.10: third output option, same as the custom-task editor.
-            ttk.Checkbutton(_out_row,
-                            text="✉️ Email the analysis",
-                            variable=_email_var).pack(anchor='w')
-
-            tk.Label(_pad, text='Schedule:', font=('Arial', 9, 'bold'),
-                     anchor='w').pack(anchor='w', pady=(8, 0))
-            tk.Label(_pad,
-                     text='One shot = run only via ▶ Queue / ▶ NOW.  '
-                          'Choose a schedule to repeat automatically — '
-                          'AI-Prowler detects when it is due and surfaces it.',
-                     font=('Arial', 8), fg='gray',
-                     wraplength=728, justify='left').pack(anchor='w')
-
-            _sched_row = tk.Frame(_pad)
-            _sched_row.pack(fill='x', pady=(4, 2))
-
-            _sched_lbl_to_key = {v: k for k, v in _ctm_q.SCHEDULE_LABELS.items()}
-            _sched_var = tk.StringVar(
-                value=_ctm_q.SCHEDULE_LABELS.get(saved.get("schedule", "none"), "Manual only"))
-            _sched_combo = ttk.Combobox(
-                _sched_row, textvariable=_sched_var,
-                values=list(_ctm_q.SCHEDULE_LABELS.values()),
-                state='readonly', width=16)
-            _sched_combo.pack(side='left')
-
-            tk.Label(_sched_row, text='  First due date:',
-                     font=('Arial', 9, 'bold')).pack(side='left')
-            _due_var   = tk.StringVar(value=saved.get("first_due") or '')
-            _due_entry = ttk.Entry(_sched_row, textvariable=_due_var, width=12)
-            _due_entry.pack(side='left', padx=(4, 0))
-            tk.Label(_sched_row, text='YYYY-MM-DD  (blank = today)',
-                     font=('Arial', 7), fg='gray').pack(side='left', padx=(6, 0))
-
-            # v8.1.11: Daily-only time-of-day fields — Start time, End
-            # time (only meaningful/used when Times/day > 1), and Times
-            # per day (1-24, "24 times/day 00:00-23:00" is how Hourly
-            # ends up expressed — no separate Hourly schedule). Extended
-            # here to match My Custom AI Analyses exactly — previously
-            # Common Business Analysis tasks had no time-of-day
-            # granularity at all when Daily was selected. Both dialogs
-            # call custom_tasks_manager.format_daily_run_times_preview()
-            # for the live "Runs at: ..." line so they can never drift
-            # out of sync with each other.
-            _daily_row = tk.Frame(_pad)
-            tk.Label(_daily_row, text="Start time:",
-                     font=('Arial', 9, 'bold')).pack(side='left')
-            _daily_start_var = tk.StringVar(value=saved.get("daily_start_time", "09:00"))
-            ttk.Entry(_daily_row, textvariable=_daily_start_var, width=6).pack(
-                side='left', padx=(4, 16))
-            tk.Label(_daily_row, text="End time:",
-                     font=('Arial', 9, 'bold')).pack(side='left')
-            _daily_end_var = tk.StringVar(value=saved.get("daily_end_time", "17:00"))
-            ttk.Entry(_daily_row, textvariable=_daily_end_var, width=6).pack(
-                side='left', padx=(4, 16))
-            tk.Label(_daily_row, text="Times per day:",
-                     font=('Arial', 9, 'bold')).pack(side='left')
-            _daily_times_var = tk.StringVar(value=str(saved.get("daily_times_per_day", 1)))
-            ttk.Entry(_daily_row, textvariable=_daily_times_var, width=4).pack(
-                side='left', padx=(4, 0))
-            tk.Label(_daily_row, text="HH:MM, max 24/day",
-                     font=('Arial', 7), fg='gray').pack(side='left', padx=(6, 0))
-
-            _daily_preview_var = tk.StringVar(value="")
-            _daily_preview_lbl = tk.Label(_pad, textvariable=_daily_preview_var,
-                                           font=('Arial', 8), fg='#5a7a9a')
-
-            def _update_daily_preview_builtin(*_a):
-                _daily_preview_var.set(_ctm_q.format_daily_run_times_preview(
-                    _daily_start_var.get().strip(), _daily_end_var.get().strip(),
-                    _daily_times_var.get().strip() or "1"))
-            _daily_start_var.trace_add('write', _update_daily_preview_builtin)
-            _daily_end_var.trace_add('write', _update_daily_preview_builtin)
-            _daily_times_var.trace_add('write', _update_daily_preview_builtin)
-            _update_daily_preview_builtin()
-
-            # v8.1.11: the credit-usage note only matters when there's
-            # actually more than one run/day to warn about — a once-daily
-            # or weekly task barely costs anything, so showing this
-            # unconditionally overstated the concern. Now only visible
-            # when schedule == "daily" AND times/day > 1, matching the
-            # My Custom AI Analyses editor exactly. Static GUI text, not
-            # something Claude, Muse, or Grok says in chat.
-            _credit_warn_lbl = tk.Label(
-                _pad,
-                text='⚠️ If the Autonomous AI Task Queue is enabled, '
-                     'each automatic check uses Claude subscription '
-                     'usage credits.',
-                font=('Arial', 8), fg='#b8860b',
-                wraplength=728, justify='left')
-
-            def _update_daily_row_visibility_builtin():
-                _k = _sched_lbl_to_key.get(_sched_var.get(), 'none')
-                if _k == 'daily':
-                    _daily_row.pack(fill='x', pady=(2, 2), after=_sched_row)
-                    _daily_preview_lbl.pack(anchor='w', pady=(0, 4), after=_daily_row)
-                    try:
-                        _times = int(_daily_times_var.get().strip() or 1)
-                    except ValueError:
-                        _times = 1
-                    if _times > 1:
-                        _credit_warn_lbl.pack(anchor='w', pady=(0, 4), after=_daily_preview_lbl)
-                    else:
-                        _credit_warn_lbl.pack_forget()
-                else:
-                    _daily_row.pack_forget()
-                    _daily_preview_lbl.pack_forget()
-                    _credit_warn_lbl.pack_forget()
-            _daily_times_var.trace_add('write',
-                                        lambda *a: _update_daily_row_visibility_builtin())
-
-            # v9.0.2: Day-of-week pin row for builtin Configure dialog
-            _dow_row_b = tk.Frame(_pad)
-            tk.Label(_dow_row_b, text="Day of week:",
-                     font=('Arial', 9, 'bold')).pack(side='left')
-            _dow_lbl_to_int_b = {lbl: (i - 1 if i > 0 else None)
-                                 for i, lbl in enumerate(_ctm_q.DOW_LABELS)}
-            _saved_dow_b = saved.get("schedule_day_of_week")
-            _initial_dow_lbl_b = (
-                _ctm_q.DOW_LABELS[_saved_dow_b + 1]
-                if _saved_dow_b is not None else _ctm_q.DOW_LABELS[0]
-            )
-            _dow_var_b = tk.StringVar(value=_initial_dow_lbl_b)
-            ttk.Combobox(_dow_row_b, textvariable=_dow_var_b,
-                         values=_ctm_q.DOW_LABELS,
-                         state='readonly', width=12).pack(side='left', padx=(8, 0))
-            tk.Label(_dow_row_b,
-                     text="(stagger tasks to spread credit usage)",
-                     font=('Arial', 7), fg='gray').pack(side='left', padx=(8, 0))
-
-            def _update_dow_row_visibility_builtin(event=None):
-                _k = _sched_lbl_to_key.get(_sched_var.get(), 'none')
-                if _k in _ctm_q.DOW_ELIGIBLE_SCHEDULES:
-                    _dow_row_b.pack(fill='x', pady=(0, 4), after=_sched_row)
-                else:
-                    _dow_row_b.pack_forget()
-                    _dow_var_b.set(_ctm_q.DOW_LABELS[0])
-
-            def _on_sched_change(e=None):
-                _k = _sched_lbl_to_key.get(_sched_var.get(), 'none')
-                if _k == 'none':
-                    _due_entry.configure(state='disabled')
-                    _due_var.set('')
-                else:
-                    _due_entry.configure(state='normal')
-                    if not _due_var.get():
-                        import datetime as _dt2
-                        _due_var.set(_dt2.date.today().isoformat())
-                _update_daily_row_visibility_builtin()
-                _update_dow_row_visibility_builtin()
-            _sched_combo.bind('<<ComboboxSelected>>', _on_sched_change)
-            _update_dow_row_visibility_builtin()
-            # Match the entry's enabled/disabled state to the PRE-FILLED
-            # schedule (not always-disabled like the old "always Manual
-            # only at open" popup) — otherwise re-opening Edit on an
-            # already-recurring analysis would show its due date in a
-            # disabled field with no way to tell it's actually active.
-            _due_entry.configure(state='disabled')
-            _on_sched_change()
-
-            _folder_frame = tk.Frame(_pad)
-            _folder_frame.pack(fill='x', pady=(0, 8))
-            tk.Label(_folder_frame, text="Report folder:",
-                     font=('Arial', 9, 'bold')).pack(side='left')
-            _folder_var = tk.StringVar(
-                value=saved.get("report_folder") or _ctm_q.DEFAULT_REPORT_FOLDER)
-            ttk.Entry(_folder_frame, textvariable=_folder_var,
-                      width=52).pack(side='left', padx=(6, 4))
-
-            def _browse_report_folder():
-                import tkinter.filedialog as _fd
-                d = _fd.askdirectory(
-                    initialdir=_folder_var.get() or str(_Path.home()))
-                if d:
-                    _folder_var.set(d)
-
-            ttk.Button(_folder_frame, text="Browse…",
-                       command=_browse_report_folder).pack(side='left')
-
-            tk.Label(_pad,
-                     text="Save Settings stores these for ▶ Queue and ▶ NOW to use — it "
-                          "doesn't queue or run anything by itself. Close this window and "
-                          "use the row's own ▶ Queue or ▶ NOW button for that.",
-                     font=('Arial', 8, 'italic'), fg='#4a6a82',
-                     wraplength=728, justify='left').pack(anchor='w', pady=(0, 4))
-
-            _confirmed = tk.BooleanVar(value=False)
-
-            def _confirm():
-                _confirmed.set(True)
-                _win.destroy()
-
-            _btn_row = tk.Frame(_pad)
-            _btn_row.pack(fill='x', pady=(8, 0))
-            ttk.Button(_btn_row, text="Cancel",
-                       command=_win.destroy).pack(side='left', padx=(0, 8))
-            ttk.Button(_btn_row, text="Save Settings",
-                       command=_confirm).pack(side='left')
-
-            self.root.wait_window(_win)
-
-            if not _confirmed.get():
-                return  # user cancelled
-
-            scope_dirs    = [d for d, v in _scope_vars.items() if v.get()]
-            schedule_key  = _sched_lbl_to_key.get(_sched_var.get(), 'none')
-            first_due_val = _due_var.get().strip() or None
-
-            # v8.1.10: at least one output required — same rule as custom
-            # tasks (create_task()/update_task() enforce it there; this
-            # built-in path has no such backend function to enforce it
-            # centrally, so it's checked here instead).
-            if not (_learn_var.get() or _report_var.get() or _email_var.get()):
-                messagebox.showwarning(
-                    "Validation Error",
-                    "At least one output must be selected: Learnings, Document, or Email.")
-                return
-
-            # v8.1.11: same daily time-of-day validation custom tasks get
-            # from create_task()/update_task() — this built-in path has no
-            # equivalent backend function, so it's checked here too.
-            daily_start_val = _daily_start_var.get().strip() or "09:00"
-            daily_end_val   = _daily_end_var.get().strip() or "17:00"
-            try:
-                daily_times_val = max(1, int(_daily_times_var.get().strip() or 1))
-            except ValueError:
-                messagebox.showwarning(
-                    "Validation Error", "Times per day must be a whole number.")
-                return
-            if schedule_key == "daily":
-                if not (1 <= daily_times_val <= _ctm_q.MAX_DAILY_TIMES_PER_DAY):
-                    messagebox.showwarning(
-                        "Validation Error",
-                        f"Times per day must be between 1 and "
-                        f"{_ctm_q.MAX_DAILY_TIMES_PER_DAY}.")
-                    return
-                if daily_times_val > 1 and daily_end_val <= daily_start_val:
-                    messagebox.showwarning(
-                        "Validation Error",
-                        "End time must be after start time when times per day > 1.")
-                    return
-
-            # v9.0.2: resolve DOW label → int (None for "Any day")
-            _dow_val_b = _dow_lbl_to_int_b.get(_dow_var_b.get())
-            sched_dow_b = _dow_val_b if schedule_key in _ctm_q.DOW_ELIGIBLE_SCHEDULES else None
-
-            new_settings = {
-                "scope_dirs":            scope_dirs,
-                "output_learnings":      _learn_var.get(),
-                "output_report":         _report_var.get(),
-                "output_email":          _email_var.get(),
-                "report_folder":         _folder_var.get().strip() or _ctm_q.DEFAULT_REPORT_FOLDER,
-                "schedule":              schedule_key,
-                "schedule_day_of_week":  sched_dow_b,   # v9.0.2
-                "first_due":             first_due_val,
-                "daily_start_time":      daily_start_val,
-                "daily_end_time":        daily_end_val,
-                "daily_times_per_day":   daily_times_val,
-            }
-            _ctm_q.save_builtin_analysis_settings(task_def["type"], new_settings)
-            self.status_var.set(f"✅ Settings saved for {task_def['label']}")
-            self.root.after(3000, lambda: self.status_var.set("Ready"))
-
-        # Full-width rows — each analysis gets ▶ Queue / ✎ Edit on the right
-        # (no trash: these 4 are fixed, not user-deletable).
-        # NOTE: ▶ NOW was removed in v8.2.x — the Claude Code CLI headless
-        # launch path was unreliable (ChromaDB contention, localhost:8000
-        # reachability issues) and has been retired. Use ▶ Queue to schedule
-        # the next run, or run from the 🤖 Task Queue panel.
-        _an_list_frame = tk.Frame(_an_inner, bg='#1a2530')
-        _an_list_frame.pack(fill='x', pady=(4, 0))
-
-        def _draw_builtin_row(task_def):
-            import custom_tasks_manager as _ctm_row
-            settings = _ctm_row.get_builtin_analysis_settings(task_def["type"])
-
-            row = tk.Frame(_an_list_frame, bg='#0d1a26',
-                           highlightthickness=1,
-                           highlightbackground=task_def.get("color", "#1e3a52"))
-            row.pack(fill='x', pady=2)
-
-            info = tk.Frame(row, bg='#0d1a26')
-            info.pack(side='left', fill='both', expand=True, padx=6, pady=4)
-
-            tk.Label(info, text=task_def["label"],
-                     bg='#0d1a26', fg='#d0e8ff',
-                     font=('Arial', 9, 'bold')).pack(anchor='w')
-
-            badges = []
-            if settings.get("output_learnings", True):
-                badges.append("💡 Learnings")
-            if settings.get("output_report", False):
-                badges.append("📄 Report")
-            if settings.get("output_email", False):
-                badges.append("✉️ Email")
-            if settings.get("scope_dirs"):
-                _n = len(settings["scope_dirs"])
-                badges.append(f"📁 {_n} dir{'s' if _n != 1 else ''}")
-            if settings.get("schedule", "none") != "none":
-                badges.append(_ctm_row.SCHEDULE_LABELS.get(
-                    settings["schedule"], settings["schedule"]))
-            if badges:
-                tk.Label(info, text="  ".join(badges),
-                         bg='#0d1a26', fg='#4a6a5a',
-                         font=('Arial', 7)).pack(anchor='w')
-
-            _desc_first = task_def.get("description", "").split("\n")[0]
-            tk.Label(info, text=_desc_first,
-                     bg='#0d1a26', fg='#5a7a8a', font=('Arial', 7),
-                     wraplength=560, justify='left', anchor='w').pack(anchor='w')
-
-            btn_col = tk.Frame(row, bg='#0d1a26')
-            btn_col.pack(side='right', padx=4, pady=4)
-
-            tk.Button(btn_col, text="▶ Queue",
-                      bg='#1a3a5a', fg='white',
-                      font=('Arial', 7, 'bold'),
-                      relief='flat', cursor='hand2',
-                      command=lambda t=task_def: _queue_task_row(t)).pack(fill='x', pady=1)
-
-            def _edit_click(t=task_def):
-                _open_builtin_editor(t)
-                _refresh_an_list()
-
-            tk.Button(btn_col, text="✎ Edit",
-                      bg='#1a2a1a', fg='#88cc88',
-                      font=('Arial', 7),
-                      relief='flat', cursor='hand2',
-                      command=_edit_click).pack(fill='x', pady=1)
-
-        def _refresh_an_list():
-            for w in _an_list_frame.winfo_children():
-                w.destroy()
-            for _task in _ANALYSIS_TASKS:
-                _draw_builtin_row(_task)
-
-        _refresh_an_list()
-        self._refresh_an_list      = _refresh_an_list  # exposed for tests
-        self._an_list_frame        = _an_list_frame
-        self._ANALYSIS_TASKS       = _ANALYSIS_TASKS
-        self._queue_task_row       = _queue_task_row
-        self._queue_builtin_task   = _queue_builtin_task
-        self._build_builtin_prompt = _build_builtin_prompt
-        self._open_builtin_editor  = _open_builtin_editor
-
-        # Hint label
-        tk.Label(_an_inner,
-                 text="▶ Queue saves for the next Autonomous AI Task Queue run.  "
-                      "✎ Edit changes scope, output, schedule, and report folder.",
-                 bg='#1a2530', fg='#4a6a82',
-                 font=('Arial', 7), wraplength=900,
-                 justify='left', anchor='w').pack(anchor='w', pady=(6, 0))
-
-        # Divider after analysis section
-        ttk.Separator(query_frame, orient='horizontal').pack(
-            fill='x', padx=20, pady=(4, 6))
-
-        # ── Queue Panel ───────────────────────────────────────────────────────
-        # Collapsible panel showing all items currently in pending_tasks.json.
-        # User can see what's waiting and clear individual items.
-
-        _queue_outer = tk.Frame(query_frame, bg='#12181f',
-                                highlightthickness=1,
-                                highlightbackground='#2a3a4a')
-        _queue_outer.pack(fill='x', padx=20, pady=(0, 6))
-        # v8.1.6: reordering happens later, right after _tqa_banner is
-        # created and positioned — see that pack_configure call for why
-        # (this widget doesn't exist yet at this point in the method).
-
-        _queue_hdr = tk.Frame(_queue_outer, bg='#12181f')
-        _queue_hdr.pack(fill='x', padx=10, pady=6)
-
-        _queue_count_var = tk.StringVar(value="▶ Show Queue (0)")
-        _queue_expanded  = tk.BooleanVar(value=False)
-        _queue_list_frame = tk.Frame(_queue_outer, bg='#12181f')
-
-        def _refresh_queue_count():
-            import json as _json
-            from pathlib import Path as _Path
-            p = _Path.home() / ".ai-prowler" / "pending_tasks.json"
-            try:
-                tasks = _ss_read_json(p) if p.exists() else []      # retries a mid-save read
-                pending = [t for t in tasks if t.get("status") not in ("completed",)]
-                n = len(pending)
-            except Exception:
-                n = 0
-            _queue_count_var.set(
-                f"{'▼' if _queue_expanded.get() else '▶'} Show Queue ({n})"
-            )
-            return n
-
-        def _refresh_queue_list():
-            import json as _json
-            import datetime as _dt
-            from pathlib import Path as _Path
-            import custom_tasks_manager as _ctm_qlist
-            # Clear existing widgets
-            for w in _queue_list_frame.winfo_children():
-                w.destroy()
-            p = _Path.home() / ".ai-prowler" / "pending_tasks.json"
-            try:
-                tasks = _ss_read_json(p) if p.exists() else []      # retries a mid-save read
-                pending = [t for t in tasks if t.get("status") not in ("completed",)]
-            except Exception:
-                pending = []
-
-            if not pending:
-                tk.Label(_queue_list_frame,
-                         text="Queue is empty.",
-                         bg='#12181f', fg='#4a6a82',
-                         font=('Arial', 8)).pack(anchor='w', padx=10, pady=4)
-                return
-
-            now = _dt.datetime.utcnow()
-            for t in pending:
-                try:
-                    created = _dt.datetime.strptime(
-                        t.get("created_at", ""), "%Y-%m-%dT%H:%M:%SZ")
-                    age_mins = int((now - created).total_seconds() / 60)
-                    if age_mins < 60:
-                        age = f"{age_mins}m ago"
-                    elif age_mins < 1440:
-                        age = f"{age_mins // 60}h ago"
-                    else:
-                        age = f"{age_mins // 1440}d ago"
-                except Exception:
-                    age = ""
-
-                # v8.1.9: show whether this entry is actually due right now
-                # (what get_pending_analysis_tasks() will pick up) versus
-                # sitting queued-but-not-yet-due — previously the panel gave
-                # no way to visually distinguish these, so a task that
-                # looked "in the queue" could silently not run yet.
-                try:
-                    is_ready = _ctm_qlist.is_queue_entry_ready(t)
-                except Exception:
-                    is_ready = True
-                if t.get("schedule", "none") == "none":
-                    due_badge, due_color = "", ''
-                elif is_ready:
-                    due_badge, due_color = "🟢 Due now", '#6ab86a'
-                else:
-                    _nd = t.get("next_due", "?")
-                    due_badge, due_color = f"⏳ Due {_nd}", '#8a92b8'
-
-                row = tk.Frame(_queue_list_frame, bg='#12181f')
-                row.pack(fill='x', padx=8, pady=1)
-
-                tk.Label(row,
-                         text=f"• {t.get('label', t.get('task_id','?'))}",
-                         bg='#12181f', fg='#c0d0e0',
-                         font=('Arial', 8),
-                         anchor='w').pack(side='left')
-                tk.Label(row,
-                         text=age,
-                         bg='#12181f', fg='#4a6a82',
-                         font=('Arial', 7)).pack(side='left', padx=(6, 0))
-                if due_badge:
-                    tk.Label(row,
-                             text=due_badge,
-                             bg='#12181f', fg=due_color,
-                             font=('Arial', 7)).pack(side='left', padx=(6, 0))
-
-                def _remove(tid=t.get("task_id")):
-                    try:
-                        import json as _j
-                        from pathlib import Path as _P
-                        _p = _P.home() / ".ai-prowler" / "pending_tasks.json"
-                        _tasks = _ss_read_list_for_update(_p)    # unreadable -> raise, no save
-                        _tasks = [x for x in _tasks if x.get("task_id") != tid]
-                        _ss_write_json(_p, _tasks)               # atomic (safe_save)
-                    except Exception:
-                        pass
-                    _refresh_queue_list()
-                    _refresh_queue_count()
-
-                tk.Button(row, text="✕", bg='#12181f', fg='#cc4444',
-                          font=('Arial', 7), relief='flat', cursor='hand2',
-                          command=_remove).pack(side='right')
-
-            # Clear all button
-            sep = ttk.Separator(_queue_list_frame, orient='horizontal')
-            sep.pack(fill='x', padx=8, pady=(4, 2))
-            btn_row = tk.Frame(_queue_list_frame, bg='#12181f')
-            btn_row.pack(fill='x', padx=8, pady=(2, 6))
-
-            def _clear_all():
-                try:
-                    import json as _j
-                    from pathlib import Path as _P
-                    _p = _P.home() / ".ai-prowler" / "pending_tasks.json"
-                    _tasks = _ss_read_list_for_update(_p)        # unreadable -> raise, no save
-                    _tasks = [x for x in _tasks if x.get("status") != "pending"]
-                    _ss_write_json(_p, _tasks)                   # atomic (safe_save)
-                except Exception:
-                    pass
-                _refresh_queue_list()
-                _refresh_queue_count()
-
-            tk.Button(btn_row, text="🗑 Clear Queue",
-                      bg='#2a1a1a', fg='#cc4444',
-                      font=('Arial', 8), relief='flat', cursor='hand2',
-                      command=_clear_all).pack(side='right')
-
-        def _toggle_queue():
-            _queue_expanded.set(not _queue_expanded.get())
-            if _queue_expanded.get():
-                _refresh_queue_list()
-                _queue_list_frame.pack(fill='x', pady=(0, 6))
-            else:
-                _queue_list_frame.pack_forget()
-            _refresh_queue_count()
-
-        _queue_toggle_btn = tk.Button(
-            _queue_hdr,
-            textvariable=_queue_count_var,
-            bg='#12181f', fg='#6a9fbf',
-            font=('Arial', 8, 'bold'),
-            relief='flat', cursor='hand2',
-            command=_toggle_queue)
-        _queue_toggle_btn.pack(side='left')
-
-        tk.Button(_queue_hdr, text="↻",
-                  bg='#12181f', fg='#4a6a82',
-                  font=('Arial', 9), relief='flat', cursor='hand2',
-                  command=lambda: (_refresh_queue_count(),
-                                   _refresh_queue_list() if _queue_expanded.get() else None)
-                  ).pack(side='right')
-
-        # Initial count
-        _refresh_queue_count()
-
-        # v8.1.9: exposed for tests — lets test code drive/inspect the
-        # queue-list refresh and due-badge behavior directly, the same
-        # pattern used for the Custom Analyses panel above.
-        self._refresh_queue_list  = _refresh_queue_list
-        self._refresh_queue_count = _refresh_queue_count
-        self._queue_expanded      = _queue_expanded
-        self._queue_list_frame    = _queue_list_frame
-
-        # v8.1.12: live-refresh Show Queue when pending_tasks.json changes
-        # externally — e.g. a headless scheduled run completing a task and
-        # re-arming it while the GUI is already open. Mirrors the exact
-        # same mtime-polling pattern already used for the My Custom AI
-        # Analyses list below (_poll_custom_tasks_file /
-        # _custom_tasks_mtime) — cheap (a single stat() call every 3s),
-        # no new dependency, only refreshes when the file actually
-        # changed rather than unconditionally rebuilding on a timer.
-        _pending_tasks_mtime = {"last": None}
-
-        def _sync_pending_tasks_mtime():
-            try:
-                _p = Path.home() / ".ai-prowler" / "pending_tasks.json"
-                _pending_tasks_mtime["last"] = (
-                    _p.stat().st_mtime if _p.exists() else None)
+                self.status_var.set(text)
+                self.root.after(4000, lambda: self.status_var.set("Ready"))
             except Exception:
                 pass
 
-        def _poll_pending_tasks_file():
-            try:
-                _p = Path.home() / ".ai-prowler" / "pending_tasks.json"
-                mtime = _p.stat().st_mtime if _p.exists() else None
-                if mtime != _pending_tasks_mtime["last"]:
-                    _pending_tasks_mtime["last"] = mtime
-                    _refresh_queue_count()
-                    if _queue_expanded.get():
-                        _refresh_queue_list()
-            except Exception:
-                pass
-            finally:
-                self.root.after(3000, _poll_pending_tasks_file)
-
-        # Exposed for tests, same rationale as _poll_custom_tasks_file —
-        # lets a test harness that cancels pending after() callbacks still
-        # exercise this logic synchronously.
-        self._poll_pending_tasks_file = _poll_pending_tasks_file
-
-        _sync_pending_tasks_mtime()
-        self.root.after(3000, _poll_pending_tasks_file)
-
-        # ── My Custom Analyses ────────────────────────────────────────────────
-        # User-defined analysis tasks with schedule, scope, and output config.
-
-        _custom_outer = tk.Frame(query_frame, bg='#0d1a26',
-                                 highlightthickness=1,
-                                 highlightbackground='#1e3a52')
-        _custom_outer.pack(fill='x', padx=20, pady=(0, 8))
-
-        _custom_hdr_row = tk.Frame(_custom_outer, bg='#0d1a26')
-        _custom_hdr_row.pack(fill='x', padx=12, pady=(8, 4))
-
-        tk.Label(_custom_hdr_row,
-                 text="📋  My Custom AI Analyses",
-                 bg='#0d1a26', fg='#ffffff',
-                 font=('Arial', 10, 'bold')).pack(side='left')
-
-        _custom_count_var = tk.StringVar(value="0 / 25")
-        self._custom_count_var = _custom_count_var  # exposed for tests/polling
-        tk.Label(_custom_hdr_row,
-                 textvariable=_custom_count_var,
-                 bg='#0d1a26', fg='#4a6a82',
-                 font=('Arial', 8)).pack(side='right')
-
-        # v8.2.0: explains what these are now that the section reads "AI
-        # Analyses" — these user-defined tasks are themselves AI-assisted:
-        # each one can be queued and stored for repeated and/or future
-        # execution. Also notes the MCP path explicitly, since everything
-        # below this note is the manual/GUI configuration path only —
-        # Claude, Muse, or Grok can also create and add these tasks remotely via
-        # AI-Prowler MCP tools, without touching this panel at all.
-        tk.Label(_custom_outer,
-                 text="These user custom-defined tasks are AI-assisted tasks that "
-                      "can be queued and stored for repeated and/or future "
-                      "execution. In addition to manual configuration here, Claude, Muse, or Grok "
-                      "can also create and add these via AI-Prowler MCP tools "
-                      "remotely.",
-                 bg='#0d1a26', fg='#7a92a8',
-                 font=('Arial', 8),
-                 wraplength=680, justify='left').pack(anchor='w', padx=12, pady=(0, 6))
-
-        # Task list container
-        _custom_list_frame = tk.Frame(_custom_outer, bg='#0d1a26')
-        _custom_list_frame.pack(fill='x', padx=10, pady=(0, 4))
-        self._custom_list_frame = _custom_list_frame  # exposed for tests/polling
-
-        def _refresh_custom_list():
-            """Rebuild the custom task list UI."""
-            for w in _custom_list_frame.winfo_children():
-                w.destroy()
-
-            try:
-                import sys as _sys, os as _os
-                _app_dir = _os.path.dirname(_os.path.abspath(__file__))
-                if _app_dir not in _sys.path:
-                    _sys.path.insert(0, _app_dir)
-                import custom_tasks_manager as _ctm
-                tasks = _ctm.load_custom_tasks()
-            except Exception as _e:
-                tk.Label(_custom_list_frame,
-                         text=f"Error loading tasks: {_e}",
-                         bg='#0d1a26', fg='#cc4444',
-                         font=('Arial', 8)).pack(anchor='w', padx=4)
-                return
-
-            _custom_count_var.set(f"{len(tasks)} / {_ctm.MAX_CUSTOM_TASKS}")
-
-            if not tasks:
-                tk.Label(_custom_list_frame,
-                         text="No custom tasks yet. Click '+ New' to create one.",
-                         bg='#0d1a26', fg='#4a6a82',
-                         font=('Arial', 8)).pack(anchor='w', padx=4, pady=4)
-                return
-
-            for t in tasks:
-                _draw_task_row(t, tasks, _ctm)
-
-        def _draw_task_row(task, all_tasks, _ctm):
-            """Draw one task row with Queue / Edit / Delete buttons."""
-            row = tk.Frame(_custom_list_frame,
-                           bg='#0d1a26',
-                           highlightthickness=1,
-                           highlightbackground='#1e3a52')
-            row.pack(fill='x', pady=2)
-
-            info = tk.Frame(row, bg='#0d1a26')
-            info.pack(side='left', fill='both', expand=True, padx=6, pady=4)
-
-            # Label + schedule badge
-            lbl_row = tk.Frame(info, bg='#0d1a26')
-            lbl_row.pack(anchor='w')
-            tk.Label(lbl_row,
-                     text=task.get("label", "Unnamed"),
-                     bg='#0d1a26', fg='#d0e8ff',
-                     font=('Arial', 9, 'bold')).pack(side='left')
-
-            sched = task.get("schedule", "none")
-            if sched != "none":
-                import custom_tasks_manager as _ctm2
-                badge = _ctm2.SCHEDULE_LABELS.get(sched, sched)
-                tk.Label(lbl_row,
-                         text=f"  {badge}",
-                         bg='#0d1a26', fg='#4a8fa8',
-                         font=('Arial', 7)).pack(side='left')
-
-            # Due status
-            try:
-                import custom_tasks_manager as _ctm3
-                status_txt = _ctm3.due_status_label(task)
-            except Exception:
-                status_txt = ""
-            if status_txt and status_txt != "Manual only":
-                color = '#cc4444' if '⚠' in status_txt else \
-                        '#22c55e' if 'today' in status_txt.lower() else '#6a9fbf'
-                tk.Label(info,
-                         text=status_txt,
-                         bg='#0d1a26', fg=color,
-                         font=('Arial', 7)).pack(anchor='w')
-
-            # Output badges
-            out_txt = []
-            if task.get("output_learnings", True):
-                out_txt.append("💡 Learnings")
-            if task.get("output_report", False):
-                out_txt.append("📄 Report")
-            if task.get("output_email", False):
-                out_txt.append("✉️ Email")
-            if out_txt:
-                tk.Label(info,
-                         text="  ".join(out_txt),
-                         bg='#0d1a26', fg='#4a6a5a',
-                         font=('Arial', 7)).pack(anchor='w')
-
-            # Action buttons
-            btn_col = tk.Frame(row, bg='#0d1a26')
-            btn_col.pack(side='right', padx=4, pady=4)
-
-            def _queue_task(t=task):
-                try:
-                    import custom_tasks_manager as _ctmq
-                    entries = _ctmq.tasks_to_queue_entries([t])
-                    import json as _j
-                    from pathlib import Path as _P
-                    p = _P.home() / ".ai-prowler" / "pending_tasks.json"
-                    existing = _ss_read_list_for_update(p)   # unreadable -> raise, no save
-                    existing.extend(entries)
-                    _ss_write_json(p, existing)              # atomic (safe_save)
-
-                    # Copy run command to clipboard
-                    _cmd = (
-                        "Call get_pending_analysis_tasks() and for each pending "
-                        "task: execute the full analysis described in the prompt, "
-                        "save reports and record learnings as configured, then "
-                        "call complete_analysis_task(task_id, summary)."
-                    )
-                    self.root.clipboard_clear()
-                    self.root.clipboard_append(_cmd)
-                    self.root.update()
-                    self.status_var.set(f"\u2705 '{t['label']}' queued \u2014 paste into Claude, Muse, or Grok to run ALL tasks")
-                    self.root.after(3000, lambda: self.status_var.set("Ready"))
-                    _refresh_queue_count()
-                    if _queue_expanded.get():
-                        _refresh_queue_list()
-                except Exception as _e:
-                    self.status_var.set(f"Queue error: {_e}")
-
-            tk.Button(btn_col, text="▶ Queue",
-                      bg='#1a3a5a', fg='white',
-                      font=('Arial', 7, 'bold'),
-                      relief='flat', cursor='hand2',
-                      command=_queue_task).pack(fill='x', pady=1)
-
-            def _edit_task(t=task):
-                _open_task_editor(t)
-
-            tk.Button(btn_col, text="✎ Edit",
-                      bg='#1a2a1a', fg='#88cc88',
-                      font=('Arial', 7),
-                      relief='flat', cursor='hand2',
-                      command=_edit_task).pack(fill='x', pady=1)
-
-            def _delete_task(t=task):
-                from tkinter import messagebox as _mb
-                if _mb.askyesno("Delete Task",
-                                f"Delete '{t['label']}'?\nThis cannot be undone."):
-                    try:
-                        import custom_tasks_manager as _ctmd
-                        tasks = _ctmd.load_custom_tasks()
-                        _ctmd.delete_task(tasks, t["task_id"])
-                        _ctmd.save_custom_tasks(tasks)
-                        _refresh_custom_list()
-                    except Exception as _e:
-                        self.status_var.set(f"Delete error: {_e}")
-
-            tk.Button(btn_col, text="🗑",
-                      bg='#2a1a1a', fg='#cc4444',
-                      font=('Arial', 7),
-                      relief='flat', cursor='hand2',
-                      command=_delete_task).pack(fill='x', pady=1)
-
-        def _open_task_editor(existing_task=None):
-            """Open the custom task editor dialog."""
-            import custom_tasks_manager as _ctm
-            import tkinter.simpledialog as _sd
-            from tkinter import messagebox as _mb
-
-            win = tk.Toplevel(self.root)
-            win.title("Edit Custom Analysis" if existing_task else "New Custom Analysis")
-            win.geometry("806x884")
-            win.resizable(True, True)
-            win.grab_set()
-
-            # Scrollable window — all content in a canvas so nothing gets hidden
-            _win_canvas = tk.Canvas(win, highlightthickness=0)
-            _win_vsb    = ttk.Scrollbar(win, orient='vertical', command=_win_canvas.yview)
-            _win_vsb.pack(side='right', fill='y')
-            _win_canvas.pack(side='left', fill='both', expand=True)
-            _win_canvas.configure(yscrollcommand=_win_vsb.set)
-            pad = tk.Frame(_win_canvas, padx=16, pady=12)
-            _pad_id = _win_canvas.create_window((0, 0), window=pad, anchor='nw')
-            def _win_configure(e):
-                _win_canvas.configure(scrollregion=_win_canvas.bbox('all'))
-                _win_canvas.itemconfig(_pad_id, width=_win_canvas.winfo_width())
-            pad.bind('<Configure>', _win_configure)
-            def _win_mousewheel(e):
-                _win_canvas.yview_scroll(int(-1*(e.delta/120)), 'units')
-            _win_canvas.bind('<MouseWheel>', _win_mousewheel)
-            pad.bind('<MouseWheel>', _win_mousewheel)
-
-            # Name
-            tk.Label(pad, text="Name:", font=('Arial', 9, 'bold'),
-                     anchor='w').pack(anchor='w')
-            name_var = tk.StringVar(value=existing_task.get("label", "") if existing_task else "")
-            ttk.Entry(pad, textvariable=name_var, width=60).pack(
-                fill='x', pady=(2, 8))
-
-            # Prompt
-            tk.Label(pad, text="Prompt:", font=('Arial', 9, 'bold'),
-                     anchor='w').pack(anchor='w')
-            tk.Label(pad, text="Describe what Claude, Muse, or Grok should analyze and report on.",
-                     font=('Arial', 8), fg='gray', anchor='w').pack(anchor='w')
-            prompt_box = tk.Text(pad, height=6, width=60, wrap='word',
-                                 font=('Arial', 9))
-            prompt_box.pack(fill='x', pady=(2, 8))
-            if existing_task:
-                prompt_box.insert('1.0', existing_task.get("prompt", ""))
-
-            # Scope directories
-            tk.Label(pad, text="Scope directories (optional):",
-                     font=('Arial', 9, 'bold'), anchor='w').pack(anchor='w')
-            tk.Label(pad,
-                     text="Check directories to focus analysis on. Leave all unchecked to search everything.",
-                     font=('Arial', 8), fg='gray', anchor='w',
-                     wraplength=728, justify='left').pack(anchor='w')
-
-            # Scrollable scope directories — capped at 150px
-            scope_outer = tk.Frame(pad, bd=1, relief='sunken')
-            scope_outer.pack(fill='x', pady=(2, 8))
-            scope_canvas = tk.Canvas(scope_outer, highlightthickness=0, bg='white')
-            scope_vsb    = ttk.Scrollbar(scope_outer, orient='vertical',
-                                         command=scope_canvas.yview)
-            scope_inner  = tk.Frame(scope_canvas, bg='white')
-            scope_inner_id = scope_canvas.create_window((0, 0), window=scope_inner, anchor='nw')
-
-            def _edit_scope_configure(e):
-                scope_canvas.configure(scrollregion=scope_canvas.bbox('all'))
-                scope_canvas.itemconfig(scope_inner_id, width=scope_canvas.winfo_width())
-            scope_inner.bind('<Configure>', _edit_scope_configure)
-
-            scope_canvas.configure(yscrollcommand=scope_vsb.set)
-            scope_vsb.pack(side='right', fill='y')
-            scope_canvas.pack(side='left', fill='both', expand=False)
-
-            def _edit_scope_mousewheel(e):
-                scope_canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
-            scope_canvas.bind('<MouseWheel>', _edit_scope_mousewheel)
-            scope_inner.bind('<MouseWheel>', _edit_scope_mousewheel)
-
-            existing_scope = (existing_task.get('scope_dirs') or []) if existing_task else []
-            scope_vars = {}
-            # Load tracked dirs fresh (don't rely on outer-scope 'tracked' variable)
-            try:
-                from pathlib import Path as _Pt
-                import json as _jt, os as _ot
-                _df_t = _Pt.home() / '.rag_auto_update_dirs.json'
-                if _df_t.exists():
-                    _raw_t = _jt.loads(_df_t.read_text(encoding='utf-8'))
-                    if isinstance(_raw_t, dict):
-                        _dl_t = _raw_t.get('directories', [])
-                        tracked = [k for k in _dl_t if isinstance(k, str) and
-                                   (_ot.path.isabs(k) or k.startswith('\\\\') or k.startswith('//'))] \
-                                  if isinstance(_dl_t, list) else []
-                    elif isinstance(_raw_t, list):
-                        tracked = [k for k in _raw_t if isinstance(k, str) and
-                                   (_ot.path.isabs(k) or k.startswith('\\\\') or k.startswith('//'))] 
-                    else:
-                        tracked = []
-                else:
-                    tracked = []
-            except Exception:
-                tracked = []
-            if tracked:
-                for d in tracked:
-                    var = tk.BooleanVar(value=d in existing_scope)
-                    scope_vars[d] = var
-                    cb = ttk.Checkbutton(scope_inner, text=d, variable=var)
-                    cb.pack(anchor='w', padx=4, pady=1)
-                    cb.bind('<MouseWheel>', _edit_scope_mousewheel)
-                scope_canvas.update_idletasks()
-                scope_canvas.configure(height=min(scope_inner.winfo_reqheight() + 4, 150))
-            else:
-                tk.Label(scope_inner,
-                         text='No indexed directories found. Index some documents first.',
-                         font=('Arial', 8), fg='gray', bg='white').pack(padx=4, pady=4)
-                scope_canvas.configure(height=30)
-
-            # Schedule
-            sched_row = tk.Frame(pad)
-            sched_row.pack(fill='x', pady=(0, 8))
-            tk.Label(sched_row, text="Schedule:",
-                     font=('Arial', 9, 'bold')).pack(side='left')
-            # Map display labels to keys
-            _sched_label_to_key = {v: k for k, v in _ctm.SCHEDULE_LABELS.items()}
-            # v8.1.10 fix: the StringVar used to be seeded with the raw
-            # schedule KEY (e.g. "weekly") — a value that is NOT one of the
-            # combobox's own `values` (which are the display LABELS, e.g.
-            # "Weekly") — and only corrected a moment later via a separate
-            # sched_combo.set(...) call. That intermediate invalid-value
-            # state on a readonly ttk.Combobox is exactly the kind of thing
-            # that can leave the widget showing blank instead of the
-            # corrected value on some Tk/Windows redraw timings. Compute the
-            # correct LABEL up front and seed the StringVar with that
-            # directly — no invalid intermediate state, no separate .set()
-            # call needed at all.
-            _initial_sched_label = (
-                _ctm.SCHEDULE_LABELS.get(existing_task.get("schedule", "none"),
-                                          "Manual only")
-                if existing_task else "Manual only"
-            )
-            sched_var = tk.StringVar(value=_initial_sched_label)
-            sched_combo = ttk.Combobox(
-                sched_row,
-                textvariable=sched_var,
-                values=list(_ctm.SCHEDULE_LABELS.values()),
-                state='readonly', width=16)
-            sched_combo.pack(side='left', padx=(8, 16))
-
-            # v8.1.9 fix (4th attempt): a diagnostic (round 2, 2026-07-25)
-            # caught this in the act — sched_combo.get() was 'Weekly'
-            # immediately after creation, but had become '' by the time
-            # the window was mapped. The cause was MY OWN previous fix
-            # attempt: calling sched_combo.current(idx) synchronously
-            # during construction, while winfo_ismapped() was still 0.
-            # Calling ttk.Combobox.current() on a not-yet-mapped widget
-            # doesn't just fail to apply — it appears to actively clear
-            # the value. The fix: defer that same call to fire on the
-            # window's own <Map> event, so it only runs once the window
-            # is actually mapped/visible, exactly the state it needs.
-            _sched_values_list = list(_ctm.SCHEDULE_LABELS.values())
-
-            def _apply_sched_current_on_map(event=None):
-                try:
-                    if _initial_sched_label in _sched_values_list:
-                        sched_combo.current(
-                            _sched_values_list.index(_initial_sched_label))
-                except Exception:
-                    pass
-                # v9.0.1 fix: <Map> is NOT guaranteed to fire only once for
-                # this window. A ttk.Combobox's dropdown listbox is its own
-                # popup Toplevel — opening/closing it (i.e. the user actually
-                # USING the dropdown to pick a new schedule) can generate a
-                # second <Map> event on this parent dialog depending on
-                # window-manager/Tk timing. Left bound with add='+' forever,
-                # that second event re-ran this handler and force-reset the
-                # combobox's DISPLAYED text back to _initial_sched_label —
-                # the value from when the dialog first opened — even though
-                # the underlying sched_var (and everything reacting to it,
-                # like the daily start/end/times-per-day fields showing
-                # correctly) had already moved on to the user's real
-                # selection. Confirmed live: selecting "Daily" showed the
-                # daily time fields immediately but the dropdown itself
-                # still read "Manual only" until the SAME selection was
-                # made a second time. Unbinding after the first firing makes
-                # this run exactly once, which is all it was ever meant to
-                # do — the original not-yet-mapped-widget bug this works
-                # around only exists during the dialog's initial construction.
-                try:
-                    win.unbind('<Map>', _map_bind_id)
-                except Exception:
-                    pass
-
-            _map_bind_id = win.bind('<Map>', _apply_sched_current_on_map, add='+')
-
-            tk.Label(sched_row, text="First due date:",
-                     font=('Arial', 9, 'bold')).pack(side='left')
-            due_var = tk.StringVar(
-                value=existing_task.get("first_due", "") if existing_task else "")
-            ttk.Entry(sched_row, textvariable=due_var, width=12).pack(
-                side='left', padx=(4, 0))
-            tk.Label(sched_row, text="YYYY-MM-DD",
-                     font=('Arial', 7), fg='gray').pack(side='left', padx=(4, 0))
-
-            # v8.1.11: Daily-only time-of-day fields — Start time, End
-            # time (only meaningful/used when Times/day > 1), and Times
-            # per day (1-24, "24 times/day 00:00-23:00" is how Hourly
-            # ends up expressed — no separate Hourly schedule).
-            # v8.1.11: extended to the Common Business Analysis Configure
-            # dialog too, using the exact same fields/behavior — no longer
-            # Custom-only. Both dialogs call
-            # custom_tasks_manager.format_daily_run_times_preview() for
-            # the live "Runs at: ..." line so they can never drift out of
-            # sync with each other on what a given combination produces.
-            daily_row = tk.Frame(pad)
-            tk.Label(daily_row, text="Start time:",
-                     font=('Arial', 9, 'bold')).pack(side='left')
-            daily_start_var = tk.StringVar(
-                value=existing_task.get("daily_start_time", "09:00")
-                if existing_task else "09:00")
-            ttk.Entry(daily_row, textvariable=daily_start_var, width=6).pack(
-                side='left', padx=(4, 16))
-            tk.Label(daily_row, text="End time:",
-                     font=('Arial', 9, 'bold')).pack(side='left')
-            daily_end_var = tk.StringVar(
-                value=existing_task.get("daily_end_time", "17:00")
-                if existing_task else "17:00")
-            ttk.Entry(daily_row, textvariable=daily_end_var, width=6).pack(
-                side='left', padx=(4, 16))
-            tk.Label(daily_row, text="Times per day:",
-                     font=('Arial', 9, 'bold')).pack(side='left')
-            daily_times_var = tk.StringVar(
-                value=str(existing_task.get("daily_times_per_day", 1))
-                if existing_task else "1")
-            ttk.Entry(daily_row, textvariable=daily_times_var, width=4).pack(
-                side='left', padx=(4, 0))
-            tk.Label(daily_row, text="HH:MM, max 24/day",
-                     font=('Arial', 7), fg='gray').pack(side='left', padx=(6, 0))
-
-            # v8.1.11: live "what does this actually produce" preview —
-            # updates on every keystroke in any of the three fields above,
-            # so the user sees the real computed result, not just the raw
-            # inputs. Empty string (nothing shown) for invalid/mid-typing
-            # input rather than an error.
-            daily_preview_var = tk.StringVar(value="")
-            daily_preview_lbl = tk.Label(pad, textvariable=daily_preview_var,
-                                          font=('Arial', 8), fg='#5a7a9a')
-
-            def _update_daily_preview(*_a):
-                daily_preview_var.set(_ctm.format_daily_run_times_preview(
-                    daily_start_var.get().strip(), daily_end_var.get().strip(),
-                    daily_times_var.get().strip() or "1"))
-            daily_start_var.trace_add('write', _update_daily_preview)
-            daily_end_var.trace_add('write', _update_daily_preview)
-            daily_times_var.trace_add('write', _update_daily_preview)
-            _update_daily_preview()
-
-            # v8.1.11: the credit-usage note only matters when there's
-            # actually more than one run/day to warn about — a once-daily
-            # or weekly task barely costs anything, so showing this
-            # unconditionally overstated the concern. Now only visible
-            # when schedule == "daily" AND times/day > 1. Static GUI text,
-            # not something Claude, Muse, or Grok says in chat.
-            credit_warn_lbl = tk.Label(
-                pad,
-                text='⚠️ If the Autonomous AI Task Queue is enabled, '
-                     'each automatic check uses Claude subscription '
-                     'usage credits.',
-                font=('Arial', 8), fg='#b8860b',
-                wraplength=728, justify='left')
-
-            def _update_daily_row_visibility(event=None):
-                _k = _sched_label_to_key.get(sched_combo.get(), 'none')
-                if _k == 'daily':
-                    daily_row.pack(fill='x', pady=(0, 2), after=sched_row)
-                    daily_preview_lbl.pack(anchor='w', pady=(0, 8), after=daily_row)
-                    try:
-                        _times = int(daily_times_var.get().strip() or 1)
-                    except ValueError:
-                        _times = 1
-                    if _times > 1:
-                        credit_warn_lbl.pack(anchor='w', pady=(0, 8), after=daily_preview_lbl)
-                    else:
-                        credit_warn_lbl.pack_forget()
-                else:
-                    daily_row.pack_forget()
-                    daily_preview_lbl.pack_forget()
-                    credit_warn_lbl.pack_forget()
-            sched_combo.bind('<<ComboboxSelected>>', _update_daily_row_visibility, add='+')
-            daily_times_var.trace_add('write', _update_daily_row_visibility)
-            _update_daily_row_visibility()
-
-            # v9.0.2: Day-of-week pin row — visible only for weekly/biweekly/monthly
-            dow_row = tk.Frame(pad)
-            tk.Label(dow_row, text="Day of week:",
-                     font=('Arial', 9, 'bold')).pack(side='left')
-            _dow_label_to_int = {lbl: (i - 1 if i > 0 else None)
-                                 for i, lbl in enumerate(_ctm.DOW_LABELS)}
-            _existing_dow = existing_task.get("schedule_day_of_week") if existing_task else None
-            _initial_dow_label = (
-                _ctm.DOW_LABELS[_existing_dow + 1]
-                if _existing_dow is not None else _ctm.DOW_LABELS[0]
-            )
-            dow_var = tk.StringVar(value=_initial_dow_label)
-            dow_combo = ttk.Combobox(
-                dow_row, textvariable=dow_var,
-                values=_ctm.DOW_LABELS,
-                state='readonly', width=12)
-            dow_combo.pack(side='left', padx=(8, 0))
-            tk.Label(dow_row, text="(stagger tasks to spread credit usage)",
-                     font=('Arial', 7), fg='gray').pack(side='left', padx=(8, 0))
-
-            def _update_dow_row_visibility(event=None):
-                _k = _sched_label_to_key.get(sched_combo.get(), 'none')
-                if _k in _ctm.DOW_ELIGIBLE_SCHEDULES:
-                    dow_row.pack(fill='x', pady=(0, 8), after=daily_row
-                                 if _k == 'daily' else sched_row)
-                else:
-                    dow_row.pack_forget()
-                    dow_var.set(_ctm.DOW_LABELS[0])  # reset to "Any day" when hidden
-
-            sched_combo.bind('<<ComboboxSelected>>', _update_dow_row_visibility, add='+')
-            _update_dow_row_visibility()
-
-            # Output options
-            tk.Label(pad, text="Output:", font=('Arial', 9, 'bold'),
-                     anchor='w').pack(anchor='w')
-            out_row = tk.Frame(pad)
-            out_row.pack(anchor='w', pady=(2, 4))
-
-            learn_var = tk.BooleanVar(
-                value=existing_task.get("output_learnings", True) if existing_task else True)
-            report_var = tk.BooleanVar(
-                value=existing_task.get("output_report", False) if existing_task else False)
-            email_var = tk.BooleanVar(
-                value=existing_task.get("output_email", False) if existing_task else False)
-
-            ttk.Checkbutton(out_row, text="💡 Save key insights to Learnings",
-                            variable=learn_var).pack(anchor='w')
-            ttk.Checkbutton(out_row, text="📄 Save full analysis as Word document (.docx)",
-                            variable=report_var).pack(anchor='w')
-            # v8.1.10: third output option. At least one of the three is
-            # required — see _save()'s validation below and
-            # create_task()/update_task()'s matching backend validation.
-            ttk.Checkbutton(out_row, text="✉️ Email the analysis",
-                            variable=email_var).pack(anchor='w')
-
-            # Report folder
-            folder_frame = tk.Frame(pad)
-            folder_frame.pack(fill='x', pady=(0, 8))
-            tk.Label(folder_frame, text="Report folder:",
-                     font=('Arial', 9, 'bold')).pack(side='left')
-            folder_var = tk.StringVar(
-                value=existing_task.get("report_folder",
-                                        _ctm.DEFAULT_REPORT_FOLDER) if existing_task
-                else _ctm.DEFAULT_REPORT_FOLDER)
-            ttk.Entry(folder_frame, textvariable=folder_var, width=42).pack(
-                side='left', padx=(6, 4))
-
-            def _browse_folder():
-                import tkinter.filedialog as _fd
-                d = _fd.askdirectory(initialdir=folder_var.get() or str(
-                    __import__('pathlib').Path.home()))
-                if d:
-                    folder_var.set(d)
-
-            ttk.Button(folder_frame, text="Browse…",
-                       command=_browse_folder).pack(side='left')
-
-            # Buttons
-            btn_row = tk.Frame(pad)
-            btn_row.pack(fill='x', pady=(8, 0))
-
-            def _save(queue_after=False):
-                label   = name_var.get().strip()
-                prompt  = prompt_box.get('1.0', 'end-1c').strip()
-                scope   = [d for d, v in scope_vars.items() if v.get()]
-                sched_key = _sched_label_to_key.get(sched_combo.get(), "none")
-                first_due = due_var.get().strip() or None
-                # v9.0.2: resolve DOW label → int (or None for "Any day")
-                _dow_raw = _dow_label_to_int.get(dow_var.get())
-                sched_dow = _dow_raw if sched_key in _ctm.DOW_ELIGIBLE_SCHEDULES else None
-
-                try:
-                    import custom_tasks_manager as _ctm2
-                    tasks = _ctm2.load_custom_tasks()
-
-                    if existing_task:
-                        _ctm2.update_task(
-                            tasks, existing_task["task_id"],
-                            label=label, prompt=prompt,
-                            scope_dirs=scope,
-                            schedule=sched_key,
-                            schedule_day_of_week=sched_dow,
-                            first_due=first_due,
-                            output_learnings=learn_var.get(),
-                            output_report=report_var.get(),
-                            output_email=email_var.get(),
-                            report_folder=folder_var.get().strip(),
-                            daily_start_time=daily_start_var.get().strip(),
-                            daily_end_time=daily_end_var.get().strip(),
-                            daily_times_per_day=int(daily_times_var.get().strip() or 1),
-                        )
-                    else:
-                        # MAX_CUSTOM_TASKS is enforced inside create_task()
-                        # itself (raises ValueError, caught below) — not
-                        # checked here, so the GUI and any MCP tool that
-                        # calls create_task() share one single source of
-                        # truth for the limit instead of two checks that
-                        # could drift out of sync. Same applies to the
-                        # v8.1.10 "at least one output" requirement.
-                        new_task = _ctm2.create_task(
-                            label=label, prompt=prompt,
-                            scope_dirs=scope,
-                            schedule=sched_key,
-                            schedule_day_of_week=sched_dow,
-                            first_due=first_due,
-                            output_learnings=learn_var.get(),
-                            output_report=report_var.get(),
-                            output_email=email_var.get(),
-                            report_folder=folder_var.get().strip(),
-                            daily_start_time=daily_start_var.get().strip(),
-                            daily_end_time=daily_end_var.get().strip(),
-                            daily_times_per_day=int(daily_times_var.get().strip() or 1),
-                        )
-                        tasks.append(new_task)
-
-                    _ctm2.save_custom_tasks(tasks)
-                    _refresh_custom_list()
-
-                    if queue_after:
-                        # Find the task we just saved and queue it
-                        tasks_updated = _ctm2.load_custom_tasks()
-                        target = tasks_updated[-1] if not existing_task else \
-                            next((t for t in tasks_updated
-                                  if t["task_id"] == existing_task["task_id"]), None)
-                        if target:
-                            entries = _ctm2.tasks_to_queue_entries([target])
-                            import json as _j
-                            from pathlib import Path as _P
-                            p = _P.home() / ".ai-prowler" / "pending_tasks.json"
-                            existing_q = _ss_read_list_for_update(p)   # unreadable -> raise, no save
-                            existing_q.extend(entries)
-                            _ss_write_json(p, existing_q)              # atomic (safe_save)
-                            _cmd = (
-                                "Call get_pending_analysis_tasks() and for each "
-                                "pending task: execute the full analysis, save "
-                                "reports and record learnings as configured, then "
-                                "call complete_analysis_task(task_id, summary)."
-                            )
-                            self.root.clipboard_clear()
-                            self.root.clipboard_append(_cmd)
-                            self.root.update()
-                            self.status_var.set(
-                                  f"✅ '{label}' saved & queued — paste into Claude, Muse, or Grok to run ALL tasks")
-                            self.root.after(3000,
-                                lambda: self.status_var.set("Ready"))
-                            _refresh_queue_count()
-                            # v8.1.9 fix: this was the one Save & Queue path
-                            # that didn't also refresh the visible list when
-                            # the queue panel was already expanded — the
-                            # badge count updated but the new entry wouldn't
-                            # appear until manually collapsed/re-expanded.
-                            if _queue_expanded.get():
-                                _refresh_queue_list()
-
-                    win.destroy()
-                    self.status_var.set(f"✅ Task '{label}' saved")
-                    self.root.after(2500, lambda: self.status_var.set("Ready"))
-
-                except ValueError as _ve:
-                    from tkinter import messagebox as _mb3
-                    _mb3.showwarning("Validation Error", str(_ve))
-
-            ttk.Button(btn_row, text="Cancel",
-                       command=win.destroy).pack(side='left', padx=(0, 8))
-            ttk.Button(btn_row, text="Save",
-                       command=lambda: _save(False)).pack(side='left', padx=(0, 8))
-            ttk.Button(btn_row, text="Save & Queue",
-                       command=lambda: _save(True)).pack(side='left')
-
-        # + New Custom Analysis button
-        _new_btn_row = tk.Frame(_custom_outer, bg='#0d1a26')
-        _new_btn_row.pack(fill='x', padx=10, pady=(0, 8))
-
-        tk.Button(_new_btn_row,
-                  text="+ New Custom Analysis",
-                  bg='#1a3a2a', fg='#88cc88',
-                  font=('Arial', 9, 'bold'),
-                  relief='flat', cursor='hand2',
-                  command=lambda: _open_task_editor(None)).pack(side='left')
-
-        # Hint label
-        # v9.0.0: ▶ NOW removed — same ChromaDB contention rationale as
-        # the Common Business AI Analysis removal above.
-        tk.Label(_custom_outer,
-                 text="▶ Queue saves it for the next Autonomous AI Task Queue run.  "
-                      "✎ Edit changes scope, output, schedule, and report folder.  "
-                      "🗑 deletes the task.",
-                 bg='#0d1a26', fg='#4a6a82',
-                 font=('Arial', 7), wraplength=900,
-                 justify='left', anchor='w').pack(anchor='w', padx=10, pady=(0, 6))
-
-        # v8.1.6 fix: "Run Due Tasks" (a button that ran the ENTIRE pending
-        # queue) was removed — redundant now that the Autonomous Task Queue
-        # (see panel above) runs the whole pending queue on its own schedule
-        # once enabled. catch_up_all_due_tasks() (called on enabling) keeps
-        # overdue backlog from all firing at once on day one; from there the
-        # daily scheduled run picks everything up automatically.
-
-        # Initial render
-        _refresh_custom_list()
-
-        # ── Live refresh when the custom-tasks file changes externally ──────
-        # create_analysis_task() (the MCP tool Claude, Muse, or Grok calls) writes to this
-        # same custom_analysis_tasks.json file from a SEPARATE process (the
-        # MCP server) — without this, a task Claude, Muse, or Grok creates during a
-        # conversation wouldn't appear here until some other GUI action
-        # happened to rebuild this panel. Poll the file's mtime periodically
-        # and auto-refresh only when it actually changed — same
-        # self.root.after() polling pattern already used elsewhere in this
-        # file (e.g. the Ollama status light), not a new dependency.
-        _custom_tasks_mtime = {"last": None}
-
-        def _sync_custom_tasks_mtime():
-            """Record the current mtime without refreshing — call once right
-            after the initial render so the first poll tick doesn't
-            redundantly refresh a panel that's already up to date."""
-            try:
-                import custom_tasks_manager as _ctm_poll
-                _custom_tasks_mtime["last"] = (
-                    _ctm_poll.CUSTOM_TASKS_PATH.stat().st_mtime
-                    if _ctm_poll.CUSTOM_TASKS_PATH.exists() else None
-                )
-            except Exception:
-                pass
-
-        def _poll_custom_tasks_file():
-            try:
-                import custom_tasks_manager as _ctm_poll
-                mtime = (_ctm_poll.CUSTOM_TASKS_PATH.stat().st_mtime
-                        if _ctm_poll.CUSTOM_TASKS_PATH.exists() else None)
-                if mtime != _custom_tasks_mtime["last"]:
-                    _custom_tasks_mtime["last"] = mtime
-                    _refresh_custom_list()
-            except Exception:
-                pass
-            finally:
-                self.root.after(3000, _poll_custom_tasks_file)
-
-        # Exposed for tests (and general programmatic use) — calling this
-        # directly runs the exact same check-and-refresh logic the timer
-        # uses, synchronously, without waiting on a real .after() callback.
-        # Test harnesses that cancel pending after() callbacks for isolation
-        # (as this app's GUI test fixture does) would otherwise make the
-        # live-refresh behavior unobservable in tests.
-        self._poll_custom_tasks_file = _poll_custom_tasks_file
-        self._refresh_custom_task_list = _refresh_custom_list
-        # Exposed for tests — lets a GUI test open the real "Edit/New Custom
-        # Analysis" dialog and drive its widgets directly (e.g. the schedule
-        # dropdown), the same way _refresh_custom_task_list above is exposed
-        # for the same reason.
-        self._open_task_editor = _open_task_editor
-
-        _sync_custom_tasks_mtime()
-        self.root.after(3000, _poll_custom_tasks_file)
+        try:
+            import task_queue_gui as _tqg
+            self._tqa_panel = _tqg.build_section(query_frame, root=self.root, status_fn=_tasks_status,
+                                                 server=_in_server_mode)
+            self._tqa_available = True
+            _analysis_banner = self._tqa_panel["banner"]
+            self._custom_count_var = self._tqa_panel["count_var"]       # exposed for tests/polling
+            self._custom_list_frame = self._tqa_panel["list_frame"]
+            self._poll_custom_tasks_file = self._tqa_panel["poll_file"]
+            self._refresh_custom_task_list = self._tqa_panel["refresh"]
+            self._open_task_editor = self._tqa_panel["open_editor"]
+            self._ANALYSIS_TASKS = _tqg.STARTERS
+        except Exception as _e_tqg:
+            self._tqa_available = False
+            self._tqa_panel = {}
+            _analysis_banner = tk.Frame(query_frame, bg='#1a2530')
+            _analysis_banner.pack(fill='x', padx=20, pady=(0, 8))
+            tk.Label(_analysis_banner, text=f"⚠️  AI Analysis Tasks unavailable: {_e_tqg}",
+                     bg='#1a2530', fg='#cc8800', font=('Arial', 8)).pack(anchor='w', padx=14, pady=8)
+            self._refresh_custom_task_list = lambda: None
+        self._analysis_banner = _analysis_banner
+        self._tqa_banner = _analysis_banner          # older name (the panel is one section now)
 
         ttk.Separator(query_frame, orient='horizontal').pack(
             fill='x', padx=20, pady=(4, 6))
@@ -9283,6 +7479,11 @@ or from the Help menu."""
             # each, and it's always the same place regardless of which
             # job you're looking at.
             _cfg_now = _sched_eng.load_config()
+            if _in_server_mode:
+                try:
+                    _sched_eng._load_last_run()      # the server program's "Last:" times (2026-11-02)
+                except Exception:
+                    pass
 
             def _read_default_to() -> str:
                 try:
@@ -9327,8 +7528,54 @@ or from the Help menu."""
             tk.Label(_al_top2, textvariable=_location_display_var, bg='#1a2e1a',
                     fg='#8ab8cc', font=('Arial', 8)).pack(anchor='w')
 
+            # 📱 Texts (2026-11-02, David: "send individual alerts to SMS when enabled"). Personal: the
+            # owner's cell number lives here. Server: each person's cell phone from the Admin tab;
+            # this number only stands in for an owner with no cell phone on file.
+            _al_top3 = tk.Frame(_al_inner, bg='#1a2e1a')
+            _al_top3.pack(fill='x', pady=(0, 6))
+            tk.Label(_al_top3, text="📱 Texts go to:", bg='#1a2e1a', fg='#8ab8cc',
+                     font=('Arial', 8)).pack(side='left')
+            _al_sms_to_var = tk.StringVar(value=str(_sched_eng.load_config().get("sms_to") or ""))
+            self._al_sms_to_var = _al_sms_to_var
+            _al_sms_to_entry = ttk.Entry(_al_top3, textvariable=_al_sms_to_var, width=18)
+            _al_sms_to_entry.pack(side='left', padx=(4, 6))
+            self._al_sms_to_entry = _al_sms_to_entry
+            _al_sms_info_var = tk.StringVar()
+            self._al_sms_info_var = _al_sms_info_var
+            tk.Label(_al_top3, textvariable=_al_sms_info_var, bg='#1a2e1a', fg='#6a8a6a',
+                     font=('Arial', 7), wraplength=620, justify='left').pack(side='left')
+
+            def _refresh_sms_info():
+                try:
+                    _ready = _sched_eng.texting_ready()
+                except Exception:
+                    _ready = False
+                if not _ready:
+                    _al_sms_info_var.set("⚠️ Texting isn't set up — turn on SMS in Settings → MCP Tool "
+                                         "Configuration and set up an SMS provider; until then 📱 Text is skipped.")
+                elif _in_server_mode:
+                    _al_sms_info_var.set("Tick 📱 Text on an alert to text it too. Each person's cell phone "
+                                         "comes from the Admin tab (this number is used for an owner with "
+                                         "none); customers' phones from the Customers list — anyone who "
+                                         "texted STOP is skipped.")
+                else:
+                    _al_sms_info_var.set("Your cell number — tick 📱 Text on an alert to get it as a text too.")
+            self._al_refresh_sms_info = _refresh_sms_info
+            _refresh_sms_info()
+
             def _refresh_recipient_and_location_display():
                 _to = _read_default_to()
+                if _in_server_mode:
+                    # 2026-11-02 (David): on a server each alert goes to the owner by default — the
+                    # "Sends to" choice on each alert widens it; everyone gets only their own part.
+                    _recipient_var.set(
+                        "📧 Sends to: the owner by default (the email on the owner's user in the Admin tab"
+                        + (f", or {_to}" if _to else "") + "). Choose per alert below — managers and "
+                        "crew get only the parts that apply to them; crew only ever see their own jobs.")
+                    _location_display_var.set(
+                        "📍 Weather: each job's own town. ⚙️ These alerts run inside the AI-Prowler Server "
+                        "program, so they work with nobody signed in here.")
+                    return
                 _recipient_var.set(
                     f"📧 Sends to: {_to}" if _to else
                     "📧 Sends to: (not set — Settings → Email Configuration → "
@@ -9497,12 +7744,22 @@ or from the Help menu."""
             self.root.after(3000, _poll_proactive_alerts_config)
 
             def _refresh_engine_status():
+                # 2026-11-01 (David: "why does it say Stopped in red?"): the alerts start on their
+                # own as soon as any alert is ON — so "Stopped" with every alert OFF just means
+                # "nothing turned on". Say that, in grey, instead of a red error.
+                if _in_server_mode:
+                    # 2026-11-02: on a server the AI-Prowler Server program runs them, not this window.
+                    _on = any(v.get() for v in getattr(self, "_job_enabled_vars", {}).values())
+                    _al_status_var.set("● On — run by the AI-Prowler Server program" if _on else
+                                       "○ Off — turn on an alert below (click OFF)")
+                    _al_status_lbl.config(fg='#6ab86a' if _on else '#8a9a8a')
+                    return
                 if _sched_eng.is_running():
                     _al_status_var.set("● Running")
                     _al_status_lbl.config(fg='#6ab86a')
                 else:
-                    _al_status_var.set("● Stopped")
-                    _al_status_lbl.config(fg='#aa4444')
+                    _al_status_var.set("○ Off — turn on an alert below (click OFF) and it starts by itself")
+                    _al_status_lbl.config(fg='#8a9a8a')
 
             # ── Persistence + engine lifecycle (v8.2 — auto-save, no master
             # switch) ────────────────────────────────────────────────────────
@@ -9523,9 +7780,9 @@ or from the Help menu."""
                 # Deliberately NOT overwritten on every save so any legacy
                 # value already in the file is simply left alone rather
                 # than being actively cleared.
-                jobs_out = {}
+                jobs_out = dict(cfg.get("jobs") or {})       # keep alerts this mode doesn't show
                 any_enabled = False
-                for jid in _sched_jobs.JOB_REGISTRY:
+                for jid in _job_enabled_vars:
                     en = _job_enabled_vars[jid].get()
                     any_enabled = any_enabled or en
                     jobs_out[jid] = {
@@ -9533,10 +7790,24 @@ or from the Help menu."""
                         "time":    _job_time_vars[jid].get().strip(),
                         "days":    _job_days_vars[jid].get().strip(),
                     }
+                    if jid in _job_audience_vars:            # server: who gets it (2026-11-02)
+                        jobs_out[jid]["audience"] = _job_audience_vars[jid].get()
+                    elif (cfg.get("jobs") or {}).get(jid, {}).get("audience"):
+                        jobs_out[jid]["audience"] = cfg["jobs"][jid]["audience"]
+                    if jid in _job_email_vars:               # ✉ / 📱 per alert (2026-11-02)
+                        jobs_out[jid]["email"] = bool(_job_email_vars[jid].get())
+                        jobs_out[jid]["sms"] = bool(_job_sms_vars[jid].get())
+                if _al_sms_to_var is not None:               # personal: the owner's cell for texts
+                    cfg["sms_to"] = _al_sms_to_var.get().strip()
                 cfg["jobs"]    = jobs_out
-                cfg["enabled"] = any_enabled
+                cfg["enabled"] = any(j.get("enabled") for j in jobs_out.values())
                 _sched_eng.save_config(cfg)
 
+                if _in_server_mode:
+                    # The AI-Prowler Server program runs the alerts (it re-reads this file every
+                    # minute) — this window never runs a second copy.
+                    _refresh_engine_status()
+                    return
                 if any_enabled and not _sched_eng.is_running():
                     _sched_eng.start()
                     _refresh_engine_status()
@@ -9566,6 +7837,13 @@ or from the Help menu."""
                 else:
                     _refresh_engine_status()
 
+            def _save_sms_to(_e=None):
+                if _al_sms_to_var.get().strip() != str(_sched_eng.load_config().get("sms_to") or ""):
+                    _save_and_sync_engine()
+            _al_sms_to_entry.bind('<FocusOut>', _save_sms_to)
+            _al_sms_to_entry.bind('<Return>', _save_sms_to)
+            self._al_save_sms_to = _save_sms_to
+
             # ── Job list ──────────────────────────────────────────────────────
             _jobs_frame = tk.Frame(_al_inner, bg='#0e1e0e',
                                    bd=1, relief='sunken')
@@ -9579,6 +7857,18 @@ or from the Help menu."""
             self._job_time_vars    = _job_time_vars
             self._job_days_vars    = _job_days_vars
             self._job_toggle_btns  = _job_toggle_btns
+            self._job_time_combos  = {}     # 2026-11-02: job id → its Time dropdown
+            _job_audience_vars: dict[str, tk.StringVar] = {}   # 2026-11-02, server: who gets each alert
+            self._job_audience_vars = _job_audience_vars
+            self._job_audience_combos = {}
+            # 2026-11-02 (David: "send individual alerts to SMS when enabled ... per Alert along with
+            # email enable in each proactive alert row"): ✉ Email and 📱 Text switches on every row.
+            _job_email_vars: dict[str, tk.BooleanVar] = {}
+            _job_sms_vars:   dict[str, tk.BooleanVar] = {}
+            self._job_email_vars = _job_email_vars
+            self._job_sms_vars   = _job_sms_vars
+            self._job_email_checks, self._job_sms_checks = {}, {}
+            _texting_ok = _sched_eng.texting_ready()
 
             DAYS_OPTIONS = ["daily", "weekdays", "weekends",
                             "monday", "tuesday", "wednesday",
@@ -9595,7 +7885,9 @@ or from the Help menu."""
                     btn.config(text="○ OFF", bg='#5a2a2a', fg='#e88e8e',
                                activebackground='#6a3535')
 
-            for _jid, _jmeta in _sched_jobs.JOB_REGISTRY.items():
+            # 2026-11-02: only the alerts this install offers (a server has no SMS monitor or chat-run
+            # task alert; quote follow-up and crew "my day" are server-only).
+            for _jid, _jmeta in _sched_jobs.jobs_for_mode(_in_server_mode).items():
                 _jcfg = _jobs_cfg.get(
                     _jid, _sched_eng.default_job_config(_jid))
 
@@ -9632,18 +7924,27 @@ or from the Help menu."""
 
                 tk.Label(_row_top, text="Time:", bg='#0e1e0e',
                          fg='#aaaaaa', font=('Arial', 7)).pack(side='left', padx=(4, 2))
+                # 2026-11-02 (David): a dropdown instead of a typed box — a time of day (every half
+                # hour, shown as "7:00 AM") or "Every N hours". _tv keeps the saved form the engine
+                # reads ("07:00" / "every_2h"); the dropdown shows the friendly label. A value typed
+                # by hand before this change (e.g. "07:15") is kept and shown as its own choice.
                 _tv = tk.StringVar(value=_jcfg.get("time",
                                    _jmeta.get("default_time", "08:00")))
                 _job_time_vars[_jid] = _tv
-                _time_entry = ttk.Entry(_row_top, textvariable=_tv, width=9)
-                _time_entry.pack(side='left')
-                # Save on blur/Enter, not on every keystroke — saving a
-                # half-typed "0" while the user is still typing "08:00"
-                # would write an invalid time to disk mid-edit.
-                _time_entry.bind(
-                    '<FocusOut>', lambda e: _save_and_sync_engine())
-                _time_entry.bind(
-                    '<Return>', lambda e: _save_and_sync_engine())
+                _tl = tk.StringVar(value=_sched_eng.time_label(_tv.get()))
+                _time_combo = ttk.Combobox(
+                    _row_top, textvariable=_tl, state='readonly', width=15,
+                    values=[lab for lab, _ in _sched_eng.time_choices(_tv.get())])
+                _time_combo.pack(side='left')
+
+                def _make_time_pick(jid=_jid, lab_var=_tl):
+                    def _pick(_e=None):
+                        _job_time_vars[jid].set(
+                            _sched_eng.time_value(lab_var.get(), _job_time_vars[jid].get()))
+                        _save_and_sync_engine()
+                    return _pick
+                _time_combo.bind('<<ComboboxSelected>>', _make_time_pick())
+                self._job_time_combos[_jid] = _time_combo
 
                 tk.Label(_row_top, text="  Days:", bg='#0e1e0e',
                          fg='#aaaaaa', font=('Arial', 7)).pack(side='left', padx=(4, 2))
@@ -9661,6 +7962,49 @@ or from the Help menu."""
                 _days_combo.bind(
                     '<<ComboboxSelected>>', lambda e: _save_and_sync_engine())
 
+                # ✉ Email / 📱 Text — how this alert is sent (2026-11-02)
+                _emv = tk.BooleanVar(value=_jcfg.get("email", True) is not False)
+                _smv = tk.BooleanVar(value=bool(_jcfg.get("sms", False)))
+                _job_email_vars[_jid] = _emv
+                _job_sms_vars[_jid] = _smv
+                _em_cb = tk.Checkbutton(_row_top, text="✉ Email", variable=_emv, bg='#0e1e0e', fg='#cccccc',
+                                        selectcolor='#1e3a1e', activebackground='#0e1e0e', font=('Arial', 7),
+                                        command=lambda: _save_and_sync_engine())
+                _em_cb.pack(side='left', padx=(6, 0))
+                _sm_cb = tk.Checkbutton(_row_top, text="📱 Text", variable=_smv, bg='#0e1e0e',
+                                        fg='#cccccc' if _texting_ok else '#777777',
+                                        selectcolor='#1e3a1e', activebackground='#0e1e0e', font=('Arial', 7),
+                                        command=lambda: _save_and_sync_engine())
+                _sm_cb.pack(side='left')
+                self._job_email_checks[_jid] = _em_cb
+                self._job_sms_checks[_jid] = _sm_cb
+
+                # Server: who gets it (2026-11-02, David: "go only to the owner (Configurable), and
+                # managers and crew also get the parts that apply to them").
+                if _in_server_mode:
+                    _aud_allowed = list(_jmeta.get("audiences") or ("owner",))
+                    _aud_now = _jcfg.get("audience") or _jmeta.get("default_audience", "owner")
+                    if _aud_now not in _aud_allowed:
+                        _aud_now = _aud_allowed[0]
+                    _av = tk.StringVar(value=_aud_now)
+                    _job_audience_vars[_jid] = _av
+                    tk.Label(_row_top, text="  Sends to:", bg='#0e1e0e',
+                             fg='#aaaaaa', font=('Arial', 7)).pack(side='left', padx=(4, 2))
+                    _aud_lbl = tk.StringVar(value=_sched_jobs.AUDIENCE_LABELS.get(_aud_now, _aud_now))
+                    _aud_combo = ttk.Combobox(
+                        _row_top, textvariable=_aud_lbl, state='readonly', width=24,
+                        values=[_sched_jobs.AUDIENCE_LABELS.get(a, a) for a in _aud_allowed])
+                    _aud_combo.pack(side='left')
+
+                    def _make_aud_pick(jid=_jid, lab_var=_aud_lbl, allowed=tuple(_aud_allowed)):
+                        def _pick(_e=None):
+                            back = {_sched_jobs.AUDIENCE_LABELS.get(a, a): a for a in allowed}
+                            _job_audience_vars[jid].set(back.get(lab_var.get(), allowed[0]))
+                            _save_and_sync_engine()
+                        return _pick
+                    _aud_combo.bind('<<ComboboxSelected>>', _make_aud_pick())
+                    self._job_audience_combos[_jid] = _aud_combo
+
                 # Last run
                 _last = _sched_eng.get_last_run(_jid)
                 tk.Label(_row_top, text=f"  Last: {_last}",
@@ -9674,8 +8018,7 @@ or from the Help menu."""
                         self.root.update()
                         res = _sched_eng.run_job_now(jid)
                         _al_status_var.set(res[:60])
-                        self.root.after(5000, lambda: _al_status_var.set(
-                            "● Running" if _sched_eng.is_running() else "● Stopped"))
+                        self.root.after(5000, _refresh_engine_status)
                     return _run
                 ttk.Button(_row_top, text="▶ Now",
                            command=_make_run_now(_jid),
@@ -9683,12 +8026,8 @@ or from the Help menu."""
 
                 # Description line — explains what the job sends and when
                 _desc_text = _jmeta.get("description", "")
-                # Append time-format hint for interval jobs
-                _t_val = _jcfg.get("time", _jmeta.get("default_time", ""))
-                if _t_val.lower().startswith("every_"):
-                    _desc_text += f"  ·  Time field: use every_Nh or every_Nm (e.g. every_2h, every_30m)"
-                else:
-                    _desc_text += f"  ·  Time field: HH:MM (24-hour)"
+                # (2026-11-02: the "Time field: HH:MM / every_Nh" typing hint is gone — Time is a
+                # dropdown now. "Every N hours" choices run between 8 AM and 8 PM.)
                 tk.Label(_card,
                          text=_desc_text,
                          bg='#0e1e0e', fg='#c8d8c8',
@@ -9721,1323 +8060,33 @@ or from the Help menu."""
             ttk.Button(_al_btn_row, text="📋 View Log",
                        command=_view_log).pack(side='left')
 
+            # 2026-11-02 (David): Clear Log, next to View Log. Asks first; the alerts themselves and
+            # their settings are untouched — only the history of what ran is emptied. (The log also
+            # trims itself to the newest 500 lines on every write.)
+            def _clear_log():
+                if not messagebox.askyesno(
+                        "Clear Log",
+                        "Empty the Proactive Alerts log?\n\nYour alerts and their settings are not "
+                        "changed — only the history of what ran.", parent=self.root):
+                    return
+                ok = _sched_eng.clear_log()
+                _al_status_var.set("🧹 Log cleared" if ok else "⚠️ Couldn't clear the log")
+
+            _clear_log_btn = ttk.Button(_al_btn_row, text="🧹 Clear Log", command=_clear_log)
+            _clear_log_btn.pack(side='left', padx=(6, 0))
+            self._al_clear_log_btn = _clear_log_btn
+
             # Auto-start if any job is enabled (mirrors _save_and_sync_engine's
             # derivation — config on disk may have been hand-edited or left
             # over from before this auto-save redesign).
-            if any(j.get("enabled") for j in _jobs_cfg.values()) \
+            # (Never on a server — the AI-Prowler Server program runs them there, 2026-11-02.)
+            if not _in_server_mode and any(j.get("enabled") for j in _jobs_cfg.values()) \
                     and not _sched_eng.is_running():
                 _sched_eng.start()
             _refresh_engine_status()
 
-        # ── 🤖 Autonomous Task Queue ──────────────────────────────────────────
-        # Runs AI-Prowler's pending analysis task queue (Common Business AI
-        # Analysis / My Custom Analyses, above) unattended, via Claude Code
-        # headless mode on a Windows Scheduled Task — closing the "pull-based,
-        # not autonomous" gap documented for create_analysis_task. Design doc:
-        # AI-Prowler-ADMIN\autonomous-task-execution-architecture-spec.md
-        #
-        # Everything this panel writes lives under ~/.ai-prowler/ — it never
-        # touches the AI-Prowler install directory itself. The Scheduled Task
-        # is only created/enabled when the user explicitly clicks Enable;
-        # nothing here runs automatically just from opening this tab.
-        #
-        # v8.1.9: this whole panel was accidentally reverted from the live
-        # file by a later, unrelated edit that overwrote it with an older
-        # snapshot — restored here from the last complete backup plus the
-        # final button-reorder/MCP-config-fold change that had only ever
-        # existed in the live file (see _tqa_generate_mcp_config()'s and
-        # the button-row's docstrings/comments below for that history).
-        try:
-            import task_queue_automation as _tqa
-            _tqa_available = True
-        except ImportError:
-            _tqa_available = False
-
-        _tqa_banner = tk.Frame(query_frame, bg='#1a1e2e',
-                               highlightthickness=1,
-                               highlightbackground='#2e3a5a')
-        _tqa_banner.pack(fill='x', padx=20, pady=(0, 8))
-
-        _tqa_inner = tk.Frame(_tqa_banner, bg='#1a1e2e')
-        _tqa_inner.pack(fill='x', padx=14, pady=10)
-
-        # v8.1.6 fix, then removed again same night: a hover-tooltip helper
-        # briefly lived here to explain what each button does. It caused a
-        # real production bug — a Toplevel popup positioned just below a
-        # button can trigger a spurious Leave/Enter cycle on the widget
-        # underneath it once the popup appears (the popup is now "under"
-        # the cursor instead of the button), which re-shows the tooltip,
-        # which re-triggers Leave, forever — a visible flicker loop that
-        # also pegged the UI thread busy enough to make scrolling choppy
-        # and made the whole app's embedded MCP server stop responding.
-        # Removed outright rather than patched: with the buttons already
-        # simplified and split into clearly-grouped rows (setup buttons
-        # vs. enable/history buttons), the explanatory value tooltips add
-        # is no longer worth carrying this class of risk.
-
-        _tqa_hdr = tk.Frame(_tqa_inner, bg='#1a1e2e')
-        _tqa_hdr.pack(fill='x', pady=(0, 6))
-
-        tk.Label(_tqa_hdr,
-                 text="🤖  Autonomous AI Task Queue",
-                 bg='#1a1e2e', fg='#ffffff',
-                 font=('Arial', 11, 'bold'),
-                 anchor='w').pack(side='left')
-
-        _tqa_status_var = tk.StringVar(value="● Disabled")
-        _tqa_status_lbl = tk.Label(_tqa_hdr, textvariable=_tqa_status_var,
-                                    bg='#1a1e2e', fg='#aa4444',
-                                    font=('Arial', 8), anchor='e')
-        # v8.3: no longer packed/shown — the big red/green toggle button
-        # at the bottom of the panel now carries the ON/OFF state
-        # visually, so this separate "● Enabled/Disabled" dot next to the
-        # title was redundant with it. The widget and StringVar are kept
-        # alive (just unpacked) since _tqa_refresh_status_display() still
-        # updates them internally and existing code/tests read
-        # _tqa_status_var directly.
-
-        # v8.2.0: note added right after the section header/rename to
-        # "Autonomous AI Task Queue" — clarifies that everything queued
-        # here is itself AI-assisted, and that this panel isn't the only
-        # way to manage it: Claude, Muse, or Grok has tools to add, manage, and run
-        # these task queues remotely via AI-Prowler MCP tools, in
-        # addition to the manual controls below.
-        tk.Label(_tqa_inner,
-                 text="These are AI-assisted tasks that can be queued and stored "
-                      "for repeated and/or future execution. Claude, Muse, or Grok has tools to "
-                      "manage, add, and run these task queues via AI-Prowler MCP "
-                      "tools remotely.",
-                 bg='#1a1e2e', fg='#8899bb',
-                 font=('Arial', 8),
-                 wraplength=680, justify='left').pack(anchor='w', pady=(0, 4))
-
-        tk.Label(_tqa_inner,
-                 text="Runs your queued analysis tasks on a schedule via Claude Code or the Grok API, "
-                      "without opening a chat and pasting the run command yourself.",
-                 bg='#1a1e2e', fg='#a0a8cc',
-                 font=('Arial', 8),
-                 wraplength=680, justify='left').pack(anchor='w', pady=(0, 2))
-
-        # 2026-10-12 (David): unattended runs now support Grok API keys too.
-        # Muse has no API key released yet — Muse still uses the manual flow.
-        tk.Label(_tqa_inner,
-                 text="Unattended runs work with Claude (via the Claude Code CLI) and Grok (via an xAI API key) — "
-                      "pick the auth method in the Auth section below. Muse has no API key released yet, "
-                      "so with Muse, queue the tasks here (\u25b6 Queue), then open a Muse chat and paste "
-                      "the run command (Ctrl+V).",
-                 bg='#1a1e2e', fg='#e0c060',
-                 font=('Arial', 8, 'bold'),
-                 wraplength=680, justify='left').pack(anchor='w', pady=(0, 2))
-
-        tk.Label(_tqa_inner,
-                 text="\u2139\ufe0f  The Claude paths need a Claude Pro subscription or higher for the Claude "
-                      "Code CLI — the free Claude tier does not include Claude Code access. (Not required "
-                      "if you use a Claude API key or Grok instead — see Auth below.)",
-                 bg='#1a1e2e', fg='#8899bb',
-                 font=('Arial', 8, 'italic'),
-                 wraplength=680, justify='left').pack(anchor='w', pady=(0, 8))
-
-        if not _tqa_available:
-            self._tqa_available = False
-            tk.Label(_tqa_inner,
-                     text="⚠️  task_queue_automation.py not found — "
-                          "copy it to the AI-Prowler install directory.",
-                     bg='#1a1e2e', fg='#cc8800',
-                     font=('Arial', 8)).pack(anchor='w')
-        else:
-            _tqa_cfg = _tqa.load_config()
-
-            # ── Claude Code CLI presence row ─────────────────────────────────
-            # Shown first — nothing else in this panel works without this.
-            # Matters most for existing users who updated in-place rather than
-            # via a fresh installer run: AI-Prowler-Setup.iss installs this
-            # silently on a *fresh* install, but an in-app update never runs
-            # that installer logic, so this can genuinely be missing here even
-            # though the rest of the panel exists.
-            _tqa_cli_row = tk.Frame(_tqa_inner, bg='#1a1e2e')
-            _tqa_cli_row.pack(fill='x', pady=(0, 6))
-            _tqa_cli_var = tk.StringVar(value="⬤ Checking…")
-            _tqa_cli_lbl = tk.Label(_tqa_cli_row, textvariable=_tqa_cli_var,
-                                     bg='#1a1e2e', fg='#aaaaaa', font=('Arial', 9))
-            _tqa_cli_lbl.pack(side='left')
-
-            def _tqa_refresh_cli_status():
-                # v8.1.11: opportunistic self-heal — if claude.exe exists
-                # on disk at the known default location but doesn't
-                # currently resolve via PATH for THIS process (the exact
-                # real-world scenario that caused a false "Not Installed"
-                # report after AI-Prowler was relaunched via the
-                # AI-Prowler-AutoStart Scheduled Task), persist the PATH
-                # fix now rather than requiring the user to notice and
-                # click "Install" again on something that's technically
-                # already installed. _add_to_user_path() is idempotent
-                # (checks already_present before writing), so calling it
-                # here on every status refresh is safe, not just a
-                # one-time fix.
-                if (_tqa.shutil.which("claude") is None):
-                    _default_cli_dir = _tqa.Path.home() / ".local" / "bin"
-                    if (_default_cli_dir / "claude.exe").exists():
-                        _tqa._add_to_user_path(_default_cli_dir)
-                if _tqa.claude_code_cli_installed():
-                    _tqa_cli_var.set("⬤ Claude Code CLI: Installed")
-                    _tqa_cli_lbl.config(fg='#6ab86a')
-                else:
-                    _tqa_cli_var.set("⬤ Claude Code CLI: Not Installed")
-                    _tqa_cli_lbl.config(fg='#cc4444')
-
-            def _tqa_install_cli():
-                _tqa_cli_var.set("⬤ Installing… (may take a moment)")
-                _tqa_cli_lbl.config(fg='#cc8800')
-                self.root.update()
-                ok, detail = _tqa.install_claude_code_cli()
-                if ok:
-                    messagebox.showinfo("Claude Code CLI", detail)
-                else:
-                    messagebox.showerror("Install Failed", detail)
-                _tqa_refresh_cli_status()
-
-            ttk.Button(_tqa_cli_row, text="⬇ Install Claude Code CLI",
-                       command=_tqa_install_cli).pack(side='left', padx=(10, 0))
-            _tqa_refresh_cli_status()
-
-            _tqa_enabled_var  = tk.BooleanVar(value=_tqa_cfg.get("enabled", False))
-            _tqa_time_var     = tk.StringVar(value=_tqa_cfg.get("schedule_time", "06:00"))
-            # v9.0.1: paired end time — only meaningful when Check queue is
-            # set to more than 1 time/day, mirroring the exact same Start
-            # time / End time / Times per day pattern the My Custom AI
-            # Analyses and Common Business AI Analysis editors already use.
-            _tqa_end_time_var = tk.StringVar(value=_tqa_cfg.get("schedule_end_time", "23:00"))
-            _tqa_notify_var   = tk.BooleanVar(value=_tqa_cfg.get("notify_on_complete", False))
-            _tqa_method_var   = tk.StringVar(value=_tqa_cfg.get("notify_method", "sms"))
-            # v8.1.11: real OS-level "what's actually armed right now"
-            # display — see _tqa_refresh_status_display() below for why
-            # this exists (config file / GUI fields can drift from what
-            # Windows Task Scheduler genuinely has armed).
-            _tqa_armed_var    = tk.StringVar(value="")
-
-            def _tqa_refresh_status_display():
-                # v8.1.11 fix: this used to check scheduled_task_exists()
-                # (presence only) plus the LOCAL config's "enabled" flag —
-                # neither of those is the real Windows-reported enabled/
-                # disabled state, so a mismatch between config and reality
-                # (e.g. the real task somehow got disabled outside the
-                # GUI) would silently show the wrong status. Now reads
-                # get_scheduled_task_display_info(), which parses the
-                # actual `schtasks /query /v` output — genuine OS truth,
-                # not an assumption from the config file.
-                _armed_info = _tqa.get_scheduled_task_display_info()
-                if _armed_info["enabled"]:
-                    _tqa_status_var.set("● Enabled")
-                    _tqa_status_lbl.config(fg='#6ab86a')
-                    _tqa_status_lbl2.config(fg='#6ab86a')
-                else:
-                    _tqa_status_var.set("● Disabled")
-                    _tqa_status_lbl.config(fg='#aa4444')
-                    _tqa_status_lbl2.config(fg='#aa4444')
-                # v8.1.11: the actual currently-armed Windows Scheduled
-                # Task cadence, in plain language — "🟢 Armed — Daily at
-                # 06:00:00 (next: ...)" or "🔴 Not armed" — so it's
-                # visually obvious whether real MS auto-runs are actually
-                # scheduled, not just what the GUI's own fields say.
-                _tqa_armed_var.set(_armed_info["display"])
-                _tqa_armed_lbl.config(
-                    fg='#6ab86a' if _armed_info["enabled"] else '#aa4444')
-                _last = _tqa.load_last_run()
-                if _last:
-                    _tqa_last_run_var.set(
-                        f"Last: {_last.get('status', '?')} — {_last.get('detail', '')} "
-                        f"({_last.get('timestamp', '')[:19]})")
-                else:
-                    _tqa_last_run_var.set("Last: (never run)")
-
-                # Token/key status shown proactively, not just on Test Setup
-                # click — this is the "how does the user know" answer, not a
-                # hidden detail buried in a dry-run report only checked on
-                # demand. Branches on which auth method is active.
-                if _tqa_cfg.get("use_api_key"):
-                    # 2026-10-12: name the provider — "API key" alone no longer
-                    # says which key the runs will bill to.
-                    _sd_prov = _tqa.effective_api_key_provider(_tqa_cfg)
-                    _sd_name = "Grok (xAI)" if _sd_prov == "grok" else "Claude (Anthropic)"
-                    if _tqa.has_api_key(_sd_prov):
-                        _tqa_token_var.set(f"\U0001F511 {_sd_name} API key configured (metered billing)")
-                        _tqa_token_lbl.config(fg='#6ab86a')
-                    else:
-                        _tqa_token_var.set(f"\U0001F511 No {_sd_name} API key saved yet — enter one below and Save Key")
-                        _tqa_token_lbl.config(fg='#cc8800')
-                    return
-                _tok = _tqa.check_token_expiry()
-                if _tok["status"] == "no_credentials":
-                    _tqa_token_var.set(
-                        "🔑 No Claude Code token yet — click 🔑 Get / Renew Token "
-                        "(first button below), sign in, then come back here. "
-                        "This line updates on its own within a few seconds — "
-                        "no Save needed.")
-                    _tqa_token_lbl.config(fg='#cc8800')
-                elif _tok["status"] == "expired":
-                    _tqa_token_var.set(f"🔑 Token EXPIRED — {_tok['detail']}")
-                    _tqa_token_lbl.config(fg='#cc4444')
-                elif _tok["status"] == "expiring_soon":
-                    _tqa_token_var.set(f"🔑 Token expiring soon — {_tok['detail']}")
-                    _tqa_token_lbl.config(fg='#cc8800')
-                elif _tok["status"] == "unreadable":
-                    _tqa_token_var.set(f"🔑 Token status unknown — {_tok['detail']}")
-                    _tqa_token_lbl.config(fg='#aaaaaa')
-                else:
-                    _tqa_token_var.set(f"🔑 Token OK — {_tok['detail']}")
-                    _tqa_token_lbl.config(fg='#6ab86a')
-
-            _tqa_row1 = tk.Frame(_tqa_inner, bg='#1a1e2e')
-            _tqa_row1.pack(fill='x', pady=(0, 4))
-            # v8.3: the "Enable scheduled runs" checkbox that used to live
-            # here is gone — the big color-coded toggle button at the
-            # bottom of the panel is now the single control for on/off.
-            # This row is just the schedule time input.
-            # v9.0.1: "Scheduled time" -> "Start time", paired with a new
-            # "End time" field — mirrors the My Custom AI Analyses / Common
-            # Business AI Analysis editors' own Start time / End time /
-            # Times per day pattern exactly. End time is only meaningful
-            # once Check queue below is set above 1 time/day; at 1 time/day
-            # it's simply unused (matches compute_daily_run_times()'s own
-            # "times_per_day <= 1 just returns [start_time]" behavior).
-            tk.Label(_tqa_row1, text="Start time:", bg='#1a1e2e', fg='#a0a8cc',
-                     font=('Arial', 9)).pack(side='left')
-            tk.Entry(_tqa_row1, textvariable=_tqa_time_var, width=6,
-                     font=('Arial', 9)).pack(side='left', padx=(4, 2))
-            tk.Label(_tqa_row1, text="End time:", bg='#1a1e2e', fg='#a0a8cc',
-                     font=('Arial', 9)).pack(side='left', padx=(6, 0))
-            tk.Entry(_tqa_row1, textvariable=_tqa_end_time_var, width=6,
-                     font=('Arial', 9)).pack(side='left', padx=(4, 2))
-            tk.Label(_tqa_row1, text="(24h HH:MM)", bg='#1a1e2e', fg='#6a7a9a',
-                     font=('Arial', 8)).pack(side='left', padx=(0, 8))
-
-            # v8.1.11: independently-configurable checker frequency — how
-            # often the Autonomous AI Task Queue itself wakes up to look
-            # for due work, DECOUPLED from any individual task's own
-            # schedule. 1 = classic once-daily at Start time above
-            # (unchanged default). v9.0.1 REDESIGN: >1 no longer switches
-            # to an hourly-interval trigger (check_interval_hours =
-            # round(24/N), which both distorted N for non-round divisions
-            # of 24 AND, before the v9.0.1 anchor fix, could drift onto an
-            # arbitrary non-hour-aligned time forever) — it now computes N
-            # explicit check times evenly spread across [Start time, End
-            # time] via the exact same custom_tasks_manager.compute_daily_
-            # run_times() the task editors use, shown live below. Static
-            # GUI warning, not something Claude, Muse, or Grok says in chat — same "if
-            # they set it for 10 times per day" scenario David asked to
-            # have flagged right here.
-            _initial_times_per_day = _tqa_cfg.get("check_times_per_day")
-            if _initial_times_per_day is None:
-                # Backward compat: pre-v9.0.1 config has no
-                # check_times_per_day key yet, only the old check_mode/
-                # check_interval_hours pair — derive an equivalent N once,
-                # same lossy math the old code used, purely so an existing
-                # saved config's GUI field shows something reasonable
-                # before the user ever touches it again.
-                _legacy_mode = _tqa_cfg.get("check_mode", "daily")
-                _legacy_hrs = _tqa_cfg.get("check_interval_hours", 1)
-                _initial_times_per_day = (
-                    1 if _legacy_mode != "interval"
-                    else max(1, round(24 / max(1, int(_legacy_hrs))))
-                )
-            _tqa_times_per_day_var = tk.StringVar(value=str(_initial_times_per_day))
-
-            tk.Label(_tqa_row1, text="Check queue:", bg='#1a1e2e', fg='#a0a8cc',
-                     font=('Arial', 9)).pack(side='left', padx=(8, 0))
-            tk.Entry(_tqa_row1, textvariable=_tqa_times_per_day_var, width=3,
-                     font=('Arial', 9)).pack(side='left', padx=(4, 2))
-            tk.Label(_tqa_row1, text="times/day (max 24)", bg='#1a1e2e', fg='#6a7a9a',
-                     font=('Arial', 8)).pack(side='left', padx=(0, 4))
-
-            # v9.0.1: cap Check queue at the same MAX_DAILY_TIMES_PER_DAY the
-            # My Custom AI Analyses / Common Business AI Analysis editors
-            # already enforce for their own Times per day field — this
-            # field had no upper bound at all until now (only a floor of
-            # 1), an inconsistency David caught. compute_daily_run_times()
-            # itself has no ceiling either, so nothing downstream would
-            # have stopped a value like 100 from actually being registered
-            # as 100 separate Windows Daily triggers. Imported from
-            # custom_tasks_manager rather than duplicated so the two
-            # features can never drift to different limits.
-            def _tqa_clamp_times_per_day(raw):
-                import custom_tasks_manager as _ctm_clamp
-                try:
-                    n = int(str(raw).strip() or 1)
-                except (ValueError, TypeError):
-                    return 1, False
-                clamped = max(1, min(n, _ctm_clamp.MAX_DAILY_TIMES_PER_DAY))
-                return clamped, (n > _ctm_clamp.MAX_DAILY_TIMES_PER_DAY)
-
-            _tqa_credit_warn_var = tk.StringVar(value="")
-            _tqa_credit_warn_lbl = tk.Label(
-                _tqa_row1, textvariable=_tqa_credit_warn_var, bg='#1a1e2e',
-                fg='#cc8800', font=('Arial', 8, 'bold'))
-            _tqa_credit_warn_lbl.pack(side='left', padx=(4, 8))
-
-            def _tqa_update_credit_warning(*_a):
-                n, was_capped = _tqa_clamp_times_per_day(_tqa_times_per_day_var.get())
-                if was_capped:
-                    _tqa_credit_warn_var.set(
-                        f"⚠️ Capped at {n}x/day (max) — uses Claude "
-                        f"subscription usage credits each check")
-                elif n > 1:
-                    _tqa_credit_warn_var.set(
-                        f"⚠️ {n}x/day uses Claude subscription usage credits "
-                        f"each check")
-                else:
-                    _tqa_credit_warn_var.set("")
-            _tqa_times_per_day_var.trace_add('write', _tqa_update_credit_warning)
-            _tqa_update_credit_warning()
-
-            # v9.0.1: live "Checks at: ..." preview row — the actual
-            # computed check times for the current Start time / End time /
-            # Check queue field values, exactly mirroring the "Runs at:
-            # ..." preview in the My Custom AI Analyses / Common Business
-            # AI Analysis editors (both call custom_tasks_manager.
-            # format_daily_run_times_preview() too, so this panel's preview
-            # can never drift out of sync with theirs on what a given
-            # combination produces). Empty at 1 time/day — nothing useful
-            # to preview beyond the Start time field itself.
-            _tqa_checks_at_row = tk.Frame(_tqa_inner, bg='#1a1e2e')
-            _tqa_checks_at_row.pack(fill='x', pady=(0, 4))
-            _tqa_checks_at_var = tk.StringVar(value="")
-            tk.Label(_tqa_checks_at_row, textvariable=_tqa_checks_at_var,
-                     bg='#1a1e2e', fg='#6a9adf', font=('Arial', 8)).pack(side='left')
-
-            def _tqa_update_checks_at_preview(*_a):
-                n, _was_capped = _tqa_clamp_times_per_day(_tqa_times_per_day_var.get())
-                if n <= 1:
-                    _tqa_checks_at_var.set("")
-                    return
-                import custom_tasks_manager as _ctm_preview
-                preview = _ctm_preview.format_daily_run_times_preview(
-                    _tqa_time_var.get().strip(), _tqa_end_time_var.get().strip(), n)
-                _tqa_checks_at_var.set(
-                    preview.replace("Runs at:", "Checks at:") if preview else "")
-            _tqa_time_var.trace_add('write', _tqa_update_checks_at_preview)
-            _tqa_end_time_var.trace_add('write', _tqa_update_checks_at_preview)
-            _tqa_times_per_day_var.trace_add('write', _tqa_update_checks_at_preview)
-            _tqa_update_checks_at_preview()
-
-            # v8.1.9 fix: _tqa_save_and_apply() reinstalls the Windows
-            # Scheduled Task with whatever's currently in the time field
-            # every time it runs while automation is enabled — but it was
-            # previously only ever called from the ON/OFF toggle button.
-            # That meant editing this field while already ON had NO
-            # effect on the real Scheduled Task until you toggled OFF
-            # then ON again (a confusing "I set 6:15 and it didn't work"
-            # bug). This button calls the exact same apply function
-            # directly, without touching the enabled/disabled state, so
-            # a time-only change takes effect immediately either way.
-            # v8.1.11: give visible confirmation that clicking Apply
-            # actually did something — briefly flash the button green,
-            # then restore its normal appearance. Purely cosmetic
-            # feedback; the actual effect is _tqa_refresh_status_display()
-            # updating the armed-schedule line right below it.
-            def _tqa_flash_apply_success(btn):
-                try:
-                    _orig_style = btn.cget('style') or 'TButton'
-                except Exception:
-                    _orig_style = 'TButton'
-                _flash_style = 'AppliedFlash.TButton'
-                try:
-                    ttk.Style().configure(_flash_style, background='#2e7d32',
-                                           foreground='white')
-                    btn.configure(style=_flash_style)
-                    self.root.after(900, lambda: btn.configure(style=_orig_style))
-                except Exception:
-                    pass
-
-            def _tqa_apply_time_only():
-                _tqa_save_and_apply()
-                _tqa_update_enable_btn_label()
-                _tqa_refresh_status_display()
-                _tqa_flash_apply_success(_tqa_btn_apply_time)
-            _tqa_btn_apply_time = ttk.Button(
-                _tqa_row1, text="💾 Apply", command=_tqa_apply_time_only)
-            _tqa_btn_apply_time.pack(side='left')
-
-            # v8.1.10 fix: a real, OS-verified status indicator
-            # (scheduled_task_exists() + config "enabled" flag) already
-            # existed as _tqa_status_lbl, but was explicitly unpacked/
-            # hidden in v8.3 on the assumption the on/off toggle button
-            # already showed this visually. It doesn't — the toggle button
-            # only reflects the LOCAL config flag, not whether a real
-            # Windows Scheduled Task actually exists and matches it.
-            # _tqa_status_lbl's actual Tk parent is _tqa_hdr (created much
-            # earlier), a sibling frame of this row — re-parenting it here
-            # via pack(in_=...) across sibling frames is fragile, so this
-            # is a second label sharing the same _tqa_status_var, placed
-            # correctly in this row. _tqa_refresh_status_display() (below)
-            # drives both labels' color together.
-            _tqa_status_lbl2 = tk.Label(_tqa_row1, textvariable=_tqa_status_var,
-                                         bg='#1a1e2e', fg='#aa4444',
-                                         font=('Arial', 9, 'bold'))
-            _tqa_status_lbl2.pack(side='left', padx=(12, 0))
-
-            # v8.1.11: dedicated row showing the real, OS-level armed
-            # schedule — "🟢 Armed — Daily at 06:00:00 (next: 7/27/2026
-            # 6:00:00 AM)" or "🔴 Not armed". This is what David asked
-            # for: visual confirmation of what Windows Task Scheduler
-            # itself currently has armed, refreshed by
-            # _tqa_refresh_status_display() after every Apply and every
-            # Toggle On/Off, not just what the GUI's own fields say.
-            _tqa_armed_row = tk.Frame(_tqa_inner, bg='#1a1e2e')
-            _tqa_armed_row.pack(fill='x', pady=(0, 6))
-            _tqa_armed_lbl = tk.Label(_tqa_armed_row, textvariable=_tqa_armed_var,
-                                       bg='#1a1e2e', fg='#aa4444',
-                                       font=('Arial', 9))
-            _tqa_armed_lbl.pack(side='left')
-
-
-            _tqa_row2 = tk.Frame(_tqa_inner, bg='#1a1e2e')
-            _tqa_row2.pack(fill='x', pady=(0, 6))
-            tk.Checkbutton(_tqa_row2, text="Text me when a run finishes",
-                           variable=_tqa_notify_var, bg='#1a1e2e', fg='#ffffff',
-                           selectcolor='#1a1e2e', activebackground='#1a1e2e',
-                           font=('Arial', 9)).pack(side='left')
-            ttk.Combobox(_tqa_row2, textvariable=_tqa_method_var,
-                        values=["sms", "whatsapp"], width=9,
-                        state='readonly').pack(side='left', padx=(6, 0))
-
-            # ── Auth method: OAuth subscription token vs. API key ────────────
-            # Same agentic/MCP tool access either way — this is purely a
-            # billing + reliability tradeoff (see spec §5.3). Radio buttons
-            # rather than a checkbox since exactly one must be active.
-            #
-            # v8.1.5 fix: this used to be two unlabeled radio buttons with no
-            # indication of WHICH button/field below actually belongs to
-            # which option — a real user hit this exact confusion (pasted a
-            # `claude setup-token` value into the API key field while
-            # Subscription was selected, then couldn't tell why "No Claude
-            # Code token yet" kept showing). Added explicit labels stating
-            # which billing account each option draws from, plus a one-line
-            # "how to actually do this" pointer under each radio so the two
-            # credentials (a Claude Code OAuth sign-in vs. a pasted API key
-            # string) are never confused for each other again.
-            # 2026-10-12 (David): three auth methods now. "api_key" keeps its
-            # existing meaning (Anthropic/Claude) so saved configs and tests
-            # don't migrate; "api_key_grok" is the new xAI option.
-            _tqa_auth_var = tk.StringVar(value=(
-                "api_key_grok"
-                if (_tqa_cfg.get("use_api_key")
-                    and _tqa.effective_api_key_provider(_tqa_cfg) == "grok")
-                else "api_key" if _tqa_cfg.get("use_api_key") else "oauth"))
-
-            def _tqa_selected_provider():
-                """'oauth' | 'anthropic' | 'grok' from the auth radio."""
-                _v = _tqa_auth_var.get()
-                if _v == "api_key_grok":
-                    return "grok"
-                if _v == "api_key":
-                    return "anthropic"
-                return "oauth"
-
-            def _tqa_key_provider():
-                """Which saved API key the key row works on: 'grok' when Grok is
-                selected, otherwise 'anthropic' (also while Subscription is
-                selected — the key functions only know anthropic/grok)."""
-                return "grok" if _tqa_selected_provider() == "grok" else "anthropic"
-
-            _tqa_row3 = tk.Frame(_tqa_inner, bg='#1a1e2e')
-            _tqa_row3.pack(fill='x', pady=(0, 2))
-            tk.Label(_tqa_row3, text="Auth:", bg='#1a1e2e', fg='#a0a8cc',
-                     font=('Arial', 9)).pack(side='left')
-            tk.Radiobutton(_tqa_row3, text="Subscription (OAuth) — uses your Claude Pro/Max plan",
-                           variable=_tqa_auth_var, value="oauth",
-                           bg='#1a1e2e', fg='#ffffff', selectcolor='#1a1e2e',
-                           activebackground='#1a1e2e',
-                           font=('Arial', 9)).pack(side='left', padx=(4, 0))
-            tk.Radiobutton(_tqa_row3, text="Claude API Key (metered billing) — Anthropic",
-                           variable=_tqa_auth_var, value="api_key",
-                           bg='#1a1e2e', fg='#ffffff', selectcolor='#1a1e2e',
-                           activebackground='#1a1e2e',
-                           font=('Arial', 9)).pack(side='left', padx=(4, 0))
-            tk.Radiobutton(_tqa_row3, text="Grok API Key (metered billing) — xAI",
-                           variable=_tqa_auth_var, value="api_key_grok",
-                           bg='#1a1e2e', fg='#ffffff', selectcolor='#1a1e2e',
-                           activebackground='#1a1e2e',
-                           font=('Arial', 9)).pack(side='left', padx=(4, 0))
-
-            # v8.1.6 fix: both the hint text and the API-key row used to be
-            # permanently visible regardless of which auth method was
-            # selected, which is exactly the kind of "which field goes with
-            # which option" confusion the v8.1.5 labels above were trying to
-            # reduce in the first place. Now only the fields relevant to the
-            # currently-selected radio button are shown at all — see
-            # _tqa_on_auth_change() below, which both swaps this hint's text
-            # and shows/hides the whole API-key row and its buttons.
-            _tqa_hint_var = tk.StringVar()
-            _tqa_hint_lbl = tk.Label(_tqa_inner, textvariable=_tqa_hint_var,
-                     bg='#1a1e2e', fg='#7a86ac',
-                     font=('Arial', 8, 'italic'),
-                     wraplength=680, justify='left')
-            _tqa_hint_lbl.pack(anchor='w', pady=(0, 6))
-
-            # 2026-10-12: the API-key row's frame (shown/hidden by
-            # _tqa_on_auth_change) — its creation line was lost in the Grok edits.
-            _tqa_row4 = tk.Frame(_tqa_inner, bg='#1a1e2e')
-            tk.Label(_tqa_row4, text="API key:", bg='#1a1e2e', fg='#a0a8cc',
-                     font=('Arial', 9)).pack(side='left')
-            _tqa_apikey_var = tk.StringVar(
-                value="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
-                if (_tqa_selected_provider() in ("anthropic", "grok")
-                    and _tqa.has_api_key(_tqa_key_provider())) else "")
-            _tqa_apikey_entry = tk.Entry(_tqa_row4, textvariable=_tqa_apikey_var,
-                                          width=40, show='•', font=('Arial', 9))
-            _tqa_apikey_entry.pack(side='left', padx=(4, 4))
-
-            def _tqa_save_api_key():
-                val = _tqa_apikey_var.get().strip()
-                if not val or val == "••••••••":
-                    messagebox.showwarning("No Key Entered",
-                                            "Type a key into the field first.")
-                    return
-                _tqa.save_api_key(val, _tqa_key_provider())
-                _tqa_apikey_var.set("••••••••")
-                messagebox.showinfo("Saved", "API key saved. It is never "
-                                     "displayed again or logged anywhere — "
-                                     "re-enter it if you need to change it.")
-                _tqa_refresh_status_display()
-
-            ttk.Button(_tqa_row4, text="Save Key",
-                       command=_tqa_save_api_key).pack(side='left', padx=(0, 6))
-
-            def _tqa_clear_api_key():
-                """v8.1.6 fix: there was previously no way to actually remove a
-                saved API key from this machine -- _tqa_save_api_key() refuses
-                to save an empty value ("No Key Entered"), so a mistakenly
-                saved key (or one a user wants to retire when switching back
-                to Subscription) had no path to deletion; the masked Entry
-                field also isn't a live reflection of storage, so clearing
-                the on-screen text alone did nothing persistent."""
-                if not _tqa.has_api_key(_tqa_key_provider()):
-                    messagebox.showinfo("Nothing to Clear",
-                                         "No API key is currently saved.")
-                    return
-                if not messagebox.askyesno(
-                        "Clear API Key",
-                        "Remove the saved API key from this machine?\n\n"
-                        "You can paste a new one later, or use Subscription "
-                        "(OAuth) instead."):
-                    return
-                _tqa.delete_api_key(_tqa_key_provider())
-                _tqa_apikey_var.set("")
-                messagebox.showinfo("Cleared", "The saved API key has been removed.")
-                _tqa_refresh_status_display()
-
-            ttk.Button(_tqa_row4, text="Clear Key",
-                       command=_tqa_clear_api_key).pack(side='left', padx=(0, 6))
-
-            def _tqa_open_api_key_console():
-                import webbrowser
-                if _tqa_selected_provider() == "grok":
-                    webbrowser.open("https://console.x.ai/")
-                else:
-                    webbrowser.open("https://console.anthropic.com/settings/keys")
-
-            _tqa_last_run_var = tk.StringVar(value="Last: (never run)")
-            tk.Label(_tqa_inner, textvariable=_tqa_last_run_var,
-                     bg='#1a1e2e', fg='#8a92b8', font=('Arial', 8),
-                     anchor='w').pack(fill='x', pady=(0, 2))
-
-            _tqa_token_var = tk.StringVar(value="🔑 Checking token…")
-            _tqa_token_lbl = tk.Label(_tqa_inner, textvariable=_tqa_token_var,
-                                       bg='#1a1e2e', fg='#8a92b8', font=('Arial', 8),
-                                       anchor='w')
-            _tqa_token_lbl.pack(fill='x', pady=(0, 6))
-
-            _tqa_checklist_frame = tk.Frame(_tqa_inner, bg='#0e0e1e', bd=1, relief='sunken')
-            # Not packed until a dry run has actually been requested.
-
-            def _tqa_render_checklist(report):
-                for w in _tqa_checklist_frame.winfo_children():
-                    w.destroy()
-                for c in report["checks"]:
-                    icon = "✅" if c["ok"] else "❌"
-                    tk.Label(_tqa_checklist_frame,
-                             text=f"{icon} {c['name']}: {c['detail']}",
-                             bg='#0e0e1e', fg=('#6ab86a' if c["ok"] else '#cc6666'),
-                             font=('Arial', 8), anchor='w',
-                             wraplength=650, justify='left').pack(anchor='w', padx=6, pady=1)
-                if not _tqa_checklist_frame.winfo_ismapped():
-                    _tqa_checklist_frame.pack(fill='x', pady=(0, 6))
-
-            def _tqa_generate_mcp_config(silent=False):
-                """Write/refresh the MCP config file the headless Claude Code
-                wrapper script needs to reach AI-Prowler's HTTP server —
-                derived entirely from the already-saved Bearer Token and
-                tunnel domain (Settings → Remote Access), the same
-                credentials the Claude.ai connector itself uses. No new
-                user input required.
-
-                v8.1.5 fix: this used to be its own separate, unexplained
-                button most users had no reason to understand or click.
-                Folded into _tqa_test_setup() below instead — regenerating
-                it silently on every Test Setup run means it's always
-                current (including after a Bearer Token/tunnel domain
-                change) with zero extra steps. Kept callable standalone
-                (silent=False) for anyone who wants an explicit
-                confirmation dialog, but nothing in the normal flow
-                requires knowing this function/button exists.
-                """
-                ok, result = _tqa.generate_mcp_config()
-                if not ok:
-                    if not silent:
-                        messagebox.showerror("Could Not Generate Config", result)
-                    return False
-                cfg = dict(_tqa_cfg)
-                cfg["mcp_config_path"] = result
-                _tqa.save_config(cfg)
-                _tqa_cfg["mcp_config_path"] = result
-                if not silent:
-                    messagebox.showinfo(
-                        "MCP Config Generated",
-                        f"Written to:\n{result}\n\n"
-                        f"Pulled from your saved Bearer Token and tunnel domain "
-                        f"(Settings → Remote Access) — same credentials the "
-                        f"Claude.ai connector uses.")
-                _tqa_refresh_status_display()
-                return True
-
-            def _tqa_test_setup():
-                _tqa_status_var.set("⏳ Testing…")
-                self.root.update()
-                # v8.1.5 fix: silently keep the MCP config current every time
-                # this runs — see _tqa_generate_mcp_config()'s docstring for
-                # why this replaced a separate, confusing button. A failure
-                # here surfaces naturally via the checklist's own "MCP
-                # config file" check, not a separate popup.
-                _tqa_generate_mcp_config(silent=True)
-                # 2026-10-12: check the auth method selected right now
-                report = _tqa.dry_run_check(auth=_tqa_selected_provider())
-                _tqa_render_checklist(report)
-                _tqa_refresh_status_display()
-
-            def _tqa_view_audit_log():
-                _log_win = tk.Toplevel(self.root)
-                _log_win.title("Autonomous AI Task Queue — Audit Log")
-                _log_win.geometry("700x450")
-                import tkinter.scrolledtext as _st
-                _lt = _st.ScrolledText(_log_win, font=('Courier', 8),
-                                       wrap='word', bg='#0e0e0e', fg='#cccccc')
-                _lt.pack(fill='both', expand=True, padx=8, pady=8)
-                _lt.insert('1.0', _tqa.read_audit_log_tail(200))
-                _lt.configure(state='disabled')
-
-            def _tqa_clear_audit_log():
-                import tkinter.messagebox as _mb
-                if not _mb.askyesno("Clear Audit Log",
-                                    "Clear the entire audit log?\n\nThis cannot be undone."):
-                    return
-                _p = Path.home() / ".ai-prowler" / "autonomous_run_audit.log"
-                try:
-                    if _p.exists():
-                        _p.write_text("", encoding="utf-8")
-                    self.status_var.set("Audit log cleared.")
-                    self.root.after(3000, lambda: self.status_var.set("Ready"))
-                except Exception as _e:
-                    _mb.showerror("Error", f"Could not clear audit log: {_e}")
-
-            def _tqa_view_cmd_debug_log():
-                """v8.1.17: show the last ~200 lines of command_debug.log —
-                a persistent, append-only record of the EXACT .bat file
-                content (full prompt + all flags) sent to claude -p on each
-                run. Unlike last_headless_run.json / last_single_run.json
-                (overwritten every run), this keeps ALL past runs visible
-                for later debugging — particularly useful when a run behaves
-                unexpectedly and you need to see whether the prompt itself
-                was correct, or if a batch-escaping / encoding bug slipped
-                through into the actual command."""
-                _dbg_path = Path.home() / ".ai-prowler" / "command_debug.log"
-                _dbg_win = tk.Toplevel(self.root)
-                _dbg_win.title("Autonomous AI Task Queue — Command Debug Log")
-                _dbg_win.geometry("900x550")
-                import tkinter.scrolledtext as _st2
-                _dt = _st2.ScrolledText(_dbg_win, font=('Courier', 8),
-                                        wrap='none', bg='#0a1a0a', fg='#88cc88')
-                _dt.pack(fill='both', expand=True, padx=8, pady=8)
-                if _dbg_path.exists():
-                    _lines = _dbg_path.read_text(encoding='utf-8',
-                                                  errors='replace').splitlines()
-                    _dt.insert('1.0', '\n'.join(_lines[-200:]))
-                else:
-                    _dt.insert('1.0',
-                               "(no command_debug.log yet — it's written the\n"
-                               "next time a scheduled run fires)")
-                _dt.configure(state='disabled')
-
-            def _tqa_clear_cmd_debug_log():
-                import tkinter.messagebox as _mb
-                if not _mb.askyesno("Clear Command Debug Log",
-                                    "Clear the entire command debug log?\n\nThis cannot be undone."):
-                    return
-                _p = Path.home() / ".ai-prowler" / "command_debug.log"
-                try:
-                    if _p.exists():
-                        _p.write_text("", encoding="utf-8")
-                    self.status_var.set("Command debug log cleared.")
-                    self.root.after(3000, lambda: self.status_var.set("Ready"))
-                except Exception as _e:
-                    _mb.showerror("Error", f"Could not clear command debug log: {_e}")
-
-            def _tqa_save_and_apply():
-                """Enable/disable is the one action here that actually touches
-                the Scheduled Task — everything else (checkboxes, time field)
-                is just config until this runs."""
-                was_enabled = bool(_tqa_cfg.get("enabled", False))
-                cfg = dict(_tqa_cfg)
-                cfg["enabled"]            = _tqa_enabled_var.get()
-                cfg["schedule_time"]      = _tqa_time_var.get().strip() or "06:00"
-                cfg["schedule_end_time"]  = _tqa_end_time_var.get().strip() or "23:00"
-                cfg["notify_on_complete"] = _tqa_notify_var.get()
-                cfg["notify_method"]      = _tqa_method_var.get()
-                cfg["use_api_key"] = _tqa_selected_provider() in ("anthropic", "grok")
-                # 2026-10-12: persist which API-key provider the key belongs
-                # to, so the radio (and the scheduled wrapper) pick it back up.
-                cfg["api_key_provider"] = _tqa_selected_provider()
-
-                # v9.0.1: times_per_day now stored directly and losslessly
-                # (check_times_per_day) instead of round-tripped through
-                # check_interval_hours = round(24 / N) — that conversion
-                # silently distorted N for anything that doesn't divide 24
-                # evenly. 1 keeps the classic once-daily behavior at
-                # schedule_time above (check_mode stays "daily"); >1
-                # switches to check_mode="interval", which now means N
-                # explicit Daily triggers evenly spread across
-                # [schedule_time, schedule_end_time] — see
-                # _build_register_queue_task_ps1()'s docstring. Clamped to
-                # MAX_DAILY_TIMES_PER_DAY (same limit the task editors
-                # enforce) so what actually gets saved/registered can never
-                # exceed the cap — the field is corrected back to the
-                # clamped number below too, so the display and the saved
-                # config can't disagree.
-                _times_per_day, _ = _tqa_clamp_times_per_day(
-                    _tqa_times_per_day_var.get())
-                if str(_times_per_day) != _tqa_times_per_day_var.get().strip():
-                    _tqa_times_per_day_var.set(str(_times_per_day))
-                cfg["check_times_per_day"] = _times_per_day
-                if _times_per_day > 1:
-                    cfg["check_mode"] = "interval"
-                else:
-                    cfg["check_mode"] = "daily"
-
-                # v8.1.6: on the OFF -> ON transition specifically (not on
-                # every save while already enabled — that would incorrectly
-                # skip a task that's legitimately due next week just because
-                # Save got clicked again), catch up any custom tasks that
-                # accumulated overdue occurrences while automation was off.
-                # Without this, turning automation on could immediately fire
-                # a backlog of tasks nobody explicitly asked to run right
-                # now, burning subscription/API usage on stale occurrences.
-                # See catch_up_all_due_tasks()'s docstring for the full
-                # rationale — this resyncs to the normal cadence starting
-                # today rather than actually running the backlog.
-                if cfg["enabled"] and not was_enabled:
-                    try:
-                        import custom_tasks_manager as _ctm_enable
-                        _custom_tasks = _ctm_enable.load_custom_tasks()
-                        _n_caught_up = _ctm_enable.catch_up_all_due_tasks(_custom_tasks)
-                        if _n_caught_up:
-                            _ctm_enable.save_custom_tasks(_custom_tasks)
-                    except Exception:
-                        pass  # best-effort — a catch-up failure shouldn't block enabling
-
-                if cfg["use_api_key"] and not _tqa.has_api_key(cfg["api_key_provider"]):
-                    messagebox.showwarning(
-                        "API Key Needed",
-                        "API Key auth is selected but no key is saved yet. "
-                        "Enter one in the API key field and click Save Key "
-                        "first.\n\nSaving other settings now, but scheduled "
-                        "runs won't work until a key is added.")
-
-                  # v9.0.0: 'MCP Config Needed' warning removed.
-                  # generate_mcp_config() below handles a missing config path.
-
-
-                _tqa.save_config(cfg)
-                _tqa_cfg.update(cfg)
-
-                # v9.0.0 fix: always (re)generate the MCP config on Apply
-                # when enabled, so claude_mcp_config.json is written even
-                # when mcp_config_path is absent from the saved config —
-                # e.g. on a fresh install, after the file is deleted, or
-                # any time the config pre-dates this field being populated.
-                # Previously the gate below silently skipped everything
-                # when mcp_config_path was falsy: no config written, no
-                # bat written, scheduled task fires next morning with
-                # exit 9009. generate_mcp_config() is idempotent and fast;
-                # calling it unconditionally here costs nothing and ensures
-                # the file always exists and points to the correct installed
-                # path before install_wrapper_script() embeds it in the bat.
-                if cfg["enabled"]:
-                    _mcp_ok, _mcp_path = _tqa.generate_mcp_config()
-                    if _mcp_ok and _mcp_path:
-                        cfg["mcp_config_path"] = _mcp_path
-                        _tqa.save_config(cfg)
-                        _tqa_cfg.update(cfg)
-
-                if cfg["enabled"] and cfg.get("mcp_config_path"):
-                    wrapper_dir = _tqa.AI_PROWLER_HOME
-                    # v8.1.14: no install_dir to compute/pass anymore —
-                    # install_wrapper_script() now always cd's the
-                    # generated .bat into AI_PROWLER_HOME internally (see
-                    # build_wrapper_script_content()'s docstring).
-                    wrapper = _tqa.install_wrapper_script(
-                        wrapper_dir, cfg["mcp_config_path"], cfg["allowed_tools"],
-                        cfg["notify_on_complete"], cfg["notify_method"],
-                        cfg["use_api_key"],
-                        api_key_provider=cfg.get("api_key_provider", "anthropic"),
-                        check_mode=cfg["check_mode"],
-                        active_days=cfg.get("active_days"),
-                        active_start_time=cfg.get("active_start_time", "00:00"),
-                        active_end_time=cfg.get("active_end_time", "23:59"))
-                    ok, detail = _tqa.install_scheduled_task(
-                        wrapper, cfg["schedule_time"], enabled=True,
-                        check_mode=cfg["check_mode"],
-                        schedule_end_time=cfg.get("schedule_end_time", "23:00"),
-                        times_per_day=cfg.get("check_times_per_day", 1))
-                    if not ok:
-                        messagebox.showerror("Could Not Enable", detail)
-                        cfg["enabled"] = False
-                        _tqa.save_config(cfg)
-                        _tqa_cfg.update(cfg)
-                    elif "note:" in detail:
-                        # v8.1.11: install_scheduled_task() always returns
-                        # ok=True even when the "Log on as a batch job"
-                        # grant specifically failed — deliberately, so a
-                        # failed grant doesn't block the task from being
-                        # created at all (Interactive-only is still better
-                        # than nothing). But that means this detail was
-                        # PREVIOUSLY discarded silently on the success
-                        # path, with no way for the user to ever know the
-                        # grant didn't take — surface it now.
-                        messagebox.showwarning("Enabled — with a caveat", detail)
-                elif not cfg["enabled"]:
-                    # v8.1.16 fix: this used to call uninstall_scheduled_task()
-                    # and discard the (ok, detail) result entirely — a failed
-                    # delete (e.g. "Access is denied" against a task
-                    # registered via the elevated S4U principal) went
-                    # completely unnoticed. Config still said disabled and
-                    # the button still flipped to OFF, but the real Windows
-                    # Scheduled Task stayed armed and kept running on
-                    # schedule. uninstall_scheduled_task() now retries
-                    # elevated internally, so this only fires for a genuine,
-                    # unrecoverable failure — surface it instead of hiding it.
-                    _uninstall_ok, _uninstall_detail = _tqa.uninstall_scheduled_task()
-                    if not _uninstall_ok:
-                        messagebox.showerror(
-                            "Could Not Fully Disable",
-                            "The Autonomous AI Task Queue setting is now OFF, "
-                            "but the real Windows Scheduled Task could not be "
-                            "removed, so it may still run on its old "
-                            f"schedule:\n\n{_uninstall_detail}\n\n"
-                            "You can remove it manually via Task Scheduler "
-                            "(task name: AI-Prowler-QueueRunner) or try "
-                            "toggling again.")
-
-                _tqa_refresh_status_display()
-
-            def _tqa_get_token():
-                ok, detail = _tqa.open_setup_token_terminal()
-                if not ok:
-                    messagebox.showerror("Could Not Open Terminal", detail)
-                else:
-                    messagebox.showinfo(
-                        "Complete Sign-In",
-                        "A terminal window opened running `claude setup-token`.\n\n"
-                        "Complete the browser sign-in it prompts for, then come "
-                        "back here and click Test Setup (Dry Run) to confirm.")
-
-            def _tqa_copy_token():
-                """Copies the saved Claude token to the clipboard so it can be
-                pasted into the Jobs app's "CLI Pass Key" box (server-mode users
-                who also run AI-Prowler Personal reuse THIS token rather than
-                minting a second one, which would invalidate this one)."""
-                tok = _tqa.load_oauth_token()
-                if not tok:
-                    messagebox.showinfo(
-                        "No Token Yet",
-                        "There's no Claude token saved yet.\n\n"
-                        "Click 🔑 Get / Renew Token first.")
-                    return
-                self.root.clipboard_clear()
-                self.root.clipboard_append(tok)
-                self.root.update()
-                messagebox.showinfo(
-                    "Token Copied",
-                    "Your Claude token is on the clipboard.\n\n"
-                    "Paste it into the Jobs app's CLI Pass Key box. It's a "
-                    "long-lived credential — don't share it.")
-
-            def _tqa_email_token():
-                """Emails the saved Claude token to this install's own address
-                (Email Configuration's default recipient) — for getting it onto
-                a phone. Asks first: email isn't encrypted."""
-                tok = _tqa.load_oauth_token()
-                if not tok:
-                    messagebox.showinfo(
-                        "No Token Yet",
-                        "There's no Claude token saved yet.\n\n"
-                        "Click 🔑 Get / Renew Token first.")
-                    return
-                try:
-                    import ai_prowler_mcp as _mcp_tok
-                    _ecfg = _mcp_tok._email_config_load() or {}
-                    _to = (_ecfg.get("default_to") or _ecfg.get("username") or "").strip()
-                except Exception:
-                    _mcp_tok, _to = None, ""
-                if _mcp_tok is None or "@" not in _to:
-                    messagebox.showinfo(
-                        "Email Not Set Up",
-                        "Set up Email Configuration first, so AI-Prowler knows "
-                        "which address to send it to.")
-                    return
-                if not messagebox.askyesno(
-                        "Email Token To Yourself",
-                        f"Send your Claude token to {_to}?\n\n"
-                        "It's a long-lived credential and email isn't encrypted — "
-                        "only do this if that inbox is yours and private."):
-                    return
-                body = ("Your AI-Prowler Claude token (paste it into the Jobs "
-                        "app's CLI Pass Key box):\n\n"
-                        f"    {tok}\n\n"
-                        "Keep it private — anyone with it can use your Claude "
-                        "subscription.")
-                try:
-                    ok, msg = _mcp_tok._send_smtp(_to, "Your AI-Prowler Claude token", body)
-                except Exception as _e:
-                    ok, msg = False, str(_e)
-                if ok:
-                    messagebox.showinfo("Token Emailed", f"Sent to {_to}.")
-                else:
-                    messagebox.showerror("Could Not Email", str(msg))
-
-            # v8.1.5 reorder, per direct product decision: the Subscription/
-            # OAuth path (Get / Renew Token) is the recommended default —
-            # it should be the FIRST, most prominent button, not buried
-            # after Save/Test Setup/View Audit Log. "Get an API Key" is the
-            # backup/last-resort path (separate metered account) and moves
-            # to the very end of the row for exactly that reason — it
-            # previously sat right next to the API key entry field, which
-            # made it look like the natural first step rather than a
-            # fallback. "Generate MCP Config" no longer has its own button
-            # at all — see _tqa_generate_mcp_config()'s docstring above.
-            #
-            # v8.1.6 fix: Get / Renew Token and Get an API Key (backup) are
-            # now conditionally shown/hidden by _tqa_relayout_buttons() below
-            # rather than always both being visible — captured as named
-            # widgets (rather than the previous fire-and-forget
-            # .pack(...) chains) so that function can pack_forget()/re-pack
-            # them. Save / Test Setup / View Audit Log stay visible always;
-            # they're relevant to both auth methods.
-            # v8.1.6 fix: Save and View Audit Log used to sit in this same
-            # row as the setup/config buttons (Get/Renew Token, Test Setup,
-            # Get an API Key) — but they're not part of key setup at all;
-            # Save applies the schedule/enable settings above and View
-            # Audit Log is read-only history. Split into a separate row at
-            # the very bottom of the panel (see _tqa_btn_row2 further
-            # down) so the setup-configuration buttons and the
-            # enable/history buttons are visually distinct groups. Save
-            # is also renamed to state what it actually does when clicked
-            # with the checkbox on — see its tooltip for the fuller
-            # explanation of the double duty it still does either way.
-            _tqa_btn_row = tk.Frame(_tqa_inner, bg='#1a1e2e')
-            _tqa_btn_row.pack(fill='x', pady=(4, 0))
-            _tqa_btn_get_token = ttk.Button(_tqa_btn_row, text="🔑 Get / Renew Token",
-                                             command=_tqa_get_token)
-            _tqa_btn_copy_token = ttk.Button(_tqa_btn_row, text="📋 Copy Token",
-                                              command=_tqa_copy_token)
-            _tqa_btn_email_token = ttk.Button(_tqa_btn_row, text="✉ Email Token to Me",
-                                               command=_tqa_email_token)
-            _tqa_btn_test = ttk.Button(_tqa_btn_row, text="🧪 Test Setup (Dry Run)",
-                                        command=_tqa_test_setup)
-            _tqa_btn_get_api_key = ttk.Button(_tqa_btn_row, text="🌐 Get an Anthropic API Key (backup)",
-                                               command=_tqa_open_api_key_console)
-
-            def _tqa_relayout_buttons():
-                """Re-packs the button row from scratch in the correct order
-                for whichever auth method is currently selected — forgetting
-                everything first (rather than toggling in place) avoids the
-                row silently reordering itself, since Tk's pack manager
-                positions a widget relative to whatever else is CURRENTLY
-                packed at the moment .pack() is called, not by any original
-                fixed index."""
-                for _b in (_tqa_btn_get_token, _tqa_btn_copy_token, _tqa_btn_email_token,
-                           _tqa_btn_test, _tqa_btn_get_api_key):
-                    _b.pack_forget()
-                is_api_key = _tqa_selected_provider() in ("anthropic", "grok")
-                if not is_api_key:
-                    _tqa_btn_get_token.pack(side='left', padx=(0, 6))
-                    # Copy / Email the OAuth token — only meaningful on the
-                    # subscription (OAuth) path; the API-key path has no token.
-                    _tqa_btn_copy_token.pack(side='left', padx=(0, 6))
-                    _tqa_btn_email_token.pack(side='left', padx=(0, 6))
-                _tqa_btn_test.pack(side='left', padx=(0, 6))
-                if is_api_key:
-                    _tqa_btn_get_api_key.pack(side='left')
-
-            def _tqa_on_auth_change(*_args):
-                """Swaps the hint text and shows/hides the API-key row +
-                its buttons based on which radio button is currently
-                selected — see the v8.1.6 comment above _tqa_hint_var for
-                why this replaced the old always-visible, always-both
-                layout. Called once immediately below to set correct
-                initial state, then again automatically via the trace
-                every time the user clicks a radio button."""
-                _prov = _tqa_selected_provider()
-                _is_key = _prov in ("anthropic", "grok")
-                if _prov == "grok":
-                    _tqa_hint_var.set(
-                        "☝  Grok API Key: paste a key from console.x.ai "
-                        "into the field below, then click Save Key. Unattended runs "
-                        "call the xAI API directly (metered by xAI) — no Claude "
-                        "Code CLI needed.")
-                elif _prov == "anthropic":
-                    _tqa_hint_var.set(
-                        "☝  API Key: paste a real key from console.anthropic.com "
-                        "into the field below, then click Save Key. This is a "
-                        "separate pay-as-you-go account — not your Claude "
-                        "Pro/Max subscription.")
-                else:
-                    _tqa_hint_var.set(
-                        "☝  Subscription: click 🔑 Get / Renew Token below to "
-                        "sign in — there is nothing to type in below for this "
-                        "option.")
-                # The masked field mirrors the SELECTED provider's saved key,
-                # so switching radios can't show one provider's dots for the
-                # other. (Typed-but-unsaved text is intentionally replaced —
-                # saving is always per the currently selected provider.)
-                _tqa_apikey_var.set(
-                    "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
-                    if (_is_key and _tqa.has_api_key(_prov)) else "")
-                if _is_key:
-                    if not _tqa_row4.winfo_ismapped():
-                        _tqa_row4.pack(fill='x', pady=(0, 4), after=_tqa_hint_lbl)
-                else:
-                    if _tqa_row4.winfo_ismapped():
-                        _tqa_row4.pack_forget()
-                _tqa_btn_get_api_key.config(
-                    text="🔑 Get Grok API Key" if _prov == "grok" else "🔑 Get Claude API Key")
-                _tqa_relayout_buttons()
-                _tqa_persist_auth(_prov)
-
-            def _tqa_persist_auth(prov):
-                """2026-10-12 (David): picking an Auth option takes effect at once —
-                saved to the queue settings, and (when the queue is on) the
-                scheduled run's script is rewritten so the next run uses it.
-                Before, it only changed on Apply/toggle, so Test Setup and the
-                scheduled run kept using the previously saved method."""
-                want_key = prov in ("anthropic", "grok")
-                want_prov = prov if want_key else _tqa_cfg.get("api_key_provider", "anthropic")
-                if (bool(_tqa_cfg.get("use_api_key")) == want_key
-                        and (not want_key or _tqa_cfg.get("api_key_provider") == prov)):
-                    return                                   # nothing changed
-                try:
-                    cfg = dict(_tqa.load_config())
-                    cfg["use_api_key"] = want_key
-                    cfg["api_key_provider"] = want_prov
-                    _tqa.save_config(cfg)
-                    _tqa_cfg.update(cfg)
-                    if cfg.get("enabled") and cfg.get("mcp_config_path"):
-                        _tqa.install_wrapper_script(
-                            _tqa.AI_PROWLER_HOME, cfg["mcp_config_path"], cfg["allowed_tools"],
-                            cfg["notify_on_complete"], cfg["notify_method"], cfg["use_api_key"],
-                            api_key_provider=cfg.get("api_key_provider", "anthropic"),
-                            check_mode=cfg.get("check_mode", "daily"),
-                            active_days=cfg.get("active_days"),
-                            active_start_time=cfg.get("active_start_time", "00:00"),
-                            active_end_time=cfg.get("active_end_time", "23:59"))
-                    _tqa_refresh_status_display()
-                except Exception as _e_auth:
-                    self.status_var.set(f"Couldn't save the auth choice: {_e_auth}")
-
-            _tqa_auth_var.trace_add('write', _tqa_on_auth_change)
-            _tqa_on_auth_change()
-
-            # ── Bottom row: Enable + View Audit Log ────────────────────────
-            # v8.1.6 fix: separated from the setup/config row above by a
-            # divider — these two aren't part of getting auth working,
-            # they're "turn the automation on" and "look at history",
-            # which is a meaningfully different kind of action from the
-            # rest of this panel and reads better as its own group at the
-            # bottom, after everything else has been configured.
-            ttk.Separator(_tqa_inner, orient='horizontal').pack(fill='x', pady=(8, 6))
-            _tqa_btn_row2 = tk.Frame(_tqa_inner, bg='#1a1e2e')
-            _tqa_btn_row2.pack(fill='x')
-            # v8.2.2 fix: replaces the v8.2.0 attempt, which was backwards.
-            # That version showed "✅ Enable..." (the button's own initial
-            # creation text) whenever _tqa_enabled_var was True/checked, and
-            # "🛑 Disable..." when False/unchecked — so on a fresh install,
-            # before the feature had EVER been turned on, the button already
-            # read "Disable" (nothing to disable yet), and checking the box
-            # flipped it right back to the same "Enable" text it started
-            # with. It looked like clicking did nothing.
-            #
-            # This version tracks the REAL applied state from _tqa_cfg
-            # (updated by _tqa_save_and_apply() below, not the raw pending
-            # checkbox value) and the button's own click now DIRECTLY
-            # toggles that real state, rather than just re-applying
-            # whatever the checkbox happened to already say. That removes
-            # the other half of the original bug: previously, clicking this
-            # button alone (without separately touching the checkbox above
-            # it) was a no-op if the checkbox hadn't changed — exactly what
-            # "I can select it but there's no way to stop it" described.
-            def _tqa_update_enable_btn_label():
-                if _tqa_cfg.get("enabled"):
-                    _tqa_btn_enable.config(
-                        text="Toggle On/Off\nAutonomous AI Task Queue ON",
-                        bg='#1f7a3d', fg='#ffffff',
-                        activebackground='#1f7a3d', activeforeground='#ffffff')
-                else:
-                    _tqa_btn_enable.config(
-                        text="Toggle On/Off\nAutonomous AI Task Queue OFF",
-                        bg='#7a1f1f', fg='#ffffff',
-                        activebackground='#7a1f1f', activeforeground='#ffffff')
-
-            def _tqa_toggle_enabled():
-                _tqa_enabled_var.set(not _tqa_cfg.get("enabled", False))
-                _tqa_save_and_apply()
-                _tqa_update_enable_btn_label()
-                _tqa_refresh_status_display()
-
-            # v8.3: replaces the checkbox + "● Enabled/Disabled" status dot
-            # with one big color-coded toggle button — red + "OFF" or
-            # green + "ON" — so the current state and the control that
-            # changes it are the same object instead of two separate
-            # widgets a user has to reconcile. tk.Button, not ttk.Button:
-            # ttk's themed buttons on Windows ignore bg/fg entirely, so
-            # plain tk.Button is required for the color to actually show.
-            _tqa_btn_enable = tk.Button(_tqa_btn_row2, command=_tqa_toggle_enabled,
-                                         font=('Arial', 10, 'bold'), relief='raised',
-                                         bd=2, padx=16, pady=8, justify='center',
-                                         cursor='hand2')
-            _tqa_btn_enable.pack(side='left', padx=(0, 6))
-            _tqa_update_enable_btn_label()
-
-
-            _tqa_btn_audit = ttk.Button(_tqa_btn_row2, text="📄 View Audit Log",
-                                         command=_tqa_view_audit_log)
-            _tqa_btn_audit.pack(side='left')
-            ttk.Button(_tqa_btn_row2, text="🗑 Clear",
-                       command=_tqa_clear_audit_log).pack(side='left', padx=(2, 10))
-
-            # v8.1.17: Command Debug Log — append-only record of the full
-            # .bat script sent to claude -p on each scheduled/manual run.
-            ttk.Button(_tqa_btn_row2, text="🔍 Command Debug Log",
-                       command=_tqa_view_cmd_debug_log).pack(side='left', padx=(0, 0))
-            ttk.Button(_tqa_btn_row2, text="🗑 Clear",
-                       command=_tqa_clear_cmd_debug_log).pack(side='left', padx=(2, 0))
-
-            # Exposed on self so tests/gui/*.py can drive this panel the
-            # same way tests/gui/test_http_uptime.py drives the uptime
-            # feature — these were plain closures before, unreachable
-            # from outside this method, which is exactly why no GUI test
-            # existed for this panel until now.
-            self._tqa_available        = _tqa_available
-            self._tqa_cfg               = _tqa_cfg
-            self._tqa_enabled_var      = _tqa_enabled_var
-            self._tqa_time_var         = _tqa_time_var
-            self._tqa_end_time_var     = _tqa_end_time_var
-            self._tqa_checks_at_var    = _tqa_checks_at_var
-            self._tqa_notify_var       = _tqa_notify_var
-            self._tqa_method_var       = _tqa_method_var
-            self._tqa_auth_var         = _tqa_auth_var
-            self._tqa_apikey_var       = _tqa_apikey_var
-            self._tqa_hint_var         = _tqa_hint_var
-            self._tqa_row4             = _tqa_row4
-            self._tqa_clear_api_key    = _tqa_clear_api_key
-            self._tqa_on_auth_change   = _tqa_on_auth_change
-            self._tqa_relayout_buttons = _tqa_relayout_buttons
-            self._tqa_btn_get_token    = _tqa_btn_get_token
-            self._tqa_btn_get_api_key  = _tqa_btn_get_api_key
-            self._tqa_btn_enable       = _tqa_btn_enable
-            self._tqa_btn_audit        = _tqa_btn_audit
-            self._tqa_status_var       = _tqa_status_var
-            self._tqa_status_lbl       = _tqa_status_lbl
-            self._tqa_token_var        = _tqa_token_var
-            self._tqa_cli_var          = _tqa_cli_var
-            self._tqa_last_run_var     = _tqa_last_run_var
-            self._tqa_refresh_status_display = _tqa_refresh_status_display
-            self._tqa_refresh_cli_status     = _tqa_refresh_cli_status
-            self._tqa_install_cli            = _tqa_install_cli
-            self._tqa_save_and_apply         = _tqa_save_and_apply
-            self._tqa_test_setup             = _tqa_test_setup
-            self._tqa_save_api_key           = _tqa_save_api_key
-            self._tqa_generate_mcp_config    = _tqa_generate_mcp_config
-            self._tqa_toggle_enabled         = _tqa_toggle_enabled
-            self._tqa_update_enable_btn_label = _tqa_update_enable_btn_label
-            self._tqa_apply_time_only        = _tqa_apply_time_only
-            self._tqa_btn_apply_time         = _tqa_btn_apply_time
-            self._tqa_times_per_day_var      = _tqa_times_per_day_var
-            self._tqa_clamp_times_per_day    = _tqa_clamp_times_per_day
-            self._tqa_credit_warn_var        = _tqa_credit_warn_var
-            self._tqa_update_credit_warning  = _tqa_update_credit_warning
-            self._tqa_armed_var              = _tqa_armed_var
-            self._tqa_refresh_status_display = _tqa_refresh_status_display
-
-            _tqa_refresh_status_display()
-
-            # v9.0.0 fix: 60-second poll to keep the armed display
-            # current after the scheduled task fires and re-arms for
-            # the next day. Safe because compute_next_checker_run() is
-            # a pure local calculation (no schtasks, no subprocess, no
-            # disk I/O) so it cannot block the Tk event loop. 60s
-            # interval avoids the tooltip flicker that caused the
-            # original v8.1.6 4-second loop to be removed.
-            def _tqa_poll_armed():
-                try:
-                    _tqa_armed_var.set(
-                        _tqa.get_scheduled_task_display_info()["display"])
-                except Exception:
-                    pass
-                self._tqa_armed_poll_id = self.root.after(
-                    60_000, _tqa_poll_armed)
-            self._tqa_armed_poll_id = self.root.after(60_000, _tqa_poll_armed)
-
-            # v8.1.6 fix, then removed again same night: a self-rescheduling
-            # self.root.after(4000, ...) polling loop briefly lived here to
-            # auto-refresh the token status line every 4 seconds without
-            # requiring a click. Removed — it was firing at almost exactly
-            # the interval the user reported a popup-window flicker
-            # happening at, and status already refreshes on every action
-            # that actually matters (Test Setup, Save/Enable, Save Key,
-            # Clear Key). Not worth the risk of a second background timer
-            # in this panel after the tooltip timer already caused a real
-            # incident tonight — refresh-on-explicit-action only, as it
-            # was for most of this session before this loop was added.
-            #
-            # v9.0.1: the "next:" half of this display is now computed via
-            # compute_next_checker_run() — a pure local calculation from
-            # the saved Start time / End time / Times per day config and
-            # the real current date/time, not from schtasks's own Next Run
-            # Time field (which only got re-queried on explicit actions
-            # here, same as before — see that function's docstring for the
-            # incident this fixes). That's the actual bug fix: the value
-            # shown is now always correct WHENEVER this refresh runs. No
-            # timer added here — still refresh-on-explicit-action only,
-            # per the standing decision above.
-        # "Common Business AI Analysis" — moved here via pack_configure
-        # rather than physically relocating this whole block's code, which
-        # would have meant hand-copying ~380 lines of nested Tkinter with a
-        # real risk of a whitespace/syntax slip. _analysis_banner is always
-        # already created by this point (Personal mode only — server mode
-        # returns before either panel is built), so this is safe regardless
-        # of whether _tqa_available is True or False above.
-        _tqa_banner.pack_configure(before=_analysis_banner)
-        # v8.1.6: "Show Queue" (_queue_outer, built earlier above) moved to
-        # sit directly between the Autonomous Task Queue panel and Common
-        # Business AI Analysis. Anchored with after=_tqa_banner rather than
-        # before=_analysis_banner — two widgets both requesting
-        # before=_analysis_banner has ambiguous/order-dependent results in
-        # Tk's pack manager, whereas after=_tqa_banner is unambiguous once
-        # _tqa_banner itself is already correctly positioned (immediately
-        # above), which the line just before this one guarantees.
-        _queue_outer.pack_configure(after=_tqa_banner)
-        # Exposed for tests/gui/*.py to verify pack order directly.
-        self._tqa_banner      = _tqa_banner
-        self._queue_outer     = _queue_outer
-        self._analysis_banner = _analysis_banner
+        # (2026-11-01: the 🤖 Autonomous AI Task Queue panel that used to be built here is now the
+        # "Automatic runs" bar at the top of 🧠 AI Analysis Tasks, built above — task_queue_gui.py.)
         # When SUPPORT_LOCAL_HW_LLM is False, all of the input/attachment/
         # provider/answer widgets below are constructed but never packed —
         # they live in an off-screen "hidden_root" Frame. Back-end code can
@@ -18706,6 +15755,19 @@ or from the Help menu."""
                     pass
                 return False
 
+        # ── 0. 🔑 Agent API Key — server only (2026-11-01, David: "put the API keys entry at
+        # the top of the small business tab in the server and label Agent API Key"). A server has no
+        # Task Queue tab, and every agent there runs on an API key. Personal (same day): here too, with
+        # the monthly dollar limit every agent shares. The agents use only these keys (own files) — the
+        # Task Queue keeps its own CLI token / API key in Task Queue → Auth.
+        try:
+            import desk_gui_agent as _dga_key
+            self._agent_key_panel = _dga_key.build_agent_key_section(f)
+        except Exception as _e_akey:
+            self._agent_key_panel = None
+            ttk.Label(f, text=f"Agent API Key unavailable: {_e_akey}", font=('Arial', 8),
+                      foreground='gray').pack(anchor='w', padx=16, pady=(10, 0))
+
         # ── 1. OVERVIEW BANNER ────────────────────────────────────────────────
         # v9.1.x: this used to list all 12 tools + 8 example prompts inline,
         # which grew stale the moment newer tools (get_sheet_columns,
@@ -18870,6 +15932,17 @@ or from the Help menu."""
         ttk.Label(pwa_url_row, text="← send to crew phones",
                   font=('Arial', 8), foreground='gray').pack(side='left')
 
+        # ── 🧰 Jobs App Agent & settings — 2026-10-31, Vicki ───────────────────────
+        # "Where is the jobs app agent and setting like the help desk in the small business
+        # tab?" Its own section right under the Jobs App link (it works with Service Desk off).
+        try:
+            import desk_gui_agent as _dga_j
+            self._jobs_agent_section = _dga_j.build_standalone_section(self, banner, "jobs")
+            self._jobs_agent_section["frame"].pack(fill='x', pady=(8, 0))
+        except Exception as _e_jag:
+            ttk.Label(banner, text=f"Jobs agent settings unavailable: {_e_jag}",
+                      font=('Arial', 8), foreground='gray').pack(anchor='w', pady=(8, 0))
+
         # ── Service Desk app (PWA) + customer request page — 2026-10-28, David ──
         # "In AI-Prowler business tab make sure you provide the URL for the PWA
         # install on cell phones like the copy and the QR code like the other PWA
@@ -18885,6 +15958,18 @@ or from the Help menu."""
         except Exception as _e_dgl:
             ttk.Label(desk_lf, text=f"Service Desk links unavailable: {_e_dgl}",
                       font=('Arial', 8), foreground='gray').pack(anchor='w')
+
+        # ── Service Desk Agent & settings — 2026-10-29/30, David ─────────────────
+        # Every Service Desk setting (General, Data & backups, Team, 🤖 Agent) in both
+        # modes; on a server it's the ONLY place (the app has no Settings tab there).
+        # Shows "(not enabled)" and nothing else until Service Desk is switched on;
+        # "Show settings" hides/shows the rest (desk_gui_settings.py).
+        try:
+            import desk_gui_settings as _dgs
+            self._desk_settings = _dgs.build_section(self, banner)
+        except Exception as _e_dgs:
+            ttk.Label(banner, text=f"Service Desk settings unavailable: {_e_dgs}",
+                      font=('Arial', 8), foreground='gray').pack(anchor='w', pady=(8, 0))
 
         ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
 
@@ -19128,6 +16213,18 @@ or from the Help menu."""
 
         ttk.Label(hr_portal_url_row, text="← send to employees",
                   font=('Arial', 8), foreground='gray').pack(side='left')
+
+        # ── 👥 HR Agent & settings — 2026-10-31, Vicki (server only, like the HR apps) ──
+        if self._is_business_server_mode():
+            _hr_ag_wrap = ttk.Frame(f)
+            _hr_ag_wrap.pack(fill='x', padx=16, pady=(0, 6))
+            try:
+                import desk_gui_agent as _dga_h
+                self._hr_agent_section = _dga_h.build_standalone_section(self, _hr_ag_wrap, "hr")
+                self._hr_agent_section["frame"].pack(fill='x')
+            except Exception as _e_hag:
+                ttk.Label(_hr_ag_wrap, text=f"HR agent settings unavailable: {_e_hag}",
+                          font=('Arial', 8), foreground='gray').pack(anchor='w')
 
         if self._is_business_server_mode():          # HR sections are server only
             ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)

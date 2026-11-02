@@ -65,11 +65,12 @@ def test_email_only_hides_the_phone_and_never_texts(desk):
     st, d = _api(db, "GET", "/info")
     assert d["portal_enabled"] is True and d["sms"] is False
     st, d = _api(db, "POST", "/start", {"name": "Pat", "phone": PHONE})
-    assert st == 400 and d["message"] == "enter your email address"
+    assert st == 400 and d["message"] == "enter your email address so we can send your code"
     st, d = _api(db, "POST", "/start", {"name": "Pat", "phone": PHONE, "email": EMAIL})
     assert st == 200 and d["sent_via"] == "email"
     assert [ch for ch, _, _ in state["sent"]] == ["email"]
-    assert desk_db.get_contact(db, d["contact_id"])["phone"] is None      # stray number not saved
+    # 2026-10-30: the phone is now always kept — it's how the team calls back (booking-spec.md §3.1)
+    assert desk_db.get_contact(db, d["contact_id"])["phone"] == "+1" + "".join(c for c in PHONE if c.isdigit())[-10:]
     code = re.search(r"\b(\d{6})\b", state["sent"][-1][2]).group(1)
     st, out = _api(db, "POST", "/verify", {"contact_id": d["contact_id"], "code": code, "title": "Gutters"})
     assert st == 201

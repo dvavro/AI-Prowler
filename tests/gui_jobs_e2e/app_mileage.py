@@ -151,6 +151,7 @@ class Mileage:
     def open_trip(self, trip_id: str):
         """Tap a trip on the Mileage tab (opens the edit sheet)."""
         self.step(f"tap trip {trip_id}")
+        self.close_sheet()          # a sheet left open (e.g. Recalculate shows its result) covers the list
         card = self.trip_card(trip_id)
         card.scroll_into_view_if_needed()
         card.click()

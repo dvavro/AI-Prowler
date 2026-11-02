@@ -47,7 +47,7 @@ PERSONAL_HR = _block("# \u2500\u2500 HR apps \u2014 AI-Prowler SERVER only (2026
 def test_catalog_hr_tools_are_server_only_and_switchable():
     import mcp_tool_catalog as cat
     hr = [n for n in cat.tools_in_category("hr")]
-    assert len(hr) == 20, hr
+    assert len(hr) == 21, hr                      # 2026-10-31: + hr_agent (the HR agent, counts only)
     for n in hr:
         assert set(cat.modes_of(n)) == {"server"}, (n, cat.modes_of(n))
         assert not cat.is_locked(n), n
@@ -58,7 +58,7 @@ def test_catalog_hr_tools_are_server_only_and_switchable():
 
 def test_personal_mode_never_registers_hr_tools():
     import ai_prowler_mcp as ap
-    assert len(ap._HR_TOOLS) == 20
+    assert len(ap._HR_TOOLS) == 21
     assert ap._HR_TOOLS <= ap._PERSONAL_MODE_SUPPRESSED
     import mcp_tool_catalog as cat
     assert set(cat.tools_in_category("hr")) == set(ap._HR_TOOLS)

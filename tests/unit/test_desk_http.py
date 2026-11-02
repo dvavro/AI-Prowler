@@ -172,28 +172,35 @@ def test_phase3_routes_report_export_import_backups_team(db):
     body, ctype = multipart([("in.csv", b"Title\nGutters\nWindows\n")], {"dry_run": "1"})
     st, d = call(db, "POST", "/desk-api/import", raw=body, ctype=ctype, **biz)
     assert d["result"]["to_add"] == 2 and d["result"]["dry_run"]
+    # 2026-10-30 server lock: a real import, undo, restore and team setup are refused on a
+    # server — they're done in AI-Prowler on the server (tests/unit/test_desk_server_lock.py).
     body, ctype = multipart([("in.csv", b"Title\nGutters\nWindows\n")], {"dry_run": "0"})
-    st, d = call(db, "POST", "/desk-api/import", raw=body, ctype=ctype, **biz)
-    batch = d["result"]["batch_id"]
-    st, d = call(db, "POST", "/desk-api/import/undo", {"batch_id": batch}, **biz)
-    assert len(d["result"]["removed"]) == 2
+    assert call(db, "POST", "/desk-api/import", raw=body, ctype=ctype, **biz)[0] == 403
+    assert call(db, "POST", "/desk-api/import/undo", {"batch_id": "IMP-1"}, **biz)[0] == 403
     st, d = call(db, "GET", "/desk-api/backups", **biz)
-    assert any(b["trigger"] == "pre-import" for b in d["backups"]) and "backup_hour" in d["settings"]
-    st, d = call(db, "POST", "/desk-api/backups", {}, **biz)
+    assert "backup_hour" in d["settings"]
+    st, d = call(db, "POST", "/desk-api/backups", {}, **biz)              # back up now: still fine
     name = d["backup"]["name"]
     st, z = call(db, "GET", f"/desk-api/backups/{name}", **biz)
     assert st == 200 and z[:2] == b"PK"
-    st, d = call(db, "POST", "/desk-api/backups/restore", {"name": name}, **biz)
-    assert d["result"]["needs_confirm"]
+    assert call(db, "POST", "/desk-api/backups/restore", {"name": name}, **biz)[0] == 403
     assert call(db, "GET", "/desk-api/backups", actor=MANAGER, edition="business")[0] == 403
-    st, d = call(db, "POST", "/desk-api/team/queue", {"queue_id": "field", "members": "ann, bob"}, **biz)
-    assert d["queue"]["members"] == ["ann", "bob"]
-    st, d = call(db, "POST", "/desk-api/team/rule", {"rule_id": "inv", "match": {"keyword": "invoice"},
-                                                     "action": {"user": "dave"}}, **biz)
+    assert call(db, "POST", "/desk-api/team/queue", {"queue_id": "field", "members": "ann, bob"}, **biz)[0] == 403
+    import desk_routing as rt                                          # what AI-Prowler's own screen does
+    rt.upsert_queue(db, "field", members=["ann", "bob"], edition="business")
+    rt.upsert_rule(db, "inv", match={"keyword": "invoice"}, action={"user": "dave"}, edition="business")
     st, d = call(db, "GET", "/desk-api/team", **biz)
     assert d["queues"][0]["queue_id"] == "field" and d["rules"][0]["rule_id"] == "inv"
     assert call(db, "POST", "/desk-api/team/queue", {"queue_id": "x"}, actor=MANAGER,
                 edition="business")[0] == 403
+    # a personal install still does it all from the app
+    body, ctype = multipart([("in.csv", b"Title\nGutters\nWindows\n")], {"dry_run": "0"})
+    st, d = call(db, "POST", "/desk-api/import", raw=body, ctype=ctype, actor=None, edition="solo")
+    batch = d["result"]["batch_id"]
+    st, d = call(db, "POST", "/desk-api/import/undo", {"batch_id": batch}, actor=None, edition="solo")
+    assert len(d["result"]["removed"]) == 2
+    st, d = call(db, "POST", "/desk-api/backups/restore", {"name": name}, actor=None, edition="solo")
+    assert d["result"]["needs_confirm"]
 
 
 def test_bad_json_and_unknown_routes(db):

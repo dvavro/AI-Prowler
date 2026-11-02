@@ -579,10 +579,10 @@ class TestTaskQueueTab:
     def test_deleteTask_defined(self, js):
         assert "async function deleteTask" in js,             "deleteTask() missing — Delete button broken"
 
-    def test_completeTask_defined(self, js):
-        # completeTask renamed to removeFromQueue
-        assert "async function removeFromQueue" in js, \
-            "removeFromQueue() missing — Remove button broken"
+    def test_run_now_button_label(self, js):
+        # 2026-11-01: ▶ Queue became ▶ Run now (queue_single_task asks AI-Prowler to run it).
+        fn = _fn(js, "renderTaskCard")
+        assert "Run now" in fn and "Re-Queue" not in fn
     # ── HTML structure ─────────────────────────────────────────────────────
 
     def test_tasks_screen_exists(self, html):
@@ -650,12 +650,9 @@ class TestTaskQueueTab:
         fn = _fn(js, "deleteTask")
         assert "delete_analysis_task" in fn
 
-    def test_completeTask_calls_complete_analysis_task(self, js):
-        # removeFromQueue now uses delete_analysis_task to remove queue entries
-        fn_start = js.find("async function removeFromQueue")
-        fn = js[fn_start:fn_start+400] if fn_start > -1 else ""
-        assert "delete_analysis_task" in fn, \
-            "removeFromQueue should call delete_analysis_task"
+    def test_no_queue_remove_or_clear(self, js):
+        # 2026-11-01: every task has its own schedule — nothing to remove from a queue or clear.
+        assert "async function removeFromQueue" not in js and "async function clearQueue" not in js
 
     def test_no_bulk_sync_button(self, js):
         # Updated 2026-10-01: syncTasks() was removed on purpose (David,
@@ -726,10 +723,11 @@ class TestRemoteAllowedTools:
     def test_queue_single_task_defined_in_mcp(self, mcp_src):
         assert "def queue_single_task(" in mcp_src,             "queue_single_task not defined in ai_prowler_mcp.py"
 
-    def test_queue_single_task_writes_pending_json(self, mcp_src):
+    def test_queue_single_task_asks_ai_prowler_to_run_it(self, mcp_src):
+        # 2026-11-01: no queue — it marks the task to run (AI-Prowler's scheduler runs it), no queue file.
         idx = mcp_src.find("def queue_single_task(")
         fn = mcp_src[idx:idx+3000]
-        assert "pending_tasks.json" in fn,             "queue_single_task doesn't write to pending_tasks.json"
+        assert "request_run(" in fn and "BY_AI_PROWLER" in fn and "pending_tasks.json" not in fn
 
     def test_queue_single_task_checks_for_duplicates(self, mcp_src):
         idx = mcp_src.find("def queue_single_task(")

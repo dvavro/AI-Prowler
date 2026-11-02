@@ -66,7 +66,13 @@ class Voice:
 
     def refused(self, tool, **args) -> str:
         out = self(tool, **args)
-        assert out.startswith(("❌", "⚠️")), f"{self.who} {tool} should be refused: {out}"
+        assert out.startswith(("❌", "⚠️", "🔒")), f"{self.who} {tool} should be refused: {out}"
+        return out
+
+    def locked(self, tool, **args) -> str:
+        """2026-10-30 server lock: Service Desk setup is changed only in AI-Prowler on the server."""
+        out = self(tool, **args)
+        assert out.startswith("🔒") and "AI-Prowler on the server" in out, f"{self.who} {tool} should be locked: {out}"
         return out
 
     def close(self):
@@ -210,30 +216,29 @@ def test_V3_customer_ticket_by_voice_reply_search_export(business, voices):
 def test_V4_owner_admin_by_voice_and_role_gates(business, voices):
     owner, staff, crew = (voices(business, n) for n in ("Olive Owner", "Sam Staff", "Cris Crew"))
     sam = _id(business, "Sam Staff")
-    # "Close fixed customer tickets after 5 days" — numbers arrive as words/strings by voice
-    assert "auto_close_days = 5" in owner.ok("tickets_settings", setting="auto_close_days", value="5")
-    assert "auto_close_days = 3" in owner.ok("tickets_settings", setting="auto_close_days", value="3")
+    # 2026-10-30 server lock (security): on a server nobody — owner included — changes Service
+    # Desk setup by voice; it's done in AI-Prowler on the server. Reading still works.
+    owner.locked("tickets_settings", setting="auto_close_days", value="5")
+    owner.locked("tickets_settings", setting="agent_enabled", value="on")
     assert "own_tickets" in owner.ok("tickets_settings")                    # "Show the settings"
     staff.refused("tickets_settings", setting="auto_close_days", value="9")
-    # queues and rules: "Make a Redo queue with Sam" / "Send every billing ticket to Sam"
-    assert "ztest_redo" in owner.ok("manage_ticket_queues", action="save", queue_id="ztest_redo",
-                                    name="ZTEST Redo", members=sam).lower()
-    assert "ztest_redo" in owner.ok("manage_ticket_queues").lower()
+    owner.locked("manage_ticket_queues", action="save", queue_id="ztest_redo", name="ZTEST Redo", members=sam)
+    owner.ok("manage_ticket_queues")                                        # listing is fine
     staff.refused("manage_ticket_queues", action="save", queue_id="ztest_x", name="x", members=sam)
-    owner.ok("manage_ticket_rules", action="save_rule", rule_id="ztest_billing",
-             match='{"keyword": "ztest invoice"}', send_to_user=sam)
-    routed = owner.ok("create_ticket", title="ZTEST V4 question about my ztest invoice", kind="internal")
-    assert sam in routed, f"the rule should route it to Sam: {routed}"
-    owner.ok("manage_ticket_rules", action="delete_rule", rule_id="ztest_billing")
-    owner.ok("manage_ticket_queues", action="delete", queue_id="ztest_redo")
-    # backups: "Back up the tickets now" / "When was the last backup?" / restore needs a yes
+    owner.locked("manage_ticket_rules", action="save_rule", rule_id="ztest_billing",
+                 match='{"keyword": "ztest invoice"}', send_to_user=sam)
+    owner.locked("manage_ticket_rules", action="delete_rule", rule_id="ztest_billing")
+    # backups: "Back up the tickets now" / "When was the last backup?" — restore and backup
+    # settings are server-only now
     assert "verified" in owner.ok("tickets_backup_now")
     assert "verified" in owner.ok("backup_tickets_database")
     listing = owner.ok("list_tickets_backups")
     name = re.search(r"desk-\d{8}-\d{6}-[a-z-]+\.zip", listing).group(0)
-    explain = owner("restore_tickets_database", backup_name=name)
-    assert "confirm" in explain.lower(), f"restore must only explain without a yes: {explain}"
+    owner.locked("restore_tickets_database", backup_name=name)
+    owner.locked("restore_tickets_database", backup_name=name, confirm=True)
     assert "backup_hour" in owner.ok("tickets_backup_settings")
+    owner.locked("tickets_backup_settings", backup_hour="3")
+    owner.locked("import_tickets", filename="ztest_x.csv", dry_run=False)
     crew.refused("tickets_backup_now")
     crew.refused("restore_tickets_database", backup_name=name, confirm=True)
     # report, triage, import, overdue

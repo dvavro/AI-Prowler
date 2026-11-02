@@ -24,6 +24,27 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+import scheduler_jobs as _sj_mod
+
+# 2026-11-02: the alerts now read Service Desk, bookings, old quotes, unread texts and the job
+# database. Every test here starts with those QUIET (empty) so nothing reads the real data;
+# a test that wants something there patches it in. _REAL keeps the real helpers for the tests
+# that check the helpers themselves.
+_REAL = {n: getattr(_sj_mod, n) for n in (
+    "_ticket_lines", "_bookings_waiting", "_unread_sms_threads", "_stale_quotes", "_jobs_on")}
+
+
+@pytest.fixture(autouse=True)
+def _quiet_app_data(monkeypatch):
+    monkeypatch.setattr(_sj_mod, "_ticket_lines", lambda **k: [])
+    monkeypatch.setattr(_sj_mod, "_bookings_waiting", lambda: [])
+    monkeypatch.setattr(_sj_mod, "_unread_sms_threads", lambda: [])
+    monkeypatch.setattr(_sj_mod, "_stale_quotes", lambda days=14: [])
+    monkeypatch.setattr(_sj_mod, "_jobs_on", lambda day: [])
+    # personal mode unless a test says otherwise — never this PC's real config.json
+    monkeypatch.setattr(_sj_mod, "_server_mode", lambda: False)
+    yield
+
 
 # ---------------------------------------------------------------------------
 # TC-SCHED-001  Job registry completeness and structure
@@ -37,6 +58,9 @@ class TestJobRegistry:
             "morning_briefing", "overdue_invoice_alert", "due_analysis_tasks",
             "sms_reply_monitor", "weather_watch", "end_of_day_summary",
             "mileage_reminders",   # 2026-10-24: mileage spec FR-24 (owner's 7 PM digest)
+            "service_desk_watch",  # 2026-11-02: tickets + bookings ("we have more apps now")
+            # 2026-11-02: "New alerts a business owner would pay for (no AI cost)"
+            "billing_leak", "weekly_scorecard", "quote_followup", "appointment_reminders", "crew_my_day",
         }
         assert set(sj.JOB_REGISTRY.keys()) == expected
 
@@ -441,46 +465,69 @@ class TestSilentJobs:
             result = sj.job_overdue_invoice_alert(self._cfg())
         assert result is not None
 
+    # 2026-11-02: the monitor reads the unread threads (sms_inbox), not the old pasted list.
     def test_TC_SCHED_004_sms_monitor_silent_when_no_unread(self):
         import scheduler_jobs as sj
-        with patch("ai_prowler_mcp.list_sms_contacts_with_replies",
-                   return_value="No contacts with replies."):
+        with patch("scheduler_jobs._unread_sms_threads", return_value=[]):
             result = sj.job_sms_reply_monitor(self._cfg())
         assert result is None
 
     def test_TC_SCHED_004_sms_monitor_alerts_when_unread(self):
         import scheduler_jobs as sj
-        with patch("ai_prowler_mcp.list_sms_contacts_with_replies",
-                   return_value="3 unread: Johnson, Williams, Chen"):
+        with patch("scheduler_jobs._unread_sms_threads",
+                   return_value=[{"name": "Johnson", "unread": 2}, {"name": "Chen", "unread": 1}]):
             result = sj.job_sms_reply_monitor(self._cfg())
         assert result is not None
         subject, body = result
-        assert "Unanswered" in subject or "Message" in subject
+        assert "Unanswered" in subject
+        assert "Johnson" in body and "2 unread" in body and "Chen" in body
 
-    def test_TC_SCHED_004_due_tasks_silent_when_none_due(self, tmp_path):
+    def test_TC_SCHED_004_sms_monitor_emails_same_list_only_once(self):
+        """Every 2 hours it used to resend the same list. Now: once, then quiet until something new."""
         import scheduler_jobs as sj
-        # Pending tasks all in future
-        future = (datetime.date.today() + datetime.timedelta(days=7)).isoformat()
-        tasks = [{"task_id": "t1", "status": "pending",
-                  "next_due": future, "label": "Future task"}]
-        tasks_file = tmp_path / ".ai-prowler" / "pending_tasks.json"
-        tasks_file.parent.mkdir(parents=True)
-        tasks_file.write_text(json.dumps(tasks), encoding="utf-8")
-        with patch.object(Path, "home", return_value=tmp_path):
-            result = sj.job_due_analysis_tasks(self._cfg())
-        assert result is None
+        one = [{"name": "Johnson", "unread": 1}]
+        two = [{"name": "Johnson", "unread": 2}]
+        with patch("scheduler_jobs._unread_sms_threads", return_value=one):
+            assert sj.job_sms_reply_monitor(self._cfg()) is not None
+            assert sj.job_sms_reply_monitor(self._cfg()) is None
+        with patch("scheduler_jobs._unread_sms_threads", return_value=two):
+            assert sj.job_sms_reply_monitor(self._cfg()) is not None     # a new text came in
+        with patch("scheduler_jobs._unread_sms_threads", return_value=[]):
+            assert sj.job_sms_reply_monitor(self._cfg()) is None          # all read → resets
+        with patch("scheduler_jobs._unread_sms_threads", return_value=two):
+            assert sj.job_sms_reply_monitor(self._cfg()) is not None
 
-    def test_TC_SCHED_004_due_tasks_alerts_when_overdue(self, tmp_path):
+    def test_TC_SCHED_004_sms_monitor_escapes_names(self):
+        import scheduler_jobs as sj
+        with patch("scheduler_jobs._unread_sms_threads", return_value=[{"name": "<b>x</b>", "unread": 1}]):
+            _, body = sj.job_sms_reply_monitor(self._cfg())
+        assert "<b>x</b>" not in body and "&lt;b&gt;" in body
+
+    # 2026-11-01: no queue file — the alert lists tasks a CHAT should run (auto-run off, due);
+    # auto-run tasks are run by AI-Prowler itself and aren't listed.
+    def _write_tasks(self, tmp_path, monkeypatch, tasks):
+        import custom_tasks_manager as ctm
+        p = tmp_path / "custom_analysis_tasks.json"
+        p.write_text(json.dumps(tasks), encoding="utf-8")
+        monkeypatch.setattr(ctm, "CUSTOM_TASKS_PATH", p)
+
+    def test_TC_SCHED_004_due_tasks_silent_when_none_due(self, tmp_path, monkeypatch):
+        import scheduler_jobs as sj
+        future = (datetime.date.today() + datetime.timedelta(days=7)).isoformat()
+        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        self._write_tasks(tmp_path, monkeypatch, [
+            {"task_id": "t1", "next_due": future, "label": "Future task", "schedule": "weekly"},
+            {"task_id": "t2", "next_due": yesterday, "label": "Runs itself", "schedule": "weekly",
+             "auto_run": True}])
+        assert sj.job_due_analysis_tasks(self._cfg()) is None
+
+    def test_TC_SCHED_004_due_tasks_alerts_when_overdue(self, tmp_path, monkeypatch):
         import scheduler_jobs as sj
         yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
-        tasks = [{"task_id": "t1", "status": "pending",
-                  "next_due": yesterday, "label": "Weekly Report",
-                  "schedule": "weekly"}]
-        tasks_file = tmp_path / ".ai-prowler" / "pending_tasks.json"
-        tasks_file.parent.mkdir(parents=True)
-        tasks_file.write_text(json.dumps(tasks), encoding="utf-8")
-        with patch.object(Path, "home", return_value=tmp_path):
-            result = sj.job_due_analysis_tasks(self._cfg())
+        self._write_tasks(tmp_path, monkeypatch, [
+            {"task_id": "t1", "next_due": yesterday, "label": "Weekly Report", "schedule": "weekly",
+             "auto_run": False}])
+        result = sj.job_due_analysis_tasks(self._cfg())
         assert result is not None
         subject, body = result
         assert "Due" in subject
@@ -965,3 +1012,401 @@ class TestDefaultToEmailFallback:
             json.dumps({"smtp_host": "smtp.gmail.com"}), encoding="utf-8")
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         assert se._read_default_to_email() == ""
+
+
+# ---------------------------------------------------------------------------
+# TC-SCHED-012  2026-11-02 review: alerts match today's apps (David: "the jobs app and other apps
+# have changed so much … if they need expanding because we have more apps now please do so")
+# ---------------------------------------------------------------------------
+
+def _day(offset=0):
+    return (datetime.date.today() + datetime.timedelta(days=offset)).isoformat()
+
+
+def _forecast(rain_days):
+    """A forecast shaped like get_weather's: one line per day, RAIN RISK on the rainy ones."""
+    out = ["Weather for Town, FL"]
+    for i in range(7):
+        d = _day(i)
+        risk = "  ⚠️  RAIN RISK — consider rescheduling" if d in rain_days else ""
+        out.append(f"  {d}:  High 80°F  Low 65°F  Rain: {'70' if risk else '10'}%{risk}")
+    return "\n".join(out)
+
+
+class TestRainToday:
+
+    def test_TC_SCHED_012_rain_today_flags(self):
+        import scheduler_jobs as sj
+        assert sj._rain_today(_forecast({_day(0)})) is True
+
+    def test_TC_SCHED_012_rain_only_later_in_week_is_not_today(self):
+        """The old check flagged a dry day because rain showed up anywhere in the forecast."""
+        import scheduler_jobs as sj
+        assert sj._rain_today(_forecast({_day(2)})) is False
+
+    def test_TC_SCHED_012_failed_lookup_is_not_rain(self):
+        import scheduler_jobs as sj
+        assert sj._rain_today("❌ Weather lookup failed: rain gauge offline") is False
+        assert sj._rain_today("") is False
+
+    def test_TC_SCHED_012_short_summary_falls_back_to_words(self):
+        import scheduler_jobs as sj
+        assert sj._rain_today("⚠️ Rain likely, 72F") is True
+        assert sj._rain_today("Sunny 84F") is False
+
+
+class TestMorningBriefingExpanded:
+
+    def _run(self, jobs=None, weather="Sunny 80F"):
+        import scheduler_jobs as sj
+        with patch("scheduler_jobs._todays_jobs_structured", return_value=jobs or []), \
+             patch("scheduler_jobs._weather", side_effect=lambda loc: weather), \
+             patch("scheduler_jobs._owner_name", return_value="David"), \
+             patch("scheduler_jobs._owner_location", return_value="New Smyrna Beach, FL"), \
+             patch("scheduler_jobs._ar_aging", return_value=""), \
+             patch("scheduler_jobs._mileage_brief_lines", return_value=[]), \
+             patch("scheduler_jobs._pending_tasks", return_value=[]), \
+             patch("scheduler_jobs._app_on", return_value=True):
+            return sj.job_morning_briefing({})
+
+    def test_TC_SCHED_012_no_rain_flag_when_rain_is_only_tomorrow(self):
+        _, body = self._run(jobs=[{"customer": "Torres", "city": "Port Orange", "state": "FL"}],
+                            weather=_forecast({_day(1)}))
+        assert "Rain risk" not in body
+
+    def test_TC_SCHED_012_rain_flag_when_rain_today(self):
+        _, body = self._run(jobs=[{"customer": "Torres", "city": "Port Orange", "state": "FL"}],
+                            weather=_forecast({_day(0)}))
+        assert "Rain risk" in body
+
+    def test_TC_SCHED_012_new_app_sections_show_when_there_is_something(self, monkeypatch):
+        import scheduler_jobs as sj
+        monkeypatch.setattr(sj, "_bookings_waiting", lambda: ["BK-7 — Ann Lee — Gutter cleaning, Fri"])
+        monkeypatch.setattr(sj, "_ticket_lines", lambda **k: (
+            ["TKT-1 Leaky faucet (Pat)"] if k.get("overdue") else ["TKT-2 New quote request (Sam)"]))
+        monkeypatch.setattr(sj, "_stale_quotes", lambda days=14: ["Q-3 — Bob Ray (Pressure washing), sent 2026-10-01"])
+        monkeypatch.setattr(sj, "_unread_sms_threads", lambda: [{"name": "Jane Doe", "unread": 2}])
+        _, body = self._run()
+        for text in ("Bookings Waiting", "BK-7", "Service Desk", "Overdue: TKT-1", "New: TKT-2",
+                     "Quotes With No Answer", "Q-3", "Unanswered Messages", "Jane Doe — 2 unread"):
+            assert text in body, text
+
+    def test_TC_SCHED_012_sections_hidden_when_nothing_to_say(self):
+        _, body = self._run()
+        for text in ("Bookings Waiting", "Service Desk", "Quotes With No Answer", "Unanswered Messages"):
+            assert text not in body, text
+
+    def test_TC_SCHED_012_customer_names_are_escaped(self):
+        _, body = self._run(jobs=[{"customer": "Smith & <Sons>", "city": "Deland", "state": "FL"}])
+        assert "Smith &amp; &lt;Sons&gt;" in body
+
+    def test_TC_SCHED_012_start_time_shown(self):
+        _, body = self._run(jobs=[{"customer": "Torres", "start_time": "09:30"}])
+        assert "09:30 Torres" in body
+
+
+class TestWeatherWatchJobs:
+
+    def _run(self, rain_days, jobs_by_day, jobs_app_on=True):
+        import scheduler_jobs as sj
+        with patch("scheduler_jobs._owner_location", return_value="New Smyrna Beach, FL"), \
+             patch("scheduler_jobs._weather", side_effect=lambda loc, days=3: _forecast(rain_days)), \
+             patch("scheduler_jobs._jobs_on", side_effect=lambda d: jobs_by_day.get(d, [])), \
+             patch("scheduler_jobs._app_on", return_value=jobs_app_on):
+            return sj.job_weather_watch({})
+
+    def test_TC_SCHED_012_asks_for_seven_days(self):
+        import scheduler_jobs as sj
+        seen = {}
+        def _w(loc, days=3):
+            seen["days"] = days
+            return _forecast(set())
+        with patch("scheduler_jobs._owner_location", return_value="X, FL"), \
+             patch("scheduler_jobs._weather", side_effect=_w):
+            sj.job_weather_watch({})
+        assert seen["days"] == 7
+
+    def test_TC_SCHED_012_lists_jobs_on_rain_days_only(self):
+        rain = _day(2)
+        _, body = self._run({rain}, {
+            rain: [{"customer": "Wet Job", "service_type": "Roof wash", "status": "Unscheduled"},
+                   {"customer": "Done Job", "status": "Cancelled"}],
+            _day(3): [{"customer": "Dry Job", "status": "Unscheduled"}]})
+        assert "Jobs on rain-risk days" in body
+        assert "Wet Job" in body and "Roof wash" in body
+        assert "Dry Job" not in body
+        assert "Done Job" not in body                       # cancelled jobs aren't listed
+
+    def test_TC_SCHED_012_says_no_jobs_on_rain_days(self):
+        _, body = self._run({_day(1)}, {})
+        assert "No jobs booked on the rain-risk days" in body
+
+    def test_TC_SCHED_012_dry_week(self):
+        _, body = self._run(set(), {})
+        assert "No rain-risk days this week" in body
+
+    def test_TC_SCHED_012_jobs_app_off_lists_no_jobs(self):
+        rain = _day(1)
+        _, body = self._run({rain}, {rain: [{"customer": "Wet Job", "status": "Unscheduled"}]},
+                            jobs_app_on=False)
+        assert "Wet Job" not in body
+
+    def test_TC_SCHED_012_failed_lookup_is_silent(self):
+        import scheduler_jobs as sj
+        with patch("scheduler_jobs._owner_location", return_value="X, FL"), \
+             patch("scheduler_jobs._weather", side_effect=lambda loc, days=3: "❌ no service"):
+            assert sj.job_weather_watch({}) is None
+
+
+class TestEndOfDay:
+    """The old version looked for an ISO date in text that shows MM/DD/YYYY, so it always said
+    'No jobs scheduled today'. These run against a throwaway database for the time entries."""
+
+    def _db(self, tmp_path, logged_job_ids):
+        import sqlite3
+        db = tmp_path / "jobs.db"
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE time_entries (job_id TEXT, entry_date TEXT)")
+        for j in logged_job_ids:
+            conn.execute("INSERT INTO time_entries VALUES (?, ?)", (j, _day(0)))
+        conn.commit()
+        conn.close()
+        return str(db)
+
+    def _run(self, tmp_path, today_jobs, tomorrow_jobs=(), logged=(), jobs_app_on=True):
+        import scheduler_jobs as sj
+        db = self._db(tmp_path, logged)
+        by_day = {_day(0): list(today_jobs), _day(1): list(tomorrow_jobs)}
+        with patch("scheduler_jobs._jobs_on", side_effect=lambda d: by_day.get(d, [])), \
+             patch("scheduler_jobs._app_on", return_value=jobs_app_on), \
+             patch("ai_prowler_mcp._resolve_job_db_path", side_effect=lambda *a, **k: db):
+            return sj.job_end_of_day_summary({})
+
+    def test_TC_SCHED_012_completed_open_and_no_time(self, tmp_path):
+        _, body = self._run(tmp_path, [
+            {"job_id": "J1", "customer": "Done Logged", "status": "Complete"},
+            {"job_id": "J2", "customer": "Done No Time", "status": "Complete"},
+            {"job_id": "J3", "customer": "Still Going", "status": "In Progress"},
+            {"job_id": "J4", "customer": "Called Off", "status": "Cancelled"},
+        ], tomorrow_jobs=[{"job_id": "J9", "customer": "Tomorrow Co", "start_time": "08:00",
+                           "status": "Unscheduled"}], logged=["J1"])
+        assert "Completed (2)" in body
+        assert "Still open (1)" in body and "Still Going" in body
+        assert "No time logged today (2)" in body          # J2 (done) and J3 (in progress)
+        no_time = body.split("No time logged today", 1)[1].split("Tomorrow", 1)[0]
+        assert "Done No Time" in no_time and "Still Going" in no_time and "Done Logged" not in no_time
+        assert "Called Off" not in body
+        assert "Tomorrow (1 job)" in body and "08:00 — Tomorrow Co" in body
+        assert "No jobs scheduled today" not in body
+
+    def test_TC_SCHED_012_quiet_day_still_shows_tomorrow(self, tmp_path):
+        _, body = self._run(tmp_path, [], tomorrow_jobs=[])
+        assert "No jobs scheduled today" in body
+        assert "Tomorrow (0 jobs)" in body
+
+    def test_TC_SCHED_012_silent_when_jobs_app_off(self, tmp_path):
+        assert self._run(tmp_path, [{"job_id": "J1", "customer": "X", "status": "Complete"}],
+                         jobs_app_on=False) is None
+
+
+class TestServiceDeskWatch:
+
+    def test_TC_SCHED_012_silent_when_nothing(self):
+        import scheduler_jobs as sj
+        assert sj.job_service_desk_watch({}) is None
+
+    def test_TC_SCHED_012_lists_overdue_new_and_bookings_then_goes_quiet(self, monkeypatch):
+        import scheduler_jobs as sj
+        monkeypatch.setattr(sj, "_ticket_lines", lambda **k: (
+            ["TKT-1 Leak <urgent>"] if k.get("overdue") else ["TKT-2 New request"]))
+        monkeypatch.setattr(sj, "_bookings_waiting", lambda: ["BK-1 — Ann — Fri 9am"])
+        subject, body = sj.job_service_desk_watch({})
+        assert "Service Desk" in subject
+        assert "Overdue tickets (1)" in body and "TKT-1 Leak &lt;urgent&gt;" in body
+        assert "New tickets nobody has picked up (1)" in body and "TKT-2" in body
+        assert "Bookings waiting for your approval (1)" in body and "BK-1" in body
+        assert sj.job_service_desk_watch({}) is None             # same list → no repeat email
+        monkeypatch.setattr(sj, "_bookings_waiting", lambda: ["BK-1 — Ann — Fri 9am", "BK-2 — Bo — Sat"])
+        assert sj.job_service_desk_watch({}) is not None         # something new → email
+
+    def test_TC_SCHED_012_registered_every_2h(self):
+        import scheduler_jobs as sj
+        meta = sj.JOB_REGISTRY["service_desk_watch"]
+        assert meta["fn"] is sj.job_service_desk_watch
+        assert meta["default_time"] == "every_2h"
+
+
+class TestAppHelpers:
+    """The real helpers (the autouse fixture swaps them for quiet ones elsewhere)."""
+
+    def test_TC_SCHED_012_ticket_lines_parses_list(self):
+        with patch("scheduler_jobs._app_on", return_value=True), \
+             patch("ai_prowler_mcp.list_tickets",
+                   return_value="2 ticket(s):\n  TKT-1 Leak — Open\n  TKT-2 Quote — Open\n"):
+            assert _REAL["_ticket_lines"](overdue=True) == ["TKT-1 Leak — Open", "TKT-2 Quote — Open"]
+
+    def test_TC_SCHED_012_ticket_lines_none(self):
+        with patch("scheduler_jobs._app_on", return_value=True), \
+             patch("ai_prowler_mcp.list_tickets", return_value="No tickets match."):
+            assert _REAL["_ticket_lines"](state="Open") == []
+
+    def test_TC_SCHED_012_ticket_lines_service_desk_off_never_asks(self):
+        m = MagicMock(return_value="1 ticket(s):\n  TKT-1")
+        with patch("scheduler_jobs._app_on", return_value=False), patch("ai_prowler_mcp.list_tickets", m):
+            assert _REAL["_ticket_lines"](overdue=True) == []
+        m.assert_not_called()
+
+    def test_TC_SCHED_012_bookings_parse(self):
+        with patch("scheduler_jobs._app_on", return_value=True), \
+             patch("ai_prowler_mcp.review_booking",
+                   return_value="📅 2 booking(s):\n• BK-1 Ann — Fri\n• BK-2 Bo — Sat"):
+            assert _REAL["_bookings_waiting"]() == ["BK-1 Ann — Fri", "BK-2 Bo — Sat"]
+        with patch("scheduler_jobs._app_on", return_value=True), \
+             patch("ai_prowler_mcp.review_booking", return_value="📅 No bookings are waiting for approval."):
+            assert _REAL["_bookings_waiting"]() == []
+
+    def test_TC_SCHED_012_unread_threads_only(self):
+        threads = [{"contact_name": "Jane", "unread_replies": 2}, {"contact_name": "Read Already",
+                                                                     "unread_replies": 0}]
+        with patch("scheduler_jobs._app_on", return_value=True), \
+             patch("sms_inbox.sms_active_threads", return_value=threads):
+            assert _REAL["_unread_sms_threads"]() == [{"name": "Jane", "unread": 2}]
+
+    def test_TC_SCHED_012_unread_threads_texting_off(self):
+        with patch("scheduler_jobs._app_on", return_value=False):
+            assert _REAL["_unread_sms_threads"]() == []
+
+    def test_TC_SCHED_012_stale_quotes(self, tmp_path):
+        import sqlite3
+        db = tmp_path / "jobs.db"
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE quotes (quote_id TEXT, customer_name TEXT, quote_date TEXT, "
+                     "service_type TEXT, status TEXT)")
+        conn.executemany("INSERT INTO quotes VALUES (?,?,?,?,?)", [
+            ("Q-1", "Old Open", _day(-30), "Pressure washing", "Open"),
+            ("Q-2", "Fresh Open", _day(-2), "Gutters", "Open"),
+            ("Q-3", "Old Accepted", _day(-30), "Windows", "Accepted"),
+        ])
+        conn.commit()
+        conn.close()
+        with patch("ai_prowler_mcp._resolve_job_db_path", side_effect=lambda *a, **k: str(db)):
+            out = _REAL["_stale_quotes"]()
+        assert len(out) == 1 and out[0].startswith("Q-1 — Old Open (Pressure washing)")
+
+
+class TestTimeDropdownChoices:
+    """2026-11-02: the Time box is a dropdown — friendly labels, stored in the engine's own form."""
+
+    def test_TC_SCHED_013_labels(self):
+        import scheduler_engine as se
+        assert se.time_label("07:00") == "7:00 AM"
+        assert se.time_label("00:30") == "12:30 AM"
+        assert se.time_label("12:00") == "12:00 PM"
+        assert se.time_label("18:30") == "6:30 PM"
+        assert se.time_label("every_1h") == "Every hour"
+        assert se.time_label("every_2h") == "Every 2 hours"
+        assert se.time_label("every_30m") == "Every 30 minutes"
+        assert se.time_label("garbage") == "garbage"
+
+    def test_TC_SCHED_013_choices_cover_the_day_and_intervals(self):
+        import scheduler_engine as se
+        ch = se.time_choices()
+        vals = [v for _, v in ch]
+        assert vals[0] == "00:00" and "23:30" in vals and len([v for v in vals if ":" in v]) == 48
+        assert [v for v in vals if v.startswith("every_")] == [f"every_{n}h" for n in se.INTERVAL_HOURS]
+        assert len({lab for lab, _ in ch}) == len(ch)                    # no duplicate labels
+
+    def test_TC_SCHED_013_round_trip(self):
+        import scheduler_engine as se
+        for lab, val in se.time_choices():
+            assert se.time_value(lab) == val
+
+    def test_TC_SCHED_013_old_typed_value_kept_once(self):
+        import scheduler_engine as se
+        ch = se.time_choices("07:15")
+        assert ("7:15 AM", "07:15") in ch
+        assert se.time_value("7:15 AM", "07:15") == "07:15"
+        assert len(se.time_choices("7:00")) == len(se.time_choices())    # same as 07:00 — not added twice
+        assert se.time_value("Every 45 minutes", "every_45m") == "every_45m"
+
+    def _tick_at(self, hour, minute=0):
+        """Run one engine tick at a fixed clock time with one repeating alert switched on.
+        Returns how many times the alert ran."""
+        import scheduler_engine as se
+        import scheduler_jobs as sj
+        import time_machine
+        ran = []
+        reg = {"__rep__": {"label": "x", "description": "x", "fn": lambda cfg: ran.append(1),
+                           "default_time": "every_2h", "default_days": "daily"}}
+        cfg = {"enabled": True, "jobs": {"__rep__": {"enabled": True, "time": "every_2h", "days": "daily"}}}
+        se._last_run.pop("__rep__", None)
+        # .astimezone() pins it to this PC's local clock (a bare time would be read as UTC)
+        with time_machine.travel(datetime.datetime(2026, 11, 4, hour, minute).astimezone(), tick=False), \
+             patch.object(sj, "JOB_REGISTRY", reg), \
+             patch("scheduler_engine.load_config", return_value=cfg), \
+             patch("scheduler_engine._read_default_to_email", return_value="a@b.c"), \
+             patch("scheduler_engine._save_last_run"), \
+             patch("scheduler_engine._send_email", return_value=True), \
+             patch("scheduler_engine._log"):
+            se._tick()
+        se._last_run.pop("__rep__", None)
+        return len(ran)
+
+    def test_TC_SCHED_013_repeating_alerts_run_in_the_daytime(self):
+        assert self._tick_at(8, 0) == 1
+        assert self._tick_at(14, 0) == 1
+        assert self._tick_at(19, 59) == 1
+
+    def test_TC_SCHED_013_repeating_alerts_quiet_at_night(self):
+        """The descriptions always said 8am–8pm, but a 2-hour alert used to email at 2 AM too."""
+        assert self._tick_at(2, 0) == 0
+        assert self._tick_at(7, 59) == 0
+        assert self._tick_at(20, 0) == 0
+        assert self._tick_at(23, 30) == 0
+
+
+def test_TC_SCHED_014_engine_files_stay_in_test_folder():
+    """David's View Log was full of test runs' "Scheduler started/stopped" lines: the tests used the
+    real scheduler config, log and last-run file. They must all be throwaway ones."""
+    import scheduler_engine as se
+    real = Path.home() / ".ai-prowler"
+    assert se.CONFIG_PATH != real / "scheduler_config.json"
+    assert se.LOG_PATH != real / "scheduler_log.txt"
+    if hasattr(se, "_LAST_RUN_PATH"):
+        assert se._LAST_RUN_PATH != real / "scheduler_last_run.json"
+
+
+def test_TC_SCHED_014_starting_the_engine_writes_the_test_log_only():
+    import scheduler_engine as se
+    real_log = Path.home() / ".ai-prowler" / "scheduler_log.txt"
+
+    def _starts():      # the open AI-Prowler app may add its own lines meanwhile — count starts only
+        try:
+            return real_log.read_text(encoding="utf-8").count("Scheduler started")
+        except Exception:
+            return 0
+    before = _starts()
+    se.start()
+    time.sleep(0.3)
+    se.stop()
+    assert "Scheduler started" in se.LOG_PATH.read_text(encoding="utf-8")
+    assert _starts() == before
+
+
+def test_TC_SCHED_015_clear_log_and_500_line_limit():
+    import scheduler_engine as se
+    for i in range(520):
+        se._log(f"line {i}")
+    lines = se.LOG_PATH.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 500 and lines[-1].endswith("line 519")       # trims itself
+    assert se.clear_log() is True
+    lines = se.LOG_PATH.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1 and lines[0].endswith("Log cleared")
+    se._log("after")
+    assert se.get_log_tail(10).splitlines()[-1].endswith("after")
+
+
+def test_TC_SCHED_012_alert_memory_stays_in_test_folder():
+    """The 'already emailed this' memory must never be the real ~/.ai-prowler file in tests."""
+    import scheduler_jobs as sj
+    assert Path.home() / ".ai-prowler" / "scheduler_alert_state.json" != sj._STATE_PATH

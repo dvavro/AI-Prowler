@@ -108,6 +108,8 @@ CREATE TABLE IF NOT EXISTS customers (
     gate_code_notes         TEXT,
     onsite_contact          TEXT,
     status                  TEXT DEFAULT 'Active', -- Active/Inactive — never deleted
+    email_messages          TEXT DEFAULT 'On',    -- On/Off: Off = never email this customer (2026-11-02)
+    sms_messages            TEXT DEFAULT 'On',    -- On/Off: Off = never text this customer (2026-11-02)
     created_by              TEXT,
     last_edited_by          TEXT,
     last_edited_at          TEXT,
@@ -512,6 +514,109 @@ CREATE TABLE IF NOT EXISTS mileage_review_actions (
     note                      TEXT
 );
 
+-- ── Service booking (2026-10-30, booking-spec.md) ───────────────────
+-- A customer's chosen window is HELD in booking_holds — never written to
+-- jobs.service_date — until it is approved (spec §7a). Routing, the
+-- Calendar, mileage and the scheduler only ever see approved (Scheduled)
+-- jobs, so a booking waiting for approval can't be routed by accident.
+CREATE TABLE IF NOT EXISTS booking_services (
+    service_code              TEXT PRIMARY KEY,      -- = service_pricing.service_code
+    online                    INTEGER NOT NULL DEFAULT 0,
+    label                     TEXT,                  -- blank = the Services & Pricing name
+    description               TEXT,
+    minutes                   INTEGER NOT NULL DEFAULT 60,
+    people                    INTEGER NOT NULL DEFAULT 1,
+    price_display             TEXT NOT NULL DEFAULT 'from',   -- none | from | exact
+    mode                      TEXT NOT NULL DEFAULT 'instant', -- instant | request (needs a quote)
+    needs_photos              INTEGER NOT NULL DEFAULT 0,
+    buffer_min                INTEGER NOT NULL DEFAULT 15,
+    sort_order                INTEGER NOT NULL DEFAULT 0,
+    last_edited_by            TEXT,
+    last_edited_at            TEXT
+);
+CREATE TABLE IF NOT EXISTS booking_holds (
+    hold_id                   TEXT PRIMARY KEY,
+    job_id                    TEXT,                  -- blank while a customer is still checking out
+    kind                      TEXT NOT NULL,         -- checkout | pending | suggested | waitlist
+    hold_date                 TEXT NOT NULL,         -- YYYY-MM-DD
+    start_time                TEXT NOT NULL,         -- arrival window start HH:MM
+    end_time                  TEXT NOT NULL,         -- arrival window end HH:MM
+    minutes                   INTEGER NOT NULL,      -- the work it reserves (service + buffer)
+    crew                      TEXT,
+    service_code              TEXT,
+    contact_hash              TEXT,
+    created_at                TEXT NOT NULL,
+    expires_at                TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_booking_holds_date ON booking_holds(hold_date);
+CREATE TABLE IF NOT EXISTS booking_requests (
+    job_id                    TEXT PRIMARY KEY,      -- the job this booking / request created
+    ticket_id                 TEXT,                  -- the linked Service Desk ticket
+    path                      TEXT NOT NULL,         -- book | new | buy (an order: choices_json has the totals)
+    service_code              TEXT,
+    choices_json              TEXT,                  -- first choice + backups the customer picked
+    suggested_json            TEXT,                  -- window the approver suggested
+    status                    TEXT NOT NULL,         -- pending | suggested | scheduled | requested | declined | cancelled
+    created_at                TEXT NOT NULL,
+    decided_by                TEXT,
+    decided_at                TEXT,
+    decision                  TEXT,
+    note                      TEXT,
+    reminded_at               TEXT                   -- approvers last reminded (§7a.5)
+);
+CREATE TABLE IF NOT EXISTS booking_openings (
+    opening_id                TEXT PRIMARY KEY,
+    kind                      TEXT NOT NULL,         -- open (extra hours) | closed (holiday, vacation)
+    open_date                 TEXT NOT NULL,
+    start_time                TEXT,                  -- blank = the whole day
+    end_time                  TEXT,
+    who                       TEXT,                  -- blank = the whole business; else one crew
+    note                      TEXT,
+    created_by                TEXT,
+    created_at                TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_booking_openings_date ON booking_openings(open_date);
+CREATE TABLE IF NOT EXISTS booking_waitlist (
+    wait_id                   TEXT PRIMARY KEY,
+    customer_id               TEXT,
+    phone                     TEXT,
+    email                     TEXT,
+    service_code              TEXT,
+    zip                       TEXT,
+    earliest_date             TEXT,
+    status                    TEXT NOT NULL DEFAULT 'waiting',   -- waiting | offered | booked | expired
+    offered_hold_id           TEXT,
+    created_at                TEXT NOT NULL
+);
+-- Personal installs only (spec §6): busy times of the ONE business Google
+-- Calendar, synced in by Claude, Muse or Grok. Servers never use these.
+CREATE TABLE IF NOT EXISTS calendar_busy (
+    busy_id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    start_at                  TEXT NOT NULL,         -- YYYY-MM-DDTHH:MM (local)
+    end_at                    TEXT NOT NULL,
+    all_day                   INTEGER NOT NULL DEFAULT 0,
+    synced_at                 TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_calendar_busy_start ON calendar_busy(start_at);
+CREATE TABLE IF NOT EXISTS calendar_sync_queue (
+    item_id                   TEXT PRIMARY KEY,
+    job_id                    TEXT NOT NULL,
+    action                    TEXT NOT NULL,         -- new | update | cancel
+    payload_json              TEXT,
+    google_event_id           TEXT,
+    status                    TEXT NOT NULL DEFAULT 'waiting',   -- waiting | done | error
+    error                     TEXT,
+    created_at                TEXT NOT NULL,
+    synced_at                 TEXT
+);
+CREATE TABLE IF NOT EXISTS calendar_sync_log (
+    ran_at                    TEXT NOT NULL,
+    blocks                    INTEGER,
+    pushed                    INTEGER,
+    errors                    INTEGER,
+    runner                    TEXT
+);
+
 -- ── schema metadata (for future migrations) ─────────────────────────
 CREATE TABLE IF NOT EXISTS schema_meta (
     key   TEXT PRIMARY KEY,
@@ -813,6 +918,15 @@ def apply_schema(conn):
     # 2026-09-13: clock_in_map_url/clock_out_map_url added to time_entries
     # after Phase 0 shipped (Job Board Architecture Spec §12, GPS map-link
     # follow-up) — existing databases need these columns added explicitly.
+    # 2026-10-30: booking_requests.reminded_at (service booking Phase 2) — a database
+    # that got the table earlier the same day needs the column added.
+    _ensure_column(conn, "booking_requests", "reminded_at", "TEXT")
+    # Booking agent (2026-10-30): weather matters for this service (booking-agent-spec.md §9)
+    _ensure_column(conn, "booking_services", "outdoor", "INTEGER NOT NULL DEFAULT 0")
+    # "Buy a product" on the customer page (2026-11-02): shipping & handling per item, $
+    _ensure_column(conn, "booking_services", "shipping", "REAL NOT NULL DEFAULT 0")
+    # …and the product's specs shown on its card ("Size: …" one per line)
+    _ensure_column(conn, "booking_services", "specs", "TEXT")
     _ensure_column(conn, "time_entries", "clock_in_map_url", "TEXT")
     _ensure_column(conn, "time_entries", "clock_out_map_url", "TEXT")
 
@@ -907,6 +1021,12 @@ def apply_schema(conn):
     # column via _ensure_column; existing rows take 'Soft' from the
     # column DEFAULT. Purely additive — no other table or column touched.
     _ensure_column(conn, "customers", "schedule_type", "TEXT DEFAULT 'Soft'")
+
+    # 2026-11-02 (David: "some customers have their own system and require the contractor to use it"):
+    # per-customer Email / Text switches. Off = AI-Prowler never emails / texts that customer (the owner's
+    # own alerts still list their jobs). Existing customers take 'On' from the DEFAULT — nothing changes.
+    _ensure_column(conn, "customers", "email_messages", "TEXT DEFAULT 'On'")
+    _ensure_column(conn, "customers", "sms_messages", "TEXT DEFAULT 'On'")
 
     # 2026-10-04: jobs.preferred_days added -- job-level Preferred Day(s)
     # (Monday/Friday notation, inherited from the customer on new jobs,

@@ -36,12 +36,53 @@ button.bad{background:var(--bad)}
 .err{color:var(--bad)}.okmsg{color:var(--ok)}.muted{color:var(--mute)}.hide{display:none!important}
 .stars button{background:none;color:#f5a524;font-size:30px;padding:0 4px}
 .live{margin:-8px 0 10px;font-size:13px;color:var(--ok)}
+/* booking (2026-10-30): arrival windows, grouped by day */
+.day{margin:10px 0 4px;font-size:13px;font-weight:600;color:var(--mute)}
+.wins{display:flex;flex-wrap:wrap;gap:6px}
+.win{background:#fff;color:var(--ink);border:1px solid var(--line);font-weight:500;padding:9px 12px;position:relative}
+.win.pick{background:var(--acc);color:#fff;border-color:var(--acc)}
+.win .n{position:absolute;top:-8px;right:-6px;background:var(--ok);color:#fff;border-radius:999px;font-size:11px;padding:0 6px}
+.bk{border-left:4px solid var(--acc)}.bk.ok{border-left-color:var(--ok)}
+select{width:100%;border:1px solid var(--line);border-radius:10px;padding:11px;font:inherit;background:#fff}
+/* the page look (2026-10-30): the business's icon, background and accent (desk_page_look.py) */
+a{color:var(--acc)}
+.top{display:flex;align-items:center;gap:12px;margin:0 0 14px}
+.top img{width:52px;height:52px;border-radius:12px;object-fit:contain;flex:none;background:#fff}
+.top .biz{margin:0}
+body.look .top{background:rgba(255,255,255,.93);border-radius:var(--r);padding:10px 14px;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+body.bgpic{background-size:cover;background-position:center;background-attachment:fixed}
+body.look .card{box-shadow:0 1px 3px rgba(0,0,0,.12)}
+body.look .live{background:rgba(255,255,255,.93);display:inline-block;border-radius:8px;padding:2px 8px}
+/* the choices, each with a line saying what it's for (2026-11-02, David: "if I am confused the customer
+   will be confused") */
+.choice{width:100%;margin:6px 0;text-align:left;display:flex;gap:12px;align-items:flex-start;padding:14px 16px}
+.choice .ic{font-size:22px;line-height:1.2}
+.choice .lbl{display:block;font-size:17px}
+.choice small{display:block;font-weight:400;color:var(--mute);font-size:14px;margin-top:2px}
+/* 🛒 Shop: product cards with photos and specs */
+.prods{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.prod{border:1px solid var(--line);border-radius:var(--r);overflow:hidden;display:flex;flex-direction:column;background:#fff}
+.pimg{aspect-ratio:4/3;background:#f1f3f7;display:flex;align-items:center;justify-content:center}
+.pimg img{width:100%;height:100%;object-fit:contain}
+.pimg .none{font-size:44px;opacity:.5}
+.pth{display:flex;gap:6px;padding:6px 10px 0}
+.pth button{padding:0;width:44px;height:44px;border:1px solid var(--line);background:#fff;border-radius:6px;overflow:hidden}
+.pth button.on{border-color:var(--acc);border-width:2px}
+.pth img{width:100%;height:100%;object-fit:cover}
+.pbody{padding:10px 12px 12px;display:flex;flex-direction:column;gap:6px;flex:1}
+.pname{font-size:16px}
+.pprice{font-weight:600}
+.pbody p{margin:0;font-size:14px}
+.pbody details{font-size:14px}
+.pbody summary{cursor:pointer;color:var(--acc)}
+.pbody ul{margin:6px 0 0;padding-left:18px}
+.pbody .go{margin-top:auto}
 </style>
 </head>
 <body>
 <main>
-  <h1 id="h1">Service request</h1>
-  <p class="biz" id="biz"></p>
+  <header class="top" id="top"><img id="logo" class="hide" alt="">
+    <div><h1 id="h1">Service request</h1><p class="biz" id="biz"></p></div></header>
   <p class="live hide" id="live" role="status" aria-live="polite">Updated just now</p>
   <div id="app"></div>
 </main>
@@ -66,56 +107,355 @@ async function call(method, path, body, isForm) {
 }
 function note(id, text, ok) { const e = $(id); e.textContent = text; e.className = ok ? 'okmsg' : 'err'; }
 
-async function boot() {
-  try { const i = await call('GET', '/info'); P.business = i.business || ''; P.sms = !!i.sms;
-        $('#biz').textContent = P.business; if (!i.portal_enabled && !location.pathname.startsWith('/support/t/')) {
-          app.innerHTML = '<div class="card">Online requests are turned off — please call or text us.</div>'; return; } }
-  catch (_) {}
-  const m = location.pathname.match(/^\/support\/t\/([A-Za-z0-9_-]{20,100})/);
-  if (m) { P.token = m[1]; history.replaceState(null, '', '/support/t/' + P.token); return showStatus(); }
-  showForm();
+// The owner's look (AI-Prowler → Service Desk → 🌐 Web forms → Page look): icon, background, accent.
+function applyLook(L) {
+  if (!L) return;
+  const root = document.documentElement.style, b = document.body;
+  if (/^#[0-9a-f]{6}$/i.test(L.accent || '')) root.setProperty('--acc', L.accent);
+  if (L.logo_url) {
+    const img = $('#logo'); img.src = L.logo_url; img.alt = P.business || ''; img.classList.remove('hide');
+    document.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]').forEach(l => { l.href = L.logo_url; });
+  }
+  if (L.bg_mode === 'color' && /^#[0-9a-f]{6}$/i.test(L.bg_color || '')) {
+    b.style.background = L.bg_color; b.classList.add('look');
+  } else if (L.bg_mode === 'picture' && L.bg_url) {
+    b.style.backgroundColor = '#d9dde6'; b.style.backgroundImage = `url("${L.bg_url}")`;
+    b.classList.add('look', 'bgpic');
+  }
 }
 
-// ── request form ───────────────────────────────────────────────────────────
-function showForm() {
-  $('#h1').textContent = 'Request service';
-  app.innerHTML = `<div class="card">
-    <p class="muted" style="margin-top:0">Tell us what you need. We'll ${P.sms ? 'text or email' : 'email'} you a code to confirm it's you.</p>
+async function boot() {
+  try { const i = await call('GET', '/info'); P.business = i.business || ''; P.sms = !!i.sms;
+        P.paths = (i.paths && i.paths.length) ? i.paths : ['problem']; P.services = i.services || [];
+        P.welcome = i.welcome || ''; P.backups = +(i.backups ?? 2); P.approval = i.approval || 'approve_all';
+        P.portalOn = !!i.portal_enabled;
+        P.products = i.products || []; P.payOnline = !!i.pay_online; P.taxRate = +(i.tax_rate || 0);
+        P.maxQty = +(i.max_qty || 20);
+        $('#biz').textContent = P.business; applyLook(i.look); if (!i.portal_enabled && !location.pathname.startsWith('/support/t/')) {
+          app.innerHTML = '<div class="card">Online requests are turned off — please call or text us.</div>'; return; } }
+  catch (_) {}
+  P.paths = P.paths || ['problem'];
+  const m = location.pathname.match(/^\/support\/t\/([A-Za-z0-9_-]{20,100})/);
+  if (m) { P.token = m[1]; history.replaceState(null, '', '/support/t/' + P.token); return showStatus(); }
+  const qs = new URLSearchParams(location.search);
+  P.wantSvc = qs.get('service') || '';          // Share & embed: "Book gutter cleaning" buttons
+  const want = qs.get('path') || (P.wantSvc && P.paths.includes('book') ? 'book' : '');
+  if (want && P.paths.includes(want)) return showForm(want);
+  if (P.paths.length === 1) return showForm(P.paths[0]);
+  showChoices();
+}
+// Embedded on the business's own website (Share & embed): tell the frame how tall the page is.
+if (window.parent !== window) {
+  const tellHeight = () => { try { parent.postMessage({ aiprowlerHeight: document.documentElement.scrollHeight }, '*'); } catch (_) {} };
+  try { new ResizeObserver(tellHeight).observe(document.body); } catch (_) {}
+  window.addEventListener('load', tellHeight);
+}
+
+// Services and products in the "Request a new service" list (2026-11-02, David: "2 types of services
+// online offered services and the other is products"). Grouped only when there are both.
+function svcOptions(list) {
+  const opt = s => `<option value="${esc(s.code)}">${esc(s.name)}${s.price ? ' — ' + esc(s.price) : ''}</option>`;
+  const svc = list.filter(s => s.kind !== 'product'), prod = list.filter(s => s.kind === 'product');
+  if (!svc.length || !prod.length) return list.map(opt).join('');
+  return `<optgroup label="Services">${svc.map(opt).join('')}</optgroup>`
+       + `<optgroup label="Products">${prod.map(opt).join('')}</optgroup>`;
+}
+
+// ── one page, three paths (2026-10-30, booking-spec.md §3) ─────────────────
+// "How can we help?" — only the paths the owner switched on; one path goes
+// straight to its form (so with the default — Report a problem only — the page
+// looks the way it always has). Phone is required on every path.
+// 2026-11-02 (David: "it's not clear ... the difference between Book a service and request a new
+// service, if I am confused the customer will be confused"): every choice says what it's for, and
+// "Request a new service" is now "Get a quote" — the call-back / quote path.
+const PATHS = {
+  book:    { icon: '📅', label: 'Book a service', h: 'Book a service',
+             sub: 'Pick a service and an open time — booked online in a minute.' },
+  buy:     { icon: '🛒', label: 'Shop products', h: 'Shop products',
+             sub: 'Equipment and parts we sell — see photos and specs, order and pay online, shipped to you.' },
+  new:     { icon: '✨', label: 'Get a quote', h: 'Get a quote',
+             sub: 'Not sure what you need, a bigger job, or no time that suits you? Tell us and we’ll call to quote and schedule it.' },
+  problem: { icon: '🛠', label: 'Report a problem', h: 'Report a problem',
+             sub: 'Something not right after a visit, or with something you bought from us.' },
+};
+function showChoices() {
+  $('#h1').textContent = 'How can we help?';
+  app.innerHTML = `${P.welcome ? `<div class="card" id="welcome">${esc(P.welcome)}</div>` : ''}
+    <div class="card" id="choices">${P.paths.map(p => `<button class="ghost choice" data-path="${p}">
+      <span class="ic">${PATHS[p].icon}</span><span><span class="lbl">${esc(PATHS[p].label)}</span>
+      <small>${esc(PATHS[p].sub)}</small></span></button>`).join('')}</div>`;
+  app.querySelectorAll('[data-path]').forEach(b => b.addEventListener('click', () => showForm(b.dataset.path)));
+}
+
+// Services only in Book / Get a quote while the Shop is on — products live in the Shop. With the
+// Shop off, products can still be asked for in Get a quote (grouped under Products).
+function quoteList() { return P.paths.includes('buy') ? P.services.filter(s => s.kind !== 'product') : P.services; }
+
+function specsHtml(t) {
+  const lines = String(t || '').split('\n').map(x => x.trim()).filter(Boolean);
+  if (!lines.length) return '';
+  return `<details><summary>Specs</summary><ul>${lines.map(l => {
+    const i = l.indexOf(':');
+    return i > 0 && i < 40 ? `<li><b>${esc(l.slice(0, i))}</b>: ${esc(l.slice(i + 1).trim())}</li>` : `<li>${esc(l)}</li>`;
+  }).join('')}</ul></details>`;
+}
+function productCard(p) {
+  const ph = p.photos || [];
+  const price = p.buyable ? money(p.unit_price) : 'Price on request';
+  const ship = !p.buyable ? '' : +p.shipping ? ` <span class="muted" style="font-weight:400">+ ${money(p.shipping)} shipping &amp; handling each</span>`
+    : ' <span class="muted" style="font-weight:400">· free shipping</span>';
+  const go = p.buyable ? `<button class="go" data-buy="${esc(p.code)}">Buy</button>`
+    : P.paths.includes('new') ? `<button class="ghost go" data-ask="${esc(p.code)}">Ask about it</button>`
+    : '<p class="muted go">Call or text us about this one.</p>';
+  return `<div class="prod" data-code="${esc(p.code)}">
+    <div class="pimg">${ph.length ? `<img alt="${esc(p.name)}" src="${esc(ph[0])}">` : '<span class="none">📦</span>'}</div>
+    ${ph.length > 1 ? `<div class="pth">${ph.map((u, i) => `<button type="button" class="${i ? '' : 'on'}" data-ph="${esc(u)}"
+      aria-label="Photo ${i + 1}"><img alt="" src="${esc(u)}"></button>`).join('')}</div>` : ''}
+    <div class="pbody"><b class="pname">${esc(p.name)}</b><div class="pprice">${price}${ship}</div>
+      ${p.description ? `<p>${esc(p.description)}</p>` : ''}${specsHtml(p.specs)}${go}</div></div>`;
+}
+
+function showForm(path, opts) {
+  opts = opts || {};
+  P.path = path;
+  const many = P.paths.length > 1;
+  $('#h1').textContent = many ? PATHS[path].h : 'Request service';
+  const addr = `
+    <label>Address for the service</label><input id="fStreet" autocomplete="street-address" placeholder="Street">
+    <div class="row" style="margin-top:8px"><input id="fCity" autocomplete="address-level2" placeholder="City">
+      <input id="fState" autocomplete="address-level1" placeholder="State" style="max-width:90px">
+      <input id="fZip" autocomplete="postal-code" inputmode="numeric" placeholder="ZIP" style="max-width:110px"></div>`;
+  const bookable = P.services.filter(s => s.bookable);
+  const svcPick = path === 'book' ? `
+    <label>Which service?</label>
+    <select id="fSvc">${bookable.map(s => `<option value="${esc(s.code)}">${esc(s.name)}${s.price ? ' — ' + esc(s.price) : ''}</option>`).join('')}</select>
+    ${addr}
+    <label>When? <span class="muted" style="font-weight:400">— tap the arrival window you'd like${P.backups ? `, then up to ${P.backups} backup${P.backups > 1 ? 's' : ''}` : ''}</span></label>
+    <div id="wins"><p class="muted">Loading open times…</p></div>
+    ${P.paths.includes('new') ? `<p class="muted" style="font-size:14px">No time suits you? <a href="#" id="toNew">Ask us to call you instead</a>.</p>` : ''}
+    <label>Anything we should know? (optional)</label><textarea id="fDesc"></textarea>` : path === 'buy' ? `
+    ${P.products.length ? `<div class="prods" id="catalog">${P.products.map(productCard).join('')}</div>
+    <div id="orderBox" class="hide">
+      <p style="margin:0 0 6px"><a href="#" id="toCatalog">← All products</a></p>
+      <div id="picked"></div>
+      <label>How many?</label><input id="fQty" type="number" min="1" max="${P.maxQty}" value="1" inputmode="numeric" style="max-width:110px">
+      <div id="fSum" style="margin-top:12px"></div>
+      <label>Shipping address</label><input id="fStreet" autocomplete="street-address" placeholder="Street">
+      <div class="row" style="margin-top:8px"><input id="fCity" autocomplete="address-level2" placeholder="City">
+        <input id="fState" autocomplete="address-level1" placeholder="State" style="max-width:90px">
+        <input id="fZip" autocomplete="postal-code" inputmode="numeric" placeholder="ZIP" style="max-width:110px"></div>
+      <label>Anything we should know? (optional)</label><textarea id="fDesc"></textarea></div>`
+    : `<p class="muted" id="noProducts">No products are for sale online right now — please call or text us.</p>`}` : path === 'new' ? `
+    <label>${quoteList().some(s => s.kind === 'product') ? 'Which service or product?' : 'Which service?'}</label>
+    <select id="fSvc" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:11px;font:inherit;background:#fff">
+      ${svcOptions(quoteList())}
+      <option value="">Something else</option></select>
+    <div id="fOtherWrap" class="${quoteList().length ? 'hide' : ''}"><label>What would you like?</label>
+      <input id="fOther" maxlength="120" placeholder="e.g. Screen cleaning"></div>
+    <label>Address for the service</label><input id="fStreet" autocomplete="street-address" placeholder="Street">
+    <div class="row" style="margin-top:8px"><input id="fCity" autocomplete="address-level2" placeholder="City">
+      <input id="fState" autocomplete="address-level1" placeholder="State" style="max-width:90px">
+      <input id="fZip" autocomplete="postal-code" inputmode="numeric" placeholder="ZIP" style="max-width:110px"></div>
+    <label>Preferred days or times (optional)</label><input id="fPref" maxlength="120" placeholder="e.g. Tuesday or Thursday mornings">
+    <label>Anything we should know? (optional)</label><textarea id="fDesc"></textarea>` : `
+    <label>${many ? "What's wrong?" : 'What do you need?'}</label><input id="fTitle" maxlength="200" placeholder="${many ? 'e.g. Streaks left on the front windows' : 'e.g. Streaks on the front windows'}">
+    <label>Details (optional)</label><textarea id="fDesc"></textarea>`;
+  app.innerHTML = `${P.welcome && !many ? `<div class="card" id="welcome">${esc(P.welcome)}</div>` : ''}<div class="card">
+    ${many ? '<p style="margin-top:0"><a href="#" id="back">← Back</a></p>' : ''}
+    ${svcPick}
+    <div id="who" class="${path === 'buy' ? 'hide' : ''}">
+    <p class="muted" style="margin:16px 0 0">Your details — we'll ${P.sms ? 'text or email' : 'email'} you a code to confirm it's you.</p>
     <label>Your name</label><input id="fName" autocomplete="name">
-    ${P.sms ? `<label>Mobile number</label><input id="fPhone" type="tel" autocomplete="tel" placeholder="for a text code">
-    <label>or Email</label>` : '<label>Email</label>'}<input id="fEmail" type="email" autocomplete="email">
+    <label>Phone number (so we can call you)</label><input id="fPhone" type="tel" autocomplete="tel" placeholder="e.g. 386-555-0100">
+    <label>Email${P.sms ? ' (optional if we text your code)' : ''}</label><input id="fEmail" type="email" autocomplete="email">
+    ${P.sms ? `<label>Send my code by</label><div class="row" id="fBy">
+      <label style="margin:0;color:var(--ink)"><input type="radio" name="by" value="sms" checked style="width:auto"> Text</label>
+      <label style="margin:0;color:var(--ink)"><input type="radio" name="by" value="email" style="width:auto"> Email</label></div>` : ''}
     <div class="hp" aria-hidden="true"><label>Website</label><input id="fWeb" tabindex="-1" autocomplete="off"></div>
-    <label>What do you need?</label><input id="fTitle" maxlength="200" placeholder="e.g. Streaks on the front windows">
-    <label>Details (optional)</label><textarea id="fDesc"></textarea>
     <p id="fErr" class="err"></p>
-    <button id="fSend" style="width:100%">Send me a code</button></div>
+    <button id="fSend" style="width:100%">Send me a code</button></div></div>
   <div class="card hide" id="codeCard">
     <label>Enter the 6-digit code we sent you</label>
     <input id="fCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6">
     <p id="cErr" class="err"></p>
-    <div class="row"><button id="fVerify">Submit request</button><button class="ghost" id="fResend">Send a new code</button></div></div>`;
+    <div class="row"><button id="fVerify">${path === 'book' ? 'Book it' : path === 'buy' ? 'Place order' : 'Submit request'}</button><button class="ghost" id="fResend">Send a new code</button></div></div>`;
+  if ($('#back')) $('#back').addEventListener('click', e => { e.preventDefault(); showChoices(); });
+  if ($('#fOtherWrap')) $('#fSvc').addEventListener('change', () =>
+    $('#fOtherWrap').classList.toggle('hide', $('#fSvc').value !== ''));
+  if (path === 'book') {
+    P.picks = []; P.hold = null;
+    $('#fSvc').addEventListener('change', () => { P.picks = []; loadWins(); });
+    if ($('#toNew')) $('#toNew').addEventListener('click', e => { e.preventDefault(); showForm('new'); });
+    if (P.wantSvc && [...$('#fSvc').options].some(o => o.value === P.wantSvc)) $('#fSvc').value = P.wantSvc;
+    loadWins();
+  }
+  if (path === 'buy' && P.products.length) {
+    P.prod = '';
+    $('#fQty').addEventListener('input', drawOrder);
+    $('#toCatalog').addEventListener('click', e => { e.preventDefault(); pickProduct(''); });
+    app.querySelectorAll('[data-ph]').forEach(b => b.addEventListener('click', () => {   // switch the big photo
+      const card = b.closest('.prod');
+      card.querySelector('.pimg img').src = b.dataset.ph;
+      card.querySelectorAll('[data-ph]').forEach(x => x.classList.toggle('on', x === b));
+    }));
+    app.querySelectorAll('[data-buy]').forEach(b => b.addEventListener('click', () => pickProduct(b.dataset.buy)));
+    app.querySelectorAll('[data-ask]').forEach(b => b.addEventListener('click', () => {
+      const p = P.products.find(x => x.code === b.dataset.ask);
+      showForm('new', { other: p ? p.name : '' });
+    }));
+    if (P.wantSvc && P.products.some(p => p.code === P.wantSvc && p.buyable)) pickProduct(P.wantSvc);
+  }
+  if (path === 'new' && opts.other) {          // "Ask about it" on a product with no price
+    $('#fSvc').value = ''; $('#fOtherWrap').classList.remove('hide'); $('#fOther').value = opts.other;
+  }
   $('#fSend').addEventListener('click', sendCode);
   $('#fResend').addEventListener('click', sendCode);
   $('#fVerify').addEventListener('click', verify);
 }
+// ── Buy a product (2026-11-02): price × how many + shipping & handling + tax ───
+// The same math the server uses for the invoice; the server's numbers are the ones charged.
+function money(n) { return '$' + (+n || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+const cents = n => Math.round((+n || 0) * 100) / 100;
+function qtyOf() { const q = parseInt(($('#fQty') || {}).value, 10); return q >= 1 && q <= P.maxQty ? q : 0; }
+function sumRows(rows, total) {
+  return `<table style="width:100%;border-collapse:collapse;font-size:15px">${rows.map(([k, v]) =>
+    `<tr><td style="padding:3px 0">${esc(k)}</td><td style="text-align:right">${money(v)}</td></tr>`).join('')}
+    <tr><td style="padding:6px 0 0;border-top:1px solid var(--line)"><b>Total</b></td>
+    <td style="text-align:right;padding-top:6px;border-top:1px solid var(--line)"><b>${money(total)}</b></td></tr></table>`;
+}
+// Buy on a card -> the order box (the catalog hides); "← All products" goes back.
+function pickProduct(code) {
+  P.prod = code;
+  const p = P.products.find(x => x.code === code);
+  $('#catalog').classList.toggle('hide', !!p);
+  $('#orderBox').classList.toggle('hide', !p);
+  $('#who').classList.toggle('hide', !p);
+  if (!p) return;
+  const ph = (p.photos || [])[0];
+  $('#picked').innerHTML = `<div style="display:flex;gap:12px;align-items:center">
+    ${ph ? `<img alt="" src="${esc(ph)}" style="width:72px;height:72px;object-fit:contain;border:1px solid var(--line);border-radius:8px;background:#fff">` : ''}
+    <div><b id="pickedName">${esc(p.name)}</b><div class="muted">${money(p.unit_price)} each</div></div></div>`;
+  drawOrder();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+function drawOrder() {
+  const p = P.products.find(x => x.code === P.prod), box = $('#fSum');
+  const q = qtyOf();
+  if (!p || !q) { box.innerHTML = q ? '' : `<p class="err">Enter how many — 1 to ${P.maxQty}.</p>`; return; }
+  const items = cents(p.unit_price * q), ship = cents(p.shipping * q), sub = cents(items + ship), tax = cents(sub * P.taxRate);
+  const rows = [[`${p.name} × ${q}`, items]];
+  if (ship) rows.push(['Shipping & handling', ship]);
+  if (tax) rows.push(['Sales tax', tax]);
+  box.innerHTML = sumRows(rows, cents(sub + tax)) + `<p class="muted" style="font-size:14px;margin:8px 0 0">${P.payOnline
+    ? 'After you confirm your order you can pay by card right away.' : "We'll send you an invoice to pay."}</p>`;
+}
+
+// ── arrival windows (booking-spec.md §3) ──────────────────────────────────
+// Shared by the booking form and the status page's "pick another" / "reschedule".
+function winList(ws, picks, max) {
+  if (!ws.length) return '<p class="muted">No open times in the next few weeks — please ask us to call you.</p>';
+  const days = []; let cur = null;
+  for (const w of ws) {
+    const day = w.label.split(',')[0];
+    if (!cur || cur.day !== day) { cur = { day, ws: [] }; days.push(cur); }
+    cur.ws.push(w);
+  }
+  return days.map(d => `<div class="day">${esc(d.day)}</div><div class="wins">${d.ws.map(w => {
+    const i = picks.indexOf(w.key);
+    return `<button type="button" class="win${i === 0 ? ' pick' : ''}" data-win="${esc(w.key)}" aria-pressed="${i >= 0}">${esc(w.label.split(', ')[1] || w.label)}${
+      i > 0 ? `<span class="n">backup ${i}</span>` : i === 0 && max > 0 ? '<span class="n">1st</span>' : ''}</button>`;
+  }).join('')}</div>`).join('');
+}
+async function loadWins() {
+  const box = $('#wins'), code = $('#fSvc') && $('#fSvc').value;
+  if (!code) { box.innerHTML = '<p class="muted">Online booking has no services yet — please ask us to call you.</p>'; return; }
+  try { P.wins = (await call('GET', '/windows?service=' + encodeURIComponent(code))).windows; }
+  catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  P.picks = P.picks.filter(k => P.wins.some(w => w.key === k));
+  drawWins();
+}
+function drawWins() {
+  const box = $('#wins'); box.innerHTML = winList(P.wins, P.picks, P.backups);
+  box.querySelectorAll('[data-win]').forEach(b => b.addEventListener('click', () => {
+    const k = b.dataset.win, i = P.picks.indexOf(k);
+    if (i >= 0) P.picks.splice(i, 1);
+    else if (P.picks.length <= P.backups) P.picks.push(k);
+    else P.picks[P.picks.length - 1] = k;
+    P.hold = null; drawWins();
+  }));
+}
+function sendBy() { const r = document.querySelector('input[name="by"]:checked'); return r ? r.value : 'email'; }
+function phoneOk(v) { const d = v.replace(/\D/g, ''); return d.length === 10 || (d.length === 11 && d[0] === '1') || (v.trim().startsWith('+') && d.length >= 8 && d.length <= 15); }
+function formProblem() {
+  if (P.path === 'book') {
+    if (!$('#fSvc').value) return 'Pick a service.';
+    if (!$('#fStreet').value.trim() || !($('#fCity').value.trim() || $('#fZip').value.trim()))
+      return 'Enter the address — street, and city or ZIP.';
+    if (!P.picks.length) return 'Tap the arrival window you’d like.';
+  } else if (P.path === 'buy') {
+    if (!P.prod) return 'Pick a product.';
+    if (!qtyOf()) return `Enter how many — 1 to ${P.maxQty}.`;
+    if (!$('#fStreet').value.trim() || !($('#fCity').value.trim() || $('#fZip').value.trim()))
+      return 'Enter the shipping address — street, and city or ZIP.';
+  } else if (P.path === 'new') {
+    if ($('#fSvc').value === '' && !$('#fOther').value.trim()) return 'Tell us which service you’d like.';
+    if (!$('#fStreet').value.trim() || !($('#fCity').value.trim() || $('#fZip').value.trim()))
+      return 'Enter the address — street, and city or ZIP.';
+  } else if (!$('#fTitle').value.trim()) return 'Tell us briefly what you need.';
+  if (!$('#fPhone').value.trim()) return 'Enter your phone number so we can reach you.';
+  if (!phoneOk($('#fPhone').value)) return 'That phone number doesn’t look right — use 10 digits, like 386-555-0100.';
+  if (sendBy() === 'email' && !$('#fEmail').value.trim()) return 'Enter your email address so we can send your code.';
+  return '';
+}
 async function sendCode() {
-  if (!$('#fTitle').value.trim()) { note('#fErr', 'Tell us briefly what you need.'); return; }
-  const phone = $('#fPhone') ? $('#fPhone').value.trim() : '';      // no box when texting isn't set up
-  if (!phone && !$('#fEmail').value.trim()) {
-    note('#fErr', P.sms ? 'Enter a mobile number or an email.' : 'Enter your email address.'); return; }
+  const bad = formProblem();
+  if (bad) { note('#fErr', bad); return; }
+  if (P.path === 'book') {        // hold the first choice while they enter the code
+    try { P.hold = await call('POST', '/hold', { service_code: $('#fSvc').value, window_key: P.picks[0] }); }
+    catch (e) { note('#fErr', e.message); P.picks.shift(); loadWins(); return; }
+  }
   try {
-    const d = await call('POST', '/start', { name: $('#fName').value.trim(), phone,
-      email: $('#fEmail').value.trim(), website: $('#fWeb').value });
+    const d = await call('POST', '/start', { name: $('#fName').value.trim(), phone: $('#fPhone').value.trim(),
+      email: $('#fEmail').value.trim(), send_by: sendBy(), website: $('#fWeb').value });
     P.contact = d.contact_id; note('#fErr', 'Code sent by ' + (d.sent_via === 'sms' ? 'text' : 'email') + '.', true);
     $('#codeCard').classList.remove('hide'); $('#fCode').focus();
   } catch (e) { note('#fErr', e.message); }
 }
 async function verify() {
+  const body = { contact_id: P.contact, code: $('#fCode').value.trim(), path: P.path,
+                 description: $('#fDesc').value.trim() };
+  if (P.path === 'book') {
+    const sel = $('#fSvc');
+    Object.assign(body, { service_code: sel.value, service: sel.options[sel.selectedIndex].text.split(' — ')[0],
+      address: { street: $('#fStreet').value.trim(), city: $('#fCity').value.trim(),
+                 state: $('#fState').value.trim(), zip: $('#fZip').value.trim() },
+      window_key: P.picks[0], hold_id: P.hold ? P.hold.hold_id : '', backups: P.picks.slice(1) });
+  } else if (P.path === 'buy') {
+    const p = P.products.find(x => x.code === P.prod) || {};
+    Object.assign(body, { service_code: P.prod, service: p.name || '', qty: qtyOf(), address: { street: $('#fStreet').value.trim(), city: $('#fCity').value.trim(),
+                               state: $('#fState').value.trim(), zip: $('#fZip').value.trim() } });
+  } else if (P.path === 'new') {
+    const sel = $('#fSvc');
+    body.service_code = sel.value;
+    body.service = sel.value ? sel.options[sel.selectedIndex].text.split(' — ')[0] : $('#fOther').value.trim();
+    body.address = { street: $('#fStreet').value.trim(), city: $('#fCity').value.trim(),
+                     state: $('#fState').value.trim(), zip: $('#fZip').value.trim() };
+    body.preferred = $('#fPref').value.trim();
+  } else body.title = $('#fTitle').value.trim();
   try {
-    const d = await call('POST', '/verify', { contact_id: P.contact, code: $('#fCode').value.trim(),
-      title: $('#fTitle').value.trim(), description: $('#fDesc').value.trim() });
+    const d = await call('POST', '/verify', body);
+    if (d.out_of_area) {          // service area (booking-spec.md §5): taken, flagged, we call back
+      $('#h1').textContent = 'Thanks — we got your request';
+      app.innerHTML = `<div class="card" id="outOfArea"><p style="margin-top:0">We don't usually cover that area yet,
+        but we've saved your request and we'll call you at <b>${esc($('#fPhone') ? $('#fPhone').value.trim() : '')}</b>
+        to talk it through.</p><a href="/support/t/${encodeURIComponent(d.token)}"><button>See your request</button></a></div>`;
+      return;
+    }
     location.href = '/support/t/' + d.token;
-  } catch (e) { note('#cErr', e.message); }
+  } catch (e) {
+    note('#cErr', e.message);
+    if (P.path === 'book' && /taken|pick a time/i.test(e.message)) { P.picks.shift(); P.hold = null; loadWins(); }
+  }
 }
 
 // ── status page ────────────────────────────────────────────────────────────
@@ -132,7 +472,7 @@ function sigOf(d) {           // everything the page shows, nothing else
   const t = d.ticket || {};
   return JSON.stringify([d.business || '', t.ticket_id, t.title, t.description, t.state,
     t.who && t.who.role, !!t.can_confirm, !!t.can_reject, !!t.can_reopen, !!t.can_mark_done,
-    !!t.can_rate, t.csat_score, t.csat_comment || '',
+    !!t.can_rate, t.csat_score, t.csat_comment || '', JSON.stringify(t.booking || null), JSON.stringify(t.order || null),
     (t.messages || []).map(m => [m.author_kind, m.at, m.body]),
     (t.attachments || []).map(a => [a.attachment_id, a.kind, a.filename, !!a.thumb_path])]);
 }
@@ -221,6 +561,8 @@ function render(d) {
     ${t.can_mark_done ? `<div class="row" style="margin-top:10px"><button id="done">My part is done</button></div>` : ''}
     ${t.can_reopen ? `<div class="row" style="margin-top:10px"><button class="ghost" id="reopen">Reopen this request</button></div>` : ''}
     <p id="sErr" class="err"></p></div>
+  ${bookingCard(t.booking)}
+  ${orderCard(t.order)}
   ${t.can_rate ? `<div class="card"><b>How did we do?</b><div class="stars" id="stars">${[1,2,3,4,5].map(n => `<button data-star="${n}" aria-label="${n} stars">☆</button>`).join('')}</div>
     <textarea id="rateNote" placeholder="Anything to add? (optional)"></textarea><div class="row" style="margin-top:8px"><button id="rateGo">Send rating</button></div></div>` : ''}
   ${t.csat_score != null && !sub ? `<div class="card" id="rated"><b>Your rating</b><div class="stars" style="color:#f5a524;font-size:26px" aria-label="${+t.csat_score} of 5 stars">${'★'.repeat(+t.csat_score)}${'☆'.repeat(5 - +t.csat_score)}</div>
@@ -231,9 +573,15 @@ function render(d) {
     <div class="row" style="margin-top:8px"><button id="send">Send</button>
       <label class="ghost" style="margin:0;text-align:center;border:1px solid var(--acc);border-radius:10px;padding:12px;color:var(--acc)">📷 Add photo<input type="file" accept="image/*,.pdf" multiple class="hide" id="up"></label></div>` : ''}</div>
   ${(t.attachments || []).length ? `<div class="card"><b>Photos & files</b><div class="thumbs">${t.attachments.map(a =>
-    `<a href="#" data-att="${esc(a.attachment_id)}" data-thumb="${a.thumb_path ? 1 : 0}">${a.kind === 'photo' ? '' : esc(a.filename)}</a>`).join('')}</div></div>` : ''}`;
+    `<a href="#" data-att="${esc(a.attachment_id)}" data-thumb="${a.thumb_path ? 1 : 0}">${a.kind === 'photo' ? '' : esc(a.filename)}</a>`).join('')}</div></div>` : ''}
+  ${!sub && P.portalOn ? `<div class="card" id="another" style="text-align:center"><a href="/support/new" style="font-weight:600">➕ Make another request</a></div>` : ''}`;
   restoreDrafts();
   const on = (id, fn) => { const e = $(id); if (e) e.addEventListener('click', fn); };
+  bindBooking(t.booking);
+  on('#payNow', () => act(async () => {        // a fresh checkout link for what's owed now
+    try { const d = await call('POST', `/t/${P.token}/order/pay`); location.href = d.url; }
+    catch (e) { note('#ordErr', e.message); }
+  }));
   on('#yes', () => move('Closed', ''));
   on('#no', () => { const r = prompt('What still needs fixing?'); if (r && r.trim()) move('In Progress', r.trim()); });
   on('#done', () => move('Fixed', ''));
@@ -266,6 +614,90 @@ function render(d) {
         a.innerHTML = `<img alt="" src="${URL.createObjectURL(b)}">`; }).catch(() => {});
     }
   }
+}
+// ── the order on the status page ("Buy a product", 2026-11-02) ─────────────
+function orderCard(o) {
+  if (!o) return '';
+  const rows = [[`${o.name} × ${o.qty}`, o.items]];
+  if (+o.shipping) rows.push(['Shipping & handling', o.shipping]);
+  if (+o.tax) rows.push(['Sales tax', o.tax]);
+  const state = o.paid ? '<p style="margin:10px 0 0"><b>✅ Paid — thank you!</b> We’ll let you know when it ships.</p>'
+    : o.cancelled ? '<p style="margin:10px 0 0"><b>This order is cancelled.</b></p>'
+    : o.can_pay && o.pay_online ? `<div class="row" style="margin-top:12px"><button id="payNow">💳 Pay now — ${money(o.due)}</button></div>`
+    : '<p class="muted" style="margin:10px 0 0">We’ll send you the invoice to pay.</p>';
+  return `<div class="card bk${o.paid ? ' ok' : ''}" id="order"><b>🛒 Your order</b>
+    <div style="margin-top:8px">${sumRows(rows, o.total)}</div>
+    ${o.ship_to ? `<p class="muted" style="margin:8px 0 0">Ship to: ${esc(o.ship_to)}</p>` : ''}
+    ${state}<p id="ordErr" class="err"></p></div>`;
+}
+// ── the booking on the status page (booking-spec.md §3, §7a) ───────────────
+function bookingCard(b) {
+  if (!b) return '';
+  const ok = b.state === 'scheduled' || b.state === 'reschedule';
+  const ics = b.ics ? '<button class="ghost" id="bkIcs">📅 Add to my calendar</button>' : '';
+  const cancel = b.can_cancel ? '<button class="bad" id="bkCancel">Cancel booking</button>' : '';
+  const body = {
+    pending: `<b>⏳ Waiting for confirmation</b><p>We're holding <b>${esc(b.waiting_for)}</b> for you (arrival window).
+      We'll confirm it or suggest another time shortly.</p><div class="row">${cancel}</div>`,
+    suggested: `<b>We'd like to come ${esc(b.suggested)} instead</b><p class="muted">That's the window we'd arrive in.</p>
+      <div class="row"><button id="bkAccept">Accept</button><button class="ghost" id="bkPick">Pick another time</button>
+      <button class="ghost" id="bkCall">Call me</button></div>`,
+    scheduled: `<b>✅ Confirmed: ${esc(b.confirmed)}</b><p class="muted">That's the window we'll arrive in.</p>
+      <div class="row">${ics}${b.can_reschedule ? '<button class="ghost" id="bkMove">Reschedule</button>' : ''}${cancel}</div>`,
+    reschedule: `<b>✅ Confirmed: ${esc(b.confirmed)}</b><p>You asked to move it to <b>${esc(b.reschedule_to)}</b> —
+      we'll confirm shortly. Your visit stays as it is until then.</p><div class="row">${ics}${cancel}</div>`,
+    requested: `<b>We'll call you to arrange your visit.</b>`,
+    declined: `<b>We couldn't book that time.</b><p class="muted">We'll be in touch to find another.</p>`,
+    cancelled: `<b>This booking is cancelled.</b>`,
+  }[b.state] || '';
+  const w = b.waitlist;                         // Phase 6: "tell me if something earlier opens"
+  const wl = !w || !['pending', 'scheduled'].includes(b.state) ? '' : w.offer
+    ? `<div id="bkOffer"><p><b>🎉 An earlier time opened: ${esc(w.offer)}</b> (arrival window). It's held for you for a
+        little while.</p><div class="row"><button id="bkTake">Take it</button>
+        <button class="ghost" id="bkUnwait">No thanks — stop waiting</button></div></div>`
+    : w.waiting ? `<p class="muted" id="bkWaiting">⏩ We'll tell you if an earlier time opens. <a href="#" id="bkUnwait">Stop</a></p>`
+    : w.can_join ? `<p class="muted"><a href="#" id="bkWait">Tell me if an earlier time opens</a></p>` : '';
+  return `<div class="card bk${ok ? ' ok' : ''}" id="booking">${body}${wl}
+    ${b.change_note && ok ? `<p class="muted" style="margin-bottom:0">${esc(b.change_note)}</p>` : ''}
+    <div id="bkWins"></div><p id="bkErr" class="err"></p></div>`;
+}
+function bindBooking(b) {
+  if (!b) return;
+  const on = (id, fn) => { const e = $(id); if (e) e.addEventListener('click', fn); };
+  const post = (what, body) => act(async () => {
+    try { await call('POST', `/t/${P.token}/booking/${what}`, body || {}); }
+    catch (e) { note('#bkErr', e.message); return; }
+    await refresh(false);
+  });
+  on('#bkAccept', () => post('accept'));
+  on('#bkTake', () => post('take'));
+  on('#bkWait', e => { e.preventDefault(); post('wait'); });
+  on('#bkUnwait', e => { e.preventDefault(); post('unwait'); });
+  on('#bkCall', () => act(async () => {
+    await call('POST', `/t/${P.token}/booking/call`); note('#bkErr', "Thanks — we'll call you.", true);
+  }));
+  on('#bkCancel', () => { if (confirm('Cancel this booking?')) post('cancel'); });
+  on('#bkIcs', () => act(async () => {
+    const blob = await call('GET', `/t/${P.token}/visit.ics`);
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'visit.ics';
+    document.body.appendChild(a); a.click(); a.remove();
+  }));
+  const choose = what => async () => {        // pick another time / reschedule: one window
+    const box = $('#bkWins'); L.busy++;       // no background redraw while choosing
+    let ws;
+    try { ws = (await call('GET', `/t/${P.token}/booking/windows`)).windows; }
+    catch (e) { L.busy--; note('#bkErr', e.message); return; }
+    box.innerHTML = `<label>Pick a new arrival window</label>${winList(ws, [], 0)}
+      <p><a href="#" id="bkNotNow">Not now</a></p>`;
+    $('#bkNotNow').addEventListener('click', e => { e.preventDefault(); box.innerHTML = ''; L.busy--; });
+    box.querySelectorAll('[data-win]').forEach(x => x.addEventListener('click', () => {
+      const w = ws.find(v => v.key === x.dataset.win);
+      if (!confirm(`Ask for ${w.label}?`)) return;
+      L.busy--; post(what, { window_key: w.key });
+    }));
+  };
+  on('#bkPick', choose('pick'));
+  on('#bkMove', choose('reschedule'));
 }
 function move(to, reason) {
   return act(async () => { await call('POST', `/t/${P.token}/state`, { to_state: to, reason }); await refresh(false); });

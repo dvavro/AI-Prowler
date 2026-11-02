@@ -37,7 +37,12 @@ KNOWN_OTHER = {
     "photos": {"getElementById": "SAFE",          # 📷 Add Photos / 📎 Add Files (open the picker)
                "uploadBtn": "WRITE"},
     "messages": {"sendSmsBtn": "GUARDED", "checkSMSReplies": "SAFE"},
-    "reports": {"refreshReportsBtn": "SAFE", "findStaleCustomers": "SAFE"},
+    "reports": {"refreshReportsBtn": "SAFE", "findStaleCustomers": "SAFE",
+                # the 🚗 Mileage report card — only shown when mileage tracking is available (found by the
+                # coverage check in the --sandbox run, 2026-10-31); each one is clicked for real in test_mileage_e2e:
+                "loadMileageReport": "SAFE",     # Run — MI-10
+                "miExport": "SAFE",              # PDF / Excel / CSV — MI-09
+                "miReview": "SAFE"},             # Review with AI (read-only review; Fix / Skip) — MI-08
     "profile": {"profile-signout": "SAFE"},
 }
 SMS_ON = "✅ SMS is configured (E2E fake)"

@@ -649,6 +649,10 @@ html,body{height:100%;background:var(--bg);color:var(--text);
                 <option value="5">Saturday</option>
                 <option value="6">Sunday</option>
               </select>
+              <div style="font-size:11px;color:var(--dim);margin:8px 0 4px">Time of day</div>
+              <input id="ntRunTime" type="time" value="09:00"
+                style="width:100%;background:var(--surface);border:1px solid var(--border);
+                border-radius:8px;padding:10px 12px;color:var(--text);font-size:14px;outline:none;">
             </div>
 
             <!-- Daily-only settings: start/end time and how many evenly-
@@ -681,9 +685,14 @@ html,body{height:100%;background:var(--bg);color:var(--text);
               </div>
               <div id="ntDailyPreview" style="font-size:12px;color:var(--accent)"></div>
               <div id="ntDailyCostWarn" style="display:none;font-size:11px;color:var(--red)">
-                &#9888; More runs per day uses more of your subscription/API usage each time the Autonomous AI Task Queue checks in.
+                &#9888; Each run is one AI call on your Agent API Key (a few cents) when Auto-run is on — more runs per day cost more.
               </div>
             </div>
+
+            <!-- 2026-11-01: each task has its own schedule (no queue) -->
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;">
+              <input type="checkbox" id="ntAutoRun" checked> &#9201; Auto-run — AI-Prowler runs it when due, on the Agent API Key (a few cents a run)
+            </label>
 
             <div style="display:flex;flex-direction:column;gap:6px;font-size:13px;">
               <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -719,23 +728,19 @@ html,body{height:100%;background:var(--bg);color:var(--text);
         </div>
       </div>
 
-      <!-- Queue Status Panel -->
+      <!-- Up next: due / running-soon tasks (2026-11-01: no queue — each task has its own schedule) -->
       <div class="card" id="queuePanel" style="border-color:rgba(155,93,229,.3);background:rgba(155,93,229,.05)">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
           <div style="font-size:12px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;flex:1">
-            &#9654; Task Queue
+            &#9201; Up next
           </div>
           <span id="queueCount" style="font-size:11px;color:var(--dim)">Loading&#8230;</span>
-          <button id="queueClearBtn" onclick="clearQueue()" style="display:none;
-            background:none;border:1px solid var(--red);color:var(--red);
-            border-radius:6px;padding:2px 10px;font-size:11px;cursor:pointer">
-            &#128465; Clear All
-          </button>
         </div>
         <div id="queueItems"><div class="spinner" style="margin:8px auto"></div></div>
       </div>
 
-      <!-- Custom tasks (queue status shown inline per task) -->
+      <!-- Tasks (each with its own schedule) -->
+
       <div id="taskList"><div class="spinner"></div></div>
     </div>
 
@@ -906,11 +911,9 @@ function boot() {
       var b=e.target.closest('button[data-action]'); if(!b)return;
       var a=b.getAttribute('data-action'),id=b.getAttribute('data-id');
       dbg('Button clicked: action='+a+' id='+id,'#44aaff');
-      if(a==='queue')        runTaskNow(id);
+      if(a==='queue')        runTaskNow(id);   // ▶ Run now (name kept)
       if(a==='edit')         editTask(id);
       if(a==='delete')       deleteTask(id);
-      if(a==='remove')       removeFromQueue(id);
-      if(a==='remove-queue') removeFromQueue(id);
     });
   })();
   loadTasks();
@@ -2069,38 +2072,29 @@ async function loadTasks() {
   await loadAllTasks();
 }
 
+// 2026-11-01: "Up next" — the tasks that are due or set to run now (there is no queue: each task has
+// its own schedule). Auto-run tasks are run by AI-Prowler itself; the rest by a chat.
 function renderQueuePanel(items) {
   const countEl  = document.getElementById('queueCount');
   const itemsEl  = document.getElementById('queueItems');
-  const clearBtn = document.getElementById('queueClearBtn');
   if (!countEl || !itemsEl) return;
-  if (!items || !items.length) {
-    countEl.textContent = 'Empty';
-    if (clearBtn) clearBtn.style.display = 'none';
-    itemsEl.innerHTML = '<div style="font-size:12px;color:var(--dim);padding:4px 0">No tasks in queue. Tap &#9654; Queue on any task to add it.</div>';
+  items = (items || []).filter(function(t){ return t.status === 'running soon' || t.status === 'due'; });
+  if (!items.length) {
+    countEl.textContent = 'Nothing due';
+    itemsEl.innerHTML = '<div style="font-size:12px;color:var(--dim);padding:4px 0">Nothing due right now. Tasks run on their own schedules — tap &#9654; Run now on any task to run it once.</div>';
     return;
   }
-  countEl.textContent = items.length + ' item' + (items.length > 1 ? 's' : '') + ' queued';
-  if (clearBtn) clearBtn.style.display = 'inline-block';
+  countEl.textContent = items.length + ' task' + (items.length > 1 ? 's' : '');
   itemsEl.innerHTML = items.map(function(t) {
-    const ago = t.queued_at ? _timeAgo(t.queued_at) : (t.created_at ? _timeAgo(t.created_at) : '');
-    // Date-only, no time — next_due for weekly/monthly/one-time tasks
-    // has no real time-of-day component (see _parseFlexDate above), so
-    // showing hour:minute here was always displaying a fabricated time
-    // that never existed in the underlying data.
-    const due = t.next_due ? _parseFlexDate(t.next_due).toLocaleDateString([], {month:'numeric',day:'numeric'}) : '';
-    const isPastDue = t.next_due && _parseFlexDate(t.next_due) <= new Date();
+    const who = t.status === 'running soon' || t.auto_run ? 'AI-Prowler runs it' : 'a chat runs it';
     return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">' +
-      '<span style="font-size:14px">&#9654;</span>' +
+      '<span style="font-size:14px">' + (t.status === 'running soon' ? '&#9654;' : '&#9888;') + '</span>' +
       '<div style="flex:1;min-width:0">' +
         '<div style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(t.label || t.task_id) + '</div>' +
-        '<div style="font-size:11px;color:var(--dim);display:flex;gap:8px;flex-wrap:wrap">' +
-          (ago ? '<span>Queued ' + ago + '</span>' : '') +
-          (due ? '<span style="color:' + (isPastDue ? 'var(--green)' : 'var(--dim)') + '">&#128197; Due ' + due + '</span>' : '') +
+        '<div style="font-size:11px;color:var(--dim)">' +
+          (t.status === 'running soon' ? 'Running soon' : 'Due') + ' · ' + who +
         '</div>' +
       '</div>' +
-      '<button data-action="remove-queue" data-id="' + esc(t.task_id) + '" ' +
-        'style="background:none;border:1px solid var(--border);color:var(--dim);border-radius:5px;padding:2px 8px;font-size:11px;cursor:pointer;flex-shrink:0">&#10005;</button>' +
     '</div>';
   }).join('');
 }
@@ -2159,41 +2153,37 @@ function renderTaskCard(t, isDue) {
   const lastRun = t.last_run ? _parseFlexDate(t.last_run).toLocaleDateString() : null;
   const statusOk = t.last_status === 'completed';
   const qEntry = _pendingBySourceId[t.task_id];
-  const inQueue = !!qEntry;
-  const qDue = qEntry && qEntry.next_due ? _parseFlexDate(qEntry.next_due).toLocaleDateString() : null;
-  const queuedAgo = qEntry && qEntry.queued_at ? _timeAgo(qEntry.queued_at) : null;
+  const runSoon = !!(qEntry && qEntry.status === 'running soon');
   const badges = [];
+  if (t.auto_run)         badges.push('<span style="font-size:10px;color:var(--green)">&#9201; Auto-run</span>');
   if (t.output_email)     badges.push('<span style="font-size:10px;color:var(--dim)">&#128140; Email</span>');
   if (t.output_learnings) badges.push('<span style="font-size:10px;color:var(--dim)">&#129504; Learnings</span>');
   if (t.output_report)    badges.push('<span style="font-size:10px;color:var(--dim)">&#128196; Report</span>');
-  const queueBanner = inQueue
-    ? '<div style="font-size:11px;color:var(--yellow);margin-top:4px;display:flex;align-items:center;gap:6px">' +
-        '<span>&#9654; In queue</span>' +
-        (queuedAgo ? '<span style="color:var(--dim2)">' + esc(queuedAgo) + '</span>' : '') +
-        (qDue ? '<span style="color:var(--dim)">&#128197; Due ' + esc(qDue) + '</span>' : '') +
-        '<button data-action="remove-queue" data-id="' + esc(qEntry.task_id) + '" ' +
-          'style="background:none;border:1px solid var(--dim2);color:var(--dim);border-radius:5px;padding:1px 7px;font-size:10px;cursor:pointer;margin-left:4px">&#10005; Remove</button>' +
-      '</div>'
-    : '';
+  const cost = (typeof t.last_cost_usd === 'number' && t.last_cost_usd) ? ' · $' + t.last_cost_usd.toFixed(4) : '';
+  const statusLine = runSoon
+    ? '<div style="font-size:11px;color:var(--yellow);margin-top:4px">&#9654; Running soon</div>'
+    : (t.last_skip && t.last_skip.why
+        ? '<div style="font-size:11px;color:var(--yellow);margin-top:4px">Waiting: ' + esc(t.last_skip.why) + '</div>'
+        : '');
   return '<div style="padding:10px 0;border-bottom:1px solid var(--border)" data-task-id="' + esc(t.task_id) + '">' +
     '<div style="display:flex;align-items:flex-start;gap:8px">' +
       '<div style="flex:1;min-width:0">' +
         '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px">' +
           '<span style="font-size:14px;font-weight:700">' + esc(t.label) + '</span>' +
           '<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;background:rgba(0,0,0,.3);color:' + schedColor + '">' + schedLabel + '</span>' +
-          (isDue ? '<span style="font-size:10px;font-weight:700;color:var(--red)">&#9888; OVERDUE</span>' : '') +
+          (isDue ? '<span style="font-size:10px;font-weight:700;color:var(--red)">&#9888; DUE</span>' : '') +
         '</div>' +
         '<div style="font-size:11px;color:var(--dim);display:flex;gap:10px;flex-wrap:wrap">' +
           (nextDue && !isDue ? '<span>Next: ' + esc(nextDue) + '</span>' : '') +
-          (lastRun ? '<span>' + (statusOk ? '&#10003;' : '&#9888;') + ' Last: ' + esc(lastRun) + '</span>' : '') +
+          (lastRun ? '<span>' + (statusOk ? '&#10003;' : '&#9888;') + ' Last: ' + esc(lastRun) + esc(cost) + '</span>' : '') +
           badges.join('') +
         '</div>' +
-        queueBanner +
+        statusLine +
       '</div>' +
       '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">' +
         '<button data-action="queue" data-id="' + esc(t.task_id) + '" ' +
-          'style="background:' + (inQueue ? 'var(--dim2)' : 'var(--accent)') + ';border:none;color:#fff;border-radius:6px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">' +
-          '&#9654; ' + (inQueue ? 'Re-Queue' : 'Queue') + '</button>' +
+          'style="background:' + (runSoon ? 'var(--dim2)' : 'var(--accent)') + ';border:none;color:#fff;border-radius:6px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">' +
+          '&#9654; Run now</button>' +
         '<button data-action="edit" data-id="' + esc(t.task_id) + '" ' +
           'style="background:var(--surface);border:1px solid var(--accent);color:var(--accent);border-radius:6px;padding:3px 12px;font-size:11px;cursor:pointer;white-space:nowrap">' +
           '&#9998; Edit</button>' +
@@ -2218,22 +2208,20 @@ function _timeAgo(iso) {
   } catch(e) { return ''; }
 }
 
-// No "Sync" here on purpose (David, 2026-09-30). The old syncTasks() called
-// sync_due_tasks_to_queue — a bulk "queue every due task" the server removed,
-// since one tap could start several AI runs (credits) at once. The queue is
-// filled one task at a time with Run now; the top-bar ↻ refreshes the lists.
-// (RM-R-006 had turned it into a plain refresh; nothing ever called it, so it's gone.)
+// No "Sync" here on purpose (David, 2026-09-30): one tap must never start several AI runs at once.
+// 2026-11-01: no queue — ▶ Run now asks AI-Prowler to run this one task (queue_single_task, name kept):
+// it starts within about a minute on the Agent API Key; with no key saved it waits for a chat.
 
 async function runTaskNow(taskId) {
-  dbg('Queue button clicked: taskId=' + taskId, '#44aaff');
-  toast('⏳ Queuing task…');
+  dbg('Run now clicked: taskId=' + taskId, '#44aaff');
+  toast('⏳ Asking AI-Prowler to run it…');
   try {
     const r = await api('queue_single_task', { task_id: taskId });
     dbg('queue_single_task result: ok=' + r.ok + ' result=' + JSON.stringify(r).slice(0,100));
     if (r.ok) {
-      toast('✅ ' + (r.result || 'Task queued').slice(0,80));
+      toast('✅ ' + (r.result || 'It will run within about a minute').slice(0,90));
     } else {
-      toast('❌ ' + (r.error || 'Failed to queue task'));
+      toast('❌ ' + (r.error || 'Could not start the task'));
     }
     await loadTasks();
   } catch(e) {
@@ -2269,6 +2257,8 @@ async function editTask(taskId) {
     document.getElementById('ntDailyStart').value = t.daily_start_time || '09:00';
     document.getElementById('ntDailyEnd').value   = t.daily_end_time   || '17:00';
     document.getElementById('ntDailyTimes').value = t.daily_times_per_day || 1;
+    document.getElementById('ntRunTime').value = t.run_time || '09:00';
+    document.getElementById('ntAutoRun').checked = !!t.auto_run;
     if (t.next_due) {
       // Not just a display bug here — this populates an editable date
       // input. With the old UTC-then-local-shift bug, opening the edit
@@ -2309,34 +2299,9 @@ async function deleteTask(taskId) {
   } catch(e) { toast('❌ Error: ' + String(e)); }
 }
 
-async function removeFromQueue(taskId) {
-  dbg('Remove from queue: taskId=' + taskId, '#44aaff');
-  try {
-    const r = await api('delete_analysis_task', { task_id: taskId });
-    dbg('delete_analysis_task result: ok=' + r.ok + ' ' + JSON.stringify(r).slice(0,80));
-    if (r.ok) {
-      toast('✅ Removed from queue');
-      await loadTasks();
-    } else {
-      toast('❌ ' + (r.error || 'Failed to remove'));
-    }
-  } catch(e) { toast('❌ Error: ' + String(e)); }
-}
-
-async function clearQueue() {
-  const count = Object.keys(_pendingBySourceId).length;
-  if (!confirm('Remove all ' + count + ' items from the queue?')) return;
-  const ids = Object.values(_pendingBySourceId).map(function(t){ return t.task_id; });
-  let removed = 0;
-  for (let i = 0; i < ids.length; i++) {
-    try {
-      const r = await api('delete_analysis_task', { task_id: ids[i] });
-      if (r.ok) removed++;
-    } catch(e) {}
-  }
-  toast('✅ Cleared ' + removed + ' item' + (removed !== 1 ? 's' : '') + ' from queue');
-  await loadTasks();
-}
+// 2026-11-01: there is no queue — every task has its own schedule, so there's nothing to "remove from
+// the queue" or "clear". 🗑 Delete removes a task; ⏱ Auto-run (in the task form) decides whether
+// AI-Prowler runs it on its own.
 
 // New/Edit task form
 let _editingTaskId = null;
@@ -2449,6 +2414,8 @@ function cancelNewTask() {
   document.getElementById('ntDailyStart').value = '09:00';
   document.getElementById('ntDailyEnd').value = '17:00';
   document.getElementById('ntDailyTimes').value = '1';
+  document.getElementById('ntRunTime').value = '09:00';
+  document.getElementById('ntAutoRun').checked = true;
   document.getElementById('ntLearnings').checked = true;
   document.getElementById('ntReport').checked = false;
   document.getElementById('ntEmail').checked = false;
@@ -2505,12 +2472,15 @@ async function submitNewTask() {
   if (schedule === 'weekly' || schedule === 'biweekly' || schedule === 'monthly') {
     // "" (Not pinned) -> None/unpinned; a digit string -> that weekday.
     args.schedule_day_of_week = dayOfWeek === '' ? null : parseInt(dayOfWeek, 10);
+    args.run_time = document.getElementById('ntRunTime').value || '09:00';
   }
   if (schedule === 'daily') {
     args.daily_start_time = dailyStart;
     args.daily_end_time = dailyEnd;
     args.daily_times_per_day = dailyTimes;
   }
+  // 2026-11-01: each task has its own schedule; ⏱ Auto-run = AI-Prowler runs it when due.
+  args.auto_run = schedule !== 'none' && document.getElementById('ntAutoRun').checked;
   try {
     let r;
     if (_editingTaskId) {

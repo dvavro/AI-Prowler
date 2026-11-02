@@ -472,6 +472,9 @@ _KNOWN_DROPDOWNS = {
                        "Quarterly", "Semi-Annually", "Annually", "One-time"],
         "Schedule Type": ["Soft", "Hard"],  # 2026-10-04: per-customer Soft/Hard default
         "Status Active/Inactive": ["Active", "Inactive"],
+        # 2026-11-02: Off = never email / text this customer (they use their own system)
+        "Email Messages On/Off": ["On", "Off"],
+        "Text Messages On/Off": ["On", "Off"],
     },
     "Invoices": {
         "Payment Status": ["Unpaid", "Partial", "Paid", "Cash", "Check",

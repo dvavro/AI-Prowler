@@ -271,15 +271,20 @@ def test_SP_13_mcp_writable_allowlist_hammer(mcp_files, tmp_path):
     assert not _temps(f["_WRITABLE_DIRS_FILE"])
 
 
-def test_SP_14_mcp_pending_tasks_and_licence_cache(mcp_files):
+def test_SP_14_mcp_tasks_and_licence_cache(mcp_files, tmp_path, monkeypatch):
+    # 2026-11-01: no pending_tasks.json queue — tasks live in custom_analysis_tasks.json (atomic save)
+    import custom_tasks_manager as ctm
     mcp, f = mcp_files
-    tasks = [{"task_id": "ZTEST-1", "status": "pending", "note": "caf\u00e9"}]
-    mcp._save_pending_tasks(tasks)
-    assert mcp._load_pending_tasks() == tasks
-    assert "caf\u00e9" in f["_PENDING_TASKS_FILE"].read_text(encoding="utf-8")   # ensure_ascii=False kept
+    p = tmp_path / "custom_analysis_tasks.json"
+    monkeypatch.setattr(ctm, "CUSTOM_TASKS_PATH", p)
+    tasks = [{"task_id": "ZTEST-1", "label": "café", "schedule": "none"}]
+    assert ctm.save_custom_tasks(tasks) is True
+    assert ctm.load_custom_tasks() == tasks
+    assert "café" in p.read_text(encoding="utf-8")                  # ensure_ascii=False kept
+    assert not hasattr(mcp, "_save_pending_tasks")
     mcp._save_license_cache_for("ZTEST-KEY", {"tier": "x"})
     assert mcp._load_license_cache_for("ZTEST-KEY").get("tier") == "x"
-    assert not _temps(f["_PENDING_TASKS_FILE"]) and not _temps(f["_LICENSE_CACHE_PATH"])
+    assert not _temps(p) and not _temps(f["_LICENSE_CACHE_PATH"])
 
 
 def test_SP_15_mcp_file_tools_write_atomically_and_fall_back(tmp_path):
@@ -306,10 +311,11 @@ def test_SP_16_task_queue_config_and_key_atomic(tmp_path):
         tqa.save_config(c)
         assert tqa.load_config().get("ztest_marker") == 1
         assert not _temps(cfg)
-    # conftest points the key paths into tmp_path
-    tqa.save_api_key("sk-ztest-not-a-real-key")
-    assert tqa.api_key_path("anthropic").read_text(encoding="utf-8") == "sk-ztest-not-a-real-key"
-    assert not _temps(tqa.api_key_path("anthropic"))
+    # 2026-11-01: the Task Queue has no keys of its own any more — it runs on the Agent API Key
+    prov = pytest.importorskip("desk_agent_providers")          # conftest points AGENT_KEY_DIR into tmp_path
+    prov.store_agent_key("sk-ztest-not-a-real-key", "anthropic")
+    assert prov.agent_key_path("anthropic").read_text(encoding="utf-8") == "sk-ztest-not-a-real-key"
+    assert not _temps(prov.agent_key_path("anthropic"))
 
 
 # ── custom tasks / scheduler / learnings / mobile activator ──────────────────

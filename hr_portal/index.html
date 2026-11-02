@@ -2203,6 +2203,12 @@
               </div>
               <div id="portal-detail-meta" style="font-size:11px;color:var(--muted);margin-bottom:14px"></div>
               <div id="portal-detail-body" style="font-size:13px;color:var(--text);white-space:pre-wrap;line-height:1.7;background:var(--surface);padding:14px;border-radius:8px;margin-bottom:18px"></div>
+              <!-- HR agent (2026-10-31): an answer from HR's virtual assistant can be handed to a person -->
+              <div id="portal-detail-person" data-testid="portal-talk-to-person" style="display:none;margin:-6px 0 16px">
+                <button id="portal-person-btn" onclick="talkToPerson()"
+                  style="padding:9px 14px;background:transparent;color:var(--accent);border:1px solid var(--accent);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">🙋 Talk to a person</button>
+                <div id="portal-person-note" style="display:none;font-size:12px;color:var(--muted);margin-top:6px"></div>
+              </div>
 
               <div style="border-top:1px solid var(--border);padding-top:16px">
                 <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px">↩ Reply</div>
@@ -5195,7 +5201,14 @@ async function loadPortalMessages() {
       const dataMine = await resMine.json();
       const replied = (dataMine.messages||[])
         .filter(m => m.reply && !getDismissedPortalMsgs().includes(m.id))
-        .map(m => ({ id: m.id, subject: 'Re: ' + (m.subject || 'your message'), body: m.reply, sent_at: m.replied_at || m.sent_at }));
+        .map(m => ({ id: m.id, subject: 'Re: ' + (m.subject || 'your message'), body: m.reply, sent_at: m.replied_at || m.sent_at,
+                     reply_by: m.reply_by || 'hr', needs_person: !!m.needs_person, assistant_reply: m.assistant_reply || '' }));
+      // A question still waiting for an answer from a person (asked for one, or sensitive) shows too
+      const waiting = (dataMine.messages||[])
+        .filter(m => !m.reply && m.needs_person && !getDismissedPortalMsgs().includes(m.id))
+        .map(m => ({ id: m.id, subject: m.subject || 'Your question', body: '🙋 A person from HR will answer this here.',
+                     sent_at: m.needs_person_at || m.sent_at, reply_by: 'waiting', needs_person: true }));
+      replied.push(...waiting);
       msgs = msgs.concat(replied);
     } catch(e) {}
     msgs = msgs.slice().sort((a,b) => new Date(b.sent_at) - new Date(a.sent_at));
@@ -5214,7 +5227,7 @@ async function loadPortalMessages() {
           onmouseover="this.style.opacity='1';this.style.color='#f85149'" onmouseout="this.style.opacity='.5';this.style.color='var(--muted)'">🗑</button>
         <div onclick="openPortalMsg(${JSON.stringify(m).replace(/"/g,'&quot;')})" style="cursor:pointer;padding-right:24px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
-            <div style="font-size:12px;font-weight:600;color:var(--accent)">📤 From HR Admin</div>
+            <div style="font-size:12px;font-weight:600;color:var(--accent)">${m.reply_by === 'assistant' ? '🤖 HR\'s virtual assistant' + (m.needs_person ? ' · 🙋 a person will follow up' : '') : m.reply_by === 'waiting' ? '🙋 Waiting for HR' : '📤 From HR Admin'}</div>
             <div style="font-size:11px;color:var(--muted)">${new Date(m.sent_at).toLocaleString()}</div>
           </div>
           <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:3px">${m.subject||'(No subject)'}</div>
@@ -5247,13 +5260,53 @@ function openPortalMsg(m) {
   if (typeof m === 'string') m = JSON.parse(m);
   _currentPortalMsg = m;
   document.getElementById('portal-detail-subject').textContent = m.subject || '(No subject)';
-  document.getElementById('portal-detail-meta').textContent = 'From HR Admin · ' + new Date(m.sent_at).toLocaleString();
-  document.getElementById('portal-detail-body').textContent = m.body || '';
+  const who = m.reply_by === 'assistant' ? "HR's virtual assistant" : m.reply_by === 'waiting' ? 'Waiting for HR' : 'From HR Admin';
+  document.getElementById('portal-detail-meta').textContent = who + ' · ' + new Date(m.sent_at).toLocaleString();
+  document.getElementById('portal-detail-body').textContent =
+    (m.assistant_reply && m.reply_by !== 'assistant' ? "Earlier, from HR's virtual assistant:\n" + m.assistant_reply + '\n\n— — —\n\n' : '') + (m.body || '');
+  _showTalkToPerson(m);
   const replyBox = document.getElementById('portal-reply-box');
   if (replyBox) replyBox.value = '';
   const fb = document.getElementById('portal-reply-feedback');
   if (fb) fb.style.display = 'none';
   document.getElementById('portal-msg-detail').style.display = 'flex';
+}
+
+// ── HR agent (2026-10-31, hr-agent-spec.md §7): "Talk to a person" on every assistant answer ──
+function _showTalkToPerson(m) {
+  const box = document.getElementById('portal-detail-person');
+  const btn = document.getElementById('portal-person-btn');
+  const note = document.getElementById('portal-person-note');
+  if (!box) return;
+  const isAssistant = m && m.reply_by === 'assistant';
+  box.style.display = isAssistant ? 'block' : 'none';
+  if (!isAssistant) return;
+  btn.style.display = m.needs_person ? 'none' : '';
+  note.style.display = m.needs_person ? 'block' : 'none';
+  note.textContent = m.needs_person ? '🙋 You asked for a person — HR will reply here.' : '';
+}
+
+async function talkToPerson() {
+  if (!_currentPortalMsg) return;
+  const btn = document.getElementById('portal-person-btn');
+  const note = document.getElementById('portal-person-note');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/hr-api/messages/talk-to-person', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Employee-Session': JSON.stringify(authState.session) },
+      body: JSON.stringify({ id: _currentPortalMsg.id })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Failed');
+    _currentPortalMsg.needs_person = true;
+    _showTalkToPerson(_currentPortalMsg);
+    loadPortalMessages();
+  } catch (e) {
+    note.style.display = 'block';
+    note.textContent = '❌ Could not reach HR — please try again, or send HR a message.';
+  }
+  btn.disabled = false;
 }
 
 async function sendPortalReply() {
@@ -5746,13 +5799,53 @@ function sendHelpAiMsg(prefill) {
     </div>`);
   messages.scrollTop = messages.scrollHeight;
 
-  setTimeout(function() {
+  setTimeout(async function() {
     const reply = hrAiAnswer(question);
     const el = document.getElementById(thinkId);
     if (el) el.querySelector('div:last-child').innerHTML = reply;
     if (btn) { btn.textContent = 'Send ↑'; btn.disabled = false; }
     messages.scrollTop = messages.scrollHeight;
+    // HR agent (2026-10-31): when HR's assistant answers questions, offer a real answer from the
+    // handbook — it arrives in Messages (HR checks it first if the owner chose that).
+    const a = await _hrAssistantInfo();
+    if (a && a.answers_on && el) {
+      _helpAskQ[thinkId] = question;
+      el.querySelector('div:last-child').insertAdjacentHTML('beforeend',
+        `<div style="margin-top:10px"><button data-testid="help-ask-assistant" onclick="askHrAssistant('${thinkId}', this)"
+          style="padding:7px 12px;background:var(--accent);color:#0d1117;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer">📨 Ask HR's assistant — answer comes to Messages</button></div>`);
+      messages.scrollTop = messages.scrollHeight;
+    }
   }, 600);
+}
+
+const _helpAskQ = {};
+let _hrAssistantCache = null;
+async function _hrAssistantInfo() {
+  if (_hrAssistantCache && Date.now() - _hrAssistantCache.at < 60000) return _hrAssistantCache.v;
+  try {
+    const res = await fetch('/hr-api/assistant', { headers: { 'X-Employee-Session': JSON.stringify(authState.session) } });
+    const v = res.ok ? await res.json() : null;
+    _hrAssistantCache = { at: Date.now(), v: v };
+    return v;
+  } catch (e) { return null; }
+}
+
+async function askHrAssistant(key, btn) {
+  const q = _helpAskQ[key];
+  if (!q) return;
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const res = await fetch('/hr-api/ai-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Employee-Session': JSON.stringify(authState.session) },
+      body: JSON.stringify({ message: q, ask_assistant: true })
+    });
+    const data = await res.json();
+    btn.parentElement.innerHTML = '<div style="font-size:12px;color:var(--text);margin-top:4px">' + escHtml(data.reply || 'Sent.') + '</div>';
+    delete _helpAskQ[key];
+  } catch (e) {
+    btn.disabled = false; btn.textContent = '📨 Try again';
+  }
 }
 </script>
 <!-- FEEDBACK MODAL -->

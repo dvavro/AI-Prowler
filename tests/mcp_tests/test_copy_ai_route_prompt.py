@@ -198,19 +198,13 @@ def test_CR10_bad_date_and_codes_persist(mcp_mod, env):
     assert saved[code]["route_date"] == DAY and saved[code]["crew"] == ""
 
 
-def test_CR11_claude_cli_wrappers_are_strict(tmp_path, monkeypatch):
-    # The Claude CLI AI Route wrapper is gone (2026-10-22); the task-queue
-    # wrappers that remain use ONLY AI-Prowler's own config, never also the
-    # user's other Claude MCP servers (which may hold a second AI-Prowler).
+def test_CR11_no_claude_cli_wrappers_left(tmp_path, monkeypatch):
+    # The Claude CLI AI Route wrapper went 2026-10-22, and the Task Queue's CLI wrappers 2026-11-01 —
+    # the queue now runs on the Agent API Key over AI-Prowler's own tools only.
     import task_queue_automation as tqa
-    assert not hasattr(tqa, "build_ai_routing_wrapper_content")
-    cfg = str(tmp_path / "claude_mcp_config.json")
-    q = tqa.build_wrapper_script_content(cfg, "mcp__ai-prowler__*")
-    assert "--strict-mcp-config" in q and '--mcp-config "%AIP_MCP_CONFIG%"' in q
-    for use_key in (False, True):
-        s = tqa.build_single_prompt_wrapper_content("hi", cfg, "mcp__ai-prowler__*", use_api_key=use_key)
-        assert "--strict-mcp-config" in s
-        assert "{mcp_config_path}" not in s and "{allowed_tools}" not in s
+    for gone in ("build_ai_routing_wrapper_content", "build_wrapper_script_content",
+                 "build_single_prompt_wrapper_content"):
+        assert not hasattr(tqa, gone), gone
 
 
 def test_CR12_jobs_app_button_and_allow_lists():

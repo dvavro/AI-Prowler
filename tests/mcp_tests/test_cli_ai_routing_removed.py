@@ -268,25 +268,15 @@ def tq(tmp_path, monkeypatch):
     h = tmp_path / ".ai-prowler"
     h.mkdir()
     monkeypatch.setattr(t, "AI_PROWLER_HOME", h)
-    monkeypatch.setattr(t, "RUNNING_SERVER_MCP_CONFIG_PATH", h / "claude_mcp_config_running.json")
     monkeypatch.setattr(t, "AI_PROWLER_CONFIG_PATH", h / "config.json")
     monkeypatch.setattr(t, "STATUS_PATH", h / "task_automation_last_run.json")
     monkeypatch.setattr(t, "AUDIT_LOG_PATH", h / "autonomous_run_audit.log")
-    # Never start the real app from a test; never wait for real.
-    monkeypatch.setattr(t, "_ai_prowler_app_running", lambda: False)
-    monkeypatch.setattr(t, "_start_ai_prowler_app", lambda: (False, "mocked"))
-    _fake_clock(monkeypatch, t)
     return t, h
 
 
-def _fake_clock(monkeypatch, t):
-    """time.sleep advances a fake clock, so 5-minute waits finish instantly."""
-    now = [1_000_000.0]
-    monkeypatch.setattr(t.time, "time", lambda: now[0])
-    monkeypatch.setattr(t.time, "sleep", lambda s: now.__setitem__(0, now[0] + s))
-
-
-def test_D1_running_server_is_used_with_the_owners_bearer_token(tq, monkeypatch):
+def test_D1_running_server_is_checked_with_the_owners_bearer_token(tq, monkeypatch):
+    """2026-11-01: the Task Queue's AI calls AI-Prowler's tools over the running AI-Prowler's local
+    connection, signed in with the owner's Bearer Token — never a second copy."""
     t, h = tq
     (h / "config.json").write_text(json.dumps({"remote_token": "OWNER-TOKEN"}), encoding="utf-8")
 
@@ -297,81 +287,36 @@ def test_D1_running_server_is_used_with_the_owners_bearer_token(tq, monkeypatch)
     seen = []
     import urllib.request
     monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=0: (seen.append(req), _Resp())[1])
-    path = t.scheduled_run_mcp_config()
-    assert path == str(h / "claude_mcp_config_running.json")
-    cfg = json.loads(Path(path).read_text(encoding="utf-8"))["mcpServers"]["ai-prowler"]
-    assert cfg["url"] == "http://localhost:8000/mcp" and cfg["headers"]["Authorization"] == "Bearer OWNER-TOKEN"
-    assert "command" not in cfg                                    # never a second copy
-    assert seen and seen[0].full_url == "http://localhost:8000/health"
+    assert t._bearer_token() == "OWNER-TOKEN"
+    assert t._server_answers(t._bearer_token()) is True
+    assert seen[0].full_url == "http://localhost:8000/health"
     assert seen[0].get_header("Authorization") == "Bearer OWNER-TOKEN"
-    assert not (h / "claude_mcp_config_now.json").exists()          # the ▶ NOW file is left alone
 
 
-def test_D2_nothing_running_means_skipped_not_a_second_copy(tq, monkeypatch):
+def test_D2_nothing_running_means_no_answer(tq, monkeypatch):
     t, h = tq
-    (h / "config.json").write_text(json.dumps({"remote_token": "T"}), encoding="utf-8")
     import urllib.request
 
     def refuse(*a, **k):
         raise OSError("refused")
     monkeypatch.setattr(urllib.request, "urlopen", refuse)
-    monkeypatch.setattr(t, "SERVER_START_WAIT_SEC", 0)
-    ok, why = t.connect_to_running_ai_prowler(wait_sec=0)
-    assert ok is False and "isn't running" in why
-    assert t.scheduled_run_mcp_config() == "NO_SERVER"
-    assert "skipped" in (h / "last_headless_run.json").read_text(encoding="utf-8").lower()
+    assert t._server_answers("T") is False
 
 
 def test_D3_no_bearer_token_means_no_run(tq):
     t, h = tq
-    assert t.scheduled_run_mcp_config() == "NO_SERVER"               # no config.json at all
-    assert "Bearer Token" in json.loads((h / "task_automation_last_run.json").read_text(encoding="utf-8"))["detail"]
+    assert t._bearer_token() == ""
+    assert "Bearer Token" in t.NO_REMOTE_ACCESS_MSG
 
 
-def test_D4_no_stdio_path_is_left_in_the_code():
-    """The stdio config writers and the stdio Grok client are gone for good."""
+def test_D4_no_stdio_or_cli_path_is_left_in_the_code():
+    """The stdio config writers, the stdio Grok client and every Claude CLI / Windows task helper are gone."""
     import task_queue_automation as t
     for gone in ("_generate_local_mcp_config", "_generate_localhost_mcp_config",
-                 "_generate_remote_mcp_config", "runtime_mcp_config", "_StdioMCPClient"):
+                 "_generate_remote_mcp_config", "runtime_mcp_config", "_StdioMCPClient",
+                 "build_wrapper_script_content", "install_scheduled_task", "claude_code_cli_installed",
+                 "open_setup_token_terminal", "load_oauth_token", "scheduled_run_mcp_config", "dry_run_check"):
         assert not hasattr(t, gone), gone
-
-
-def test_D5_queue_wrapper_picks_the_config_at_run_time(tq):
-    t, h = tq
-    bat = t.build_wrapper_script_content(r"C:\cfg\stdio.json", "mcp__ai-prowler__*")
-    assert "stdio.json" not in bat                                  # no fixed file baked in
-    assert "_t.scheduled_run_mcp_config()" in bat
-    assert '--mcp-config "%AIP_MCP_CONFIG%"' in bat and "--strict-mcp-config" in bat
-    assert bat.index("AIP_MCP_CONFIG=%%M") < bat.index("NO_SERVER") < bat.index("-p \"")
-
-
-@pytest.mark.skipif(os.name != "nt", reason="runs the generated line through cmd.exe")
-def test_D6_the_generated_lines_really_work_in_cmd(tmp_path):
-    """Runs the wrapper's AIP_MCP_CONFIG lines through cmd.exe with a fake
-    empty home (no config.json -> no Bearer Token -> NO_SERVER, nothing
-    started). Catches quoting mistakes the text checks above can't."""
-    import task_queue_automation as t
-    bat = t.build_wrapper_script_content(r"C:\cfg\stdio.json", "mcp__ai-prowler__*")
-    lines = [l for l in bat.splitlines()
-             if "AIP_MCP_CONFIG" in l and l.lstrip().lower().startswith(("set ", "for "))]
-    script = tmp_path / "pick.bat"
-    script.write_text("@echo off\r\n" + "\r\n".join(lines) + "\r\necho PICKED=%AIP_MCP_CONFIG%\r\n",
-                      encoding="utf-8")
-    fake_home = tmp_path / "home"
-    fake_home.mkdir()
-    env = dict(os.environ, USERPROFILE=str(fake_home), HOME=str(fake_home))
-    env.pop("AIPROWLER_TEST_STATE_DIR", None)
-    r = subprocess.run(["cmd", "/c", str(script)], capture_output=True, text=True, env=env, timeout=120)
-    assert "PICKED=NO_SERVER" in r.stdout, (r.stdout, r.stderr)
-    # the skip was recorded in the FAKE home, never the real one
-    assert (fake_home / ".ai-prowler" / "last_headless_run.json").exists()
-
-
-def test_D7_now_button_uses_the_running_server_and_never_starts_it():
-    i = _TQA.index("def generate_mcp_config_for_now_button")
-    body = _TQA[i:_TQA.index("\ndef ", i + 10)]
-    assert "connect_to_running_ai_prowler(" in body and "start_app=False" in body
-
 
 # ── the Grok runner's HTTP client, against a tiny local MCP-like server ───
 
@@ -525,27 +470,9 @@ def test_E5_field_crew_cannot_use_a_colleagues_address(mcp_mod, as_user, monkeyp
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# F. Personal Links & Analysis 📋 Copy / ✉ Email Token (unchanged)
+# F. (2026-11-01) the Links & Analysis 📋 Copy / ✉ Email Token buttons went with the Claude CLI
 # ══════════════════════════════════════════════════════════════════════════
 
-_LA = _GUI[_GUI.index("def _tqa_copy_token"):_GUI.index("def _tqa_on_auth_change")]
-
-
-def test_F1_copy_and_email_buttons_exist_next_to_get_renew():
-    assert 'text="📋 Copy Token"' in _LA and 'text="✉ Email Token to Me"' in _LA
-    assert _LA.index("_tqa_btn_get_token = ttk.Button") < _LA.index("_tqa_btn_copy_token = ttk.Button")
-
-
-def test_F2_copy_reads_the_saved_token_and_handles_none():
-    body = _LA[_LA.index("def _tqa_copy_token"):_LA.index("def _tqa_email_token")]
-    assert "_tqa.load_oauth_token()" in body and "clipboard_append(tok)" in body
-    assert "No Token Yet" in body and body.index("No Token Yet") < body.index("clipboard_append")
-
-
-def test_F3_email_asks_first_and_goes_only_to_the_installs_own_address():
-    body = _LA[_LA.index("def _tqa_email_token"):_LA.index("_tqa_btn_row = tk.Frame")]
-    assert "askyesno" in body and body.index("askyesno") < body.index("_send_smtp(")
-    assert '_ecfg.get("default_to")' in body and "_send_smtp(_to," in body
-    for line in body.splitlines():
-        if "messagebox." in line:
-            assert "tok" not in line.replace("Token", "")
+def test_F1_no_claude_cli_token_buttons_left():
+    for gone in ('"📋 Copy Token"', '"✉ Email Token to Me"', "Get / Renew Token", "load_oauth_token"):
+        assert gone not in _GUI, gone

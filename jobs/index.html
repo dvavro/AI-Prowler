@@ -955,6 +955,28 @@ textarea::placeholder{color:#c0c6d8}
       </div>
     </div>
 
+    <!-- 🤖 Agent (2026-10-31, jobs-agent-spec.md J3): what the Jobs agent suggested —
+         approve / edit / reject, practice results, and its settings with the Jobs flow and
+         Route flow diagrams (same colours as Service Desk). Owner and managers only (the
+         server's jobs_agent tool checks again); settings: the owner, at the server PC on a
+         server. Works with Service Desk off. -->
+    <div id="screen-agent" class="screen">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <h1 class="section-head">🤖 Agent</h1>
+        <button class="btn btn-ghost" style="width:auto;padding:8px 10px" onclick="loadAgent()" title="Refresh">↻</button>
+      </div>
+      <div class="card" style="margin-bottom:12px"><div class="card-body" id="agStatus" data-testid="agent-status">Loading…</div></div>
+      <div id="agChips" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px"></div>
+      <h3 style="margin:10px 2px 6px;font-size:15px">Waiting for your OK</h3>
+      <div id="agPending" data-testid="agent-pending"></div>
+      <h3 style="margin:16px 2px 6px;font-size:15px" id="agPracticeHead">Practice — what it would have done</h3>
+      <div id="agPractice"></div>
+      <details class="card" style="margin-top:16px" id="agSettingsBox">
+        <summary class="card-header" style="cursor:pointer"><span class="card-title">⚙️ Jobs agent settings and diagrams</span></summary>
+        <div class="card-body" id="agSettings">Loading…</div>
+      </details>
+    </div>
+
     <!-- "Reports" (2026-09-23, at the owner's request) — weekly revenue
          (actual = paid so far, from each job's invoice; projected = still
          owed, across Scheduled/In Progress/unpaid Completed work alike —
@@ -1315,6 +1337,7 @@ textarea::placeholder{color:#c0c6d8}
                 <label style="font-size:13px;color:#aaa">Job Status<br>
                   <select id="jfStatus" style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0d0d20;border:1px solid #333;color:#fff;font-size:14px">
                     <option>Unscheduled</option><option>Scheduled</option><option>In Progress</option><option>Complete</option><option>Cancelled</option>
+                    <optgroup label="Service booking"><option>Pending Approval</option><option>Suggested</option><option>Requested</option><option>Declined</option></optgroup>
                   </select></label>
                 <label style="font-size:13px;color:#aaa">Payment Status<br>
                   <select id="jfPayment" style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0d0d20;border:1px solid #333;color:#fff;font-size:14px">
@@ -1464,6 +1487,11 @@ textarea::placeholder{color:#c0c6d8}
     <button class="nav-btn" id="navReports" data-testid="nav-reports" onclick="showScreen('reports',this)" style="display:none">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
       <span class="nav-label">Reports</span>
+    </button>
+    <!-- 🤖 Agent (2026-10-31): the Jobs agent — owner / managers (personal: always). -->
+    <button class="nav-btn" id="navAgent" data-testid="nav-agent" onclick="showScreen('agent',this)" style="display:none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="8" width="14" height="11" rx="2"/><circle cx="9.5" cy="13" r="1.2"/><circle cx="14.5" cy="13" r="1.2"/><line x1="12" y1="4" x2="12" y2="8"/><circle cx="12" cy="3.5" r="1"/></svg>
+      <span class="nav-label">Agent<span id="agNavBadge" style="display:none;margin-left:3px;background:#d97706;color:#fff;border-radius:8px;padding:0 5px;font-size:10px"></span></span>
     </button>
     <button class="nav-btn" data-testid="nav-profile" onclick="showScreen('profile',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -1975,6 +2003,13 @@ function bootApp() {
     navReports.style.display = (!state.serverMode || _rr === 'owner' || _rr === 'manager' || _rr === 'staff') ? '' : 'none';
   }
 
+  // 🤖 Agent (2026-10-31): the Jobs agent's tab — owner and managers (personal: the owner).
+  const navAgent = document.getElementById('navAgent');
+  if (navAgent) {
+    var _ar = (state.userRole || '').trim().toLowerCase();
+    navAgent.style.display = (!state.serverMode || _ar === 'owner' || _ar === 'manager') ? '' : 'none';
+    if (navAgent.style.display === '') agentBadge();
+  }
   mileageInit();   // Mileage tab / Clock vehicle picker / Profile switch (2026-10-24)
   loadJobs(); setConn(true);
   _restoreOpenClock();   // R-025: still clocked in after the app was closed
@@ -5273,7 +5308,223 @@ function showScreen(name, btn) {
   if (name === 'clock') _restoreOpenClock();   // R-025: pick up a clock-in made elsewhere
   if (name === 'reports') loadReports();
   if (name === 'mileage') loadMileage();
+  if (name === 'agent') loadAgent();
   _maybeReshowUpdateBanner();
+}
+
+// ── 🤖 AGENT — the Jobs agent (2026-10-31, jobs-agent-spec.md J3) ──────────────
+// Everything is decided server-side (desk_jobs_agent.py through the jobs_agent tool); this
+// screen shows what it suggested, lets the owner / a manager approve, edit or reject it, and
+// shows its settings with the two diagrams (the same model and colours as Service Desk).
+var AG = { data: null, filter: '', settings: null };
+var AG_STAGE = { quotes: 'Quotes', schedule: 'Schedule', prep: 'Prep the day', onsite: 'On site', closeout: 'Close out',
+  collect: 'Get paid', repeat: 'Repeat', learn: 'Learn', sort: 'Sort the week', plan: 'Schedule week', route: 'Route',
+  send: 'Send routes', replan: 'Re-plan day' };
+
+async function _agCall(args) {
+  var r = JSON.parse(await mcpCall('jobs_agent', args));
+  if (!r.ok) throw new Error(r.error || 'The Jobs agent said no.');
+  return r;
+}
+
+async function agentBadge() {
+  try {
+    var st = await _agCall({ action: 'status' });
+    var b = document.getElementById('agNavBadge');
+    if (b) { b.textContent = st.pending; b.style.display = st.enabled && st.pending ? '' : 'none'; }
+  } catch (e) { /* the tool is off, or not allowed — no badge */ }
+}
+
+function _agDetail(p) {
+  var x = p.payload || {}, out = [];
+  if (x.date) out.push('on ' + x.date);
+  if (x.flag) out.push(x.flag.replace(/_/g, ' '));
+  if (x.minutes) out.push(x.minutes + ' min');
+  if (x.channel) out.push('by ' + x.channel);
+  if (Array.isArray(x.moves)) out.push(x.moves.map(function (m) { return m.job_id + ' → ' + m.to; }).join(', '));
+  if (Array.isArray(x.job_ids)) out.push(x.job_ids.join(', '));
+  return out.join(' · ');
+}
+
+function _agCard(p, practice) {
+  var text = (p.payload && (p.payload.body || p.payload.notes)) || '';
+  var head = (p.kind === 'route' ? '🗺 ' : '🧰 ') + esc(p.ref) + ' — ' + esc(AG_STAGE[p.stage] || p.stage);
+  var act = esc(String(p.action || '').replace(/^(jb|rt)_/, '').replace(/_/g, ' '));
+  var btns = practice
+    ? '<button class="btn btn-ghost" style="width:auto;padding:6px 10px" data-ag="up">👍 Good</button>' +
+      '<button class="btn btn-ghost" style="width:auto;padding:6px 10px" data-ag="down">👎 Not right</button>' +
+      (p.feedback ? '<span style="font-size:12px;color:var(--muted)">you said ' + (p.feedback === 'up' ? '👍' : '👎') + '</span>' : '')
+    : '<button class="btn" style="width:auto;padding:6px 12px" data-ag="approve">✅ Approve</button>' +
+      (text ? '<button class="btn btn-ghost" style="width:auto;padding:6px 10px" data-ag="edit">✏️ Edit</button>' : '') +
+      '<button class="btn btn-ghost" style="width:auto;padding:6px 10px;color:#f87171" data-ag="reject">✖ Reject</button>';
+  return '<div class="card" style="margin-bottom:8px" data-pid="' + esc(p.proposal_id) + '" data-testid="agent-card"><div class="card-body">' +
+    '<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><b>' + head + '</b>' +
+    '<span style="font-size:12px;border:1px solid var(--muted);border-radius:10px;padding:1px 8px">' + act + '</span></div>' +
+    (_agDetail(p) ? '<div style="font-size:13px;color:var(--muted)">' + esc(_agDetail(p)) + '</div>' : '') +
+    (text ? '<div style="white-space:pre-wrap;margin:6px 0;padding:6px 8px;border-left:3px solid var(--muted)">' + esc(text) + '</div>' : '') +
+    '<div style="font-size:13px;color:var(--muted)">Why: ' + esc(p.why || '—') +
+    (p.confidence != null ? ' · ' + Math.round(p.confidence * 100) + '% sure' : '') +
+    (p.hold_reason && !practice ? ' · waiting because ' + esc(p.hold_reason) : '') + '</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">' + btns + '</div>' +
+    '<p class="ag-err" style="color:#f87171;margin:6px 0 0;font-size:13px"></p></div></div>';
+}
+
+async function loadAgent() {
+  var box = document.getElementById('agStatus');
+  try {
+    var st = await _agCall({ action: 'status' }), pend = await _agCall({ action: 'list' }),
+        prac = await _agCall({ action: 'practice' });
+  } catch (e) { box.textContent = e.message; return; }
+  AG.data = { st: st, pending: pend.items, practice: prac.items };
+  var runs = st.provider === 'chat_only'
+    ? 'Runs in a chat — paste this in Claude, Muse or Grok: <i>' + esc(st.chat_prompt) + '</i>'
+    : (st.runs_on_its_own ? 'Runs on its own (' + esc(st.provider) + ') · $' + Number(st.spent_usd || 0).toFixed(2) +
+       ' of $' + Number(st.budget_usd || 0).toFixed(0) + ' this month'
+       : 'Can\'t run on its own: ' + esc(st.ready_note || ''));
+  box.innerHTML = '<b>' + (st.enabled ? (st.practice ? '🟣 Jobs agent on — practice mode' : '🟢 Jobs agent on')
+                                     : '⚪ Jobs agent off') + ' · ' +
+    (st.route_enabled ? (st.route_practice ? '🟣 Route flow on — practice mode' : '🟢 Route flow on')
+                      : '⚪ Route flow off') + '</b> · ' + st.waiting + ' waiting in its queue · ' +
+    st.pending + ' for your OK<div style="font-size:13px;color:var(--muted);margin-top:4px">' + runs + '</div>' +
+    (!state.serverMode || (state.userRole || '').toLowerCase() === 'owner'
+      ? '<button class="btn btn-ghost" style="width:auto;padding:6px 10px;margin-top:8px" id="agRunNow">▶ Run now</button>' : '');
+  var rn = document.getElementById('agRunNow');
+  if (rn) rn.onclick = async function () {
+    rn.disabled = true;
+    try { var o = await _agCall({ action: 'run_now' }); showToast(o.started ? 'Started — tap ↻ in a minute.' : o.why); }
+    catch (e) { showToast(e.message, 'error'); } finally { rn.disabled = false; }
+  };
+  var chips = document.getElementById('agChips'), by = st.by_stage || {};
+  var keys = Object.keys(by);
+  chips.innerHTML = keys.length ? ['<button class="btn btn-ghost" style="width:auto;padding:4px 10px" data-f="">All ' + st.pending + '</button>']
+    .concat(keys.map(function (k) {
+      var s = k.split(':')[1];
+      return '<button class="btn btn-ghost" style="width:auto;padding:4px 10px' + (AG.filter === k ? ';border-color:#d97706' : '') +
+        '" data-f="' + esc(k) + '">' + (k.indexOf('route') === 0 ? '🗺 ' : '🧰 ') + esc(AG_STAGE[s] || s) + ' ' + by[k] + '</button>';
+    })).join('') : '';
+  chips.querySelectorAll('[data-f]').forEach(function (c) { c.onclick = function () { AG.filter = c.dataset.f; _agDraw(); loadAgent(); }; });
+  _agDraw();
+  agentBadge();
+  _agSettings();
+}
+
+function _agDraw() {
+  var d = AG.data; if (!d) return;
+  var want = function (p) { return !AG.filter || (p.kind + ':' + p.stage) === AG.filter; };
+  var pend = d.pending.filter(want), prac = d.practice.filter(want);
+  document.getElementById('agPending').innerHTML = pend.length ? pend.map(function (p) { return _agCard(p, false); }).join('')
+    : '<div class="card"><div class="card-body" style="color:var(--muted)">Nothing waiting.</div></div>';
+  document.getElementById('agPracticeHead').style.display = prac.length ? '' : 'none';
+  document.getElementById('agPractice').innerHTML = prac.map(function (p) { return _agCard(p, true); }).join('');
+  document.querySelectorAll('#screen-agent [data-pid]').forEach(function (c) {
+    c.querySelectorAll('[data-ag]').forEach(function (b) {
+      b.onclick = async function () {
+        var all = d.pending.concat(d.practice), p = all.filter(function (x) { return String(x.proposal_id) === c.dataset.pid; })[0];
+        var what = b.dataset.ag, args = { action: what, proposal_id: p.proposal_id };
+        if (what === 'edit') {
+          var t = prompt('Edit the text, then OK to approve it:', (p.payload && p.payload.body) || '');
+          if (t === null) return;
+          args.edits = JSON.stringify({ body: t });
+        }
+        b.disabled = true;
+        try {
+          var out = await _agCall(args);
+          showToast(what === 'reject' ? 'Rejected.' : (what === 'up' || what === 'down') ? 'Thanks — noted.' : 'Done: ' + (out.result || 'applied'));
+          loadAgent();
+        } catch (e) { c.querySelector('.ag-err').textContent = e.message; b.disabled = false; }
+      };
+    });
+  });
+}
+
+// The diagrams: the same drawing as Service Desk's renderAgentFlow (desk/index.html).
+function _agFlow(f, id, noun) {
+  var box = document.getElementById(id); if (!box || !f) return;
+  var PURPLE = '#7c3aed', arrow = function (c) { return 'url(#' + id + 'Arr' + c.replace('#', '') + ')'; };
+  var colors = f.edges.map(function (e) { return e.color; }).filter(function (c, i, a) { return a.indexOf(c) === i; });
+  var defs = colors.map(function (c) { return '<marker id="' + id + 'Arr' + c.replace('#', '') + '" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="' + c + '"/></marker>'; }).join('');
+  var edges = f.edges.map(function (e) { return '<line x1="' + e.x1 + '" y1="' + e.y1 + '" x2="' + e.x2 + '" y2="' + e.y2 + '" stroke="' + e.color + '" stroke-width="' + (e.kind === 'step' && !e.dash ? 2.5 : 1.5) + '" ' + (e.dash ? 'stroke-dasharray="4 3" ' : '') + 'marker-end="' + arrow(e.color) + '"' + (e.both ? ' marker-start="' + arrow(e.color) + '"' : '') + '/>'; }).join('');
+  var states = f.states.map(function (s) { return '<g><title>' + esc(s.label) + '</title><rect x="' + s.x + '" y="' + s.y + '" width="' + s.w + '" height="' + s.h + '" rx="16" fill="' + s.color + '" fill-opacity="' + (s.lit ? 0.22 : 0) + '" stroke="' + s.color + '" stroke-width="' + (s.lit ? 2.5 : 1) + '"/><text x="' + (s.x + s.w / 2) + '" y="' + (s.y + s.h / 2 + 4) + '" text-anchor="middle" font-size="12" font-weight="' + (s.lit ? 700 : 400) + '" fill="currentColor">' + esc(s.label) + '</text></g>'; }).join('');
+  var steps = f.steps.map(function (p) {
+    var dim = p.mode === 'off' || p.mode === 'inactive';
+    var ring = p.practice ? '<rect x="' + (p.x - 4) + '" y="' + (p.y - 4) + '" width="' + (p.w + 8) + '" height="' + (p.h + 8) + '" rx="11" fill="none" stroke="' + PURPLE + '" stroke-width="1.5" stroke-dasharray="5 3"/>' : '';
+    return '<g style="cursor:help"><title>' + esc(p.label + ' — ' + p.word + (p.practice ? ' (practice mode: shows only)' : '') + '\n\n' + p.help) + '</title>' + ring +
+      '<rect x="' + p.x + '" y="' + p.y + '" width="' + p.w + '" height="' + p.h + '" rx="8" fill="' + p.color + '" fill-opacity="' + (dim ? 0.06 : 0.2) + '" stroke="' + p.color + '" stroke-width="' + (p.mode === 'off' ? 1 : dim ? 1.5 : 2.5) + '"' + (dim ? ' stroke-dasharray="4 3"' : '') + '/>' +
+      '<text x="' + (p.x + p.w / 2) + '" y="' + (p.y + 17) + '" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor">' + esc(p.label) + '</text>' +
+      '<text x="' + (p.x + p.w / 2) + '" y="' + (p.y + 32) + '" text-anchor="middle" font-size="11" font-weight="600" fill="' + p.color + '">' + esc(p.word) + '</text>' +
+      (p.practice ? '<text x="' + (p.x + p.w / 2) + '" y="' + (p.y + 46) + '" text-anchor="middle" font-size="10" font-style="italic" fill="currentColor">practice</text>' : '') + '</g>';
+  }).join('');
+  box.innerHTML = '<div style="font-size:12px;color:var(--muted);margin-bottom:4px">How a ' + noun + ' moves — the top and bottom boxes are the agent\'s steps (hover or long-press for details)</div>' +
+    '<svg viewBox="-6 -6 ' + (f.w + 12) + ' ' + (f.h + 12) + '" style="width:100%;height:auto;display:block"><defs>' + defs + '</defs>' + edges + states + steps + '</svg>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:10px;font-size:12px;margin:6px 0">' + f.legend.map(function (l) {
+      return '<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;' + (l[0] === 'practice' ? 'border:1.5px dashed ' + l[1] : 'background:' + l[1]) + ';margin-right:4px"></span>' + esc(l[2]) + '</span>'; }).join('') + '</div>' +
+    '<p style="font-size:13px;margin:0">' + esc(f.summary) + '</p>';
+}
+
+async function _agSettings() {
+  var box = document.getElementById('agSettings');
+  var r;
+  try { r = await _agCall({ action: 'settings' }); } catch (e) { box.textContent = e.message; return; }
+  var s = r.settings, J = r.options, can = r.can_change_settings, dis = can ? '' : ' disabled';
+  var modes = [['off', 'Off'], ['suggest', 'Suggest (a person approves)'], ['auto', 'Auto']];
+  var sel = function (key) {
+    return '<select data-agk="' + key + '"' + dis + ' style="width:100%;margin:2px 0 8px">' + modes.map(function (m) {
+      return '<option value="' + m[0] + '"' + (s[key] === m[0] ? ' selected' : '') + '>' + esc(m[1]) + '</option>'; }).join('') + '</select>';
+  };
+  var tog = function (key, label, help) {
+    return '<label style="display:flex;gap:8px;align-items:center;margin:6px 0" title="' + esc(help || '') + '"><input type="checkbox" data-agk="' + key + '"' +
+      (s[key] ? ' checked' : '') + dis + '> ' + esc(label) + '</label>';
+  };
+  var small = function (t) { return '<p style="font-size:12px;color:var(--muted);margin:0 0 2px">' + esc(t) + '</p>'; };
+  box.innerHTML = (can ? '' : '<p style="font-size:13px;color:var(--muted)">' + (state.serverMode
+      ? 'On a server these are changed at the server PC (AI-Prowler → 🏢 Small Business → 🧰 Jobs App Agent & settings).' : 'Only the owner changes these.') + '</p>') +
+    tog('agent_jb_enabled', 'Jobs agent on') + tog('agent_jb_shadow', 'Practice mode — only show what it would do', J.practice_help) +
+    '<div style="display:flex;flex-wrap:wrap;gap:16px"><div style="flex:1 1 280px;min-width:0">' +
+    J.stages.map(function (st) { return '<b style="font-size:13px">' + esc(st[1]) + '</b>' + small(J.stage_help[st[0]]) + sel('agent_jb_stage_' + st[0]); }).join('') +
+    tog('agent_jb_can_send_invoices', 'Let the agent send invoices (only with Close out on Auto and practice off)', J.send_help) + small(J.send_help) +
+    '<div style="display:flex;gap:8px"><label style="flex:1">Up to ($ each)<input id="agMax" type="number" min="0" value="' + esc(s.agent_jb_invoice_max) + '"' + dis + '></label>' +
+    '<label style="flex:1">At most a day<input id="agPerDay" type="number" min="1" max="100" value="' + esc(s.agent_jb_invoices_per_day) + '"' + dis + '></label></div>' +
+    '<div style="display:flex;gap:8px"><label style="flex:1">Follow up quotes after (days)<input id="agQuote" type="number" min="1" max="60" value="' + esc(s.agent_jb_quote_days) + '"' + dis + '></label>' +
+    '<label style="flex:1" title="' + esc(J.remind_help) + '">Payment reminders at (days)<input id="agRemind" value="' + esc((s.agent_jb_remind_days || []).join(', ')) + '"' + dis + '></label></div>' +
+    '<label>Prep tomorrow at (hour)<input id="agPrep" type="number" min="0" max="23" value="' + esc(s.agent_jb_prep_hour) + '"' + dis + '></label>' +
+    tog('agent_jb_weather', 'Check the weather for outdoor jobs', J.weather_help) +
+    (can ? '<button class="btn" style="width:auto;padding:6px 12px;margin-top:6px" id="agSaveJ">Save Jobs agent settings</button>' : '') +
+    '</div><div style="flex:1 1 300px;min-width:0" id="agJbFlow"></div></div>' +
+    '<h3 style="font-size:15px;margin:16px 0 4px">🗺 Route flow — sort the week, schedule it, route it, crews get their route</h3>' +
+    tog('agent_jb_rt_enabled', 'Route flow on', J.route_enabled_help) + tog('agent_jb_rt_shadow', 'Practice mode for routes — only show what it would do', J.route_practice_help) +
+    '<div style="display:flex;flex-wrap:wrap;gap:16px"><div style="flex:1 1 280px;min-width:0">' +
+    J.route_stages.map(function (st) { return '<b style="font-size:13px">' + esc(st[1]) + '</b>' + small(J.route_help[st[0]]) + sel('agent_jb_rt_stage_' + st[0]); }).join('') +
+    '<label title="' + esc(J.route_scope_help) + '">Route<select data-agk="agent_jb_route_scope"' + dis + ' style="width:100%">' + J.route_scopes.map(function (x) {
+      return '<option value="' + x[0] + '"' + (s.agent_jb_route_scope === x[0] ? ' selected' : '') + '>' + esc(x[1]) + '</option>'; }).join('') + '</select></label>' +
+    '<label title="' + esc(J.sort_day_help) + '">Sort the coming week on<select data-agk="agent_jb_sort_weekday" data-num="1"' + dis + ' style="width:100%">' + J.weekdays.map(function (d, i) {
+      return '<option value="' + i + '"' + (s.agent_jb_sort_weekday === i ? ' selected' : '') + '>' + esc(d) + '</option>'; }).join('') + '</select></label>' +
+    '<label title="' + esc(J.send_hour_help) + '">Crews get tomorrow\'s route at (hour)<input id="agRtHour" type="number" min="0" max="23" value="' + esc(s.agent_jb_route_send_hour) + '"' + dis + '></label>' +
+    (can ? '<button class="btn" style="width:auto;padding:6px 12px;margin-top:6px" id="agSaveR">Save route settings</button>' : '') +
+    '</div><div style="flex:1 1 300px;min-width:0" id="agRtFlow"></div></div>';
+  var draw = function (x) { _agFlow(x.jb_flow, 'agJbFlow', 'job'); _agFlow(x.rt_flow, 'agRtFlow', 'week of routes'); };
+  draw(r);
+  if (!can) return;
+  var save = async function (vals) { var x = await _agCall({ action: 'set', settings: JSON.stringify(vals) }); draw(x); showToast('Saved.'); loadAgent(); };
+  box.querySelectorAll('[data-agk]').forEach(function (c) {
+    c.onchange = async function () {
+      var v = c.type === 'checkbox' ? c.checked : c.dataset.num ? parseInt(c.value, 10) : c.value, o = {};
+      o[c.dataset.agk] = v;
+      try { await save(o); } catch (e) { showToast(e.message, 'error'); if (c.type === 'checkbox') c.checked = !c.checked; }
+    };
+  });
+  var n = function (id) { return parseInt(document.getElementById(id).value, 10); };
+  document.getElementById('agSaveJ').onclick = async function () {
+    var days = document.getElementById('agRemind').value.split(/[\s,]+/).filter(Boolean).map(function (x) { return parseInt(x, 10); });
+    if (days.some(function (x) { return !(x >= 1 && x <= 120); })) { showToast('Reminder days: numbers 1 to 120, like 7, 14, 30.', 'error'); return; }
+    try { await save({ agent_jb_invoice_max: Math.max(0, n('agMax') || 0), agent_jb_invoices_per_day: n('agPerDay') || 10,
+      agent_jb_quote_days: n('agQuote') || 5, agent_jb_remind_days: days, agent_jb_prep_hour: n('agPrep') }); }
+    catch (e) { showToast(e.message, 'error'); }
+  };
+  document.getElementById('agSaveR').onclick = async function () {
+    var h = n('agRtHour');
+    if (!(h >= 0 && h <= 23)) { showToast('Hour: 0 to 23.', 'error'); return; }
+    try { await save({ agent_jb_route_send_hour: h }); } catch (e) { showToast(e.message, 'error'); }
+  };
 }
 
 // ── MILEAGE TRACKER (2026-10-24) ────────────────────────────────────────────
@@ -7550,6 +7801,18 @@ var REQUIRED_INVOICE_SETTINGS = [
   { setting: 'Website', note: 'Optional — printed on invoices if set.' },
   { setting: 'License / LLC Number', note: 'Optional — printed on invoices if set.' },
 ];
+// (2026-10-29, David) The "request service" link on invoices and receipts —
+// read by service_link.py (same keys; keep the two in step — the unit test
+// tests\unit\test_service_link.py checks it). All optional: a blank link = off,
+// a blank Yes/No = Yes.
+var SERVICE_LINK_SETTINGS = [
+  { setting: 'Service Request Link', note: "Optional — type auto for your Service Desk request page (/support/new), or paste any http(s) link (e.g. your website's contact page). Blank = off." },
+  { setting: 'Service Request Link Text', dflt: 'Need anything else? Request service here:', note: 'Optional — the words in front of the link.' },
+  { setting: 'Service Link - Email Invoice', dflt: 'Yes', note: 'Yes / No — add the link to emailed invoices.' },
+  { setting: 'Service Link - Email Receipt', dflt: 'Yes', note: 'Yes / No — add the link to emailed receipts.' },
+  { setting: 'Service Link - Text Invoice', dflt: 'Yes', note: 'Yes / No — add the link to texted invoices.' },
+  { setting: 'Service Link - Text Receipt', dflt: 'Yes', note: 'Yes / No — add the link to texted receipts.' },
+];
 
 // ── "Settings aren't filled out" warning (2026-10-21, David) ────────────────
 // Required = the non-optional REQUIRED_INVOICE_SETTINGS above (Tax Rate,
@@ -7704,11 +7967,22 @@ async function _renderSettingsCard() {
   });
   var requiredKeys = {};
   REQUIRED_INVOICE_SETTINGS.forEach(function(r) { requiredKeys[r.setting] = true; });
+  SERVICE_LINK_SETTINGS.forEach(function(r) { requiredKeys[r.setting] = true; });
 
   var requiredSection = {
     title: 'Required For Invoicing',
     items: REQUIRED_INVOICE_SETTINGS.map(function(r) {
       return realByKey[r.setting] || { setting: r.setting, value: '', note: r.note, exists: false };
+    }),
+  };
+  // (2026-10-29) The "request service" link on invoices/receipts — its own
+  // section, always listed (all optional; blank = off / the default).
+  var serviceLinkSection = {
+    title: 'Service Request Link (Invoices & Receipts)',
+    items: SERVICE_LINK_SETTINGS.map(function(r) {
+      var real = realByKey[r.setting];
+      return Object.assign({}, real || { setting: r.setting, value: '', exists: false },
+                           { note: (real && real.note) || r.note, optional: true, dflt: r.dflt || '' });
     }),
   };
   // Any OTHER settings the user has added (not one of the 7 required
@@ -7718,7 +7992,7 @@ async function _renderSettingsCard() {
     return { title: sec.title, items: sec.items.filter(function(item) { return !requiredKeys[item.setting]; }) };
   }).filter(function(sec) { return sec.items.length > 0; });
 
-  sections = [requiredSection].concat(otherSections);
+  sections = [requiredSection, serviceLinkSection].concat(otherSections);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   var html = '<div style="padding:12px 4px 24px">';
@@ -7775,12 +8049,15 @@ async function _renderSettingsCard() {
             + '<div style="font-size:13px;color:#a0a8c0;flex-shrink:0;'
             + 'min-width:160px">' + esc(item.setting) + '</div>'
 
-            // Value — amber if empty/zero so user knows to fill it in
+            // Value — amber if empty/zero so user knows to fill it in. Optional
+            // rows with a default (service-request link switches, 2026-10-29)
+            // show that default in grey instead: blank there is a fine answer.
             + '<div style="font-size:14px;font-weight:700;text-align:right;'
-            + 'color:' + (isEmpty ? '#f59e0b' : '#e8eaf6') + '">'
+            + 'color:' + (isEmpty ? (item.optional ? '#8a90a8' : '#f59e0b') : '#e8eaf6') + '">'
             + (isEmpty
                ? '<span style="font-style:italic;font-size:12px">'
-                 + 'Not set — tap to add</span>'
+                 + (item.optional ? esc(item.dflt ? item.dflt + ' (default)' : 'Off — tap to set')
+                                  : 'Not set — tap to add') + '</span>'
                : esc(_settingDisplayLabel(item.setting, item.value)))
             + '</div>'
             + '</div>';
@@ -9784,8 +10061,12 @@ function openEditJobModal(jobId) {
   // selected even though the sheet holds 'Scheduled'/blank.
   (function(){
     var _st = String(j.status || '').trim();
+    // Service booking states (2026-10-30) open as themselves: a booking waiting for
+    // approval has no date, and showing it as "Unscheduled" would save it back as
+    // "Scheduled" — skipping the owner's approval.
+    var _keep = ['In Progress', 'Complete', 'Cancelled', 'Pending Approval', 'Suggested', 'Requested', 'Declined'];
     document.getElementById('jfStatus').value =
-      (_st === 'In Progress' || _st === 'Complete' || _st === 'Cancelled') ? _st :
+      _keep.indexOf(_st) >= 0 ? _st :
       (String(j.date || '').trim() ? 'Scheduled' : 'Unscheduled');
   })();
   document.getElementById('jfPayment').value            = j.payment       || '';
@@ -10196,7 +10477,7 @@ async function saveJobForm() {
       document.getElementById('jfEndDate').value = '';
       _jfStatusVal = 'Scheduled';
     }
-    var _saveClosed = /^(complete|cancelled|canceled)$/i.test(_jfStatusVal);
+    var _saveClosed = /^(complete|cancelled|canceled|declined)$/i.test(_jfStatusVal);
     // (2026-10-06) pause stash on modal save. Pausing (new): stash the field
     // dates into the new columns, clear the live dates, set the flag + reason.
     var _savePauseChecked = !_saveClosed && document.getElementById('jfPaused').checked;

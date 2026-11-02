@@ -63,8 +63,10 @@ class TestRenderTaskCardButtons:
     def test_edit_accent_delete_red(self, js):
         fn = _fn(js, "renderTaskCard")
         assert "var(--accent)" in fn and "var(--red)" in fn
-    def test_requeue_when_in_queue(self, js):
-        assert "Re-Queue" in _fn(js, "renderTaskCard")
+    def test_run_now_label(self, js):
+        # 2026-11-01: ▶ Queue / Re-Queue became ▶ Run now (no queue)
+        fn = _fn(js, "renderTaskCard")
+        assert "Run now" in fn and "Re-Queue" not in fn
 
 
 class TestQueueButton:
@@ -149,28 +151,28 @@ class TestQueuePanel:
         assert 'id="queueItems"' in html
     def test_count_exists(self, html):
         assert 'id="queueCount"' in html
-    def test_clear_btn_exists(self, html):
-        assert 'id="queueClearBtn"' in html
+    def test_no_clear_btn(self, html):
+        # 2026-11-01: no queue — nothing to clear
+        assert 'id="queueClearBtn"' not in html
     def test_uses_get_all_queued_tasks(self, js):
         assert "get_all_queued_tasks" in _fn(js, "loadTasks"),             "Must use get_all_queued_tasks not get_pending_analysis_tasks"
     def test_render_panel_defined(self, js):
         assert "function renderQueuePanel" in js
-    def test_shows_due_date(self, js):
-        assert "next_due" in _fn(js, "renderQueuePanel")
-    def test_shows_queued_ago(self, js):
+    def test_shows_status(self, js):
         fn = _fn(js, "renderQueuePanel")
-        assert "queued_at" in fn or "_timeAgo" in fn
-        # Uses data-action="remove-queue" via event delegation — not inline removeFromQueue()
-        assert "remove-queue" in fn or "removeFromQueue" in fn, \
-            "renderQueuePanel must have a remove button per item"
-    def test_clear_queue_defined(self, js):
-        assert "async function clearQueue" in js
+        assert "t.status" in fn and "Running soon" in fn
+    def test_no_remove_per_item(self, js):
+        fn = _fn(js, "renderQueuePanel")
+        assert "remove-queue" not in fn and "removeFromQueue" not in fn
+    def test_no_clear_queue(self, js):
+        assert "async function clearQueue" not in js
     def test_mcp_defined(self, mcp):
         assert "def get_all_queued_tasks(" in mcp
     def test_in_allowed(self, mcp):
         assert "get_all_queued_tasks" in _allowed(mcp)
-    def test_reads_pending_json(self, mcp):
+    def test_reads_the_tasks(self, mcp):
         idx = mcp.find("def get_all_queued_tasks(")
-        assert "pending_tasks" in mcp[idx:idx+1500] or "_load_pending" in mcp[idx:idx+1500]
+        fn = mcp[idx:idx+2000]
+        assert "load_custom_tasks()" in fn and "running soon" in fn
 
     # NOTE: JSON.stringify in onclick breaks HTML — use single quotes

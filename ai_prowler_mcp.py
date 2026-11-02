@@ -1553,6 +1553,19 @@ def _hr_run_employee_backup(db: dict = None) -> dict:
             cdir = _hr_company_dir()
             if _hros.path.isdir(cdir):
                 _hr_shutil.copytree(cdir, _hros.path.join(dest, _HR_COMPANY_DIRNAME), ignore=ignore)
+            adb_src = _hros.path.join(src_root, "agent", "hr_agent.db")
+            if _hros.path.isfile(adb_src):           # the HR agent's own database (2026-10-31)
+                try:
+                    import sqlite3 as _hr_sql
+                    _hros.makedirs(_hros.path.join(dest, "agent"), exist_ok=True)
+                    _s, _d = _hr_sql.connect(adb_src), _hr_sql.connect(_hros.path.join(dest, "agent", "hr_agent.db"))
+                    try:
+                        _s.backup(_d)                # a consistent copy even while the agent runs
+                    finally:
+                        _d.close()
+                        _s.close()
+                except Exception as exc:
+                    result["errors"].append(f"HR agent database: {exc}")
             ebase = _hr_employees_base((db.get("config") or {}).get("doc_root", ""))
             if _hros.path.isdir(ebase):
                 for folder in sorted(_hros.listdir(ebase)):
@@ -3052,6 +3065,12 @@ def _hr_api_route(method: str, subpath: str, query: dict, body: dict, auth: dict
     function (no I/O here is actually async) — ASGI callers call it directly
     without await, same as the rest of this file's blocking file-read routes.
     """
+    if subpath == "/agent" or subpath.startswith("/agent/"):
+        # The HR agent's 🤖 tab (hr-agent-spec.md). HR Admin only; answered outside the HR lock
+        # because approving re-enters this function through HR's own routes.
+        if auth.get("role") != "admin":
+            return _hr_json_response(403, {"error": "admin_only"})
+        return _hr_agent_route(method, subpath, query or {}, body or {})
     with _hr_db_lock:
         db = _hr_load_db()
         role = auth.get("role")
@@ -3102,6 +3121,11 @@ def _hr_api_route(method: str, subpath: str, query: dict, body: dict, auth: dict
             user_msg = (body.get("message") or "").strip()
             if not user_msg:
                 return _hr_json_response(400, {"error": "message required"})
+            if role == "employee" and body.get("ask_assistant"):
+                # 2026-10-31 (hr-agent-spec.md §6 / §7): with the HR agent answering questions, the
+                # question becomes an HR Portal message; the agent drafts the answer from the
+                # handbook (HR checks it first on Suggest) and it arrives in Messages.
+                return _hr_json_response(200, _hr_ask_assistant(db, auth.get("employee_id"), user_msg[:2000]))
             m = user_msg.lower()
             # (2026-10-16) Phase 3: answers come from HR's own settings, not fixed text
             _ac_pol = _hr_pto_policy(db.get("config"))
@@ -3367,13 +3391,56 @@ def _hr_api_route(method: str, subpath: str, query: dict, body: dict, auth: dict
             import datetime as _rp_dt
             msg_id = body.get("id")
             reply_text = body.get("reply", "").strip()
+            by = "assistant" if body.get("by") == "assistant" else "hr"
             for m in db.get("messages", []):
                 if m["id"] == msg_id:
+                    if by == "assistant" and m.get("needs_person"):
+                        # 2026-10-31: the employee asked for a person — the assistant never answers again
+                        return _hr_json_response(409, {"error": "a person answers this one"})
+                    if by == "hr" and m.get("reply_by") == "assistant" and m.get("reply"):
+                        m["assistant_reply"] = m["reply"]               # keep what the assistant said
+                        m["assistant_replied_at"] = m.get("replied_at")
                     m["reply"] = reply_text
+                    m["reply_by"] = by
                     m["replied_at"] = _rp_dt.datetime.now().isoformat(timespec="seconds")
                     m["read"] = True
+                    if by == "hr" and m.get("needs_person"):
+                        m["needs_person"] = False
+                        m["person_replied_at"] = m["replied_at"]
                     break
             _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True})
+
+        # ── HR agent in the HR Portal (2026-10-31, hr-agent-spec.md §7) ────────
+        # GET  /assistant                 is the assistant answering questions? (portal shows the button)
+        # POST /messages/talk-to-person   the employee wants a person, not the assistant, on their message
+        if subpath == "/assistant" and method == "GET":
+            if role not in ("admin", "employee"):
+                return _hr_json_response(401, {"error": "sign_in_required"})
+            a = _hr_agent_answers()
+            return _hr_json_response(200, {"answers_on": a["on"], "checked_first": a["mode"] == "suggest",
+                                           "display": a["display"]})
+
+        if subpath == "/messages/talk-to-person" and method == "POST":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            import datetime as _tp_dt
+            target = next((m for m in db.get("messages", []) if m.get("id") == body.get("id")), None)
+            if not target or target.get("employee_id") != auth.get("employee_id"):
+                return _hr_json_response(404, {"error": "message_not_found"})
+            if not target.get("needs_person"):
+                target["needs_person"] = True
+                target["needs_person_at"] = _tp_dt.datetime.now().isoformat(timespec="seconds")
+                target["read"] = False                      # back to the top of HR's inbox
+                _hr_save_db(db)
+                try:                                         # no message text in the email (privacy)
+                    _tp_to = (db.get("config", {}).get("hr_admin_email") or db.get("config", {}).get("owner_email"))
+                    if _tp_to:
+                        _send_smtp(to=_tp_to, subject="An employee asked for a person at HR",
+                                   body=(f"{target.get('sender_name') or 'An employee'} asked for a person to answer "
+                                         "their HR Portal message. Open HR Admin → Messages (marked 🙋)."))
+                except Exception as _tp_err:
+                    _log.warning("talk-to-person email failed: %s", _tp_err)
             return _hr_json_response(200, {"ok": True})
 
         # ── everything else requires admin OR resolved employee auth ───────
@@ -6525,8 +6592,11 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     # Agentic analysis task queue — personal-install-only (Quick Links tab's
     # Common Business AI Analysis / My Custom Analyses panels are hidden in
     # server mode's GUI, so the queue they drive has no server-mode caller).
-    "get_pending_analysis_tasks", "complete_analysis_task", "save_analysis_report",
-    "create_analysis_task", "list_analysis_tasks",
+    # 2026-11-02 (David: AI Analysis Tasks on the server, owner + managers): create / list / update /
+    # delete_analysis_task and save_analysis_report are now offered on a server too, each refusing anyone
+    # but an owner or manager (_task_tools_denied). The chat-run tools below stay personal-only — a
+    # server runs every task itself on the Agent API Key, with no paste-into-chat runner.
+    "get_pending_analysis_tasks", "complete_analysis_task",
     # v8.1.9: the queue-management tools added alongside the due-aware
     # filtering / unified re-arm redesign — same personal-install-only
     # rationale as the rest of this group above; there is no server-mode
@@ -6546,7 +6616,6 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     # able to queue or list tasks with nothing else in the category
     # available to define, view, or execute what's queued. Added below to
     # match the stated rationale.
-    "delete_analysis_task", "update_analysis_task",
     "queue_single_task", "get_all_queued_tasks",
     # Raw/unscoped SMS inbox — personal-install-only. sms_inbox_read() has no
     # per-user filtering (unlike sms_inbox_read_for_user()), so in a
@@ -6588,6 +6657,7 @@ _log.info(
 # The HR apps' tools (2026-10-11, David): HR Admin / HR Portal are AI-Prowler
 # SERVER only, so none of the hr_* tools exists on a personal install.
 _HR_TOOLS: frozenset = frozenset({
+    "hr_agent",                     # 2026-10-31: the HR agent (counts only from a chat)
     "hr_backup_now",
     "hr_complete_task",
     "hr_create_employee",
@@ -6891,6 +6961,34 @@ def _append_audit_log(tool_name: str, kwargs: dict, ok: bool, error: str = "") -
             line += f" error={error[:200]}"
         with open(_AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(line + "\n")
+        _cap_audit_log()
+    except Exception:
+        pass
+
+
+# 2026-11-02 (David: size control for the AI Analysis Tasks run log). Every tool call from every app
+# lands here, so the file is capped by size: past 512 KB it becomes .log.1 (.1 → .2, the oldest is
+# dropped). Same limit as task_queue_automation.AUDIT_LOG_MAX_BYTES — about 1.5 MB at most in all.
+_AUDIT_LOG_MAX_BYTES = 512 * 1024
+_AUDIT_LOG_BACKUPS = 2
+
+
+def _cap_audit_log() -> None:
+    try:
+        if not _AUDIT_LOG_PATH.exists() or _AUDIT_LOG_PATH.stat().st_size <= _AUDIT_LOG_MAX_BYTES:
+            return
+        base = str(_AUDIT_LOG_PATH)
+        for i in range(_AUDIT_LOG_BACKUPS - 1, 0, -1):          # .1 → .2 (the old .2 is replaced)
+            src = Path(f"{base}.{i}")
+            if src.exists():
+                try:
+                    src.replace(Path(f"{base}.{i + 1}"))
+                except Exception:
+                    pass
+        try:
+            _AUDIT_LOG_PATH.replace(Path(f"{base}.1"))
+        except Exception:
+            pass                       # another program has it open — try again on the next line
     except Exception:
         pass
 
@@ -7427,6 +7525,21 @@ def _desk_db_path() -> str:
     return _p
 
 
+def _desk_business_name() -> str:
+    """The name customers see on Service Desk pages, replies and texts (2026-11-02): the Business
+    Name from the Jobs app Settings — it used to be the owner's personal name ("David Vavro" under
+    "Request T-0003" instead of "AI-Prowler LLC"). Falls back to the owner's name when it's blank."""
+    try:
+        _jp = _resolve_job_db_path(None)
+        if _jp and os.path.exists(_jp):          # never create an empty Jobs database just to look
+            _nm = str((_read_business_info(_jp) or {}).get("name") or "").strip()
+            if _nm:
+                return _nm
+    except Exception:
+        pass
+    return _get_personal_owner_name() or ""
+
+
 def _desk_team() -> list:
     """Server team for Service Desk alerts: id (same id the server gives the
     user at sign-in), name, role, email, cell phone. Active users only."""
@@ -7513,9 +7626,41 @@ def _desk_configure_alerts() -> None:
         _dal.configure(push=_push)
         _dal.configure(email=_email, sms=_sms, team=_desk_team if _IS_SERVER_MODE else None,
                        db_path=lambda: _ddb_default_path(), base_url=_base,
-                       business=lambda: _get_personal_owner_name() or "")
+                       business=lambda: _desk_business_name())
         import desk_portal as _dpo
         _dpo.channels_fn = _channels
+        # The customer page's "Request a new service" creates a Requested job in the
+        # Jobs app; "Report a problem" links the customer's recent job (2026-10-30).
+        _dpo.jobs_db_fn = lambda: _resolve_job_db_path(None)
+
+        # "Buy a product" (2026-11-02): Pay now uses the same Stripe / Square keys as
+        # invoices (Small Business → Online Payment Links), read fresh on every use.
+        def _checkout_ready():
+            _p = _load_payment_settings()
+            return bool(_p["stripe_secret_key"]
+                        or (_p["square_access_token"] and _p["square_location_id"]))
+
+        def _checkout(amount, description, ref, return_url=""):
+            _p = _load_payment_settings()
+            if _p["stripe_secret_key"]:
+                _u = _create_stripe_checkout_url(_p["stripe_secret_key"], amount, description,
+                                                 ref, success_url=return_url)
+                if _u:
+                    return _u
+            if _p["square_access_token"] and _p["square_location_id"]:
+                return _create_square_checkout_url(_p["square_access_token"], _p["square_location_id"],
+                                                   amount, description, ref, redirect_url=return_url)
+            return None
+
+        if _outbox and _desk_sandbox_test_mode():
+            # E2E sandboxes never reach Stripe or Square: a fake checkout page address
+            # (DESK_E2E_PAY=off plays an install with no payment keys).
+            _pay_on = os.environ.get("DESK_E2E_PAY", "on").lower() != "off"
+            _checkout_ready = lambda: _pay_on  # noqa: E731
+            _checkout = (lambda amount, description, ref, return_url="":  # noqa: E731
+                         f"https://pay.example.test/{ref}?amount={float(amount):.2f}")
+        _dpo.checkout_ready_fn = _checkout_ready
+        _dpo.checkout_fn = _checkout
     except Exception as _e:
         _log.warning("Service Desk alerts not configured (%s) — tickets still work.", _e)
     _desk_start_email_intake()
@@ -7525,6 +7670,264 @@ def _desk_configure_alerts() -> None:
         _dai.enable_duplicate_flagging(_ddb_default_path)
     except Exception as _e:
         _log.warning("Service Desk duplicate flagging not enabled (%s).", _e)
+    try:
+        # The agent queue (desk_agent.py, 2026-10-30): ticket events queue work for the
+        # Service Desk Agent / Booking & scheduling agent when they're switched on.
+        import desk_agent as _dag
+        _dag.enable(_ddb_default_path)
+    except Exception as _e:
+        _log.warning("Service Desk agent queue not enabled (%s).", _e)
+
+
+_JOBS_AGENT_WIRED: dict = {}
+
+
+def _jobs_agent_wire() -> None:
+    """The Jobs agent (desk_jobs_agent.py, jobs-agent-spec.md; 2026-10-31): hand it the same
+    Jobs tools a chat uses (ctx=None = the owner on this machine) and start its timer, which
+    works whether or not Service Desk is on. Once per start."""
+    if _JOBS_AGENT_WIRED.get("done"):
+        return
+    _JOBS_AGENT_WIRED["done"] = True
+    try:
+        import desk_jobs_agent as _dja
+        import desk_portal as _dpo2
+        if _dpo2.jobs_db_fn is None:
+            _dpo2.jobs_db_fn = lambda: _resolve_job_db_path(None)
+
+        def _sms(to, text):
+            if "send_sms" in _USER_DISABLED_TOOLS:
+                return "❌ Texting is switched off."
+            return send_sms(to, text)
+        _dja.install_ops(
+            send_email=lambda to, subject, body: send_email(to, subject, body),
+            send_sms=_sms,
+            email_invoice=lambda inv: email_invoice(inv),
+            text_invoice=lambda inv: text_invoice(inv),
+            email_receipt=lambda inv, method: email_receipt(inv, payment_method=method),
+            text_receipt=lambda inv, method: text_receipt(inv, payment_method=method),
+            suggest_route=lambda day, crew: suggest_route_schedule(day, crew=crew, email_route=False),
+            approve_route=lambda day, crew: approve_route_schedule(day, crew=crew),
+            email_route=lambda day, crew: email_route_now(day, crew=crew),
+            replan_route=lambda day, crew: replan_route_day(day, crew=crew),
+            week_proposals_path=_week_proposals_path)
+        import desk_scheduler as _dsch2
+        _dsch2.start_jobs_agent(get_edition=_desk_edition, desk_on=lambda: bool(_DESK_DB_READY)
+                                and not _desk_app_turned_off())
+    except Exception as _e:
+        _log.warning("Jobs agent not wired (%s).", _e)
+    _hr_agent_wire()
+
+
+def _hr_agent_wire() -> None:
+    """The HR agent (desk_hr_agent.py, hr-agent-spec.md; 2026-10-31): its database lives in the HR
+    data folder, and it reaches HR's data only through these functions — HR's own lock, HR's own
+    /hr-api routes as HR Admin, HR's own email sender. Its timer is desk_scheduler.hr_agent_tick."""
+    if _JOBS_AGENT_WIRED.get("hr"):
+        return
+    _JOBS_AGENT_WIRED["hr"] = True
+    try:
+        import json as _json_hr
+        import desk_agent_hr_store as _dhs
+        import desk_hr_agent as _dha
+        _dhs.hr_root_fn = _hr_data_root
+
+        def _mutate(fn):
+            with _hr_db_lock:
+                db = _hr_load_db()
+                out = fn(db)
+                _hr_save_db(db)
+                return out
+
+        def _api(method, path, body):
+            st, _ct, raw = _hr_api_route(method, path, {}, body or {}, {"role": "admin"})
+            try:
+                payload = _json_hr.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw or "{}")
+            except Exception:  # noqa: BLE001
+                payload = {}
+            return st, payload if isinstance(payload, dict) else {"result": payload}
+
+        def _state_rules(code):
+            states = (_hr_load_state_rules() or {}).get("states") or {}
+            return states.get(str(code or "").upper()) or {}
+
+        def _booked_jobs(emp, dates):
+            """Jobs-app jobs this person is crew on, on those dates (time-off check). Unknown
+            person or no Jobs app = 0; a database error counts as booked (the check fails safe)."""
+            uid = str((emp or {}).get("aiprowler_user_id") or "").strip()
+            name = f"{(emp or {}).get('first_name') or ''} {(emp or {}).get('last_name') or ''}".strip()
+            if not dates or not (uid or name):
+                return 0
+            try:
+                jdb = _resolve_job_db_path(None)
+            except Exception:  # noqa: BLE001
+                return 0
+            if not jdb or not _hros.path.exists(str(jdb)):
+                return 0
+            try:
+                from db_access import get_connection as _gc_hr
+                conn = _gc_hr(str(jdb))
+                try:
+                    q = ",".join("?" * len(dates))
+                    return int(conn.execute(
+                        f"SELECT COUNT(*) FROM jobs WHERE service_date IN ({q}) AND "
+                        "COALESCE(job_status, '') NOT IN ('Cancelled', 'Canceled', 'Completed', 'Paid') AND "
+                        "((? <> '' AND crew_user_id = ?) OR (? <> '' AND LOWER(COALESCE(crew, '')) = LOWER(?)))",
+                        (*dates, uid, uid, name, name)).fetchone()[0])
+                finally:
+                    conn.close()
+            except Exception:  # noqa: BLE001
+                return 1
+
+        _dha.install(load=_hr_load_db, mutate=_mutate, api=_api, balance=_hr_pto_balance,
+                     notify=lambda to, subject, body: hr_send_notification(to, subject, body),
+                     state_rules=_state_rules, booked_jobs=_booked_jobs)
+    except Exception as _e:
+        _log.warning("HR agent not wired (%s).", _e)
+
+
+def _hr_agent_answers() -> dict:
+    """Is the HR agent answering employees' questions right now? Only when it's on, out of
+    practice mode, its Questions step is Suggest or Auto, and its runner is allowed (decision 5).
+    Never creates the HR agent's database."""
+    out = {"on": False, "mode": "off", "display": "HR's virtual assistant", "adb": None, "s": None, "ed": None}
+    try:
+        from pathlib import Path as _hp
+        import desk_agent_hr_store as _dhs
+        import desk_agent_settings as _das_a
+        import desk_db as _ddb_a
+        if not _hp(_dhs.path()).exists():
+            return out
+        ed = _desk_edition()
+        adb = _dhs.init()
+        s = _dhs.sync_shared(None if _desk_app_turned_off() else _ddb_a.default_db_path(), adb)
+        mode = _das_a.hr_stage_mode(s, "answer")
+        _prov, why = _das_a.hr_runner(s, ed)
+        out.update(adb=adb, s=s, ed=ed, mode=mode,
+                   display=_das_a.persona(s, _desk_business_name())["display"])
+        out["on"] = mode in ("suggest", "auto") and not why
+    except Exception as _e:  # noqa: BLE001
+        _log.warning("HR agent answers check failed (%s).", _e)
+    return out
+
+
+def _hr_ask_assistant(db: dict, emp_id: str, text: str) -> dict:
+    """An HR Portal Help question for the HR agent (called under the HR lock with `db` loaded).
+    It becomes the employee's own message; a sensitive one goes straight to a person."""
+    import datetime as _aa_dt
+    import uuid as _aa_uuid
+    import desk_hr_agent as _dha_a
+    a = _hr_agent_answers()
+    me = next((e for e in db.get("employees", []) if e.get("id") == emp_id), None)
+    if not a["on"] or not me:
+        return {"queued": False, "reply": "HR's assistant isn't answering questions right now — please message HR "
+                                          "from the Messages tab."}
+    now = _aa_dt.datetime.now().isoformat(timespec="seconds")
+    sensitive = bool(_dha_a.SENSITIVE.search(text))
+    msg = {"id": "MSG-" + str(_aa_uuid.uuid4())[:8].upper(), "sent_at": now, "read": False, "reply": None,
+           "message_type": "help_question", "subject": "Help question", "body": text, "employee_id": emp_id,
+           "sender_name": f"{me.get('first_name', '')} {me.get('last_name', '')}".strip(),
+           "sender_email": me.get("personal_email") or me.get("work_email") or ""}
+    if sensitive:                                    # never shown to the AI; a person answers
+        msg.update(needs_person=True, needs_person_at=now)
+    db.setdefault("messages", []).append(msg)
+    _hr_save_db(db)
+    if sensitive:
+        try:
+            _to = (db.get("config", {}).get("hr_admin_email") or db.get("config", {}).get("owner_email"))
+            if _to:
+                _send_smtp(to=_to, subject="An employee's question needs a person at HR",
+                           body=(f"{msg['sender_name'] or 'An employee'} asked HR a question that a person should "
+                                 "answer. Open HR Admin → Messages (marked 🙋)."))
+        except Exception as _e:  # noqa: BLE001
+            _log.warning("help-question email failed: %s", _e)
+        return {"queued": True, "sensitive": True, "message_id": msg["id"],
+                "reply": "This sounds like something a person at HR should answer, so I've sent it straight to HR. "
+                         "Their reply will appear in Messages."}
+    try:
+        import desk_agent as _dag_a
+        _jobs_agent_wire()                           # also hands the HR agent HR's data functions
+        _dag_a.enqueue(a["adb"], "hr", f"msg:{msg['id']}", "answer", "help question", version="new", settings=a["s"])
+        if not _dag_a.why_not_run(a["adb"], a["s"], edition=a["ed"], now=_dag_a._now()):
+            _dag_a.run_in_background(a["adb"], edition=a["ed"], business=_desk_business_name())
+    except Exception as _e:  # noqa: BLE001 — the 15-minute timer picks it up anyway
+        _log.warning("HR agent help question not started (%s).", _e)
+    return {"queued": True, "sensitive": False, "message_id": msg["id"],
+            "reply": (f"Thanks — {a['display']} is preparing an answer from the handbook. It will appear in "
+                      "Messages" + (" once HR has checked it" if a["mode"] == "suggest" else " shortly")
+                      + ". Want a person instead? Tap 🙋 Talk to a person on the answer.")}
+
+
+def _hr_agent_route(method: str, subpath: str, query: dict, body: dict) -> tuple:
+    """/hr-api/agent… for HR Admin's 🤖 Agent tab (already checked: HR Admin). HR Admin reviews
+    as the owner's HR role (decision 2); settings change on personal installs only."""
+    import re as _re_hr
+    import desk_agent as _dag_hr
+    import desk_agent_hr_store as _dhs
+    import desk_agent_settings as _das_hr
+    import desk_db as _ddb_hr
+    import desk_rules as _drules_hr
+    _jobs_agent_wire()
+    ed = _desk_edition()
+    tdb = None if _desk_app_turned_off() else _ddb_hr.default_db_path()
+    adb = _dhs.init()
+    s = _dhs.sync_shared(tdb, adb)
+    actor = {"role": _drules_hr.OWNER, "id": "hr_admin", "name": "HR Admin", "hr_admin": True}
+    biz = _desk_business_name()
+    sub = subpath[len("/agent"):] or "/status"
+
+    def rows(status):
+        return [dict(x, proposal_id=f"H{x['proposal_id']}") for x in _dag_hr.inbox(adb, status=status, limit=100)]
+    try:
+        provider, why = _das_hr.hr_runner(s, ed)
+        if method == "GET" and sub == "/status":
+            hs = _dhs.settings(adb)
+            st = _dag_hr.status(adb)
+            return _hr_json_response(200, {
+                "ok": True, "enabled": bool(hs.get("agent_hr_enabled")), "practice": bool(hs.get("agent_hr_shadow")),
+                "waiting": st.get("waiting"), "pending": st.get("pending"), "practice_results": st.get("practice"),
+                "provider": provider, "runner_note": why, "spent_usd": st.get("spent_usd"),
+                "budget_usd": st.get("budget_usd"), "can_change_settings": not _drules_hr.server_locked(ed),
+                "edition": ed})
+        if method == "GET" and sub == "/pending":
+            return _hr_json_response(200, {"ok": True, "items": rows("pending")})
+        if method == "GET" and sub == "/practice":
+            return _hr_json_response(200, {"ok": True, "items": rows("practice")})
+        if method == "GET" and sub == "/recommendations":          # "🤖 suggests…" on the request cards
+            import desk_hr_agent as _dha_r
+            return _hr_json_response(200, {"ok": True, "by_ref": _dha_r.recommendations(adb)})
+        if method == "GET" and sub == "/settings":
+            return _hr_json_response(200, {
+                "ok": True, "settings": _dhs.settings(adb), "options": _das_hr.hr_ui_options(),
+                "flow": _dhs.flow(ed, adb), "mode_colors": _das_hr.MODE_COLORS,
+                "mode_labels": _das_hr.STAGE_MODE_LABELS, "runner_note": why, "provider": provider,
+                "can_change_settings": not _drules_hr.server_locked(ed)})
+        if method == "POST" and sub == "/flow":
+            return _hr_json_response(200, {"ok": True, "flow": _dhs.flow(ed, adb, body.get("settings") or {})})
+        if method == "POST" and sub == "/settings":
+            if _drules_hr.server_locked(ed):
+                return _hr_json_response(403, {"error": _drules_hr.SERVER_LOCK_MSG})
+            for k, v in (body.get("settings") or {}).items():
+                _dhs.set_setting(str(k), v, actor=actor, edition=ed, db=adb)
+            return _hr_json_response(200, {"ok": True, "settings": _dhs.settings(adb), "flow": _dhs.flow(ed, adb)})
+        if method == "POST" and sub == "/run-now":
+            if why:
+                return _hr_json_response(200, {"ok": True, "started": False, "why": why})
+            _dag_hr.retry_errors(adb)
+            w = _dag_hr.why_not_run(adb, s, edition=ed, now=_dag_hr._now(), force=True)
+            if w:
+                return _hr_json_response(200, {"ok": True, "started": False, "why": w})
+            started = _dag_hr.run_in_background(adb, edition=ed, business=biz, force=True)
+            return _hr_json_response(200, {"ok": True, "started": started,
+                                           "why": "" if started else "a run is already going"})
+        m = _re_hr.fullmatch(r"/proposals/H?(\d{1,9})/(approve|edit|reject|up|down)", sub)
+        if method == "POST" and m:
+            out = _dag_hr.review(adb, int(m.group(1)), m.group(2), actor_=actor, edition=ed,
+                                 edits=body.get("edits") or None, business=biz)
+            return _hr_json_response(200, dict(out, ok=True, proposal_id=f"H{m.group(1)}"))
+    except Exception as e:  # noqa: BLE001 — AgentError / DeskError / ValueError: show the reason
+        return _hr_json_response(400, {"error": str(e)})
+    return _hr_json_response(404, {"error": "not_found"})
 
 
 def _desk_start_scheduler() -> None:
@@ -7794,6 +8197,242 @@ def update_ticket(ticket_id: str, title: str = "", description: str = "", priori
                       description=description, priority=priority, type=type, due=due,
                       job_id=job_id, customer_id=customer_id, sms_fallback=sms_fallback,
                       reason=reason, expected_version=expected_version, resolution=resolution)
+
+
+@mcp.tool()
+def review_booking(action: str = "list", booking: str = "", window_key: str = "", crew: str = "",
+                   message: str = "", keep_request: bool = False, ctx: "Context | None" = None) -> str:
+    """
+    Bookings customers made on the website that wait for approval (Service Desk → 📅 To
+    approve). Only the owner — and managers on a server when allowed — can use this; the
+    agent can only suggest times to them, never approve.
+
+    action: "list" (default) — what's waiting; "windows" — open arrival windows for one
+            booking (each with a key); "approve" — confirm the customer's held window, or
+            another open one given as window_key; "suggest" — offer the customer window_key
+            instead (message = optional note); "decline" — free the window (message is sent
+            to the customer; keep_request=True keeps it as a request to schedule later).
+    booking: the job id (JOB-0012), the ticket id (T-0042) or part of the customer's name.
+    crew: a user id to assign (server), else the crew setting decides.
+
+    Read back the booking and the time, and approve / decline only after a clear yes.
+
+    Voice examples:
+        "Any bookings to approve?"                       -> list
+        "Approve the Lopez booking"                      -> approve, booking="Lopez"
+        "Suggest Wednesday morning instead for Lopez"    -> windows, then suggest with that key
+    """
+    return _desk_call("review_booking", ctx, action=action, booking=booking, window_key=window_key,
+                      crew=crew, message=message, keep_request=keep_request)
+
+
+@mcp.tool()
+def desk_agent_next(limit: int = 1, ctx: "Context | None" = None) -> str:
+    """
+    The agent queue (Service Desk Agent and Booking & scheduling agent). Claims the next
+    item — a ticket or a booking — and returns everything needed to work it: the context
+    pack, the stage, the actions allowed and the rules (JSON). Work ONLY from the pack,
+    then call desk_agent_submit with your actions. Repeat until it says the queue is empty.
+    Owner or manager only. Claude, Muse, or Grok all use the same tools.
+
+    Voice examples:
+        "Run the desk agent"            -> call this, work the item, submit, repeat
+        "Work the booking queue"
+    """
+    _jobs_agent_wire()
+    return _desk_call("desk_agent_next", ctx, limit=limit, business=_desk_business_name(),
+                      jobs_db=_resolve_job_db_path(None))
+
+
+@mcp.tool()
+def desk_agent_submit(item_id: "int | str", actions: str, summary: str = "", ctx: "Context | None" = None) -> str:
+    """
+    Finish one agent item. actions: a JSON list, each {"action": ..., fields..., "why": "one line",
+    "confidence": 0-1}. Allowed actions are listed in the item's pack (Jobs agent items have ids
+    like "J12" and list their fields in "action_fields"). Examples:
+      [{"action":"set_priority","priority":"P2","why":"leak getting worse","confidence":0.8}]
+      [{"action":"reply","body":"Thanks — we'll look at it Tuesday.","why":"ack","confidence":0.9}]
+      [{"action":"bk_recommend","choice":"approve","window_key":"2026-11-03T08:00-10:00","crew":"u-ann",
+        "why":"near 2 other jobs that morning","confidence":0.85}]
+    Each action is checked against the owner's settings: applied now (Auto), held for a person
+    (Suggest, risky, or a safety rule), or shown only (practice mode). Times must be window keys
+    from the pack. Returns what happened to each action.
+    """
+    _jobs_agent_wire()
+    return _desk_call("desk_agent_submit", ctx, item_id=item_id, actions=actions, summary=summary,
+                      business=_desk_business_name(), jobs_db=_resolve_job_db_path(None))
+
+
+@mcp.tool()
+def desk_agent_review(action: str = "list", proposal_id: "int | str" = 0, edits: str = "", kind: str = "",
+                      ctx: "Context | None" = None) -> str:
+    """
+    Review the agent's work. action: "list" (waiting for a person), "practice" (practice-mode
+    results), "approve", "edit" (approve with changes — edits is JSON like {"body":"…"}),
+    "reject", "up" / "down" (👍 / 👎 on a practice result). kind: "ticket", "booking", "job"
+    or "route" to filter. Jobs agent suggestions have ids like "J12".
+    Owner or manager only. Read the item back and act only after a clear yes.
+
+    Voice examples:
+        "What is the agent waiting on?"      -> list
+        "Approve agent item 12"              -> approve, proposal_id=12
+    """
+    _jobs_agent_wire()
+    return _desk_call("desk_agent_review", ctx, action=action, proposal_id=proposal_id, edits=edits, kind=kind,
+                      business=_desk_business_name(), jobs_db=_resolve_job_db_path(None))
+
+
+@mcp.tool()
+def desk_agent_status(ctx: "Context | None" = None) -> str:
+    """
+    The agent at a glance: on/off (tickets and bookings), which AI runs it, how many items are
+    waiting in its queue and how many of its suggestions wait for a person.
+
+    Voice examples:
+        "How's the agent doing?"
+    """
+    return _desk_call("desk_agent_status", ctx)
+
+
+@mcp.tool()
+def desk_agent_run_now(ctx: "Context | None" = None) -> str:
+    """
+    Start the self-running agent now (Claude API key, Claude subscription or the Grok bot,
+    whichever is chosen in Service Desk → 🤖 Agent). Items that failed are retried. It
+    doesn't run when the runner is "chat", the budget is used up, or nothing is waiting —
+    the answer says why. Owner only.
+
+    Voice examples:
+        "Run the agent now"
+    """
+    _jobs_agent_wire()
+    return _desk_call("desk_agent_run_now", ctx, business=_desk_business_name())
+
+
+@mcp.tool()
+def jobs_agent(action: str = "status", proposal_id: str = "", edits: str = "", settings: str = "",
+               ctx: "Context | None" = None) -> str:
+    """
+    The Jobs agent (Jobs app → 🤖 Agent): the assistant that follows up quotes, suggests dates,
+    preps tomorrow, flags jobs running long, drafts invoices, sends payment reminders, sets up
+    repeat visits, learns real job times — and the Route flow (sort the week, schedule it,
+    route each day, send crews their routes, re-plan today). Works with Service Desk off.
+    It never takes or records payments, changes prices or settings, deletes or cancels
+    anything, edits time or mileage, messages a customer who opted out, or moves a fixed-time
+    job or anything today.
+
+    action: "status" (default) · "list" (suggestions waiting for a person) · "practice"
+            (practice-mode results) · "approve" / "edit" (edits = JSON like {"body": "…"}) /
+            "reject" / "up" / "down" with proposal_id (like "J12") · "run_now" (owner) ·
+            "settings" (settings + both diagrams) · "set" (owner; settings = JSON like
+            {"agent_jb_enabled": true}) · "flow" (redraw the diagrams for unsaved choices).
+    Owner or manager only. Read a suggestion back and approve only after a clear yes.
+    Returns JSON.
+
+    Voice examples:
+        "What is the jobs agent waiting on?"          -> list
+        "Approve jobs agent suggestion J12"           -> approve, proposal_id="J12"
+        "Turn on the jobs agent"                      -> set, settings={"agent_jb_enabled": true}
+    """
+    import desk_db as _ddb5
+    import desk_tools as _dtools
+    _jobs_agent_wire()
+    return _dtools.jobs_agent(_desk_actor_from_user(_current_user(ctx)), _desk_edition(), action=action,
+                              proposal_id=proposal_id, edits=edits, settings=settings or None,
+                              tickets_db=None if _desk_app_turned_off() else _ddb5.default_db_path(),
+                              business=_desk_business_name(), jobs_db=_resolve_job_db_path(None))
+
+
+@mcp.tool()
+def hr_agent(action: str = "status", ctx: "Context | None" = None) -> str:
+    """
+    The HR agent (HR Admin → 🤖 Agent): watches HR deadlines, prepares onboarding and
+    offboarding paperwork, drafts answers to employee questions and flags timeclock and
+    compliance problems. People make every decision about a person.
+
+    From a chat you get COUNTS ONLY — HR details are never handed to a chat AI. Suggestions are
+    reviewed in the HR Admin app's 🤖 Agent tab. The agent itself runs only on an AI with a key
+    you control (a Claude API key or the Grok bot) or this PC's Claude CLI.
+
+    action: "status" (default) · "run_now" (start a run now). Owner only.
+
+    Voice examples:
+        "Is the HR agent on?"                 -> status
+        "Run the HR agent now"                -> run_now
+    """
+    import desk_db as _ddb5
+    import desk_tools as _dtools
+    _jobs_agent_wire()
+    return _dtools.hr_agent(_desk_actor_from_user(_current_user(ctx)), _desk_edition(), action=action,
+                            tickets_db=None if _desk_app_turned_off() else _ddb5.default_db_path(),
+                            business=_desk_business_name())
+
+
+# ── The one business Google Calendar (booking-spec.md §6) — personal installs only ──
+# AI-Prowler has no Google code: YOU (Claude, Muse or Grok) read and write the calendar with
+# your own Google Calendar connector and use these four tools to move the data.
+
+@mcp.tool()
+def calendar_sync_busy(date_from: str, date_to: str, blocks: list | None = None,
+                       ctx: "Context | None" = None) -> str:
+    """
+    STEP 1 of a calendar sync. Send the busy times you read from the ONE business Google
+    Calendar (named in calendar_sync_status) for date_from..date_to (YYYY-MM-DD). AI-Prowler
+    replaces its saved busy times for that range, so events deleted on Google free the time.
+
+    blocks: [{"start": "2026-11-04T10:00", "end": "2026-11-04T11:00", "all_day": false,
+              "event_id": "<google id>"}] — local time; send NO titles or details.
+    Leave out events whose title starts with "Job:" (AI-Prowler's own bookings).
+    A busy time that lands on a booked visit opens a "Calendar clash" ticket for the owner.
+    Then call calendar_pending_events. Refused on a server (Jobs app calendar only).
+
+    Voice examples:
+        "Sync my calendar"
+    """
+    return _desk_call("calendar_sync_busy", ctx, date_from=date_from, date_to=date_to, blocks=blocks or [])
+
+
+@mcp.tool()
+def calendar_pending_events(ctx: "Context | None" = None) -> str:
+    """
+    STEP 2 of a calendar sync. What to write to the business Google Calendar now: confirmed
+    bookings to add ("new"), moved ones to change ("update", with event_id) and cancelled ones
+    to delete ("cancel", with event_id). Each item has title, date, start, end, address and
+    description. Bookings waiting for approval are never included. Do the writes with your
+    Google Calendar connector, then call calendar_mark_synced. Personal installs only.
+
+    Voice examples:
+        "What bookings still need to go on my calendar?"
+    """
+    return _desk_call("calendar_pending_events", ctx)
+
+
+@mcp.tool()
+def calendar_mark_synced(items: list | None = None, ctx: "Context | None" = None) -> str:
+    """
+    STEP 3 of a calendar sync. Report each item from calendar_pending_events:
+    [{"job_id": "JOB-0123", "action": "new", "event_id": "<google event id>"}] when done, or
+    [{"job_id": "JOB-0124", "error": "what went wrong"}] when it failed (it's offered again
+    next sync). The event id lets the next sync update or delete the right event instead of
+    adding a duplicate. Personal installs only.
+
+    Voice examples:
+        "I've added those bookings to the calendar"
+    """
+    return _desk_call("calendar_mark_synced", ctx, items=items or [])
+
+
+@mcp.tool()
+def calendar_sync_status(ctx: "Context | None" = None) -> str:
+    """
+    The business calendar sync: which calendar, when busy times were last synced, whether
+    bookings are waiting for approval because it's stale, what's waiting to be written,
+    errors and clashes — plus the sync prompt to follow. Personal installs only.
+
+    Voice examples:
+        "When did my calendar last sync?"
+    """
+    return _desk_call("calendar_sync_status", ctx)
 
 
 @mcp.tool()
@@ -8185,6 +8824,11 @@ def tickets_settings(setting: str = "", value: "bool | str | None" = None,
     from the customer; 0 = never; default 3). Call with no arguments to show
     them all.
 
+    On an AI-Prowler SERVER this tool only SHOWS settings: every Service Desk
+    setting (and queues, rules, types, backup settings, restores and imports) is
+    changed in AI-Prowler on the server itself — Small Business tab — for
+    security. Changes asked for here are refused; tell the user where to go.
+
     Voice examples:
         "Let me file tickets to myself"
         "Show the Service Desk settings"
@@ -8211,11 +8855,12 @@ def _desk_is_path(path: str) -> bool:
     return path == "/desk" or path.startswith(("/desk/", "/desk-api"))
 
 
-async def _desk_send(send, status: int, ctype: bytes, body: bytes, cache: bytes = b"no-store"):
+async def _desk_send(send, status: int, ctype: bytes, body: bytes, cache: bytes = b"no-store",
+                     extra: list | None = None):
     await send({"type": "http.response.start", "status": status,
                 "headers": [[b"content-type", ctype],
                             [b"content-length", str(len(body)).encode()],
-                            [b"cache-control", cache]]})
+                            [b"cache-control", cache]] + list(extra or [])})
     await send({"type": "http.response.body", "body": body, "more_body": False})
 
 
@@ -8244,6 +8889,7 @@ async def _desk_api(scope, body: bytes, send, actor):
                                 body=body, content_type=_ct, actor=actor,
                                 edition=_desk_edition(), db_path=_db,
                                 services={"base_url": _desk_base_url(),
+                                          "business": _desk_business_name(),
                                           "directory": _desk_directory,
                                           "team": (_desk_team if _IS_SERVER_MODE else (lambda: [])),
                                           "create_job": (None if "create_job" in _USER_DISABLED_TOOLS
@@ -8256,7 +8902,8 @@ async def _desk_api(scope, body: bytes, send, actor):
 # (desk_portal.py). Served whenever Service Desk is on; the request form
 # itself also obeys the owner's "portal_enabled" setting.
 def _desk_portal_path(path: str) -> bool:
-    return path == "/support" or path.startswith(("/support/", "/support-api"))
+    # /book (2026-10-30, booking-spec.md §3): the same one page as /support/new.
+    return path in ("/support", "/book", "/book/") or path.startswith(("/support/", "/support-api"))
 
 
 def _desk_client_ip(scope) -> str:
@@ -8288,7 +8935,9 @@ async def _desk_portal(scope, receive, send):
         _st, _ct, _bd = _dp.static_page(path)
         if _st == 200:     # versioned icon addresses, like the apps (2026-10-28)
             _bd = _version_pwa_icons(str(_dh_p.APP_DIR), _bd)
-        await _desk_send(send, _st, _ct, _bd, b"no-cache")
+        # booking-spec.md §4: framed only on the owner's Allowed websites (Share & embed)
+        await _desk_send(send, _st, _ct, _bd, b"no-cache",
+                         extra=[[b"content-security-policy", _dp.frame_policy(_desk_db_path())]])
         return
     _chunks = []
     while True:
@@ -8312,7 +8961,7 @@ async def _desk_portal(scope, receive, send):
         None, lambda: _dp.route(scope.get("method", "GET"), path, query=_q, body=_body,
                                 content_type=_ct, ip=_ip, db_path=_db, edition=_desk_edition(),
                                 base_url=_desk_base_url(),
-                                business=_get_personal_owner_name() or ""))
+                                business=_desk_business_name()))
     await _desk_send(send, _st, _rct, _rb)
 
 
@@ -8331,7 +8980,7 @@ def _desk_inbound_sms_reply(from_num: str, body_text: str) -> str:
         _team.append(_ddb3.get_settings(_db).get("alert_phone") or "")
         return _din.handle_sms(_db, from_num, body_text, edition=_desk_edition(),
                                team_phones=_team, base_url=_desk_base_url(),
-                               business=_get_personal_owner_name() or "") or ""
+                               business=_desk_business_name()) or ""
     except Exception as _e:
         _log.warning("Service Desk inbound SMS handling failed: %s", _e)
         return ""
@@ -9104,43 +9753,27 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
 
         "  • Agentic analysis tasks (personal mode only — this entire\n"
         "    group is Tier A suppressed and invisible to any server-mode\n"
-        "    client, no role exempted; the Quick Links tab GUI that\n"
-        "    drives this queue is itself hidden in server mode):\n"
+        "    client, no role exempted). Every task has its OWN schedule\n"
+        "    (none / daily / weekly / biweekly / monthly, plus a time of\n"
+        "    day). With auto-run on, AI-Prowler runs it itself when due on\n"
+        "    the Agent API Key (Claude or Grok — a default, with an optional\n"
+        "    per-task override). There is no queue.\n"
         "      create_analysis_task — defines a new recurring or one-off\n"
-        "        custom analysis task from a plain-language request. Day-\n"
-        "        granularity scheduling only; pull-based, not autonomous —\n"
-        "        see its own docstring for the full behavior explanation.\n"
-        "      list_analysis_tasks — lists the FULL custom-task definition\n"
-        "        list (up to 25) regardless of due date, with an is_due flag\n"
-        "        per task. Use for 'what's in my task queue' — different from\n"
-        "        get_pending_analysis_tasks below, which only shows tasks\n"
-        "        already queued into the run queue. Read-only.\n"
-        "      queue_single_task(task_id) — adds one specific task to the\n"
-        "        run queue immediately, regardless of its scheduled next_due\n"
-        "        time. The queue is populated manually only — there is no\n"
-        "        bulk 'sync everything currently due' tool — so this is how\n"
-        "        a task actually gets into the queue in the first place.\n"
-        "      get_pending_analysis_tasks — returns tasks from\n"
-        "        pending_tasks.json that are DUE right now (queued but not\n"
-        "        yet due stays hidden). Call when the user pastes the\n"
-        "        run-queue command from the Quick Links tab.\n"
-        "      complete_analysis_task(task_id, summary) — marks a task done\n"
-        "        for this run. One-shot tasks (no schedule) close\n"
-        "        permanently. Recurring tasks — built-in and custom treated\n"
-        "        identically — have next_due advanced (anchor-based, not\n"
-        "        completion-date-based) and status reset back to pending, so\n"
-        "        the same entry re-arms and resurfaces on its own next cycle\n"
-        "        instead of needing to be re-queued. Call after finishing\n"
-        "        each analysis.\n"
-        "      update_analysis_task(task_id, ...) — edits an existing custom\n"
-        "        task's label, prompt, schedule, first_due, output options,\n"
-        "        or scope_dirs from chat; only the fields passed are changed.\n"
-        "        Built-in tasks aren't editable this way — no standalone\n"
-        "        definition to edit.\n"
-        "      delete_analysis_task(task_id) — removes a task from chat.\n"
-        "        Accepts either a custom definition's task_id (deletes the\n"
-        "        definition AND any linked queue entries) or a single queue\n"
-        "        entry's task_id (removes just that instance).\n"
+        "        task from a plain-language request (auto_run, run_time,\n"
+        "        ai_provider, ai_model are optional).\n"
+        "      list_analysis_tasks — lists ALL tasks (up to 25) with their\n"
+        "        due status. Read-only.\n"
+        "      queue_single_task(task_id) — asks AI-Prowler to run one task\n"
+        "        now (name kept for compatibility).\n"
+        "      get_pending_analysis_tasks — the tasks a CHAT should run now:\n"
+        "        due tasks with auto-run off, or runs AI-Prowler couldn't do\n"
+        "        (e.g. no Agent API Key).\n"
+        "      complete_analysis_task(task_id, summary) — records a chat run\n"
+        "        and moves a recurring task to its next due time.\n"
+        "      update_analysis_task(task_id, ...) — edits a task's label,\n"
+        "        prompt, schedule, time, auto-run, AI, outputs or scope;\n"
+        "        only the fields passed change.\n"
+        "      delete_analysis_task(task_id) — deletes a task.\n"
         "      save_analysis_report(content, title, task_id, report_folder) —\n"
         "        saves the full analysis as a .docx Word document.\n\n"
 
@@ -9467,16 +10100,17 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
 
         "AGENTIC ANALYSIS WORKFLOW\n"
         + "-" * 30 + "\n"
-        "The Quick Links tab in the AI-Prowler GUI queues analysis tasks and\n"
-        "copies a run command to the clipboard. When the user pastes that\n"
-        "command into Claude, Muse, or Grok, follow this sequence:\n\n"
+        "Every analysis task has its own schedule. There is no queue.\n"
+        "Tasks with Auto-run on are run by AI-Prowler itself on the Agent\n"
+        "API Key. When the user asks you to 'run my due analysis tasks' (or\n"
+        "pastes a 📋 Copy for chat prompt), follow this sequence:\n\n"
 
         "  STEP A1  get_pending_analysis_tasks()\n"
-        "    Returns a JSON object with pending_count and a tasks array.\n"
-        "    Each task has: task_id, label, prompt, scope_dirs,\n"
-        "    schedule, next_due, output_learnings, output_report,\n"
-        "    report_folder, queued_ago.\n"
-        "    If pending_count is 0, tell the user the queue is empty.\n\n"
+        "    Returns a JSON object with pending_count and a tasks array:\n"
+        "    the tasks a CHAT should run (due with Auto-run off, or asked\n"
+        "    to run). Each has task_id, label, prompt, scope_dirs, schedule,\n"
+        "    next_due, output_learnings, output_report, report_folder, why.\n"
+        "    If nothing needs running, say so.\n\n"
 
         "  STEP A2  Execute each task's prompt\n"
         "    The prompt field contains the COMPLETE instruction for that\n"
@@ -9488,15 +10122,13 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "    as the primary financial source; fall back to\n"
         "    read_job_spreadsheet() and get_ar_aging_report() otherwise.\n\n"
 
-        "  STEP A3  complete_analysis_task(task_id, summary)\n"
-        "    Call after EVERY task — even if nothing was found. The summary\n"
-        "    is one sentence (e.g. 'Found 3 overdue invoices totalling $1,450').\n"
-        "    For scheduled tasks this auto-advances next_due anchored to the\n"
-        "    original due date (weekly task due Monday stays on Mondays).\n\n"
+        "  STEP A3  save_analysis_report() if output_report=true\n"
+        "    Save the full analysis as a Word document to report_folder.\n\n"
 
-        "  STEP A4  save_analysis_report() if output_report=true\n"
-        "    Save the full analysis as a Word document to report_folder.\n"
-        "    Call this BEFORE complete_analysis_task.\n\n"
+        "  STEP A4  complete_analysis_task(task_id, summary)\n"
+        "    Call after EVERY task — even if nothing was found (failed=True\n"
+        "    if it didn't finish). AI-Prowler records the run and moves a\n"
+        "    scheduled task to its next time (a Monday task stays on Mondays).\n\n"
 
         "  QUICKBOOKS DETECTION (in analysis prompts):\n"
         "    Check whether tools whose names contain 'quickbooks' or 'qbo'\n"
@@ -9505,9 +10137,8 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "  Server mode: get_pending_analysis_tasks, complete_analysis_task,\n"
         "  save_analysis_report, create_analysis_task, list_analysis_tasks,\n"
         "  queue_single_task, delete_analysis_task, and\n"
-        "  update_analysis_task are NOT available to any role — the Quick\n"
-        "  Links tab that queues this workflow is a personal-install-only\n"
-        "  GUI feature.\n\n"
+        "  update_analysis_task are NOT available to any role — analysis\n"
+        "  tasks are a personal-install-only feature.\n\n"
 
 
         "PROACTIVE ALERTS (background scheduler — no Claude, Muse, or Grok needed)\n"
@@ -9756,31 +10387,18 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         if _app not in _sys.path:
             _sys.path.insert(0, _app)
 
-        # Only show queue entries that are due right now
-        pending_tasks = _load_pending_tasks()
-        now_utc = _dt.datetime.utcnow()
-        due_now = []
-        for t in pending_tasks:
-            if t.get("status") != "pending":
-                continue
-            next_due_str = t.get("next_due", "")
-            if not next_due_str:
-                continue
-            try:
-                next_due = _dt.datetime.fromisoformat(
-                    next_due_str.replace("Z", ""))
-                if next_due <= now_utc:
-                    due_now.append(t)
-            except Exception:
-                pass
-
-        # Check custom_analysis_tasks.json for due/overdue items
+        # 2026-11-01: every task has its own schedule. Two lists — what this chat should run now (auto-run
+        # off, or a run AI-Prowler couldn't do), and what AI-Prowler runs itself.
         try:
             import custom_tasks_manager as _ctm
             custom_tasks = _ctm.load_custom_tasks()
-            due_tasks = _ctm.get_due_tasks(custom_tasks)
+            due_now = _ctm.chat_due_tasks(custom_tasks)
+            chat_ids = {t.get("task_id") for t in due_now}
+            due_tasks = [t for t in custom_tasks
+                         if _ctm.auto_runs_now(t) and t.get("task_id") not in chat_ids]
         except Exception:
             custom_tasks = []
+            due_now = []
             due_tasks = []
 
         has_due_now = len(due_now) > 0
@@ -9795,8 +10413,9 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
 
             if has_due_now:
                 briefing_lines.append(
-                    f"Queue: {len(due_now)} task"
-                    f"{'s' if len(due_now) != 1 else ''} due now:"
+                    f"For this chat: {len(due_now)} task"
+                    f"{'s' if len(due_now) != 1 else ''} to run now "
+                    f"(get_pending_analysis_tasks):"
                 )
                 for t in due_now:
                     briefing_lines.append(
@@ -9806,8 +10425,8 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
                 if has_due_now:
                     briefing_lines.append("")
                 briefing_lines.append(
-                    f"Scheduled: {len(due_tasks)} task"
-                    f"{'s' if len(due_tasks) != 1 else ''} due:"
+                    f"AI-Prowler is running {len(due_tasks)} task"
+                    f"{'s' if len(due_tasks) != 1 else ''} itself (no action needed):"
                 )
                 for t in due_tasks:
                     status = _ctm.due_status_label(t)
@@ -13097,6 +13716,26 @@ def _owner_or_manager_denied(ctx) -> str:
     return "❌ The AR aging report is for the owner and managers only. Nothing was shown."
 
 
+def _task_tools_denied(ctx) -> str:
+    """AI Analysis Tasks on a server (2026-11-02, David): owner and managers only. "" for them, for
+    personal mode and for the server's own program (no signed-in user); a ❌ for staff and field crew."""
+    user = _current_user(ctx)
+    if user is None:
+        return ""
+    if (user.get("role") or "").strip().lower() in ("owner", "manager"):
+        return ""
+    return "❌ AI Analysis Tasks are for the owner and managers only. Nothing was changed."
+
+
+def _task_is_mine(task: dict, ctx) -> bool:
+    """On a server a manager sees and changes only their own tasks; the owner sees them all (tasks made in
+    the server's own window belong to the owner). Personal mode: always True."""
+    user = _current_user(ctx)
+    if user is None or (user.get("role") or "").strip().lower() == "owner":
+        return True
+    return str(task.get("owner_user_id") or "") == str(user.get("id") or "")
+
+
 def _crew_name_in_cell(row_crew_lower: str, crew_name: str) -> bool:
     """
     Checks whether crew_name (the logged-in user's stripped+lowercased
@@ -15930,6 +16569,36 @@ def _read_business_info(db_path: str) -> dict:
     return info
 
 
+def _service_link(db_path: str, document: str, channel: str) -> tuple:
+    """(url, wording) for the "request service" link on an invoice/receipt —
+    Jobs app Settings "Service Request Link" (blank = off, 'auto' = this
+    install's /support/new, or any http(s) link) and the four
+    "Service Link - Email/Text Invoice/Receipt" Yes/No rows. See service_link.py.
+    'auto' needs Remote Access and Service Desk with its request form switched
+    on. Never raises: any problem means no link, never a failed send."""
+    try:
+        import service_link as _sl
+        _base, _desk_on = "", True
+        try:
+            import setup_wizard as _sw_sl
+            _d = _sw_sl.tunnel_domain()
+            _base = f"https://{_d}" if _d else ""
+        except Exception:
+            pass
+        try:
+            import desk_gui_links as _dgl_sl
+            _desk_on = _dgl_sl.desk_switched_on()
+            if _desk_on:
+                import desk_db as _ddb_sl, desk_portal as _dpo_sl
+                _desk_on = bool(_ddb_sl.get_settings(_ddb_default_path()).get("portal_enabled")) \
+                    and bool(_dpo_sl.channels().get("email"))
+        except Exception:
+            pass                                  # can't tell -> don't hide a link the owner set
+        return _sl.link_for(db_path, document, channel, base_url=_base, desk_on=_desk_on)
+    except Exception:
+        return "", ""
+
+
 def _note_app_seen(app: str, scope) -> None:
     """Setup Center (2026-09-30): note that a phone app ('remote_app' /
     'jobs_app') is in use, and whether from a phone, in
@@ -16155,12 +16824,14 @@ def _load_payment_settings() -> dict:
 
 
 def _create_stripe_checkout_url(secret_key: str, amount_dollars: float,
-                                 description: str, invoice_id: str) -> "str | None":
+                                 description: str, invoice_id: str,
+                                 success_url: str = "") -> "str | None":
     """
     Creates a fresh, single-use Stripe Checkout Session for exactly this
     invoice's amount and returns its URL, or None on any failure (network,
     bad key, etc. — callers fall back to a static URL when this returns
-    None, never raise up to the caller).
+    None, never raise up to the caller). success_url (2026-11-02, online
+    orders): where the customer lands after paying — their order page.
     """
     try:
         import requests as _req_stripe
@@ -16170,7 +16841,7 @@ def _create_stripe_checkout_url(secret_key: str, amount_dollars: float,
             auth=(secret_key, ""),
             data={
                 "mode": "payment",
-                "success_url": "https://ai-prowler.com/",
+                "success_url": success_url or "https://ai-prowler.com/",
                 "line_items[0][price_data][currency]": "usd",
                 "line_items[0][price_data][product_data][name]": description or f"Invoice {invoice_id}",
                 "line_items[0][price_data][unit_amount]": _cents,
@@ -16191,15 +16862,26 @@ def _create_stripe_checkout_url(secret_key: str, amount_dollars: float,
 
 def _create_square_checkout_url(access_token: str, location_id: str,
                                  amount_dollars: float, description: str,
-                                 invoice_id: str) -> "str | None":
+                                 invoice_id: str, redirect_url: str = "") -> "str | None":
     """
     Creates a fresh, single-use Square payment link for exactly this
     invoice's amount and returns its URL, or None on any failure. Same
     graceful-fallback contract as _create_stripe_checkout_url().
+    redirect_url: where the customer lands after paying (online orders).
     """
     try:
         import requests as _req_sq, uuid as _uuid_sq
         _cents = int(round(amount_dollars * 100))
+        _sq_body = {
+            "idempotency_key": str(_uuid_sq.uuid4()),
+            "quick_pay": {
+                "name": description or f"Invoice {invoice_id}",
+                "price_money": {"amount": _cents, "currency": "USD"},
+                "location_id": location_id,
+            },
+        }
+        if redirect_url:
+            _sq_body["checkout_options"] = {"redirect_url": redirect_url}
         resp = _req_sq.post(
             "https://connect.squareup.com/v2/online-checkout/payment-links",
             headers={
@@ -16207,14 +16889,7 @@ def _create_square_checkout_url(access_token: str, location_id: str,
                 "Content-Type": "application/json",
                 "Square-Version": "2026-05-20",
             },
-            json={
-                "idempotency_key": str(_uuid_sq.uuid4()),
-                "quick_pay": {
-                    "name": description or f"Invoice {invoice_id}",
-                    "price_money": {"amount": _cents, "currency": "USD"},
-                    "location_id": location_id,
-                },
-            },
+            json=_sq_body,
             timeout=15,
         )
         if resp.status_code == 200:
@@ -16435,6 +17110,12 @@ def email_invoice(
     inv_row = _ei_lookup["inv_row"]
     db_path = _ei_lookup["db_path"]
 
+    # ── The customer's own Email switch (2026-11-02) ──────────────────────────
+    _ei_block = _customer_message_block(db_path, "email", customer_id=str(inv_row.get("CustomerID", "") or ""),
+                                        to=to)
+    if _ei_block:
+        return _ei_block
+
     # ── Look up customer email if not provided ────────────────────────────────
     if not to:
         cust_id = str(inv_row.get("CustomerID", "") or "")
@@ -16651,6 +17332,12 @@ def email_invoice(
         f"Due Date: {due_date}\n\n"
         f"View this invoice in HTML format if your email client supports it."
     )
+    # (2026-10-29) "Request service" link — Jobs app Settings, see _service_link()
+    _sl_url, _sl_words = _service_link(db_path, "invoice", "email")
+    if _sl_url:
+        import service_link as _sl_mod
+        html_body = _sl_mod.add_to_html(html_body, _sl_url, _sl_words)
+        _plain_body += "\n\n" + _sl_mod.text_line(_sl_url, _sl_words).strip()
 
     try:
         _ei_ok, _ei_msg = _send_smtp(
@@ -16797,6 +17484,12 @@ def text_invoice(
             f"Hi {cust_name}, your invoice for {job_id} is ready — total due: "
             f"{total_due}. Reply here with any questions."
         )
+
+    # (2026-10-29) "Request service" link — Jobs app Settings, see _service_link()
+    _sl_url, _sl_words = _service_link(_ti_lookup["db_path"], "invoice", "sms")
+    if _sl_url:
+        import service_link as _sl_mod
+        _ti_msg += _sl_mod.text_line(_sl_url, _sl_words)
 
     _ti_result = send_sms(to=cust_name, message=_ti_msg, ctx=ctx)
     if _ti_result.startswith("❌"):
@@ -16998,6 +17691,12 @@ def email_receipt(
         f"Payment Method: {pm}\n\n"
         f"Thank you for your business!"
     )
+    # (2026-10-29) "Request service" link — Jobs app Settings, see _service_link()
+    _sl_url, _sl_words = _service_link(db_path, "receipt", "email")
+    if _sl_url:
+        import service_link as _sl_mod
+        html_body = _sl_mod.add_to_html(html_body, _sl_url, _sl_words)
+        _plain_body += "\n\n" + _sl_mod.text_line(_sl_url, _sl_words).strip()
 
     try:
         _er_ok, _er_msg = _send_smtp(
@@ -17074,6 +17773,12 @@ def text_receipt(
         f"Hi {cust_name}, thank you! We received your {pm} payment of {total_amt} "
         f"for job {job_id}. Receipt #{inv_id}. We appreciate your business!"
     )
+
+    # (2026-10-29) "Request service" link — Jobs app Settings, see _service_link()
+    _sl_url, _sl_words = _service_link(_tr_lookup["db_path"], "receipt", "sms")
+    if _sl_url:
+        import service_link as _sl_mod
+        _tr_msg += _sl_mod.text_line(_sl_url, _sl_words)
 
     _tr_result = send_sms(to=cust_name, message=_tr_msg, ctx=ctx)
     if _tr_result.startswith("❌"):
@@ -18327,6 +19032,11 @@ def send_customer_reminders(
         if not c:
             skipped.append(f"{cid} (not found or not currently an active customer)")
             continue
+        # 2026-11-02: the customer's own Email / Text switch (Off = they use their own system)
+        if not c.get("email_on" if channel_norm == "email" else "sms_on", True):
+            skipped.append(f"{c['name']} ({cid}) — {'Email' if channel_norm == 'email' else 'Text'} Messages "
+                           f"is Off for this customer (they use their own system)")
+            continue
         contact = c["email"] if channel_norm == "email" else c["phone"]
         if not contact:
             skipped.append(f"{c['name']} ({cid}) — no {'email' if channel_norm == 'email' else 'phone number'} on file")
@@ -18362,6 +19072,30 @@ def send_customer_reminders(
         lines.append(f"⚠️ Skipped {len(skipped)}:")
         lines.extend(f"  • {s}" for s in skipped)
     return "\n".join(lines)
+
+
+def _customer_message_block(db_path: str, channel: str, *, customer_id: str = "", to: str = "") -> str:
+    """2026-11-02 (David: "some customers have their own system and require the contractor to use it"):
+    the ❌ to return when this customer's Email / Text Messages switch is Off — or "" to go ahead.
+    `to` = an address/number the caller typed. Typing a DIFFERENT address than the customer's own (say
+    their accounts-payable inbox) is a deliberate choice and is honored; their own on-file contact, or
+    no address at all (look it up), is held back."""
+    try:
+        from db_write_ops import db_customer_message_switches, customer_blocked_message
+        sw = db_customer_message_switches(db_path, customer_id,
+                                          email=to if channel == "email" else "",
+                                          phone=to if channel == "sms" else "")
+        if not sw.get("found") or sw.get(channel, True):
+            return ""
+        if to and customer_id and sw.get("customer_id") == customer_id:
+            # found by ID — is the typed address the customer's own?
+            own = db_customer_message_switches(db_path, "", email=to if channel == "email" else "",
+                                               phone=to if channel == "sms" else "")
+            if own.get("customer_id") != customer_id:
+                return ""                                  # a different address on purpose — send it
+        return customer_blocked_message(sw.get("name", ""), channel)
+    except Exception:
+        return ""
 
 
 def _isinstance_failure(result) -> bool:
@@ -27928,8 +28662,10 @@ def _outlook_is_available() -> bool:
         # Strategy 1 — GetActiveObject: connects to a RUNNING Outlook instance.
         # SAFE — never launches Outlook, only checks if it is already open.
         try:
-            _app = _wc.GetActiveObject("Outlook.Application")
-            _ = _app.Version
+            with _com_for_this_thread():
+                _app = _wc.GetActiveObject("Outlook.Application")
+                _ = _app.Version
+                _app = None
             return True
         except Exception:
             pass
@@ -28020,7 +28756,44 @@ def _send_via_outlook(to: str, subject: str, body: str,
     MS365 / Exchange OAuth tokens stored by Windows).
 
     Returns (ok: bool, message: str).
+
+    2026-11-02: every call sets up COM for the thread it runs on. Service Desk replies, alerts and
+    reminders are sent from worker threads (the web server's executor, the scheduler), where COM had
+    never been set up — so every one failed with "CoInitialize has not been called" and the customer
+    never got the reply. Only a send from the GUI's own thread used to work.
     """
+    with _com_for_this_thread():
+        return _send_via_outlook_com(to, subject, body, attachment_path, body_html, reply_to,
+                                     sender_display, from_account_email)
+
+
+class _com_for_this_thread:
+    """`with _com_for_this_thread():` — set up COM (Outlook) for the current thread and tidy up after.
+    Safe to nest and safe on a thread that already has it. 2026-11-02: COM calls from worker threads
+    failed with "CoInitialize has not been called" (Service Desk replies never reached customers)."""
+
+    def __enter__(self):
+        self._com = None
+        try:
+            import pythoncom as _pc
+            _pc.CoInitialize()
+            self._com = _pc
+        except Exception:
+            self._com = None
+        return self
+
+    def __exit__(self, *exc):
+        if self._com is not None:
+            try:
+                self._com.CoUninitialize()
+            except Exception:
+                pass
+        return False
+
+
+def _send_via_outlook_com(to, subject, body, attachment_path, body_html, reply_to, sender_display,
+                          from_account_email) -> tuple:
+    """The Outlook send itself — called by _send_via_outlook() with COM set up for this thread."""
     try:
         import win32com.client as _wc
         _app   = _wc.Dispatch("Outlook.Application")
@@ -28404,11 +29177,13 @@ def configure_email(username: str,
         acct_lines = []
         try:
             import win32com.client as _wc
-            _ns = _wc.Dispatch("Outlook.Application").GetNamespace("MAPI")
-            for _a in _ns.Accounts:
-                marker = " ← will use (matches username)" \
-                         if _a.SmtpAddress.lower() == username.lower() else ""
-                acct_lines.append(f"   • {_a.SmtpAddress}{marker}")
+            with _com_for_this_thread():
+                _ns = _wc.Dispatch("Outlook.Application").GetNamespace("MAPI")
+                for _a in _ns.Accounts:
+                    marker = " ← will use (matches username)" \
+                             if _a.SmtpAddress.lower() == username.lower() else ""
+                    acct_lines.append(f"   • {_a.SmtpAddress}{marker}")
+                _ns = None
         except Exception:
             pass
 
@@ -28520,21 +29295,23 @@ def list_outlook_accounts(ctx: Context = None) -> str:
 
     try:
         import win32com.client as _wc
-        # Try GetActiveObject first (Outlook already open — instant, no side effects).
-        # Fall back to Dispatch (Outlook installed but not open — starts it silently
-        # in the background just long enough to read accounts, same as _send_via_outlook).
-        try:
-            _app = _wc.GetActiveObject("Outlook.Application")
-        except Exception:
-            # Outlook not currently open — cold-start via Dispatch.
-            # This is safe here because the user has explicitly asked to list accounts,
-            # and Dispatch is only blocked from _outlook_is_available() to prevent
-            # the conflict error at AI-Prowler startup (before the user has asked
-            # anything). At this point the user has deliberately invoked the tool.
-            _app = _wc.Dispatch("Outlook.Application")
-        _ns   = _app.GetNamespace("MAPI")
-        accts = [_a.SmtpAddress for _a in _ns.Accounts
-                 if _a.SmtpAddress]
+        with _com_for_this_thread():          # 2026-11-02: tool calls run on worker threads
+            # Try GetActiveObject first (Outlook already open — instant, no side effects).
+            # Fall back to Dispatch (Outlook installed but not open — starts it silently
+            # in the background just long enough to read accounts, same as _send_via_outlook).
+            try:
+                _app = _wc.GetActiveObject("Outlook.Application")
+            except Exception:
+                # Outlook not currently open — cold-start via Dispatch.
+                # This is safe here because the user has explicitly asked to list accounts,
+                # and Dispatch is only blocked from _outlook_is_available() to prevent
+                # the conflict error at AI-Prowler startup (before the user has asked
+                # anything). At this point the user has deliberately invoked the tool.
+                _app = _wc.Dispatch("Outlook.Application")
+            _ns   = _app.GetNamespace("MAPI")
+            accts = [_a.SmtpAddress for _a in _ns.Accounts
+                     if _a.SmtpAddress]
+            _app = _ns = None
     except Exception as _e:
         return (f"❌ Could not enumerate Outlook accounts: {_e}\n"
                 "Make sure classic Outlook (OUTLOOK.EXE) is installed.\n"
@@ -29306,50 +30083,33 @@ def rebuild_learnings_index(ctx: Context = None) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# AI ANALYSIS QUEUE TOOLS  (v8.0.0)
+# AI ANALYSIS TASKS — every task has its own schedule (2026-11-01; was a queue since v8.0.0)
 # ══════════════════════════════════════════════════════════════════════════════
-# These two tools power the Quick Links "AI Analysis" buttons.
-#
-# WORKFLOW:
-#   1. User clicks an analysis button in the Quick Links tab (e.g. "Analyze My
-#      Business"). AI-Prowler writes a task record to pending_tasks.json and
-#      copies a matching Claude, Muse, or Grok command to the clipboard.
-#   2. User pastes the command into Claude, Muse, or Grok. Claude, Muse, or Grok calls
-#      get_pending_analysis_tasks() which returns all queued tasks.
-#   3. Claude, Muse, or Grok executes the analysis — searching documents, reading job data,
-#      reviewing learnings — and records insights via record_learning().
-#   4. Claude, Muse, or Grok calls complete_analysis_task(task_id) to mark each task done.
-#
-# pending_tasks.json schema (list of task objects):
-#   {
-#     "task_id":    "analyze_business_20260623_143022",
-#     "type":       "analyze_business",
-#     "label":      "Analyze My Business",
-#     "prompt":     "Analyze my job tracker, recent learnings, ...",
-#     "created_at": "2026-06-23T14:30:22Z",
-#     "status":     "pending"   # or "completed"
-#   }
+# David 2026-11-01: "get rid of the task queue and make every task have its own schedule". Tasks live in
+# custom_analysis_tasks.json (custom_tasks_manager). A task with ⏱ Auto-run is run by AI-Prowler itself
+# when due, on the Agent API Key (task_queue_automation's scheduler, one AI call per task). Everything
+# else is run from a chat: get_pending_analysis_tasks() lists what the chat should run,
+# complete_analysis_task() records the run and moves the task to its next time. queue_single_task()
+# (name kept for the phone app) asks AI-Prowler to run a task now. pending_tasks.json is gone — its
+# contents moved into the tasks once (custom_tasks_manager.retire_queue).
 # ══════════════════════════════════════════════════════════════════════════════
-
-_PENDING_TASKS_FILE = Path.home() / ".ai-prowler" / "pending_tasks.json"
-
 
 def _load_pending_tasks() -> list:
-    """Load pending_tasks.json, returning an empty list if absent or corrupt."""
+    """What a chat should run now, in the old queue-entry shape (status 'pending') — kept for callers like
+    the session briefing. There is no queue file any more."""
     try:
-        if _PENDING_TASKS_FILE.exists():
-            data = _ss_read_json(_PENDING_TASKS_FILE)      # retries a mid-save read
-            return data if isinstance(data, list) else []
+        import custom_tasks_manager as _ctm_lp
+        out = []
+        for t in _ctm_lp.chat_due_tasks(_ctm_lp.load_custom_tasks()):
+            e = dict(t)
+            e["status"] = "pending"
+            e["prompt"] = _ctm_lp.build_task_prompt(t)
+            at = _ctm_lp.due_at(t)
+            e["due_at"] = at.isoformat() if at else None
+            out.append(e)
+        return out
     except Exception:
-        pass
-    return []
-
-
-def _save_pending_tasks(tasks: list) -> None:
-    """Write the tasks list to pending_tasks.json atomically."""
-    _PENDING_TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    # (The docstring always said "atomically" - now it actually is: safe_save.)
-    _ss_write_json(_PENDING_TASKS_FILE, tasks, ensure_ascii=False)
+        return []
 
 
 @mcp.tool()
@@ -29367,64 +30127,32 @@ def create_analysis_task(
     daily_end_time: str = "17:00",
     daily_times_per_day: int = 1,
     schedule_day_of_week: "int | None" = None,
+    auto_run: bool = True,
+    run_time: str = "09:00",
+    ai_provider: str = "",
+    ai_model: str = "",
+    ctx: Context = None,
 ) -> str:
     """
-    AGENTIC ANALYSIS — Define a new recurring (or one-off) custom analysis
-    task in the Quick Links / My Custom Analyses queue, from a plain-language
-    request — the same feature the "+ New Custom Analysis" GUI dialog builds,
-    now callable directly from a conversation.
+    AGENTIC ANALYSIS — Define a new recurring (or one-off) analysis task from a plain-language request —
+    the same thing the "+ New Task" editor in the Links & Analysis tab builds.
 
-    IMPORTANT — how this actually behaves (set expectations honestly):
-      • Time-of-day granularity, but ONLY for schedule="daily" (v8.1.11).
-        Daily supports daily_start_time, daily_end_time, and
-        daily_times_per_day — N evenly-spaced runs per day, the first
-        exactly at daily_start_time and the last exactly at daily_end_time
-        when N > 1 (times_per_day=1 is classic once-daily, end_time
-        irrelevant). There is no separate "Hourly" schedule — 24 times/day
-        from 00:00 to 23:00 IS hourly. Weekly/biweekly/monthly remain
-        day-granularity only — no time-of-day for those; a request like
-        "every Monday at 8am" still can't be represented for anything but
-        Daily, so for weekly say so plainly rather than implying it will
-        happen at a specific time.
-      • Day-of-week pinning (v9.0.2), via schedule_day_of_week — only for
-        weekly, biweekly, or monthly. Pins next_due to a specific weekday
-        (e.g. always Tuesday) instead of drifting by a raw +7/+14/+30-day
-        interval from first_due, so you can deliberately stagger several
-        tasks across the week to spread out credit usage. Monthly snaps to
-        the first occurrence of that weekday on/after the otherwise-
-        computed monthly date. Omit (or pass None) for unpinned behavior —
-        the historical default, where the weekday just follows whatever
-        first_due happened to land on.
-      • Pull-based, not autonomous, UNLESS the Autonomous AI Task Queue is
-        separately enabled and running. Creating a task alone does NOT
-        make AI-Prowler wake up and run it unattended — that requires the
-        Autonomous AI Task Queue toggle to be ON (see Links & Analysis
-        tab). A task becoming due just means it's waiting for the next
-        check, whether that's a human asking in a Claude, Muse, or Grok conversation or
-        the automated checker's own schedule (which is independently
-        configurable and may be daily or hourly-interval — see
-        task_queue_automation.py's check_mode).
-      • times_per_day > 1 has a real cost implication worth mentioning to
-        the user: each check the Autonomous AI Task Queue makes draws from
-        the Claude subscription's usage pool (or metered API billing, if
-        configured that way) — more frequent daily runs means more of
-        that usage gets consumed. Mention this if the user is setting up
-        a task with a high times_per_day and hasn't brought up cost
-        themselves.
-      • schedule must be one of: none, daily, weekly, biweekly, monthly —
-        quarterly and yearly are NOT supported (removed; use monthly for
-        longer cadences). If schedule is anything but "none", first_due is
-        REQUIRED (YYYY-MM-DD) — compute the correct date yourself (e.g. the
-        next occurrence of the requested weekday) rather than asking the
-        user to do date math. Use user_time_v0 first if you need today's
-        date/timezone to compute it.
-      • Maximum 25 custom tasks at once (enforced inside create_task() —
-        the same limit the GUI dialog respects). If the user is at the cap,
-        tell them to delete an existing task first (Links & Analysis tab).
-      • At least one of output_learnings/output_report/output_email must be
-        True (v8.1.10) — a task with none selected produces results nowhere
-        retrievable if it ever runs via the Autonomous AI Task Queue,
-        since there's no chat window in a headless run to "display" to.
+    How it behaves (2026-11-01 — every task has its own schedule, there is no queue):
+      • auto_run=True (default): AI-Prowler runs the task itself when it's due, on the Agent API Key
+        (🔑 Agent API Key at the top of the Small Business tab; costs a few cents a run and counts in the
+        agents' monthly budget). With no key saved it waits, and a chat can run it instead
+        (get_pending_analysis_tasks lists it once it's due and Auto-run is off, or when asked to run).
+      • Time of day: daily tasks use daily_start_time / daily_end_time / daily_times_per_day (N evenly
+        spaced runs; 24/day from 00:00 to 23:00 is hourly). Weekly / biweekly / monthly tasks run at
+        run_time (HH:MM, default 09:00) on their day — so "every Monday at 8am" works: weekly,
+        schedule_day_of_week=0, run_time "08:00".
+      • schedule_day_of_week pins weekly / biweekly / monthly to a weekday (0=Mon … 6=Sun).
+      • ai_provider "" = the default AI (the agents' complex & customer model); or "claude" / "grok" with
+        an optional ai_model.
+      • More runs cost more: mention it if the user sets times_per_day high and hasn't brought up cost.
+      • schedule is one of: none, daily, weekly, biweekly, monthly. If not "none", first_due (YYYY-MM-DD)
+        is required — work out the date yourself (use user_time_v0 for today's date if needed).
+      • Maximum 25 tasks. At least one of output_learnings / output_report / output_email must be True.
 
     Args:
         label:            Short name for the task, max 60 characters.
@@ -29459,6 +30187,12 @@ def create_analysis_task(
                           meaningful for weekly/biweekly/monthly — pins
                           next_due to that weekday instead of drifting from
                           first_due's own weekday. None = unpinned.
+        auto_run:         True (default) = AI-Prowler runs it when due on the
+                          Agent API Key; False = a chat runs it.
+        run_time:         HH:MM time of day for weekly / biweekly / monthly
+                          (and one-off) tasks. Default "09:00".
+        ai_provider:      "" (default AI), "claude" or "grok".
+        ai_model:         Optional model for that provider ("" = its default).
 
     Returns:
         Confirmation with the new task_id and its next due date, or a
@@ -29473,6 +30207,13 @@ def create_analysis_task(
         "Check my weather every 3 hours between 6am and 9pm"
     """
     _telemetry_increment_tool_count("create_analysis_task")
+    _denied = _task_tools_denied(ctx)
+    if _denied:
+        return _denied
+    _user = _current_user(ctx)
+    if _IS_SERVER_MODE:
+        # A server runs every task itself (no chat runner) and keeps reports in its own folder.
+        auto_run, report_folder = True, ""
 
     try:
         import custom_tasks_manager as _ctm
@@ -29495,7 +30236,14 @@ def create_analysis_task(
             daily_end_time=daily_end_time,
             daily_times_per_day=daily_times_per_day,
             schedule_day_of_week=schedule_day_of_week,
+            auto_run=auto_run,
+            run_time=run_time,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
         )
+        if _user is not None:          # server: the task runs as the person who made it, never more
+            new_task["owner_user_id"] = str(_user.get("id") or "")
+            new_task["owner_name"] = str(_user.get("name") or "")
         tasks.append(new_task)
         if not _ctm.save_custom_tasks(tasks):
             return "❌ Could not save the new task to disk."
@@ -29506,15 +30254,19 @@ def create_analysis_task(
 
     due_note = (f"first due {new_task['next_due']}"
                if new_task.get("next_due") else "no schedule (one-off, manual run only)")
+    if new_task.get("schedule", "none") == "none":
+        how = ("It's a one-off: it runs when the user clicks ▶ Run now, or when you run it in a chat and "
+               "call complete_analysis_task.")
+    elif new_task.get("auto_run"):
+        how = ("Auto-run is on: AI-Prowler runs it itself at each due time on the Agent API Key (if no key is "
+               "saved yet, it waits — tell the user to add one in 🔑 Agent API Key at the top of the Small "
+               "Business tab).")
+    else:
+        how = "Auto-run is off: when it's due, a chat runs it (get_pending_analysis_tasks lists it)."
     return (
-        f"✅ Created custom analysis task '{label}'\n"
+        f"✅ Created analysis task '{label}'\n"
         f"   task_id  : {new_task['task_id']}\n"
-        f"   schedule : {schedule} ({due_note})\n\n"
-        f"This task will show up in get_pending_analysis_tasks() once it's "
-        f"due AND queued — either the user clicks 'Queue' / 'Run Due Tasks' "
-        f"in the Links & Analysis tab, or asks you to check for due tasks "
-        f"in a future conversation. It will not run automatically without "
-        f"either of those."
+        f"   schedule : {schedule} ({due_note})\n\n{how}"
     )
 
 
@@ -29553,6 +30305,11 @@ def save_analysis_report(task_id: str,
         )
     """
     _telemetry_increment_tool_count("save_analysis_report")
+    _denied = _task_tools_denied(ctx)
+    if _denied:
+        return _denied
+    if _IS_SERVER_MODE:
+        report_folder = ""             # server: always the server's own reports folder (2026-11-02)
 
     if not task_id or not task_id.strip():
         return "❌ task_id is required."
@@ -29568,12 +30325,13 @@ def save_analysis_report(task_id: str,
     import datetime as _dt
     from pathlib import Path as _Path
 
-    # Check pending_tasks.json for the report_folder from the task definition
-    if not report_folder:
+    # The task's own report_folder (2026-11-01: from the task itself — there is no queue)
+    if not report_folder and not _IS_SERVER_MODE:
         try:
-            tasks = _load_pending_tasks()
-            for t in tasks:
-                if t.get("task_id") == task_id.strip():
+            import custom_tasks_manager as _ctm_rf
+            _tid = task_id.strip()
+            for t in _ctm_rf.load_custom_tasks():
+                if _tid == t.get("task_id") or _tid.startswith(str(t.get("task_id")) + "_"):
                     report_folder = t.get("report_folder", "")
                     break
         except Exception:
@@ -29679,114 +30437,55 @@ def save_analysis_report(task_id: str,
 @mcp.tool()
 def get_pending_analysis_tasks(ctx: Context = None) -> str:
     """
-    AGENTIC ANALYSIS — Return analysis tasks from the run queue that are
-    DUE right now (status=="pending" AND is_queue_entry_ready()).
+    AGENTIC ANALYSIS — The analysis tasks this chat should run right now.
 
-    v8.1.9: this is now due-filtered. A recurring task sitting in the
-    queue ahead of its next_due date will NOT appear here — it stays
-    queued (persistent) and only surfaces once actually due. To run a
-    due custom task that isn't queued yet, queue it with queue_single_task()
-    first — this tool only reads what's already in the queue.
+    2026-11-01: there is no queue — every task has its own schedule. This returns tasks the user asked to
+    run from a chat, and tasks that are due but NOT set to run on their own (⏱ Auto-run off) — tasks with
+    Auto-run on are run by AI-Prowler itself on the Agent API Key, so they're left out (nothing runs twice).
 
-    Call this tool at the start of any session where the user says they have
-    analysis to run, or whenever instructed to check for pending/due tasks.
-
-    For each pending task returned, Claude, Muse, or Grok should:
-      1. Execute the analysis described in the task's 'prompt' field using
-         all available AI-Prowler tools (search_documents, search_learnings,
-         read_job_spreadsheet, get_weather, etc.)
-      2. Record any significant findings as learnings via record_learning()
-      3. Call complete_analysis_task(task_id) to mark the task done
+    For each task returned: run its 'prompt' with AI-Prowler's tools (scoped to scope_dirs if given), do
+    the outputs it asks for (record_learning / save_analysis_report with its task_id / send_email), then
+    call complete_analysis_task(task_id, summary) — AI-Prowler records the run and moves the task to its
+    next time.
 
     Returns:
-        JSON list of pending task objects, each with:
-          task_id    — unique identifier (pass to complete_analysis_task)
-          type       — task type (analyze_business, weekly_advisor, etc.)
-          label      — human-readable name
-          prompt     — the full analysis prompt Claude, Muse, or Grok should execute
-          created_at — when the user queued this task (ISO 8601)
-
-    Returns a plain message if no tasks are pending.
+        JSON {pending_count, tasks: [{task_id, label, prompt, schedule, next_due, scope_dirs, output_*,
+        report_folder, why}], instruction} — or a plain message when nothing needs running.
 
     Examples:
-        "Check for pending analysis tasks"
-        "Run any pending analysis from AI-Prowler"
-        "What analysis do I have queued?"
+        "Run my due analysis tasks"
+        "What analysis do I need to run?"
     """
     _telemetry_increment_tool_count("get_pending_analysis_tasks")
-
     try:
         import custom_tasks_manager as _ctm_gp
-        tasks = _load_pending_tasks()
-        # v8.1.9: filter to READY entries only (status=="pending" AND
-        # is_queue_entry_ready()). Previously this returned every
-        # status=="pending" entry regardless of its next_due date, so a
-        # recurring task queued ahead of time (or re-armed by
-        # complete_analysis_task for a future date) would incorrectly
-        # fire on every run instead of only on its actual due date. See
-        # is_queue_entry_ready()'s docstring for the schedule="none"
-        # one-shot exception.
-        pending = [t for t in tasks
-                   if t.get("status") == "pending"
-                   and _ctm_gp.is_queue_entry_ready(t)]
-
-        if not pending:
-            total_queued = len([t for t in tasks if t.get("status") == "pending"])
-            if total_queued:
-                # v8.1.9: distinguish "nothing queued at all" from "things
-                # are queued but none are due yet" — the old message was
-                # misleading in the latter case (it implied the queue was
-                # empty and needed items added, when really it just needs
-                # to wait for a due date).
-                return (
-                    f"✅ No tasks are due right now. "
-                    f"{total_queued} task(s) are queued but not yet due — "
-                    f"they'll surface here automatically once their next_due "
-                    f"date arrives."
-                )
-            return (
-                "✅ No pending analysis tasks. "
-                "Use the AI Analysis buttons in the Links & Analysis tab to queue analysis."
-            )
-
-        # Enrich each task with age info and output instructions
-        import datetime as _dt
-        now = _dt.datetime.utcnow()
-        for t in pending:
-            try:
-                created = _dt.datetime.strptime(
-                    t.get("created_at", ""), "%Y-%m-%dT%H:%M:%SZ")
-                age_mins = int((now - created).total_seconds() / 60)
-                if age_mins < 60:
-                    t["queued_ago"] = f"{age_mins} minute{'s' if age_mins != 1 else ''} ago"
-                elif age_mins < 1440:
-                    hrs = age_mins // 60
-                    t["queued_ago"] = f"{hrs} hour{'s' if hrs != 1 else ''} ago"
-                else:
-                    days = age_mins // 1440
-                    t["queued_ago"] = f"{days} day{'s' if days != 1 else ''} ago"
-            except Exception:
-                t["queued_ago"] = "unknown"
-
-        result = {
-            "pending_count": len(pending),
-            "tasks": pending,
-            "instruction": (
-                "For each task: execute the full analysis described in the 'prompt' "
-                "field using all available AI-Prowler tools. "
-                "If output_report=true: call save_analysis_report() with the full "
-                "analysis as Markdown content. "
-                "If output_learnings=true: call record_learning() with key insights. "
-                "Always record a completion learning with category 'general' "
-                "noting what was done and the next_due date. "
-                "Finally call complete_analysis_task(task_id, summary) to mark done "
-                "and auto-advance the next scheduled run date."
-            )
-        }
-        return json.dumps(result, indent=2, ensure_ascii=False)
-
+        all_tasks = _ctm_gp.load_custom_tasks()
+        due = _ctm_gp.chat_due_tasks(all_tasks)
+        if not due:
+            auto = [t for t in all_tasks if t.get("auto_run") and t.get("schedule", "none") != "none"]
+            return ("✅ Nothing needs running in this chat right now."
+                    + (f" {len(auto)} task(s) run on their own in AI-Prowler (Auto-run) — they aren't "
+                       f"listed here." if auto else "")
+                    + " Use list_analysis_tasks() to see every task and when it runs next.")
+        out = []
+        for t in due:
+            out.append({
+                "task_id": t.get("task_id"), "label": t.get("label"),
+                "prompt": _ctm_gp.build_task_prompt(t), "schedule": t.get("schedule", "none"),
+                "next_due": t.get("next_due"), "scope_dirs": t.get("scope_dirs") or [],
+                "output_learnings": t.get("output_learnings", True), "output_report": t.get("output_report", False),
+                "output_email": t.get("output_email", False), "report_folder": t.get("report_folder"),
+                "why": "asked to run now" if t.get("run_requested") else "due",
+            })
+        return json.dumps({
+            "pending_count": len(out), "tasks": out,
+            "instruction": ("For each task: run the analysis in its 'prompt' with AI-Prowler's tools and do "
+                            "the outputs it asks for (save_analysis_report with that task_id if a report is "
+                            "asked for). Then call complete_analysis_task(task_id, summary) — with failed=True "
+                            "if it didn't finish. AI-Prowler moves each task to its next time itself."),
+        }, indent=2, ensure_ascii=False)
     except Exception as _e:
-        return f"❌ Could not load pending tasks: {_e}"
+        return f"❌ Could not load the tasks: {_e}"
 
 
 @mcp.tool()
@@ -29797,19 +30496,16 @@ def list_analysis_tasks(ctx: Context = None) -> str:
     regardless of whether it's currently due.
 
     This is DIFFERENT from get_pending_analysis_tasks(), which only shows
-    tasks that have already been QUEUED into pending_tasks.json (either by
-    clicking "Run Due Tasks" in the GUI, or by a task actually being due).
-    A task can exist here — fully defined, scheduled, recurring — and never
-    show up in get_pending_analysis_tasks() until its next_due date arrives
-    AND someone queues it. Use this tool whenever the user asks something
-    like "what's in my task queue", "what tasks do I have set up", "list
-    all my custom analyses", or "show me everything I've scheduled" — those
-    are asking about the full definition list, not just what's due right now.
+    the tasks a chat should run right now (due, auto-run off, or a run that
+    AI-Prowler couldn't do itself). Each task has its own schedule; auto-run
+    tasks are run by AI-Prowler on the Agent API Key when due. Use this tool
+    whenever the user asks something like "what tasks do I have set up",
+    "list all my custom analyses", or "show me everything I've scheduled" —
+    those are asking about the full definition list, not just what's due.
 
-    Does NOT modify anything and does NOT queue anything — read-only. To
-    actually run a task before its due date, call the analysis directly
-    (or tell the user to click "Run Due Tasks" / queue it manually in the
-    GUI, or use create_analysis_task with a near-term schedule).
+    Does NOT modify anything — read-only. To run a task now, call
+    queue_single_task(task_id) (AI-Prowler runs it), or run the analysis in
+    the chat and call complete_analysis_task.
 
     Returns:
         JSON with:
@@ -29828,6 +30524,9 @@ def list_analysis_tasks(ctx: Context = None) -> str:
         "Show me every custom task I've set up, even ones not due yet"
     """
     _telemetry_increment_tool_count("list_analysis_tasks")
+    _denied = _task_tools_denied(ctx)
+    if _denied:
+        return _denied.replace("Nothing was changed.", "Nothing was shown.")
 
     try:
         import custom_tasks_manager as _ctm
@@ -29835,7 +30534,7 @@ def list_analysis_tasks(ctx: Context = None) -> str:
         return f"❌ custom_tasks_manager module not available: {_ie}"
 
     try:
-        tasks = _ctm.load_custom_tasks()
+        tasks = [t for t in _ctm.load_custom_tasks() if _task_is_mine(t, ctx)]   # server: a manager's own
     except Exception as _e:
         return f"❌ Could not load custom tasks: {_e}"
 
@@ -29858,11 +30557,10 @@ def list_analysis_tasks(ctx: Context = None) -> str:
         "max_tasks": _ctm.MAX_CUSTOM_TASKS,
         "tasks": tasks,
         "note": (
-            "This is the full definition list (custom_analysis_tasks.json), "
-            "not the run queue. A task with is_due=true is not automatically "
-            "running — call queue_single_task(task_id) to push it into the run "
-            "queue, then get_pending_analysis_tasks() to pick it up, or run "
-            "it directly right now if the user asks for that."
+            "Every task has its own schedule (no queue). auto_run=true tasks are run by AI-Prowler "
+            "itself on the Agent API Key when due (last_run_at / last_status / last_cost_usd show the "
+            "last run). To run one now: queue_single_task(task_id) asks AI-Prowler to run it, or run it "
+            "yourself in this chat and call complete_analysis_task(task_id, summary)."
         ),
     }
     return json.dumps(result, indent=2, ensure_ascii=False)
@@ -29871,190 +30569,103 @@ def list_analysis_tasks(ctx: Context = None) -> str:
 @mcp.tool()
 def queue_single_task(task_id: str, ctx: Context = None) -> str:
     """
-    AGENTIC ANALYSIS — Queue exactly one custom task for immediate execution,
-    without affecting any other tasks in the queue.
+    AGENTIC ANALYSIS — Run one task now: asks AI-Prowler to run it on the Agent API Key (it starts within
+    about a minute and the result shows on the task). The name is kept for older apps — there is no queue
+    any more (2026-11-01): every task has its own schedule.
 
-    Adds a single task directly to the run queue, immediately, regardless
-    of its scheduled next_due time — this is the tool to use whenever a
-    task should be queued, since the queue is populated manually only
-    (there is no bulk "sync everything that's currently due" tool).
-
-    Idempotent: if the task is already pending/ready, it is skipped.
+    If no Agent API Key is saved, the task waits for a chat instead: it shows up in
+    get_pending_analysis_tasks(). If YOU are a chat asked to run a task right now, you can simply run it
+    yourself and call complete_analysis_task — no need to call this.
 
     Args:
-        task_id: The task_id from list_analysis_tasks() output.
-    Returns:
-        Confirmation string or error message.
+        task_id: The task_id from list_analysis_tasks().
 
     Voice examples:
         "Run the weekly AR review now"
-        "Queue my sales analysis to run now"
     """
-    import json as _jq, datetime as _dtq, pathlib
-
-    # Use the same paths as the rest of the MCP server
-    _ai_prowler_dir = pathlib.Path.home() / ".ai-prowler"
-    _custom_file    = _ai_prowler_dir / "custom_analysis_tasks.json"
-    _pending_file   = _ai_prowler_dir / "pending_tasks.json"
-
+    _telemetry_increment_tool_count("queue_single_task")
     try:
-        _all_tasks = json.loads(_custom_file.read_text(encoding="utf-8"))             if _custom_file.exists() else []
+        import custom_tasks_manager as _ctm
+        tasks = _ctm.load_custom_tasks()
+        t = _ctm.get_task(tasks, (task_id or "").strip())
+        if t is None:
+            return f"Task not found: {task_id}. Use list_analysis_tasks() to see available task IDs."
+        if t.get("run_requested"):
+            return f"Task '{t.get('label', task_id)}' is already set to run. No change made."
+        _ctm.request_run(tasks, t["task_id"], by=_ctm.BY_AI_PROWLER)
+        t.pop("last_skip", None)
+        if not _ctm.save_custom_tasks(tasks):
+            return "Error saving the task."
     except Exception as _e:
-        return f"Error loading task definitions: {_e}"
-
-    _task = next((t for t in _all_tasks if t.get("task_id") == task_id), None)
-    if _task is None:
-        return (f"Task not found: {task_id}. "
-                f"Use list_analysis_tasks() to see available task IDs.")
-
-    try:
-        _pending = _ss_read_json(_pending_file) if _pending_file.exists() else []   # retries a mid-save read
-    except Exception:
-        _pending = []
-
-    _already = any(
-        e.get("source_id") == task_id and e.get("status") in ("pending", "ready")
-        for e in _pending
-    )
-    if _already:
-        return (f"Task '{_task.get('label', task_id)}' is already pending. "
-                f"No change made.")
-
-    _now_str  = _dtq.datetime.now().strftime("%Y%m%d_%H%M%S")
-    _entry_id = f"{task_id}_{_now_str}"
-    _new_entry = {
-        "task_id":          _entry_id,
-        "source_id":        task_id,
-        "label":            _task.get("label", task_id),
-        "prompt":           _task.get("prompt", ""),
-        "schedule":         _task.get("schedule", "none"),
-        "next_due":         _dtq.datetime.now().isoformat(),
-        "status":           "pending",
-        "output_learnings": _task.get("output_learnings", True),
-        "output_report":    _task.get("output_report", False),
-        "output_email":     _task.get("output_email", False),
-        "scope_dirs":       _task.get("scope_dirs", None),
-        "report_folder":    _task.get("report_folder", ""),
-        "queued_at":        _dtq.datetime.now().isoformat(),
-        "queued_by":        "remote_pwa",
-    }
-    _pending.append(_new_entry)
-
-    try:
-        _ss_write_json(_pending_file, _pending)                    # atomic (safe_save)
-    except Exception as _e:
-        return f"Error writing pending queue: {_e}"
-
-    return (f"\u2705 Task '{_task.get('label', task_id)}' queued for immediate "
-            f"execution (entry ID: {_entry_id}).")
+        return f"Error: {_e}"
+    return (f"✅ Task '{t.get('label', task_id)}' will run now — AI-Prowler starts it within about a "
+            f"minute on the Agent API Key (or, with no key saved, it waits for a chat).")
 
 
 @mcp.tool()
 def get_all_queued_tasks(ctx: Context = None) -> str:
     """
-    AGENTIC ANALYSIS — Return ALL items currently in pending_tasks.json,
-    regardless of whether they are due yet.
+    AGENTIC ANALYSIS — Every scheduled task and every task set to run now, with when it runs next.
 
-    Unlike get_pending_analysis_tasks() which only returns tasks that are
-    due RIGHT NOW, this returns every entry in the queue so the user can
-    see what is scheduled to run in the future.
-
-    Returns: JSON list of all queue entries, each with:
-      task_id    — queue entry ID
-      source_id  — original task definition ID
-      label      — human-readable task name
-      status     — pending / ready / completed
-      next_due   — when it will run (ISO 8601)
-      queued_at  — when it was added to queue
-      schedule   — none / daily / weekly / monthly
-    Returns empty JSON array [] if queue is empty.
+    2026-11-01: there is no queue — this lists the tasks themselves (name kept for older apps). Returns a
+    JSON list, each with: task_id, source_id (same as task_id), label, status ("running soon" when set to
+    run now, "due" when due, else "scheduled"), next_due, schedule, auto_run, run_requested, last_run_at,
+    last_status, last_cost_usd. Returns [] when nothing is scheduled.
 
     Voice examples:
-        "What's in the task queue?"
-        "Which analyses are queued?"
+        "What's scheduled to run?"
     """
-    import json as _jgq, datetime as _dtgq
     try:
-        _all = _load_pending_tasks()
-        # Return all non-completed entries so user sees the full queue
-        _queued = [t for t in _all if t.get("status") not in ("completed",)]
-        return json.dumps(_queued, indent=2, default=str)
-    except Exception as _e:
+        import custom_tasks_manager as _ctm
+        out = []
+        for t in _ctm.load_custom_tasks():
+            if not (t.get("run_requested") or t.get("schedule", "none") != "none"):
+                continue
+            status = ("running soon" if t.get("run_requested") else
+                      "due" if _ctm.is_due_now(t) else "scheduled")
+            out.append({"task_id": t.get("task_id"), "source_id": t.get("task_id"), "label": t.get("label"),
+                        "status": status, "next_due": t.get("next_due"), "schedule": t.get("schedule"),
+                        "auto_run": bool(t.get("auto_run")), "run_requested": bool(t.get("run_requested")),
+                        "last_run_at": t.get("last_run_at"), "last_status": t.get("last_status"),
+                        "last_cost_usd": t.get("last_cost_usd")})
+        return json.dumps(out, indent=2, default=str)
+    except Exception:
         return json.dumps([])
 
 
 @mcp.tool()
 def delete_analysis_task(task_id: str, ctx: Context = None) -> str:
     """
-    AGENTIC ANALYSIS — Remove an analysis task, from chat.
-
-    Accepts EITHER kind of ID and figures out what to do:
-      • A custom task definition's task_id (from list_analysis_tasks) —
-        deletes the definition from custom_analysis_tasks.json AND removes
-        any of its queue entries still sitting in pending_tasks.json
-        (matched via source_id), pending or not. This is almost always
-        what "remove the earnings watch task" means.
-      • A single queue entry's task_id (from get_pending_analysis_tasks)
-        — removes just that one entry from pending_tasks.json, leaving
-        the source definition (if any) untouched. Use this if the user
-        specifically wants to drop one queued instance without deleting
-        the recurring task itself.
+    AGENTIC ANALYSIS — Delete an analysis task, from chat.
 
     Args:
-        task_id: Either a custom task definition ID or a queue entry ID.
-
-    Returns:
-        Confirmation of what was removed, or an error if the ID matched
-        neither a definition nor a queue entry.
+        task_id: The task's task_id (from list_analysis_tasks). An old queue-entry id from before
+                 2026-11-01 is matched to its task.
 
     Voice examples:
         "Delete the weather check task"
-        "Remove that custom analysis"
     """
     _telemetry_increment_tool_count("delete_analysis_task")
-
+    _denied = _task_tools_denied(ctx)
+    if _denied:
+        return _denied
     if not task_id or not task_id.strip():
         return "❌ task_id is required."
     task_id = task_id.strip()
-
     try:
         import custom_tasks_manager as _ctm
-    except Exception as _ie:
-        return f"❌ custom_tasks_manager module not available: {_ie}"
-
-    try:
-        custom_tasks = _ctm.load_custom_tasks()
-        definition = _ctm.get_task(custom_tasks, task_id)
-
-        if definition is not None:
-            label = definition.get("label", task_id)
-            _ctm.delete_task(custom_tasks, task_id)
-            _ctm.save_custom_tasks(custom_tasks)
-
-            pending = _load_pending_tasks()
-            before = len(pending)
-            pending = [t for t in pending if t.get("source_id") != task_id]
-            removed_entries = before - len(pending)
-            _save_pending_tasks(pending)
-
-            extra = (f" and removed {removed_entries} queued instance(s)"
-                     if removed_entries else "")
-            return f"✅ Deleted custom task '{label}'{extra}."
-
-        # Not a definition — try it as a single queue entry instead.
-        pending = _load_pending_tasks()
-        match = next((t for t in pending if t.get("task_id") == task_id), None)
-        if match is not None:
-            label = match.get("label", task_id)
-            pending = [t for t in pending if t.get("task_id") != task_id]
-            _save_pending_tasks(pending)
-            return f"✅ Removed queued task '{label}' from the run queue."
-
-        return (
-            f"⚠️ '{task_id}' didn't match any custom task definition or "
-            f"queue entry. Use list_analysis_tasks() or "
-            f"get_pending_analysis_tasks() to find the correct task_id."
-        )
+        tasks = _ctm.load_custom_tasks()
+        t = _ctm.get_task(tasks, task_id)
+        if t is not None and not _task_is_mine(t, ctx):
+            t = None                       # a manager can't see (or delete) someone else's task
+        if t is None:
+            return (f"⚠️ '{task_id}' didn't match any task. Use list_analysis_tasks() to find the "
+                    f"correct task_id.")
+        label = t.get("label", task_id)
+        _ctm.delete_task(tasks, task_id)
+        if not _ctm.save_custom_tasks(tasks):
+            return "❌ Could not save the task list."
+        return f"✅ Deleted task '{label}'."
     except Exception as _e:
         return f"❌ Could not delete task: {_e}"
 
@@ -30075,10 +30686,19 @@ def update_analysis_task(
     daily_end_time: str = None,
     daily_times_per_day: int = None,
     schedule_day_of_week: "int | None" = -1,
+    auto_run: bool = None,
+    run_time: str = None,
+    ai_provider: str = None,
+    ai_model: str = None,
     ctx: Context = None,
 ) -> str:
     """
     AGENTIC ANALYSIS — Edit an existing CUSTOM task definition from chat.
+
+    2026-11-01 (no queue — every task has its own schedule): auto_run — AI-Prowler runs the task on its
+    own when it's due, on the Agent API Key; run_time — HH:MM a weekly / every-2-weeks / monthly task runs
+    (daily tasks use daily_start_time); ai_provider "" (the default AI) / "claude" / "grok", and ai_model
+    (one of that AI's models, or "" for the agents' default model).
 
     Only fields you actually pass are changed — everything else on the
     task is left as-is. Uses the same update_task() logic as the GUI's
@@ -30138,6 +30758,9 @@ def update_analysis_task(
         "Make the weather check run at 7am"
     """
     _telemetry_increment_tool_count("update_analysis_task")
+    _denied = _task_tools_denied(ctx)
+    if _denied:
+        return _denied
 
     if not task_id or not task_id.strip():
         return "❌ task_id is required."
@@ -30145,11 +30768,23 @@ def update_analysis_task(
 
     if schedule is not None:
         schedule = schedule.strip().lower()
+    if _IS_SERVER_MODE:
+        # A server runs every task itself and keeps reports in its own folder (2026-11-02).
+        report_folder = None
+        if auto_run is not None:
+            auto_run = True
 
     try:
         import custom_tasks_manager as _ctm
     except Exception as _ie:
         return f"❌ custom_tasks_manager module not available: {_ie}"
+    try:
+        _t0 = _ctm.get_task(_ctm.load_custom_tasks(), task_id)
+        if _t0 is not None and not _task_is_mine(_t0, ctx):
+            return (f"⚠️ '{task_id}' didn't match any of your tasks. Use list_analysis_tasks() to find the "
+                    f"correct task_id.")
+    except Exception:
+        pass
 
     if schedule is not None and schedule not in _ctm.SCHEDULES:
         return (f"❌ Invalid schedule '{schedule}'. Valid options: "
@@ -30164,6 +30799,8 @@ def update_analysis_task(
         ("daily_start_time", daily_start_time),
         ("daily_end_time", daily_end_time),
         ("daily_times_per_day", daily_times_per_day),
+        ("auto_run", auto_run), ("run_time", run_time),
+        ("ai_provider", ai_provider), ("ai_model", ai_model),
     ):
         if val is not None:
             kwargs[key] = val
@@ -30205,190 +30842,53 @@ def update_analysis_task(
 @mcp.tool()
 def complete_analysis_task(task_id: str,
                            summary: str = "",
+                           failed: bool = False,
                            ctx: Context = None) -> str:
     """
-    AGENTIC ANALYSIS — Mark a queued analysis task as done for this run.
+    AGENTIC ANALYSIS — Record that you ran an analysis task from this chat.
 
-    v8.1.9 unified re-arm behavior: a ONE-SHOT entry (schedule=="none",
-    whether from a Common Business Analysis button or a manual-only
-    custom task) completes permanently — it won't appear in
-    get_pending_analysis_tasks() again. A RECURRING entry (any real
-    schedule) instead has its next_due advanced and status reset back to
-    "pending" — it stays in the queue and will surface again
-    automatically once that new next_due date arrives. Built-in and
-    custom-derived entries behave identically here by design.
-
-    Call this after finishing each analysis task returned by
-    get_pending_analysis_tasks(). For one-shot tasks this prevents it from
-    running again; for recurring tasks it re-arms it for next time.
+    2026-11-01: there is no queue any more — every task has its own schedule. Call this after you run a
+    task from get_pending_analysis_tasks() (or one the user asked you to run): AI-Prowler records the run
+    (last result shown on the task) and moves a scheduled task to its next time — a missed or late run
+    moves to the next time after now, so missed runs never pile up. A manual-only task just records the
+    run. If the task failed partway, still call this with failed=True and say why in the summary.
 
     Args:
-        task_id: The task_id from get_pending_analysis_tasks() output.
-                 Example: "analyze_business_20260623_143022"
-        summary: Optional one-sentence summary of what was found/recorded.
-                 Stored with the task for the user's reference in the GUI.
+        task_id: The task_id from get_pending_analysis_tasks() / list_analysis_tasks().
+        summary: A real, specific summary of what was found / saved / sent (shown on the task).
+        failed:  True if the run didn't finish.
 
     Returns:
-        Confirmation message with the task label and summary.
+        Confirmation with the task's next time.
 
-    Example:
-        complete_analysis_task(
-            task_id="analyze_business_20260623_143022",
-            summary="Found 3 overdue invoices and recorded 4 business insights."
-        )
+    Voice examples:
+        "Mark the weekly AR report task as done"
+        "That analysis failed halfway — record it as failed"
     """
     _telemetry_increment_tool_count("complete_analysis_task")
-
     if not task_id or not task_id.strip():
         return "❌ task_id is required."
-
     task_id = task_id.strip()
-
     try:
-        import datetime as _dt
         import custom_tasks_manager as _ctm
-
-        tasks = _load_pending_tasks()
-        target = None
-        for t in tasks:
-            if t.get("task_id") == task_id:
-                target = t
-                break
-
-        if target is None:
-            return (
-                f"⚠️ Task '{task_id}' not found in pending_tasks.json. "
-                "It may have already been completed or was never queued."
-            )
-
-        label     = target.get("label", task_id)
-        source_id = target.get("source_id")
-        now_iso   = _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-        today_str = _dt.date.today().isoformat()
-
-        # Determine schedule/anchor. For a custom-derived entry (source_id
-        # present), the DEFINITION in custom_analysis_tasks.json is the
-        # authoritative source — this keeps backward compatibility with
-        # queue entries created before v8.1.9 (which didn't carry
-        # schedule/next_due on the entry itself, only via source_id
-        # lookup), and stays correct even if the two ever drift. The
-        # entry's own fields are only used as a fallback, or directly for
-        # built-in entries which have no definition to look up.
-        source_def = None
-        if source_id:
-            try:
-                source_def = _ctm.get_task(_ctm.load_custom_tasks(), source_id)
-            except Exception:
-                source_def = None
-
-        if source_def:
-            task_schedule = source_def.get("schedule", "none")
-            task_next_due = source_def.get("next_due") or target.get("next_due")
-        else:
-            task_schedule = target.get("schedule", "none")
-            task_next_due = target.get("next_due")
-
-        # ── Record this run's history (applies regardless of schedule) ────
-        target["last_run"]    = today_str
-        target["last_status"] = "completed"
-        target["completed_at"] = now_iso
+        tasks = _ctm.load_custom_tasks()
+        t = _ctm.get_task(tasks, task_id)
+        if t is None:
+            # an old queue-entry id ("<task_id>_<timestamp>...") — map it back to its task
+            t = next((x for x in tasks if task_id.startswith(str(x.get("task_id")) + "_")), None)
+        if t is None:
+            return (f"⚠️ Task '{task_id}' not found. Use list_analysis_tasks() to see the tasks.")
+        nxt = _ctm.record_run(tasks, t["task_id"], "failed" if failed else "completed", summary)
+        if not _ctm.save_custom_tasks(tasks):
+            return "❌ Could not save the task."
+        msg = f"✅ Recorded the run of '{t.get('label', task_id)}'" + (" (failed)" if failed else "")
         if summary:
-            target["completion_summary"] = summary.strip()
-
-        next_due_msg = ""
-
-        # ── v8.1.9 unified re-arm logic ────────────────────────────────────
-        # One-shot entries (schedule == "none") — whether from a Common
-        # Business Analysis button or a manual-only custom task — complete
-        # permanently, exactly as before: status flips to "completed" and
-        # get_pending_analysis_tasks() will never surface it again.
-        #
-        # Recurring entries (schedule != "none") — whether built-in or
-        # custom-derived — now behave IDENTICALLY per David's explicit
-        # design decision (v8.1.9): status is reset back to "pending" and
-        # next_due is advanced, so the SAME queue entry re-arms itself for
-        # its next occurrence instead of requiring the user (or GUI) to
-        # re-queue it. is_queue_entry_ready() then keeps it hidden from
-        # get_pending_analysis_tasks() until that new next_due arrives.
-        if task_schedule == "none":
-            target["status"] = "completed"
-        else:
-            anchor = task_next_due or today_str
-            # Catch-up variant so a task overdue by multiple intervals
-            # resyncs fully in one completion instead of needing one
-            # completion per missed interval. v8.1.11: routed through the
-            # unified advance_next_due_for_task() rather than calling
-            # _advance_date_catchup() directly — it dispatches to the
-            # datetime-aware daily-slot advancement when schedule=="daily",
-            # or the classic date-only catchup for every other schedule,
-            # without complete_analysis_task() needing to know the
-            # difference. The daily_* fields come from whichever source is
-            # authoritative for this entry (source_def for custom tasks,
-            # target itself for built-in ones) — same source already used
-            # for task_schedule/task_next_due just above.
-            _daily_source = source_def if source_def else target
-            new_next_due = _ctm.advance_next_due_for_task({
-                "schedule": task_schedule,
-                "next_due": anchor,
-                "daily_start_time": _daily_source.get("daily_start_time", "09:00"),
-                "daily_end_time": _daily_source.get("daily_end_time", "17:00"),
-                "daily_times_per_day": _daily_source.get("daily_times_per_day", 1),
-                # 2026-10-22: keep a weekly/biweekly/monthly weekday pin (a
-                # monthly "Tuesday" task used to drift to the same date next
-                # month, whatever weekday that was).
-                "schedule_day_of_week": _daily_source.get("schedule_day_of_week"),
-            }, today_str)
-            if new_next_due:
-                # Stamp schedule + next_due directly onto the entry too
-                # (not just the source definition) so it's self-describing
-                # for is_queue_entry_ready() going forward, even if it
-                # started out as a legacy entry without these fields.
-                # v8.1.11: same for the daily_* fields, when applicable —
-                # a legacy daily entry created before this feature existed
-                # picks up correct values on its first completion, rather
-                # than staying frozen on the (irrelevant) defaults forever.
-                target["schedule"] = task_schedule
-                target["next_due"] = new_next_due
-                if task_schedule == "daily":
-                    target["daily_start_time"]    = _daily_source.get("daily_start_time", "09:00")
-                    target["daily_end_time"]      = _daily_source.get("daily_end_time", "17:00")
-                    target["daily_times_per_day"] = _daily_source.get("daily_times_per_day", 1)
-                target["status"]   = "pending"   # re-arm, not "completed"
-                next_due_msg = f"\nNext scheduled run: {new_next_due}"
-            else:
-                # Defensive: unknown schedule key or bad date — don't
-                # leave the entry stuck cycling forever; close it out.
-                target["status"] = "completed"
-
-            # Custom-derived entry: also write the same advanced next_due
-            # back to the source definition in custom_analysis_tasks.json,
-            # so the My Custom AI Analyses list stays in sync with what
-            # the queue entry itself now shows.
-            if source_id:
-                try:
-                    custom_tasks = _ctm.load_custom_tasks()
-                    src = _ctm.get_task(custom_tasks, source_id)
-                    if src:
-                        src["last_run"]    = today_str
-                        src["last_status"] = "completed"
-                        if new_next_due:
-                            src["next_due"] = new_next_due
-                        src["updated_at"] = _ctm._now_iso()
-                        _ctm.save_custom_tasks(custom_tasks)
-                except Exception as _cte:
-                    print(f"[complete_analysis_task] source definition "
-                          f"sync failed: {_cte}")
-
-        _save_pending_tasks(tasks)
-
-        msg = f"✅ Analysis task completed: {label}"
-        if summary:
-            msg += f"\nSummary: {summary}"
-        msg += next_due_msg
+            msg += f"\nSummary: {summary.strip()[:500]}"
+        if nxt:
+            msg += f"\nNext scheduled run: {nxt}"
         return msg
-
     except Exception as _e:
-        return f"❌ Could not complete task: {_e}"
+        return f"❌ Could not record the run: {_e}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -33412,6 +33912,8 @@ def _run_server_mode(port: int, token: str,
             # the Jobs app off) and hands back an access token with the Jobs
             # app's idle timeout; every other /desk-api call needs that bearer.
             # Who may do what is decided in desk_rules.can().
+            if not _JOBS_AGENT_WIRED:
+                _jobs_agent_wire()           # the Jobs agent's tools + timer (with or without Service Desk)
             if not _DESK_DB_READY and not _desk_app_turned_off():
                 try:
                     _desk_db_path()          # first request after start: alerts + email intake
@@ -33982,6 +34484,9 @@ def _run_server_mode(port: int, token: str,
                            "get_week_plan_prompt", "get_week_proposal",
                            "apply_week_moves", "dismiss_week_proposal",
                            "get_week_plan_data", "propose_week_moves",
+                           # 🤖 Agent tab (2026-10-31): the Jobs agent — its own owner /
+                           # manager checks inside (desk_tools.jobs_agent).
+                           "jobs_agent",
                           # get_approved_route_stops (2026-10-06) -- Jobs/Board
                           # job cards show the approved scheduled time +
                           # drive info from this read-only tool via pwa-api.
@@ -35851,7 +36356,8 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                           # _srv_pa_allowed above.
                           "get_week_plan_prompt", "get_week_proposal",
                           "apply_week_moves", "dismiss_week_proposal",
-                          "get_week_plan_data", "propose_week_moves",
+                           "get_week_plan_data", "propose_week_moves",
+                           "jobs_agent",            # 🤖 Agent tab (2026-10-31)
                         # Working Days setting (2026-10-02) — the Calendar's
                         # working days (multi-day jobs, overrun carry-over).
                         "get_working_days",
@@ -36111,6 +36617,8 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             # ── Service Desk app + API, personal mode (Solo edition, 2026-10-27) ──
             # Same Bearer Token as the Jobs and Remote apps (/pwa-verify signs
             # the app in); the caller is the owner.
+            if not _JOBS_AGENT_WIRED:
+                _jobs_agent_wire()           # the Jobs agent's tools + timer (with or without Service Desk)
             if not _DESK_DB_READY and not _desk_app_turned_off():
                 try:
                     _desk_db_path()          # first request after start: alerts + email intake
@@ -37009,10 +37517,38 @@ if __name__ == "__main__":
         except Exception:
             _rt = {"mode": "personal", "edition": "home"}
         if _rt.get("mode") == "server":
+            # ── Proactive Alerts + AI Analysis Tasks on the server (2026-11-02, David) ─────────────
+            # Both run here, inside the server program, so they work with nobody signed in to the
+            # desktop — the server's own window shows and saves their settings but never runs them.
+            # Never on a test server (AIPROWLER_TEST_STATE_DIR): it must not email anyone or spend the
+            # owner's API budget.
+            if not os.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip():
+                try:
+                    import scheduler_engine as _srv_alerts
+                    _srv_alerts.start()
+                    _log.info("Proactive Alerts started inside the server (checks once a minute)")
+                except Exception as _sa_exc:
+                    _log.warning("Proactive Alerts failed to start on the server: %s", _sa_exc)
+                try:
+                    import task_queue_automation as _tqa_srv
+                    _tqa_srv.start_scheduler()
+                    _log.info("AI Analysis Tasks scheduler started inside the server")
+                except Exception as _ts_exc:
+                    _log.warning("AI Analysis Tasks scheduler failed to start on the server: %s", _ts_exc)
             _log.info("Starting SERVER-MODE HTTP transport on port %d (multi-user)", args.port)
             _run_server_mode(port=args.port, token=args.token,
                              public_base=resolved_public_base)
         else:
+            # ── Autonomous AI Task Queue scheduler (2026-11-01, David: "AI-Prowler itself") ──
+            # Personal installs only, and only here — in the running AI-Prowler's own local server —
+            # never in a stdio copy, so there is exactly one scheduler. It checks the queue (free) at
+            # the owner's check times and calls the AI only when something is due, on the Agent API Key.
+            try:
+                import task_queue_automation as _tqa_sched
+                _tqa_sched.start_scheduler()
+                _log.info("Task Queue scheduler started (API key runs, checks once a minute)")
+            except Exception as _tq_exc:
+                _log.warning("Task Queue scheduler failed to start: %s", _tq_exc)
             _log.info("Starting HTTP transport on port %d", args.port)
             _run_http(port=args.port, token=args.token, public_base=resolved_public_base)
     else:

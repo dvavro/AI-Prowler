@@ -36,7 +36,12 @@ def test_unpinned_monthly_is_unchanged():
 
 
 def test_complete_analysis_task_passes_the_pin():
+    """2026-11-02: complete_analysis_task now records the run with ctm.record_run (the queue is gone,
+    2026-11-01), so the pin is checked there — by behaviour, not by searching the source."""
     src = (Path(__file__).resolve().parents[2] / "ai_prowler_mcp.py").read_text(encoding="utf-8")
     i = src.index("def complete_analysis_task(")
     body = src[i:src.index("\n@mcp.tool()", i)]
-    assert '"schedule_day_of_week": _daily_source.get("schedule_day_of_week")' in body
+    assert "_ctm.record_run(" in body
+    tasks = [{"task_id": "t1", "schedule": "monthly", "next_due": "2027-03-02", "schedule_day_of_week": 1}]
+    nxt = ctm.record_run(tasks, "t1", "completed", "done", now=dt.datetime(2027, 3, 2, 10, 0))
+    assert nxt == "2027-04-06" and dt.date.fromisoformat(nxt).weekday() == 1     # still a Tuesday

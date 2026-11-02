@@ -56,9 +56,13 @@ def test_code_by_text_then_ticket_and_link(db):
         con.close()
 
 
-def test_email_code_when_no_phone(db):
+def test_email_code_when_chosen_and_phone_always_required(db):
+    """2026-10-30 (booking-spec.md §3.1): a phone number is required on every request so the
+    team can call back; the code goes by email when the customer chooses email."""
     db, sent = db
-    p.start_request(db, email="L@Example.com")
+    with pytest.raises(p.desk_db.DeskError, match="enter a phone number"):
+        p.start_request(db, email="L@Example.com")
+    p.start_request(db, phone="386-555-0100", email="L@Example.com", send_by="email")
     assert sent[0][0] == "email" and sent[0][1] == "l@example.com"
 
 

@@ -146,11 +146,13 @@ def test_L4_cards_show_how_long_each_ticket_has_waited(business, people):
 
 
 @pytest.mark.parametrize("phone", [False, True], ids=["desktop", "phone"])
-def test_L5_settings_buttons_keep_their_words_inside(business, people, phone):
+def test_L5_settings_buttons_keep_their_words_inside(solo, people, phone):
     """David 2026-10-28 (screenshot): "Save" and "Undo import" in Settings spilled
-    out of their buttons. Every button's words must fit inside it."""
-    o = people(business, "Olive (owner)" + (", phone" if phone else ""), phone=phone)
-    o.sign_in("Olive Owner")
+    out of their buttons. Every button's words must fit inside it.
+    2026-11-02: on the personal install — a team server's app has had no Settings tab since 2026-10-30
+    (those settings are in AI-Prowler's Small Business tab), so this test was clicking a hidden tab."""
+    o = people(solo, "owner" + (", phone" if phone else ""), phone=phone)
+    o.sign_in()
     o.tab("settings")
     o.page.locator("#undoGo").wait_for()
     spill = o.page.evaluate("""() => [...document.querySelectorAll('#app button')]

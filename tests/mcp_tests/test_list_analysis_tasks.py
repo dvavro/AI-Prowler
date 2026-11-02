@@ -44,14 +44,15 @@ def mcp_mod():
 
 class TestTierASuppression:
 
-    def test_list_analysis_tasks_is_tier_a_suppressed(self, mcp_mod):
-        assert "list_analysis_tasks" in mcp_mod._TIER_A_SUPPRESSED
+    def test_list_analysis_tasks_is_offered_on_a_server_for_owner_and_managers(self, mcp_mod):
+        # 2026-11-02 (David): AI Analysis Tasks on the server — owner and managers (gated in the tool)
+        assert "list_analysis_tasks" not in mcp_mod._TIER_A_SUPPRESSED
 
     def test_grouped_with_its_siblings(self, mcp_mod):
-        family = {"get_pending_analysis_tasks", "complete_analysis_task",
-                 "save_analysis_report", "create_analysis_task",
-                 "list_analysis_tasks"}
-        assert family.issubset(mcp_mod._TIER_A_SUPPRESSED)
+        # 2026-11-02: the task-managing tools are on a server too; the chat-run ones stay hidden there
+        assert not ({"save_analysis_report", "create_analysis_task", "list_analysis_tasks"}
+                    & mcp_mod._TIER_A_SUPPRESSED)
+        assert {"get_pending_analysis_tasks", "complete_analysis_task"}.issubset(mcp_mod._TIER_A_SUPPRESSED)
 
 
 class TestEmptyQueue:

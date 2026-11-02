@@ -153,6 +153,39 @@ DOW_LABELS = ["Any day"] + DOW_NAMES   # index 0 → None, indices 1-7 → 0-6
 # Schedules that support day-of-week pinning:
 DOW_ELIGIBLE_SCHEDULES = {"weekly", "biweekly", "monthly"}
 
+# 2026-11-01 (David: "get rid of the task queue and make every task have its own schedule"): the time of
+# day a weekly / every-2-weeks / monthly task runs (daily tasks have their own start time), and which AI.
+DEFAULT_RUN_TIME = "09:00"
+AI_PROVIDERS = ("", "claude", "grok")          # "" = the agents' default
+
+
+def _valid_run_time(value) -> str:
+    v = (value or DEFAULT_RUN_TIME).strip()
+    try:
+        datetime.time.fromisoformat(f"{v}:00")
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid run time '{v}'. Use HH:MM (24-hour).")
+    return v
+
+
+def _valid_ai(provider, model) -> tuple:
+    p = (provider or "").strip().lower()
+    p = {"anthropic": "claude", "xai": "grok"}.get(p, p)
+    if p not in AI_PROVIDERS:
+        raise ValueError("ai_provider must be '' (default), 'claude' or 'grok'.")
+    m = (model or "").strip()
+    if not p:
+        return "", ""
+    if m:
+        try:
+            import desk_agent_providers as _prov
+            ok = {x for x, _ in _prov.AGENT_MODELS[{"claude": "claude_api", "grok": "grok_api"}[p]]}
+        except Exception:  # noqa: BLE001
+            ok = {m}
+        if m not in ok:
+            raise ValueError(f"Unknown {p} model '{m}'. Choose one of: {', '.join(sorted(ok))}.")
+    return p, m
+
 
 # ---------------------------------------------------------------------------
 # Date helpers
@@ -411,16 +444,25 @@ def _is_due(task: dict) -> bool:
     as is_queue_entry_ready() above — handles daily tasks' time-of-day
     next_due correctly, without changing behavior for date-only schedules.
     """
+    if task.get("schedule", "none") == "none":
+        return False
+    at = due_at(task)                      # 2026-11-01: weekly / monthly tasks run at their run_time
+    return at is not None and at <= datetime.datetime.now()
+
+
+def due_at(task: dict):
+    """The moment a scheduled task is next due (datetime), or None. Daily tasks carry the time in
+    next_due; weekly / every-2-weeks / monthly tasks run on that date at their run_time."""
     next_due = task.get("next_due")
-    if not next_due:
-        return False
-    schedule = task.get("schedule", "none")
-    if schedule == "none":
-        return False
+    if task.get("schedule", "none") == "none" or not next_due:
+        return None
     try:
-        return _parse_due_datetime(next_due) <= datetime.datetime.now()
+        if "T" in next_due:
+            return _parse_due_datetime(next_due)
+        t = datetime.time.fromisoformat(f"{_valid_run_time(task.get('run_time'))}:00")
+        return datetime.datetime.combine(_parse_date(next_due), t)
     except (ValueError, TypeError):
-        return False
+        return None
 
 
 def is_queue_entry_ready(entry: dict) -> bool:
@@ -569,9 +611,18 @@ def create_task(label: str,
                 report_folder: str = None,
                 daily_start_time: str = "09:00",
                 daily_end_time: str = "17:00",
-                daily_times_per_day: int = 1) -> dict:
+                daily_times_per_day: int = 1,
+                auto_run: bool = True,
+                run_time: str = None,
+                ai_provider: str = "",
+                ai_model: str = "") -> dict:
     """
     Create a new custom task definition.
+
+    2026-11-01 (no more queue): auto_run — AI-Prowler runs the task itself when it's due, on the Agent
+    API Key; run_time — the time of day a weekly / every-2-weeks / monthly task runs (daily tasks use
+    daily_start_time); ai_provider / ai_model — "" = the agents' default (complex & customer model),
+    or "claude" / "grok" and one of that AI's models.
 
     Args:
         label:            User-facing name (max 60 chars).
@@ -706,6 +757,9 @@ def create_task(label: str,
             else:
                 next_due = first_due
 
+    run_time = _valid_run_time(run_time)
+    ai_provider, ai_model = _valid_ai(ai_provider, ai_model)
+
     scope_dirs = [str(d).strip() for d in (scope_dirs or []) if str(d).strip()]
 
     # Generate unique task_id using counter-based helper
@@ -730,6 +784,10 @@ def create_task(label: str,
         "daily_start_time":      daily_start_time,
         "daily_end_time":        daily_end_time,
         "daily_times_per_day":   daily_times_per_day,
+        "auto_run":              bool(auto_run),
+        "run_time":              run_time,
+        "ai_provider":           ai_provider,
+        "ai_model":              ai_model,
         "created_at":            now,
         "updated_at":            now,
     }
@@ -771,7 +829,16 @@ def update_task(tasks: list, task_id: str, **kwargs) -> bool:
             "first_due", "output_learnings", "output_report",
             "output_email", "report_folder",
             "daily_start_time", "daily_end_time", "daily_times_per_day",
+            "auto_run", "run_time", "ai_provider", "ai_model",       # 2026-11-01
         ]
+        if "run_time" in kwargs:
+            kwargs["run_time"] = _valid_run_time(kwargs["run_time"])
+        if "ai_provider" in kwargs or "ai_model" in kwargs:
+            kwargs["ai_provider"], kwargs["ai_model"] = _valid_ai(
+                kwargs.get("ai_provider", t.get("ai_provider", "")),
+                kwargs.get("ai_model", t.get("ai_model", "") if "ai_provider" not in kwargs else ""))
+        if "auto_run" in kwargs:
+            kwargs["auto_run"] = bool(kwargs["auto_run"])
 
         old_schedule  = t.get("schedule", "none")
         old_first_due = t.get("first_due")
@@ -1182,7 +1249,10 @@ def due_status_label(task: dict) -> str:
         if delta < 0:
             return f"⚠ Overdue {abs(delta)} day{'s' if abs(delta) != 1 else ''}"
         elif delta == 0:
-            return "⚡ Due today"
+            at = due_at(task)
+            if at and at > datetime.datetime.now():
+                return f"Due today at {at.strftime('%I:%M %p').lstrip('0')}"
+            return "⚡ Due now"
         elif delta == 1:
             return "Due tomorrow"
         elif delta <= 7:
@@ -1191,3 +1261,213 @@ def due_status_label(task: dict) -> str:
             return f"Due {due_date.strftime('%b %d')}"
     except (ValueError, TypeError):
         return "Unknown"
+
+
+# ---------------------------------------------------------------------------
+# Every task runs on its own schedule (2026-11-01, David: "get rid of the task queue and make every task
+# have its own schedule"). No pending_tasks.json: AI-Prowler's scheduler (task_queue_automation) runs each
+# auto-run task when it's due, one AI call per task; a chat runs the rest (chat_due_tasks /
+# complete_analysis_task); ▶ Run now / "run it now" from a chat sets run_requested.
+# ---------------------------------------------------------------------------
+
+LEGACY_QUEUE_PATH = Path.home() / ".ai-prowler" / "pending_tasks.json"
+QUEUE_RETIRED_MARKER = Path.home() / ".ai-prowler" / "task_queue_retired.marker"
+
+
+def ai_label(task: dict) -> str:
+    """'Default (agents' model)' or e.g. 'Claude · claude-opus-5-5'."""
+    p = task.get("ai_provider") or ""
+    if not p:
+        return "Default AI"
+    m = task.get("ai_model") or ""
+    if not m:
+        return "Claude" if p == "claude" else "Grok"
+    try:                                  # the friendly name (Claude Opus 5.5), not the API id (claude-opus-5-5)
+        import desk_agent_providers as _prov
+        names = dict(_prov.AGENT_MODELS[{"claude": "claude_api", "grok": "grok_api"}[p]])
+        return names.get(m, m).split(" — ")[0]
+    except Exception:  # noqa: BLE001
+        return m
+
+
+def is_due_now(task: dict, now: datetime.datetime = None) -> bool:
+    if task.get("schedule", "none") == "none":
+        return False
+    at = due_at(task)
+    return at is not None and at <= (now or datetime.datetime.now())
+
+
+def needs_run(task: dict, now: datetime.datetime = None) -> bool:
+    """Due by its schedule, or asked for (▶ Run now / 'run it now' from a chat)."""
+    return bool(task.get("run_requested")) or is_due_now(task, now)
+
+
+BY_AI_PROWLER = "ai-prowler"        # request_run(by=...) that AI-Prowler's scheduler runs (phone ▶ Run now)
+
+
+def auto_runs_now(task: dict, now: datetime.datetime = None) -> bool:
+    """What AI-Prowler's scheduler runs on its own: due auto-run tasks, and tasks asked to run by
+    AI-Prowler (the phone app's ▶ Run now). A chat's 'run it now' is run by that chat."""
+    if task.get("run_requested") and task.get("requested_by") == BY_AI_PROWLER:
+        return True
+    return bool(task.get("auto_run")) and is_due_now(task, now)
+
+
+def chat_due_tasks(tasks: list, now: datetime.datetime = None) -> list:
+    """What a chat should run now: tasks asked for from a chat, due tasks AI-Prowler doesn't run on its
+    own (auto-run off), and AI-Prowler requests it couldn't start (no key). Auto-run tasks are left to
+    AI-Prowler so nothing runs twice."""
+    out = []
+    for t in tasks:
+        req = t.get("run_requested")
+        if req and (t.get("requested_by") != BY_AI_PROWLER or t.get("last_skip")):
+            out.append(t)
+        elif not req and is_due_now(t, now) and not t.get("auto_run"):
+            out.append(t)
+    return out
+
+
+def request_run(tasks: list, task_id: str, by: str = "chat") -> bool:
+    t = get_task(tasks, task_id)
+    if not t:
+        return False
+    t["run_requested"] = True
+    t["requested_by"] = by
+    t["requested_at"] = _now_iso()
+    return True
+
+
+def record_run(tasks: list, task_id: str, status: str, summary: str = "", cost_usd=None,
+               now: datetime.datetime = None) -> str:
+    """Record one run ('completed' | 'failed') and move the task to its next time. A missed or late run
+    moves to the next slot after now (missed runs never pile up). A ▶ Run-now run of a task that isn't
+    due keeps its schedule. Returns the new next_due ('' for manual-only)."""
+    t = get_task(tasks, task_id)
+    if not t:
+        return ""
+    now = now or datetime.datetime.now()
+    was_due = is_due_now(t, now)
+    t["run_requested"] = False
+    t.pop("requested_by", None)
+    t.pop("requested_at", None)
+    t["last_run"] = now.date().isoformat()
+    t["last_run_at"] = now.isoformat(timespec="seconds")
+    t["last_status"] = status
+    t["last_summary"] = (summary or "").strip()[:2000]
+    if cost_usd is not None:
+        t["last_cost_usd"] = round(float(cost_usd), 5)
+    t.pop("last_skip", None)
+    if t.get("schedule", "none") != "none" and t.get("next_due") and was_due:
+        if t["schedule"] == "daily":
+            t["next_due"] = _advance_daily_datetime_catchup(
+                t["next_due"], t.get("daily_start_time", "09:00"), t.get("daily_end_time", "17:00"),
+                t.get("daily_times_per_day", 1), now=now)
+        else:
+            t["next_due"] = _advance_date_catchup(t["next_due"], t["schedule"], now.date().isoformat(),
+                                                  t.get("schedule_day_of_week"))
+    t["updated_at"] = _now_iso()
+    return t.get("next_due") or ""
+
+
+def record_skip(tasks: list, task_id: str, why: str, now: datetime.datetime = None) -> None:
+    """A due auto-run task that couldn't start (no key, budget used up, AI-Prowler's connection off).
+    It stays due; the scheduler tries again an hour later."""
+    t = get_task(tasks, task_id)
+    if t:
+        t["last_skip"] = {"at": (now or datetime.datetime.now()).isoformat(timespec="seconds"), "why": why[:300]}
+
+
+def skipped_recently(task: dict, now: datetime.datetime = None, minutes: int = 60) -> bool:
+    s = task.get("last_skip") or {}
+    try:
+        return (now or datetime.datetime.now()) - datetime.datetime.fromisoformat(s["at"]) < \
+            datetime.timedelta(minutes=minutes)
+    except (KeyError, ValueError, TypeError):
+        return False
+
+
+def last_run_text(task: dict) -> str:
+    """'Last: ✅ Nov 1 9:00 AM · $0.0123' / 'Last: never run' — for the task list."""
+    if not task.get("last_run_at") and not task.get("last_run"):
+        return "Last: never run"
+    icon = {"completed": "✅", "failed": "❌"}.get(task.get("last_status"), "•")
+    try:
+        when = datetime.datetime.fromisoformat(task["last_run_at"])
+        w = f"{when:%b} {when.day} {when.strftime('%I:%M %p').lstrip('0')}"
+    except (KeyError, ValueError, TypeError):
+        w = str(task.get("last_run") or "")
+    cost = task.get("last_cost_usd")
+    return f"Last: {icon} {w}" + (f" · ${cost:.4f}" if isinstance(cost, (int, float)) and cost else "")
+
+
+def retire_queue(builtin_prompts: dict = None) -> list:
+    """One-time move off pending_tasks.json. Entries of custom tasks just go (the task itself carries its
+    schedule). A queued Common Business analysis (or any entry with no task behind it) that hadn't
+    finished becomes a task of its own, keeping its schedule and due date, and a one-off one is marked
+    to run. The old file is kept as pending_tasks.json.retired. Returns what it did."""
+    if QUEUE_RETIRED_MARKER.exists():
+        return []
+    done = []
+    try:
+        queue = _load_json_keep_unreadable(LEGACY_QUEUE_PATH, list, []) if LEGACY_QUEUE_PATH.exists() else []
+    except Exception:  # noqa: BLE001
+        queue = []
+    tasks = load_custom_tasks()
+    ids = {t.get("task_id") for t in tasks}
+    labels = {t.get("label") for t in tasks}
+    for e in queue:
+        if not isinstance(e, dict) or e.get("status") == "completed":
+            continue
+        src = e.get("source_id")
+        if src in ids:
+            if e.get("schedule", "none") == "none":
+                request_run(tasks, src, by="queue")
+                done.append(f"'{e.get('label', src)}' was queued — it will run next")
+            continue
+        label = str(e.get("label") or e.get("type") or "Analysis")[:60]
+        if label in labels or len(tasks) >= MAX_CUSTOM_TASKS:
+            continue
+        try:
+            sched = e.get("schedule", "none") if e.get("schedule") in SCHEDULES else "none"
+            nd = e.get("next_due") or ""
+            first = nd[:10] if sched != "none" and nd else None
+            t = create_task(label=label, prompt=str(e.get("prompt") or "Run this analysis."),
+                            scope_dirs=e.get("scope_dirs") or [], schedule=sched if first else "none",
+                            first_due=first, output_learnings=e.get("output_learnings", True),
+                            output_report=e.get("output_report", False), output_email=e.get("output_email", False),
+                            report_folder=e.get("report_folder") or None,
+                            daily_start_time=e.get("daily_start_time", "09:00"),
+                            daily_end_time=e.get("daily_end_time", "17:00"),
+                            daily_times_per_day=e.get("daily_times_per_day", 1), auto_run=False)
+            if sched != "none" and nd:
+                t["next_due"] = nd if (sched == "daily" or "T" not in nd) else nd[:10]
+            if t["schedule"] == "none":
+                request_run([t], t["task_id"], by="queue")
+            tasks.append(t)
+            ids.add(t["task_id"])
+            labels.add(label)
+            done.append(f"queued '{label}' is now a task of its own")
+        except ValueError as ex:
+            done.append(f"couldn't keep queued '{label}': {ex}")
+    if done:
+        save_custom_tasks(tasks)
+    try:
+        if LEGACY_QUEUE_PATH.exists():
+            LEGACY_QUEUE_PATH.replace(LEGACY_QUEUE_PATH.with_name("pending_tasks.json.retired"))
+            done.append("pending_tasks.json kept as pending_tasks.json.retired")
+        QUEUE_RETIRED_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        QUEUE_RETIRED_MARKER.write_text(_now_iso() + "\n" + "\n".join(done), encoding="utf-8")
+    except OSError as ex:
+        done.append(f"marker not written: {ex}")
+    return done
+
+
+def enable_auto_run_for_scheduled(tasks: list) -> int:
+    """Old installs that had the Autonomous AI Task Queue switched on: their scheduled tasks keep running
+    on their own (auto_run on). Returns how many changed."""
+    n = 0
+    for t in tasks:
+        if t.get("schedule", "none") != "none" and not t.get("auto_run"):
+            t["auto_run"] = True
+            n += 1
+    return n

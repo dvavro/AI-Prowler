@@ -77,10 +77,74 @@ def _never_touch_real_tqa_credentials(tmp_path, monkeypatch):
                         # running-server config — never the real ~/.ai-prowler
                         ("RETIRED_AI_ROUTING_DIR", "ai_routing"),
                         ("RETIRED_AI_ROUTING_MARKER", "cli_ai_routing_retired.marker"),
-                        ("RUNNING_SERVER_MCP_CONFIG_PATH", "claude_mcp_config_running.json")):
+                        ("RUNNING_SERVER_MCP_CONFIG_PATH", "claude_mcp_config_running.json"),
+                        # 2026-11-01 API-key-only Task Queue: its run records (shared budget),
+                        # scheduler state, run lock, and the old-CLI cleanup folder
+                        ("RUNS_DB_PATH", "agent_database/task_queue.db"),
+                        ("SCHED_STATE_PATH", "task_queue_scheduler.json"),
+                        ("RUN_LOCK_PATH", "task_queue_run.lock"),
+                        ("LEGACY_HOME", "legacy_home"),
+                        # 2026-11-02: the AI Analysis Tasks run log (tests wrote the real one)
+                        ("AUDIT_LOG_PATH", "autonomous_run_audit.log")):
         if hasattr(_tqa_iso, _name):
             monkeypatch.setattr(_tqa_iso, _name, _home / _rel)
+    # The MCP server also writes every tool call to that log. It's heavy to import, so patch it only
+    # once some test has loaded it (it stays loaded for the rest of the run).
+    import sys as _sys_iso
+    _apm_iso = _sys_iso.modules.get("ai_prowler_mcp")
+    if _apm_iso is not None and hasattr(_apm_iso, "_AUDIT_LOG_PATH"):
+        monkeypatch.setattr(_apm_iso, "_AUDIT_LOG_PATH", _home / "autonomous_run_audit.log")
+    try:                                    # 2026-11-01: the retired queue file + its one-time move marker,
+        import custom_tasks_manager as _ctm_iso   # and the tasks themselves (each runs on its own schedule)
+        monkeypatch.setattr(_ctm_iso, "LEGACY_QUEUE_PATH", _home / "pending_tasks.json")
+        monkeypatch.setattr(_ctm_iso, "QUEUE_RETIRED_MARKER", _home / "task_queue_retired.marker")
+        monkeypatch.setattr(_ctm_iso, "CUSTOM_TASKS_PATH", _home / "custom_analysis_tasks.json")
+    except Exception:
+        pass
+    try:                                    # 2026-11-01: the agents' own key files (desk_agent_providers)
+        import desk_agent_providers as _prov_iso
+        monkeypatch.setattr(_prov_iso, "AGENT_KEY_DIR", _home / "agent_keys")
+    except Exception:
+        pass
+    try:                                    # 2026-11-01: the agents' budget-alert state (desk_agent_budget)
+        import desk_agent_budget as _ab_iso
+        monkeypatch.setattr(_ab_iso, "STATE_PATH", _home / "agent_budget_alerts.json")
+        monkeypatch.setattr(_ab_iso, "send_fn", lambda *a, **k: [])
+    except Exception:
+        pass
+    try:                                    # 2026-11-02: Proactive Alerts' "already emailed this" memory
+        import scheduler_jobs as _sj_iso
+        monkeypatch.setattr(_sj_iso, "_STATE_PATH", _home / "scheduler_alert_state.json")
+    except Exception:
+        pass
+    # 2026-11-02 (David's View Log screenshot): every GUI test builds the app, and the Proactive
+    # Alerts panel read the REAL scheduler_config.json — with real alerts switched on it started the
+    # real engine, which wrote "Scheduler started/stopped" + "no default recipient" into the REAL
+    # scheduler_log.txt (and could have emailed real alerts if a recipient had been found). Now the
+    # engine's config, log and last-run file are throwaway ones for every test, and any engine a test
+    # left running is stopped before the next test.
+    _se_iso = None
+    try:
+        import scheduler_engine as _se_iso
+        _home.mkdir(parents=True, exist_ok=True)
+        if _se_iso.is_running():
+            _se_iso.stop()
+        monkeypatch.setattr(_se_iso, "CONFIG_PATH", _home / "scheduler_config.json")
+        monkeypatch.setattr(_se_iso, "LOG_PATH", _home / "scheduler_log.txt")
+        if hasattr(_se_iso, "_LAST_RUN_PATH"):
+            monkeypatch.setattr(_se_iso, "_LAST_RUN_PATH", _home / "scheduler_last_run.json")
+        monkeypatch.setattr(_se_iso, "_last_run", {})
+        if hasattr(_se_iso, "_send_sms"):          # 2026-11-02: an alert test never sends a real text
+            monkeypatch.setattr(_se_iso, "_send_sms", lambda to, text: True)
+    except Exception:
+        _se_iso = None
     yield
+    if _se_iso is not None:
+        try:
+            if _se_iso.is_running():
+                _se_iso.stop()          # stop while the paths still point at the test folder
+        except Exception:
+            pass
 
 
 # ── Default-off groups (2026-10-12, David) ───────────────────────────────────

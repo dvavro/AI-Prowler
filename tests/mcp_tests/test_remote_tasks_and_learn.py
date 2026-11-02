@@ -59,8 +59,8 @@ class TestTasksFunctions:
     def test_runTaskNow(self, js):           assert "async function runTaskNow(" in js
     def test_editTask(self, js):             assert "async function editTask(" in js
     def test_deleteTask(self, js):           assert "async function deleteTask(" in js
-    def test_removeFromQueue(self, js):      assert "async function removeFromQueue(" in js
-    def test_clearQueue(self, js):           assert "async function clearQueue(" in js
+    def test_no_queue_functions(self, js):
+        assert "async function removeFromQueue(" not in js and "async function clearQueue(" not in js
     def test_showNewTaskForm(self, js):      assert "function showNewTaskForm(" in js
     def test_cancelNewTask(self, js):        assert "function cancelNewTask(" in js
     def test_submitNewTask(self, js):        assert "async function submitNewTask(" in js
@@ -76,7 +76,9 @@ class TestTasksHTML:
     def test_queuePanel(self, html):     assert 'id="queuePanel"' in html
     def test_queueItems(self, html):     assert 'id="queueItems"' in html
     def test_queueCount(self, html):     assert 'id="queueCount"' in html
-    def test_queueClearBtn(self, html):  assert 'id="queueClearBtn"' in html
+    def test_no_queueClearBtn(self, html): assert 'id="queueClearBtn"' not in html
+    def test_auto_run_and_time_fields(self, html):
+        assert 'id="ntAutoRun"' in html and 'id="ntRunTime"' in html
     def test_newTaskForm(self, html):    assert 'id="newTaskForm"' in html
     def test_taskFormTitle(self, html):  assert 'id="taskFormTitle"' in html
     def test_taskFormSubmitBtn(self, html): assert 'id="taskFormSubmitBtn"' in html
@@ -102,7 +104,7 @@ class TestEventDelegation:
     def test_boot_routes_queue(self, js):       assert "runTaskNow" in _fn(js, "boot")
     def test_boot_routes_edit(self, js):        assert "editTask" in _fn(js, "boot")
     def test_boot_routes_delete(self, js):      assert "deleteTask" in _fn(js, "boot")
-    def test_boot_routes_remove(self, js):      assert "removeFromQueue" in _fn(js, "boot")
+    def test_boot_has_no_queue_remove(self, js): assert "removeFromQueue" not in _fn(js, "boot")
 
     def test_switchTab_loads_tasks(self, js):
         assert "loadTasks" in _fn(js, "switchTab"), \
@@ -139,16 +141,16 @@ class TestRenderTaskCard:
         bad = re.findall(r'onclick="(?:runTaskNow|editTask|deleteTask)\(', fn)
         assert not bad, f"Inline onclick found: {bad}"
 
-    def test_overdue_badge(self, js):      assert "OVERDUE" in _fn(js, "renderTaskCard")
-    def test_in_queue_banner(self, js):
+    def test_due_badge(self, js):          assert "DUE" in _fn(js, "renderTaskCard")
+    def test_running_soon_and_waiting(self, js):
         fn = _fn(js, "renderTaskCard")
-        assert "In queue" in fn or "inQueue" in fn
+        assert "Running soon" in fn and "last_skip" in fn
     def test_output_badges(self, js):
         fn = _fn(js, "renderTaskCard")
-        assert "output_email" in fn and "output_learnings" in fn
-    def test_remove_queue_action(self, js):
+        assert "output_email" in fn and "output_learnings" in fn and "auto_run" in fn
+    def test_no_queue_remove_action(self, js):
         fn = _fn(js, "renderTaskCard")
-        assert 'data-action="remove"' in fn or 'data-action="remove-queue"' in fn
+        assert 'data-action="remove' not in fn and "Run now" in fn
 
 
 # ── TASKS: loadAllTasks ───────────────────────────────────────────────────────
@@ -180,13 +182,16 @@ class TestQueuePanel:
     def test_populates_pending_source_id(self, js):
         assert "_pendingBySourceId" in _fn(js, "loadTasks")
 
-    def test_shows_due_date(self, js):       assert "next_due" in _fn(js, "renderQueuePanel")
-    def test_shows_queued_ago(self, js):
+    # 2026-11-01: the panel is "⏱ Up next" — due / running-soon tasks only, no remove (no queue)
+    def test_shows_only_due_or_running_soon(self, js):
         fn = _fn(js, "renderQueuePanel")
-        assert "_timeAgo" in fn or "queued_at" in fn
-    def test_has_remove_button(self, js):
+        assert "'running soon'" in fn and "'due'" in fn
+    def test_says_who_runs_it(self, js):
         fn = _fn(js, "renderQueuePanel")
-        assert "remove-queue" in fn or "removeFromQueue" in fn
+        assert "AI-Prowler runs it" in fn and "a chat runs it" in fn
+    def test_has_no_remove_button(self, js):
+        fn = _fn(js, "renderQueuePanel")
+        assert "remove-queue" not in fn and "removeFromQueue" not in fn
     def test_mcp_defined(self, mcp):         assert "def get_all_queued_tasks(" in mcp
     def test_in_allowed(self, mcp):          assert "get_all_queued_tasks" in _allowed(mcp)
 
@@ -202,10 +207,11 @@ class TestQueueButton:
     def test_refreshes(self, js):    assert "loadTasks" in _fn(js, "runTaskNow")
     def test_toast(self, js):        assert "toast(" in _fn(js, "runTaskNow")
     def test_mcp_defined(self, mcp): assert "def queue_single_task(" in mcp
-    def test_writes_pending(self, mcp):
+    def test_marks_the_task_to_run(self, mcp):
+        # 2026-11-01: no queue file — the task itself is marked to run (AI-Prowler's scheduler runs it)
         idx = mcp.find("def queue_single_task(")
         fn = mcp[idx:idx+2000]
-        assert '"pending"' in fn, "Must write status=pending so GUI shows it"
+        assert "request_run(" in fn and "BY_AI_PROWLER" in fn
     def test_in_allowed(self, mcp):  assert "queue_single_task" in _allowed(mcp)
 
 

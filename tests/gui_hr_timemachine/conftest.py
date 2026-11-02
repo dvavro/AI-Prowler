@@ -47,10 +47,18 @@ def _free_port():
 
 
 def _fingerprint(folder: Path):
+    """Same as tests/gui_hr_e2e/conftest.py (2026-11-02): SQLite's -shm / -wal times change whenever any
+    program just opens the database (the AI-Prowler running on this PC does, every couple of minutes),
+    so their times are left out; a real write still shows in the database file or the -wal size.
+    The side files also come and go (made on open, deleted on close), so they're left out
+    entirely — except a -wal holding data, a write not yet copied into the database."""
     if not folder.exists():
         return None
-    return sorted((str(p.relative_to(folder)), p.stat().st_size, int(p.stat().st_mtime))
-                  for p in folder.rglob("*") if p.is_file())
+    return sorted((str(p.relative_to(folder)), p.stat().st_size,
+                   None if p.name.endswith("-wal") else int(p.stat().st_mtime))
+                  for p in folder.rglob("*") if p.is_file()
+                  and not p.name.endswith("-shm")
+                  and not (p.name.endswith("-wal") and p.stat().st_size == 0))
 
 
 class TM:
