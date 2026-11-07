@@ -257,6 +257,10 @@ def example_prompts() -> list[str]:
             "Bid the Miller plans: framing, drywall and a new roof (has plans)",
             "Show my estimating jobs board",
             "What's waiting for review?",
+            "Import my supplier price list from C:\\Users\\me\\Documents\\abc_supply_prices.csv",
+            "The Garcia roof is done: it really cost $8,600. How did that compare?",
+            "Where do my prices run high or low?",
+            "Export the Miller estimate to Excel",
             "Set the AI budget to $1 a day"]
 
 

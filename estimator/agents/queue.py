@@ -107,6 +107,9 @@ def build_pack(conn, ctx, task: dict, registry=None) -> dict:
         pack["estimate"] = _estimate_pack(conn, ctx, task["estimate_id"], reg)
         v = validate.validate(conn, ctx, task["estimate_id"], registry=reg)
         pack["checks"] = [{"level": f["level"], "message": f["message"]} for f in v.get("findings", [])]
+        from estimator.learning import history
+        hist = history.compare_history(conn, ctx, estimate_id=task["estimate_id"])
+        pack["history"] = [r["message"] for r in hist["lines"] if r.get("flag") and r.get("message")]
         job = conn.execute("SELECT request_text FROM director_jobs WHERE id = ? AND company_id = ?",
                            (task["job_id"], ctx.company_id)).fetchone() if task["job_id"] else None
         pack["request"] = job["request_text"] if job else None

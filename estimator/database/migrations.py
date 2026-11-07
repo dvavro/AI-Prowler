@@ -414,6 +414,29 @@ CREATE TABLE agent_usage (
 );
 CREATE INDEX ix_agent_usage_company ON agent_usage (company_id, at);
 """),
+    (9, "actual job costs for the learning loop", """
+CREATE TABLE estimate_actuals (
+    id                   INTEGER PRIMARY KEY,
+    company_id           TEXT NOT NULL,
+    estimate_id          INTEGER NOT NULL REFERENCES estimates (id) ON DELETE CASCADE,
+    line_item_id         INTEGER,
+    price_key            TEXT,
+    module_id            TEXT,
+    kind                 TEXT CHECK (kind IS NULL OR kind IN ('material', 'labor', 'equipment', 'sub', 'other')),
+    description          TEXT NOT NULL DEFAULT '',
+    est_quantity         TEXT,
+    est_unit_cost_cents  INTEGER,
+    est_total_cents      INTEGER,
+    actual_quantity      TEXT,
+    actual_cost_cents    INTEGER NOT NULL CHECK (actual_cost_cents >= 0),
+    actual_hours         TEXT,
+    note                 TEXT,
+    recorded_by          TEXT,
+    recorded_at          TEXT NOT NULL
+);
+CREATE INDEX ix_actuals_estimate ON estimate_actuals (company_id, estimate_id);
+CREATE INDEX ix_actuals_key ON estimate_actuals (company_id, price_key)
+"""),
 ]
 
 

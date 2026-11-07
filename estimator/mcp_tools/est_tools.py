@@ -33,6 +33,9 @@ from estimator.agents import queue as agent_queue
 from estimator.agents import roles as agent_roles
 from estimator.modules import get_registry
 from estimator.pricing import price_book
+from estimator.pricing import importer as price_import
+from estimator.learning import history
+from estimator import exports
 
 # Server mode will replace this with the API key / signed-in user's context.
 _context_provider = personal_context
@@ -414,6 +417,48 @@ def pricebook_update(prices: dict | str, confirm: bool = False, effective_date: 
                                                    effective_date=effective_date or None))
 
 
+def pricebook_import(file_path: str = "", csv_text: str = "", mapping: dict | str | None = None, sheet: str = "",
+                     effective_date: str = "", add_new: bool = False, confirm: bool = False) -> str:
+    """Import a supplier's price list into the price book: file_path (a .csv or .xlsx on this PC) or csv_text
+    (pasted CSV). Columns are found by name (item code / price key, unit price / cost, description, unit, kind,
+    supplier) or by mapping, e.g. {"cost": "Net Price", "description": "Item"}. Rows update existing prices by key or
+    description; add_new=true adds unmatched rows as new prices (they need a unit). Rows with a different unit are
+    skipped, never converted. Without confirm=true it returns needs_confirmation with the changes: show the user."""
+    return _run(lambda c: price_import.import_prices(
+        c, _ctx(), file_path=file_path or None, csv_text=csv_text or None,
+        mapping=_obj(mapping, "mapping") if mapping else None, sheet=sheet or None,
+        effective_date=effective_date or None, add_new=bool(add_new), confirm=bool(confirm)))
+
+
+def est_record_actuals(estimate_id: int, actuals: list | str, replace: bool = False, note: str = "") -> str:
+    """After a sold job is done, record what it really cost (dollars). Items: {"line_id": 12, "cost": "480", "quantity":
+    "1900", "hours": "6"} for one line, {"price_key": "...", "cost": "..."}, {"kind": "labor", "cost": "2200", "hours":
+    "40"} for all of one kind, or {"total": "9800"} for the whole job. replace=true clears earlier records. The estimate
+    itself never changes; est_compare_history uses these to show where prices run high or low."""
+    def go(c):
+        items = json.loads(actuals) if isinstance(actuals, str) and actuals.strip() else actuals
+        if isinstance(items, dict):
+            items = [items]
+        return history.record_actuals(c, _ctx(), int(estimate_id), items, replace=bool(replace), note=note)
+    return _run(go)
+
+
+def est_compare_history(estimate_id: int = 0, price_key: str = "", module_id: str = "") -> str:
+    """Compare unit costs with past estimates and with what jobs really cost (from est_record_actuals). With
+    estimate_id: each line against your usual unit cost and real job costs, flagging lines 25% off. With price_key: that
+    price's history. Neither: every price with job costs, biggest gaps first, plus suggested pricebook_update calls when
+    two or more jobs show your price is 10% or more off. Changes nothing."""
+    return _run(lambda c: history.compare_history(c, _ctx(), int(estimate_id) or None, price_key or None,
+                                                  module_id or None))
+
+
+def est_export(estimate_id: int = 0, status: str = "", format: str = "csv") -> str:  # noqa: A002 - tool argument name
+    """Export to a CSV or Excel (format="xlsx") file in the Estimator's exports folder. With estimate_id: its line items
+    (trade, kind, quantity, unit cost, cost, price) and totals. Without: a list of estimates (optionally one status,
+    e.g. "won"). Returns the file path for send_file or get_file_download_url."""
+    return _run(lambda c: exports.export(c, _ctx(), int(estimate_id) or None, status or None, format))
+
+
 def est_create_revision(estimate_id: int, change_summary: str) -> str:
     """Make a new editable version (v2, v3…) of an approved, sent, lost or expired estimate. The original stays
     unchanged and its open bids are voided."""
@@ -559,7 +604,8 @@ TOOLS = (
     est_director_add_trade, est_director_book_site_visit, est_validate, est_scenarios, est_choose_scenario,
     est_followups_due, est_director_briefing, est_director_inbox, est_director_watch_now, est_director_watch_status,
     est_director_settings_get, est_director_settings_update, est_playbook_list, est_playbook_update,
-    pricebook_get, pricebook_update, est_create_revision,
+    pricebook_get, pricebook_update, pricebook_import, est_create_revision,
+    est_record_actuals, est_compare_history, est_export,
     est_setup_status, est_setup_step,
     est_list_modules, est_create_estimate, est_get_estimate, est_list_estimates, est_add_line_item,
     est_calculate, est_quick_questions, est_quick_answer,
