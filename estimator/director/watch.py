@@ -222,16 +222,16 @@ def tick(conn, ctx: RequestContext, now: datetime | None = None) -> dict:
 # ---------------------------------------------------------------- inbox
 
 def unread_count(conn, ctx) -> int:
-    return conn.execute("SELECT COUNT(*) FROM director_notices WHERE company_id = ? AND read_at IS NULL",
-                        (ctx.company_id,)).fetchone()[0]
+    return conn.execute("SELECT COUNT(*) FROM director_notices WHERE company_id = ? AND read_at IS NULL"
+                        " AND (for_user IS NULL OR for_user = ?)", (ctx.company_id, ctx.user_id)).fetchone()[0]
 
 
 def inbox(conn, ctx: RequestContext, unread_only: bool = True, mark_read: bool = False, limit: int = 50) -> dict:
-    sql = "SELECT * FROM director_notices WHERE company_id = ?"
+    sql = "SELECT * FROM director_notices WHERE company_id = ? AND (for_user IS NULL OR for_user = ?)"
     if unread_only:
         sql += " AND read_at IS NULL"
     sql += " ORDER BY id DESC LIMIT ?"
-    rows = [dict(r) for r in conn.execute(sql, (ctx.company_id, max(1, min(int(limit), 500))))]
+    rows = [dict(r) for r in conn.execute(sql, (ctx.company_id, ctx.user_id, max(1, min(int(limit), 500))))]
     if mark_read and rows:
         with service.transaction(conn):
             conn.execute(f"UPDATE director_notices SET read_at = ? WHERE company_id = ? AND read_at IS NULL"

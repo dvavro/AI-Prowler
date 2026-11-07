@@ -9,6 +9,7 @@ to, so keep the first words stable):
     🏗 Trades                 which construction trades the Estimator runs takeoffs for
     🤖 AI agents and budget   which AI runs each agent, its backup, the daily and monthly budget
     🧑‍💼 Director              review limit, quick-send limit, follow-ups, daily briefing, watcher
+    📦 Modules               every installed trade and service, its version and how it's priced
     💾 Data and backups       where estimator.db lives, back up now
     📱 Phone and web app      what's coming (David's track) and how to use it from chat today
     ❓ Help                   what to ask your AI
@@ -51,7 +52,7 @@ class EstimatorTab:
         self.sections = {}
         self._setup_section()
         for build in (self._company_section, self._trades_section, self._agents_section, self._director_section,
-                      self._data_section, self._phone_section, self._help_section):
+                      self._modules_section, self._data_section, self._phone_section, self._help_section):
             try:
                 build()
             except Exception as exc:  # noqa: BLE001 - one broken section doesn't take the rest down
@@ -116,6 +117,23 @@ class EstimatorTab:
         self.switch_msg = self._note(box, "")
         self.check_frame = ttk.Frame(box)
         self.check_frame.pack(fill="x", pady=(8, 0))
+        prow = ttk.Frame(box)
+        prow.pack(fill="x", pady=(8, 0))
+        self.practice_btn = ttk.Button(prow, text="", command=self._practice)
+        self.practice_btn.pack(side="left")
+        ttk.Label(prow, text="A ready-made roof and house-wash estimate to try things on; it stays out of your history.",
+                  foreground=GREY, font=("Arial", 8)).pack(side="left", padx=8)
+        self.refresh_setup()
+
+    def _practice(self):
+        if model.practice_id():
+            from tkinter import messagebox
+            if not messagebox.askyesno("Delete the practice project?", "Delete the practice estimate and anything made "
+                                       "from it (bids, recorded costs)? Your real work isn't touched.", parent=self.root):
+                return
+            self._say(self.switch_msg, model.practice_delete())
+        else:
+            self._say(self.switch_msg, model.practice_create())
         self.refresh_setup()
 
     def _toggle(self):
@@ -128,6 +146,11 @@ class EstimatorTab:
         self.state_lbl.config(text="✅ The Estimator is ON" if on else "The Estimator is OFF",
                               foreground=GREEN if on else GREY)
         self.switch_btn.config(text="Turn it off" if on else "✅ Turn the Estimator on")
+        try:
+            self.practice_btn.config(text="🗑 Delete the practice project" if model.practice_id() else
+                                     "🎓 Make a practice project")
+        except Exception:  # noqa: BLE001 - no database yet
+            self.practice_btn.config(text="🎓 Make a practice project")
         for w in self.check_frame.winfo_children():
             w.destroy()
         try:
@@ -356,6 +379,20 @@ class EstimatorTab:
         ttk.Button(box, text="💾 Save Director settings", command=save).pack(anchor="w", pady=(6, 0))
         msg = self._note(box, "")
 
+    # ------------------------------------------------------------ 📦 modules
+
+    def _modules_section(self):
+        ttk = self.ttk
+        box = self._box("📦 Modules", "modules")
+        self._note(box, "Each trade and service is a module with its own questions, formulas and sample prices.", GREY, 8)
+        grid = ttk.Frame(box)
+        grid.pack(fill="x", pady=(6, 0))
+        for c, h in enumerate(("Module", "Kind", "Priced by", "Version")):
+            ttk.Label(grid, text=h, font=("Arial", 8, "bold")).grid(row=0, column=c, sticky="w", padx=(0, 18))
+        for i, m in enumerate(model.modules(), start=1):
+            for c, v in enumerate((m["name"], m["category"], m["how"], m["version"])):
+                ttk.Label(grid, text=v, font=("Arial", 8)).grid(row=i, column=c, sticky="w", padx=(0, 18))
+
     # ------------------------------------------------------------ 💾 data
 
     def _data_section(self):
@@ -375,7 +412,28 @@ class EstimatorTab:
         ttk.Button(row, text="📂 Open the folder", command=lambda: _open_folder(config.data_dir())).pack(side="left",
                                                                                                      padx=6)
         listing = self._note(box, "Recent backups: " + (", ".join(model.recent_backups()) or "none yet"), GREY, 8)
+        move = ttk.Frame(box)
+        move.pack(fill="x", pady=(8, 0))
+        ttk.Button(move, text="📤 Pack up my data to move", command=lambda: self._say(msg, model.data_export())
+                   ).pack(side="left")
+        ttk.Button(move, text="📥 Load a data file…", command=lambda: self._data_import(msg)).pack(side="left", padx=6)
+        ttk.Label(move, text="Moves everything to AI-Prowler Server or another PC in one .zip.", foreground=GREY,
+                  font=("Arial", 8)).pack(side="left", padx=6)
         msg = self._note(box, "")
+
+    def _data_import(self, msg):
+        from tkinter import filedialog, messagebox
+        path = filedialog.askopenfilename(parent=self.root, title="Estimator data file",
+                                          filetypes=[("Estimator data", "*.zip")])
+        if not path:
+            return
+        ok, preview = model.data_import_preview(path)
+        if not ok:
+            self._say(msg, (ok, preview))
+            return
+        if messagebox.askyesno("Load this data?", preview + "\n\nLoad it now?", parent=self.root):
+            self._say(msg, model.data_import(path))
+            self.refresh_setup()
 
     # ------------------------------------------------------------ 📱 phone
 

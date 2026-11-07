@@ -357,14 +357,23 @@ def get_estimate(conn, ctx: RequestContext, estimate_id: int) -> dict:
         "updated_at": row["updated_at"],
         "totals": json.loads(row["totals_json"]) if row["totals_json"] else None,
         "sections": sections,
+        "practice": bool(row["is_practice"]) if "is_practice" in row.keys() else False,
+        **_editing(row, ctx),
     }
+
+
+def _editing(row, ctx: RequestContext) -> dict:
+    from estimator.team import editing_warning
+    msg = editing_warning(row, ctx)
+    return {"editing_warning": msg} if msg else {}
 
 
 def list_estimates(conn, ctx: RequestContext, status: str | None = None, limit: int = 50) -> dict:
     if status is not None and status not in STATUSES:
         raise InvalidInput(f"status must be one of {STATUSES}", field="status")
     limit = max(1, min(int(limit), 500))
-    sql = "SELECT id, title, status, rev, customer_id, totals_json, updated_at FROM estimates WHERE company_id = ?"
+    sql = ("SELECT id, title, status, rev, customer_id, totals_json, updated_at, is_practice, assigned_to FROM estimates"
+           " WHERE company_id = ?")
     args: list = [ctx.company_id]
     if status:
         sql += " AND status = ?"
@@ -376,7 +385,8 @@ def list_estimates(conn, ctx: RequestContext, status: str | None = None, limit: 
         totals = json.loads(r["totals_json"]) if r["totals_json"] else {}
         items.append({"id": r["id"], "title": r["title"], "status": r["status"], "rev": r["rev"],
                       "customer_id": r["customer_id"], "total_cents": totals.get("total_cents", 0),
-                      "updated_at": r["updated_at"]})
+                      "updated_at": r["updated_at"], "assigned_to": r["assigned_to"],
+                      **({"practice": True} if r["is_practice"] else {})})
     return {"ok": True, "count": len(items), "estimates": items}
 
 

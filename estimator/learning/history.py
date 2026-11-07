@@ -200,9 +200,10 @@ def _key_history(conn, company_id: str, price_key: str, exclude_estimate: int | 
     used = [int(r[0]) for r in conn.execute(
         "SELECT li.unit_cost_cents FROM line_items li JOIN trade_sections s ON s.id = li.trade_section_id"
         " JOIN estimates e ON e.id = s.estimate_id WHERE e.company_id = ? AND li.price_key = ? AND e.id != ?"
-        " AND e.status NOT IN ('draft', 'archived') AND li.unit_cost_cents > 0",
+        " AND e.status NOT IN ('draft', 'archived') AND li.unit_cost_cents > 0 AND e.is_practice = 0",
         (company_id, price_key, exclude_estimate or -1))]
-    acts = conn.execute("SELECT * FROM estimate_actuals WHERE company_id = ? AND price_key = ? AND estimate_id != ?",
+    acts = conn.execute("SELECT * FROM estimate_actuals WHERE company_id = ? AND price_key = ? AND estimate_id != ?"
+                        " AND estimate_id NOT IN (SELECT id FROM estimates WHERE is_practice = 1)",
                         (company_id, price_key, exclude_estimate or -1)).fetchall()
     unit_actuals = [u for u in (_unit_cost(r) for r in acts) if u is not None]
     overruns = [Decimal(r["actual_cost_cents"] - r["est_total_cents"]) / r["est_total_cents"]
@@ -251,7 +252,8 @@ def compare_history(conn, ctx: RequestContext, estimate_id: int | None = None, p
         if not s["estimates_using_it"] and not s["jobs_with_actuals"] and s["price_book"] is None:
             raise NotFound(f"no history or price called '{price_key}'", price_key=price_key)
         return {"ok": True, "prices": [_clean(s)], "suggestions": [s["suggestion"]] if "suggestion" in s else []}
-    sql = "SELECT DISTINCT price_key FROM estimate_actuals WHERE company_id = ? AND price_key IS NOT NULL"
+    sql = ("SELECT DISTINCT price_key FROM estimate_actuals WHERE company_id = ? AND price_key IS NOT NULL"
+           " AND estimate_id NOT IN (SELECT id FROM estimates WHERE is_practice = 1)")
     args: list = [ctx.company_id]
     if module_id:
         sql += " AND module_id = ?"
@@ -259,10 +261,12 @@ def compare_history(conn, ctx: RequestContext, estimate_id: int | None = None, p
     keys = [r[0] for r in conn.execute(sql, args)]
     summaries = [_price_summary(conn, ctx, k) for k in keys]
     summaries.sort(key=lambda s: -abs(s.get("_avg_overrun", Decimal(0))))
-    jobs = conn.execute("SELECT COUNT(DISTINCT estimate_id) FROM estimate_actuals WHERE company_id = ?",
+    jobs = conn.execute("SELECT COUNT(DISTINCT estimate_id) FROM estimate_actuals WHERE company_id = ?"
+                        " AND estimate_id NOT IN (SELECT id FROM estimates WHERE is_practice = 1)",
                         (ctx.company_id,)).fetchone()[0]
     whole = conn.execute("SELECT actual_cost_cents, est_total_cents FROM estimate_actuals WHERE company_id = ?"
-                         " AND description = 'Whole job' AND line_item_id IS NULL AND kind IS NULL AND est_total_cents > 0",
+                         " AND description = 'Whole job' AND line_item_id IS NULL AND kind IS NULL AND est_total_cents > 0"
+                         " AND estimate_id NOT IN (SELECT id FROM estimates WHERE is_practice = 1)",
                          (ctx.company_id,)).fetchall()
     out = {"ok": True, "jobs_with_actuals": jobs, "prices": [_clean(s) for s in summaries],
            "suggestions": [s["suggestion"] for s in summaries if "suggestion" in s]}

@@ -148,7 +148,8 @@ def test_tab_is_added_with_its_sections(root, db_home, switch, wizard):  # S16-G
     frame = build_estimator_tab(app)
     assert frame is not None and app.notebook.tab(1, "text") == model.TAB_TITLE
     tab = app._estimator_tab
-    assert set(tab.sections) == {"setup", "company", "trades", "agents", "director", "data", "phone", "help"}
+    assert set(tab.sections) == {"setup", "company", "trades", "agents", "director", "modules", "data", "phone",
+                                 "help"}
     texts = _texts(frame)
     assert any(t.startswith("🧭 Estimator setup") for t in texts)        # Setup AI-Prowler scrolls to this
     assert any("The Estimator is ON" in t for t in texts) and any("Setup checklist: 0 of 9" in t for t in texts)

@@ -35,7 +35,7 @@ from estimator.modules import get_registry
 from estimator.pricing import price_book
 from estimator.pricing import importer as price_import
 from estimator.learning import history
-from estimator import exports
+from estimator import data_move, exports, practice, team
 
 # Server mode will replace this with the API key / signed-in user's context.
 _context_provider = personal_context
@@ -459,6 +459,38 @@ def est_export(estimate_id: int = 0, status: str = "", format: str = "csv") -> s
     return _run(lambda c: exports.export(c, _ctx(), int(estimate_id) or None, status or None, format))
 
 
+def est_assign(user_id: str, estimate_id: int = 0, job_id: int = 0, note: str = "") -> str:
+    """Assign an estimate (and its Director job) to a person by their sign-in name, e.g. "maria"; they get a notice in
+    their inbox. user_id="" clears the assignment. Owner, estimator or office."""
+    return _run(lambda c: team.assign(c, _ctx(), user_id, estimate_id=int(estimate_id) or None,
+                                      job_id=int(job_id) or None, note=note))
+
+
+def est_my_work(user_id: str = "") -> str:
+    """Open estimates and Director jobs assigned to me (or, for the owner or office, to user_id), with new notices."""
+    return _run(lambda c: team.my_work(c, _ctx(), user_id or None))
+
+
+def est_sample_project(action: str = "create", confirm: bool = False) -> str:
+    """The practice project: action="create" makes "Practice: Garcia house" (a roof and a house wash, priced from your
+    price book) to try things on; action="delete" removes it and anything made from it (needs confirm=true). Practice
+    estimates stay out of your history comparisons and "my work"."""
+    return _run(lambda c: practice.run(c, _ctx(), action, bool(confirm)))
+
+
+def est_data_export(include_practice: bool = False) -> str:
+    """Pack all of this company's Estimator data (estimates, quotes and their PDFs, prices, settings, Director jobs,
+    job costs) into one .zip in the exports folder, to move to AI-Prowler Server or another PC. Owner only."""
+    return _run(lambda c: data_move.export_data(c, _ctx(), bool(include_practice)))
+
+
+def est_data_import(file_path: str, confirm: bool = False) -> str:
+    """Load a .zip made by est_data_export into this company. Every estimate gets a new number here; quote numbers stay.
+    A company that already has estimates keeps its own settings and prices. Without confirm=true it shows what would
+    come in. Owner only."""
+    return _run(lambda c: data_move.import_data(c, _ctx(), file_path, bool(confirm)))
+
+
 def est_create_revision(estimate_id: int, change_summary: str) -> str:
     """Make a new editable version (v2, v3…) of an approved, sent, lost or expired estimate. The original stays
     unchanged and its open bids are voided."""
@@ -605,7 +637,8 @@ TOOLS = (
     est_followups_due, est_director_briefing, est_director_inbox, est_director_watch_now, est_director_watch_status,
     est_director_settings_get, est_director_settings_update, est_playbook_list, est_playbook_update,
     pricebook_get, pricebook_update, pricebook_import, est_create_revision,
-    est_record_actuals, est_compare_history, est_export,
+    est_record_actuals, est_compare_history, est_export, est_assign, est_my_work, est_sample_project,
+    est_data_export, est_data_import,
     est_setup_status, est_setup_step,
     est_list_modules, est_create_estimate, est_get_estimate, est_list_estimates, est_add_line_item,
     est_calculate, est_quick_questions, est_quick_answer,

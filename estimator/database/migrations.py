@@ -437,6 +437,10 @@ CREATE TABLE estimate_actuals (
 CREATE INDEX ix_actuals_estimate ON estimate_actuals (company_id, estimate_id);
 CREATE INDEX ix_actuals_key ON estimate_actuals (company_id, price_key)
 """),
+    (10, "assignments for one person, practice project", """
+ALTER TABLE director_notices ADD COLUMN for_user TEXT;
+ALTER TABLE estimates ADD COLUMN is_practice INTEGER NOT NULL DEFAULT 0
+"""),
 ]
 
 

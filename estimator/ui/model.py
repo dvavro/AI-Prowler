@@ -251,16 +251,95 @@ def backup_now() -> tuple[bool, str]:
     return _try(go)
 
 
+def modules() -> list[dict]:
+    """Every installed trade and service module, for the 📦 Modules section."""
+    reg = _registry()
+    return [{"id": m.id, "name": m.name, "category": m.category, "version": m.version,
+             "how": {"quick_estimate": "quick quote", "plan_takeoff": "plan takeoff", "both": "quick or plans"}.get(m.path, m.path)}
+            for m in sorted(reg.list(), key=lambda m: (m.category, m.name))]
+
+
+def practice_id() -> int | None:
+    with _open() as conn:
+        row = conn.execute("SELECT id FROM estimates WHERE company_id = ? AND is_practice = 1 ORDER BY id LIMIT 1",
+                           (_ctx().company_id,)).fetchone()
+    return row[0] if row else None
+
+
+def practice_create() -> tuple[bool, str]:
+    from estimator import practice
+
+    def go():
+        with _open() as conn:
+            out = practice.create(conn, _ctx())
+        from estimator.core.units.money import format_cents
+        return (f"{out['title']} is ready (estimate {out['estimate_id']}, {format_cents(out['total_cents'])}). Ask your AI "
+                "\"show me the practice estimate\" to try it." if out["created"] else out["message"])
+    return _try(go)
+
+
+def practice_delete() -> tuple[bool, str]:
+    from estimator import practice
+
+    def go():
+        with _open() as conn:
+            return practice.delete(conn, _ctx(), confirm=True)["message"]
+    return _try(go)
+
+
+def data_export() -> tuple[bool, str]:
+    from estimator import data_move
+
+    def go():
+        with _open() as conn:
+            out = data_move.export_data(conn, _ctx())
+        return (f"Packed {out['counts']['estimates']} estimate(s) and {out['counts']['bids']} quote(s) into {out['path']}. "
+                "Copy it to the other AI-Prowler and load it there.")
+    return _try(go)
+
+
+def data_import_preview(path: str) -> tuple[bool, str]:
+    """What loading the file would do, in words (nothing is loaded)."""
+    from estimator import data_move
+    from estimator.errors import ConfirmationRequired
+    try:
+        with _open() as conn:
+            data_move.import_data(conn, _ctx(), path, confirm=False)
+    except ConfirmationRequired as ask:
+        d = ask.details
+        c = d["counts"]
+        return True, (f"From {d['from_company']} (packed {str(d['exported_at'])[:10]}): {c['estimates']} estimate(s), "
+                      f"{c['bids']} quote(s), {c['price_book']} price(s). Settings: {d['settings']}.")
+    except EstimatorError as exc:
+        return False, exc.message
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"
+    return False, "That file has nothing to load."
+
+
+def data_import(path: str) -> tuple[bool, str]:
+    from estimator import data_move
+
+    def go():
+        with _open() as conn:
+            out = data_move.import_data(conn, _ctx(), path, confirm=True)
+        return (f"Loaded {out['imported']['estimates']} estimate(s) and {out['imported']['bids']} quote(s). Estimates have "
+                "new numbers here; quote numbers are unchanged.")
+    return _try(go)
+
+
 def example_prompts() -> list[str]:
     return ["Quote a pressure wash for the Garcia house: 1,800 sq ft driveway and patio",
             "Replace the roof on 2,000 sq ft, 5/12 pitch, architectural shingles",
             "Bid the Miller plans: framing, drywall and a new roof (has plans)",
+            "Show me the practice estimate",
             "Show my estimating jobs board",
             "What's waiting for review?",
             "Import my supplier price list from C:\\Users\\me\\Documents\\abc_supply_prices.csv",
             "The Garcia roof is done: it really cost $8,600. How did that compare?",
             "Where do my prices run high or low?",
             "Export the Miller estimate to Excel",
+            "Pack up my Estimator data to move to the server",
             "Set the AI budget to $1 a day"]
 
 

@@ -158,13 +158,23 @@ def write_pdf(html_path: Path, pdf_path: Path, timeout: int = 60) -> str | None:
     browser = find_browser()
     if not browser:
         return "no browser found to make the PDF (the HTML bid is ready)"
-    cmd = [browser, "--headless=new", "--disable-gpu", "--no-sandbox", "--no-pdf-header-footer", "--no-first-run",
-           "--disable-background-networking", "--disable-component-update", "--disable-sync",
-           f"--print-to-pdf={pdf_path}", Path(html_path).resolve().as_uri()]
+    base = [browser, "--headless=new", "--disable-gpu", "--no-sandbox", "--no-pdf-header-footer", "--no-first-run",
+            "--disable-background-networking", "--disable-component-update", "--disable-sync"]
+    target = [f"--print-to-pdf={pdf_path}", Path(html_path).resolve().as_uri()]
     try:
-        subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
+        subprocess.run(base + target, capture_output=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return f"PDF step failed: {exc}"
+    if not pdf_path.exists() or pdf_path.stat().st_size == 0:
+        # A second try with a throwaway profile: a headless Edge can hand the job to an Edge window that's already open
+        # and quit without printing (always when one runs as administrator and the other doesn't).
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="estimator_pdf_") as profile:
+            try:
+                subprocess.run(base + ["--no-default-browser-check", f"--user-data-dir={profile}"] + target,
+                               capture_output=True, timeout=timeout, check=False)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return f"PDF step failed: {exc}"
     if not pdf_path.exists() or pdf_path.stat().st_size == 0:
         return "the browser didn't produce a PDF (the HTML bid is ready)"
     return None
