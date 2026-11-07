@@ -23,6 +23,9 @@ REM      Home-tab opt-in banner posts here) and the admin subscriber list.
 REM   4. E2E server isolation tests       (tests/e2e)
 REM      Spawns a real AI-Prowler Server subprocess, probes over HTTP.
 REM      Covers: auth/identity (ST1), scope isolation (ST2), concurrent (ST3)
+REM   5. Estimator suite                  (tests/estimator)       ~630 tests
+REM      Run through run_tests_estimate.bat (sandboxed Estimator database,
+REM      watcher off). Left out of Suite 1 so it runs once, with its own verdict line.
 REM
 REM KNOWN GAP — flagged deliberately rather than silently ignored:
 REM   ai-prowler-subs (the Python Subscription Manager GUI/CLI at
@@ -115,20 +118,20 @@ echo ============================================================
 echo.
 
 REM ── Suite 1: AI-Prowler main test suite ──────────────────────────────────
-echo [1/4] Running AI-Prowler main test suite ...
+echo [1/5] Running AI-Prowler main test suite ...
 echo       Expected: ~1980+ tests (unit, mcp, gui, learning, reindex, installer)
 echo.
 cd /d "%AIPROWLER_ROOT%"
-py -m pytest tests -m "not e2e" -v -p no:logging --tb=short --junit-xml="%TEMP%\suite1_results.xml"
+py -m pytest tests -m "not e2e" --ignore=tests\estimator -v -p no:logging --tb=short --junit-xml="%TEMP%\suite1_results.xml"
 REM Parse the JUnit XML for pass/fail — immune to teardown crashes since
 REM pytest writes the XML before teardown. Zero failures = PASS.
 py -c "import sys,xml.etree.ElementTree as ET; r=ET.parse(r'%TEMP%\suite1_results.xml').getroot(); f=int(r.get('failures',0))+int(r.get('errors',0)); sys.exit(0 if f==0 else 1)"
 set "SUITE1_RC=%ERRORLEVEL%"
 echo.
 if "%SUITE1_RC%"=="0" (
-    echo [1/4] AI-Prowler main suite: PASSED
+    echo [1/5] AI-Prowler main suite: PASSED
 ) else (
-    echo [1/4] AI-Prowler main suite: FAILED ^(exit code %SUITE1_RC%^)
+    echo [1/5] AI-Prowler main suite: FAILED ^(exit code %SUITE1_RC%^)
 )
 echo.
 
@@ -136,7 +139,7 @@ REM ── Suite 2: ai-prowler-subscription Worker suite (Vitest) ────�
 REM provision.test.js + subscription_flow.test.js (mint/upgrade/downgrade/
 REM over-quota/seat-suspension end-to-end flow) + newsletter_send.test.js
 REM (admin "send to all subscribers" endpoint).
-echo [2/4] Running ai-prowler-subscription Worker suite ...
+echo [2/5] Running ai-prowler-subscription Worker suite ...
 echo       Expected: ~50 tests, 3 files, ~0:01 runtime
 echo.
 cd /d "%SUBSCRIPTION_ROOT%"
@@ -145,16 +148,16 @@ call npm test
 set "SUITE2_RC=%ERRORLEVEL%"
 echo.
 if "%SUITE2_RC%"=="0" (
-    echo [2/4] ai-prowler-subscription Worker suite: PASSED
+    echo [2/5] ai-prowler-subscription Worker suite: PASSED
 ) else (
-    echo [2/4] ai-prowler-subscription Worker suite: FAILED ^(exit code %SUITE2_RC%^)
+    echo [2/5] ai-prowler-subscription Worker suite: FAILED ^(exit code %SUITE2_RC%^)
 )
 echo.
 
 REM ── Suite 3: ai-prowler-telemetry Worker suite (Vitest) ───────────────────
 REM newsletter.test.js — subscribe/unsubscribe endpoints (the desktop Home
 REM tab opt-in banner posts here) and the admin subscriber-list endpoint.
-echo [3/4] Running ai-prowler-telemetry Worker suite ...
+echo [3/5] Running ai-prowler-telemetry Worker suite ...
 echo       Expected: ~20 tests, 1 file, ~0:01 runtime
 echo.
 cd /d "%TELEMETRY_ROOT%"
@@ -163,14 +166,14 @@ call npm test
 set "SUITE3_RC=%ERRORLEVEL%"
 echo.
 if "%SUITE3_RC%"=="0" (
-    echo [3/4] ai-prowler-telemetry Worker suite: PASSED
+    echo [3/5] ai-prowler-telemetry Worker suite: PASSED
 ) else (
-    echo [3/4] ai-prowler-telemetry Worker suite: FAILED ^(exit code %SUITE3_RC%^)
+    echo [3/5] ai-prowler-telemetry Worker suite: FAILED ^(exit code %SUITE3_RC%^)
 )
 echo.
 
 REM ── Suite 4: E2E server isolation tests ──────────────────────────────────
-echo [4/4] Running E2E server isolation tests ...
+echo [4/5] Running E2E server isolation tests ...
 echo       Spawns a real AI-Prowler Server subprocess, probes over HTTP.
 echo       Covers: auth/identity (ST1), scope isolation (ST2), concurrent (ST3)
 echo       Requires: pip install mcp[cli]
@@ -184,9 +187,26 @@ call run_tests.bat tests\e2e -v -m e2e
 set "SUITE4_RC=%ERRORLEVEL%"
 echo.
 if "%SUITE4_RC%"=="0" (
-    echo [4/4] E2E server isolation suite: PASSED
+    echo [4/5] E2E server isolation suite: PASSED
 ) else (
-    echo [4/4] E2E server isolation suite: FAILED ^(exit code %SUITE4_RC%^)
+    echo [4/5] E2E server isolation suite: FAILED ^(exit code %SUITE4_RC%^)
+)
+echo.
+
+REM ── Suite 5: Estimator suite ─────────────────────────────────────────────
+REM tests\estimator through run_tests_estimate.bat: throwaway Estimator database,
+REM background watcher off, no real emails or API calls, log in test_logs\.
+echo [5/5] Running Estimator suite ...
+echo       Expected: ~630 tests (estimating, trades, Director, agents, tab, data move)
+echo.
+cd /d "%AIPROWLER_ROOT%"
+call run_tests_estimate.bat
+set "SUITE5_RC=%ERRORLEVEL%"
+echo.
+if "%SUITE5_RC%"=="0" (
+    echo [5/5] Estimator suite: PASSED
+) else (
+    echo [5/5] Estimator suite: FAILED ^(exit code %SUITE5_RC%^)
 )
 echo.
 
@@ -217,9 +237,14 @@ if "%SUITE4_RC%"=="0" (
 ) else (
     echo   Suite 4 ^(E2E server isolation^):            FAIL
 )
+if "%SUITE5_RC%"=="0" (
+    echo   Suite 5 ^(Estimator^):                       PASS
+) else (
+    echo   Suite 5 ^(Estimator^):                       FAIL
+)
 echo.
 
-if "%SUITE1_RC%"=="0" if "%SUITE2_RC%"=="0" if "%SUITE3_RC%"=="0" if "%SUITE4_RC%"=="0" (
+if "%SUITE1_RC%"=="0" if "%SUITE2_RC%"=="0" if "%SUITE3_RC%"=="0" if "%SUITE4_RC%"=="0" if "%SUITE5_RC%"=="0" (
     echo  [OK] ALL TESTS PASSED -- safe to release.
     echo.
     echo  MANUAL CHECKS STILL REQUIRED before tagging:
@@ -230,6 +255,8 @@ if "%SUITE1_RC%"=="0" if "%SUITE2_RC%"=="0" if "%SUITE3_RC%"=="0" if "%SUITE4_RC
     echo    - Proactive Alerts panel ^(launch AI-Prowler, confirm per-job
     echo      toggles auto-save and the engine auto-starts/stops correctly^)
     echo    - Installer test         ^(install on a clean VM, run end-to-end^)
+    echo    - Estimator chat check   ^(type the Sprint 20 scenarios with Claude
+    echo      and Grok on the deployed build^)
     echo    - Git working tree clean ^(git status, all changes pushed, in ALL
     echo      FOUR repos: AI-Prowler, ai-prowler-subs, ai-prowler-subscription,
     echo      ai-prowler-telemetry^)
