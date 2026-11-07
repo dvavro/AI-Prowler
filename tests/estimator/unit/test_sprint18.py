@@ -106,7 +106,12 @@ def test_practice_stays_out_of_history_and_my_work(db):  # S18-P02
     history.record_actuals(db, CTX, e["id"], [{"total": "1"}])
     assert history.compare_history(db, CTX)["jobs_with_actuals"] == 0
     team.assign(db, CTX, "maria", estimate_id=e["id"])
-    assert team.my_work(db, MARIA)["estimates"] == []
+    work = team.my_work(db, MARIA)
+    assert work["estimates"] == []                                                   # real work stays real
+    assert [p["id"] for p in work["practice"]] == [e["id"]]                          # but she can find the practice job
+    assert work["practice"][0]["practice"] is True and "practice" in work["practice"][0]["label"]
+    assert work["notices"][0]["estimate_id"] == e["id"]
+    assert "plus 1 practice" in work["summary"]
 
 
 def test_practice_delete_removes_what_was_made(db, fake_host):  # S18-P03

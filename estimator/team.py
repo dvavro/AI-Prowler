@@ -73,10 +73,17 @@ def my_work(conn, ctx: RequestContext, user_id: str | None = None) -> dict:
     if user != ctx.user_id and ctx.role not in ("owner", "office"):
         raise PermissionDenied("only the owner or office can look at someone else's work", role=ctx.role)
     marks = ",".join("?" for _ in OPEN_STATUSES)
-    ests = [dict(r) for r in conn.execute(
-        f"SELECT id, title, status, due_date, updated_at FROM estimates WHERE company_id = ? AND assigned_to = ?"
-        f" AND status IN ({marks}) AND is_practice = 0 ORDER BY COALESCE(due_date, '9999'), id",
+    rows = [dict(r) for r in conn.execute(
+        f"SELECT id, title, status, due_date, updated_at, is_practice FROM estimates WHERE company_id = ?"
+        f" AND assigned_to = ? AND status IN ({marks}) ORDER BY is_practice, COALESCE(due_date, '9999'), id",
         (ctx.company_id, user, *OPEN_STATUSES))]
+    ests, practice = [], []
+    for r in rows:   # practice jobs are listed, labelled and kept apart, so a notice about one always has a match
+        is_practice = bool(r.pop("is_practice"))
+        r["practice"] = is_practice
+        if is_practice:
+            r["label"] = "🎓 practice (not a real job)"
+        (practice if is_practice else ests).append(r)
     jobs = [dict(r) for r in conn.execute(
         "SELECT id, lane, stage, state, waiting_on, estimate_id, due_date FROM director_jobs WHERE company_id = ?"
         " AND assigned_to = ? AND state NOT IN ('done', 'cancelled') ORDER BY COALESCE(due_date, '9999'), id",
@@ -84,8 +91,9 @@ def my_work(conn, ctx: RequestContext, user_id: str | None = None) -> dict:
     notices = [{"id": r["id"], "kind": r["kind"], "message": r["message"], "estimate_id": r["estimate_id"]}
                for r in conn.execute("SELECT * FROM director_notices WHERE company_id = ? AND for_user = ?"
                                      " AND read_at IS NULL ORDER BY id DESC LIMIT 50", (ctx.company_id, user))]
-    return {"ok": True, "user": user, "estimates": ests, "jobs": jobs, "notices": notices,
-            "summary": f"{len(ests)} estimate(s), {len(jobs)} job(s), {len(notices)} new notice(s) for {user}."}
+    extra = f" plus {len(practice)} practice" if practice else ""
+    return {"ok": True, "user": user, "estimates": ests, "practice": practice, "jobs": jobs, "notices": notices,
+            "summary": f"{len(ests)} estimate(s){extra}, {len(jobs)} job(s), {len(notices)} new notice(s) for {user}."}
 
 
 def editing_warning(row, ctx: RequestContext) -> str | None:

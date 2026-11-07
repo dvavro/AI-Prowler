@@ -467,14 +467,15 @@ def est_assign(user_id: str, estimate_id: int = 0, job_id: int = 0, note: str = 
 
 
 def est_my_work(user_id: str = "") -> str:
-    """Open estimates and Director jobs assigned to me (or, for the owner or office, to user_id), with new notices."""
+    """Open estimates and Director jobs assigned to me (or, for the owner or office, to user_id), with new notices.
+    Practice jobs come back separately under "practice", labelled, and never count as real work."""
     return _run(lambda c: team.my_work(c, _ctx(), user_id or None))
 
 
 def est_sample_project(action: str = "create", confirm: bool = False) -> str:
     """The practice project: action="create" makes "Practice: Garcia house" (a roof and a house wash, priced from your
     price book) to try things on; action="delete" removes it and anything made from it (needs confirm=true). Practice
-    estimates stay out of your history comparisons and "my work"."""
+    estimates stay out of your history comparisons; in "my work" they are listed apart, labelled practice."""
     return _run(lambda c: practice.run(c, _ctx(), action, bool(confirm)))
 
 
