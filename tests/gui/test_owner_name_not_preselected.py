@@ -45,11 +45,14 @@ def test_other_entries_keep_default_select_all(gui):
     owner = _owner_entry(gui)
     other = next((w for w in _walk(gui.root)
                   if isinstance(w, ttk.Entry) and w is not owner
-                  and not w.bind("<<TraverseIn>>")), None)
+                  and not w.bind("<<TraverseIn>>")
+                  # A read-only or disabled box can't take the text below, so it has nothing to select.
+                  and not {"readonly", "disabled"} & set(map(str, w.state()))
+                  and str(w.cget("state")) not in ("readonly", "disabled")), None)
     if other is None:
         pytest.skip("no other plain entry to compare against")
     other.delete(0, "end")
     other.insert(0, "abc")
     other.event_generate("<<TraverseIn>>")
     gui.pump()
-    assert other.selection_present()
+    assert other.selection_present(), (str(other), other.state(), str(other.cget("state")), other.get(), other.winfo_ismapped(), other.winfo_viewable())

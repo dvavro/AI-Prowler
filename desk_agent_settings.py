@@ -26,12 +26,12 @@ import re
 from pathlib import Path
 
 PROVIDERS = (
-    ("chat_only", "Chat — Claude.ai, Muse or Grok.com (no key; someone pastes the prompt)"),
     ("claude_api", "Claude API key — runs on its own when tickets arrive"),
     ("grok_api", "Grok bot (xAI API key) — runs on its own when tickets arrive"),
 )
 # David 2026-11-01: "Remove CLI everywhere" — the Claude subscription (Claude CLI) runner is gone on
-# every install. It can't be saved, and an old saved value counts as chat_only (effective_provider()).
+# every install. It can't be saved. F-26, 2026-11-05 (David: agents and AI tasks only run on API keys): an old saved
+# value reads as the runner of the key that's saved (runner_for_removed), so an install isn't left stuck on it.
 REMOVED_PROVIDERS = ("claude_code",)
 NOT_ON_SERVER = REMOVED_PROVIDERS            # kept for older callers
 CLI_REMOVED_MSG = ("the Claude subscription (Claude CLI) runner was removed — the agents run on an API key: "
@@ -42,8 +42,10 @@ CLI_ON_SERVER_MSG = CLI_REMOVED_MSG
 # (server). On a server every agent runs on its own with an API key; the chat runner isn't offered
 # and can't be saved. An unset / old chat_only value still means "doesn't run on its own" internally
 # (effective_provider), and the server's screens show it as not chosen yet.
-HIDDEN_ON_SERVER = ("chat_only",)
-CHAT_ON_SERVER_MSG = ("on a server every agent runs on its own with an API key — choose the Claude API key "
+# David 2026-11-05, final: an agent needs a saved key, on every install, or it doesn't run. Without one the four apps work
+# as they did before the agents: the apps, and a chat using the normal tools. "chat_only" now only means "no key saved".
+HIDDEN_ON_SERVER = ()
+CHAT_ON_SERVER_MSG = ("every agent runs on its own with an API key — choose the Claude API key "
                       "or the Grok bot (the key goes in 🔑 Agent API Key at the top of the Small Business tab)")
 
 # Plain-English help shown under each stage, as hover text, and in the flow diagram.
@@ -137,10 +139,12 @@ _NAME_RE = re.compile(r"^[A-Za-z][A-Za-z .'\-]*$")
 def validate(key: str, value, edition: str | None = None) -> None:
     """Extra checks for agent_* settings (the type check is desk_db's).
     edition "business" = a server install. Raises ValueError with a plain message."""
+    if key == "agent_provider" and value == "chat_only":
+        raise ValueError(CHAT_ON_SERVER_MSG)
+    if key == "agent_provider" and value == "chat_only":
+        raise ValueError(CHAT_ON_SERVER_MSG)
     if key == "agent_provider" and value in REMOVED_PROVIDERS:
         raise ValueError(CLI_REMOVED_MSG)
-    if key == "agent_provider" and edition == "business" and value == "chat_only":
-        raise ValueError(CHAT_ON_SERVER_MSG)
     if key in CHOICES and value not in CHOICES[key]:
         raise ValueError(f"{key} must be one of: {', '.join(repr(c) for c in CHOICES[key])}")
     if key in RANGES:
@@ -280,12 +284,23 @@ def public_profile(db_path: str, business: str = "") -> dict:
 
 
 def providers_for(edition: str | None) -> list:
-    """The runners this install may use (on a server: API keys only — no Claude CLI, no chat)."""
-    return [p for p in PROVIDERS if not (edition == "business" and p[0] in HIDDEN_ON_SERVER)]
+    """The runners any install may use: a Claude or a Grok API key."""
+    return list(PROVIDERS)
+
+
+def runner_for_removed() -> str:
+    """An old saved value (claude_code, chat_only) or none: the saved key's runner, Claude first. "chat_only" with no key."""
+    import desk_agent_providers as prov
+    for p in ("claude_api", "grok_api"):
+        if prov._key(p):
+            return p
+    return "chat_only"
 
 
 def effective_provider(settings: dict, edition: str | None) -> str:
     p = settings.get("agent_provider") or "chat_only"
+    if p in REMOVED_PROVIDERS or p == "chat_only":      # an old saved value, or none: the saved key decides
+        p = runner_for_removed()
     if p == "chat_only":
         return p                    # not running on its own (on a server: no runner chosen yet)
     return p if p in {k for k, _ in providers_for(edition)} else "chat_only"
@@ -843,7 +858,8 @@ HR_INCIDENTS_HELP = ("\"Type only\": the AI is told a report arrived, its type (
                      "its dates — never what it says. \"Read the report\": it also reads the text so it can judge "
                      "urgency and deadlines. Either way it never investigates or contacts anyone named in it.")
 HR_RUNNER_HELP = ("HR data only goes to an AI that runs on its own with a key you control: a Claude API key or the "
-                  "Grok bot (xAI API key). It never runs from a chat (Claude.ai, Muse, Grok.com).")
+                  "Grok bot (xAI API key). It never runs from a chat (Claude.ai, Muse, Grok.com): with Chat chosen "
+                  "for the other agents, HR still runs on the saved key.")
 HR_RUNNERS = ("claude_api", "grok_api")
 
 DEFAULTS.update({
@@ -896,13 +912,15 @@ def can_approve_timeoff(settings: dict) -> bool:
 
 
 def hr_runner(settings: dict, edition: str | None) -> tuple:
-    """(provider, why_not): decision 5 — the HR agent runs only on a key-based runner, never from a chat
-    (2026-11-01: the Claude CLI runner was removed)."""
+    """(provider, why_not): decision 5 — the HR agent runs only on a key-based runner, never from a chat.
+    David 2026-11-05: with Chat chosen for the other agents, HR still runs on a saved key."""
     p = effective_provider(settings, edition)
+    if p == "chat_only":
+        p = runner_for_removed()
     if p in HR_RUNNERS:
         return p, ""
-    return "", ("HR data only goes to an AI with a key you control — choose a Claude API key or the Grok bot "
-                "as the agent's runner. It never runs from a chat.")
+    return "", ("HR data only goes to an AI with a key you control — save a Claude or Grok key in 🔑 Agent API Key "
+                "at the top of the Small Business tab. It never runs from a chat.")
 
 
 # Layout (560 x 250, the same box as the other diagrams). Top row: hired → working; bottom row:

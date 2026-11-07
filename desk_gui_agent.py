@@ -39,7 +39,7 @@ def load(db_path: str) -> dict:
 
 def save(db_path: str, form: dict, *, edition: str) -> tuple[bool, str]:
     """form: the values as the screen holds them (numbers may be strings).
-    Saves what's valid; returns (all_ok, message). The owner is the actor
+    Saves everything or, if any box is refused, nothing; returns (all_ok, message). The owner is the actor
     (AI-Prowler on this PC is the owner's)."""
     import desk_db
     vals, problems = {}, []
@@ -60,9 +60,14 @@ def save(db_path: str, form: dict, *, edition: str) -> tuple[bool, str]:
             vals["agent_hours"] = [int(str(h).strip()) for h in form["agent_hours"]]
         except (TypeError, ValueError):
             problems.append("hours: enter whole numbers")
-    for k, v in vals.items():
+    for k, v in vals.items():           # every bad box is named, as before …
         try:
-            desk_db.set_setting(db_path, k, v, actor=None, edition=edition)
+            desk_db.check_setting(k, v, edition)
+        except desk_db.DeskError as e:
+            problems.append(str(e))
+    if not problems:                    # … but now one bad box saves none of them (F-6, 2026-11-03)
+        try:
+            desk_db.set_settings(db_path, vals, actor=None, edition=edition)
         except desk_db.DeskError as e:
             problems.append(str(e))
     return (not problems, "Saved." if not problems else "Not saved: " + "; ".join(problems))
@@ -72,6 +77,85 @@ def changed_only(form: dict, baseline: dict) -> dict:
     """Only the fields that differ from what the form showed when it was loaded / last saved
     (2026-10-31): a Save never writes back values the person didn't touch."""
     return {k: val for k, val in form.items() if k not in baseline or baseline[k] != val}
+
+
+LIVE_SYNC_MS = 5000                                 # how often an open settings section re-reads what's saved
+
+
+AUTOSAVE_MS = 600        # after the last change on the desktop panel
+
+
+def autosave(widget, v: dict, save_quiet) -> None:
+    """David 2026-11-05: the panels showed a change at once but only wrote it on Save, so a change on the desktop never
+    reached the apps, which save as soon as you change something. A change here now saves itself the same way, shortly
+    after the last keystroke or pick. Nothing was changed means nothing is written, so a change arriving from an app
+    (live_sync) isn't saved back."""
+    import tkinter as tk
+    job = {"id": None}
+
+    def fire():
+        job["id"] = None
+        try:
+            if widget.winfo_exists():
+                save_quiet()
+        except tk.TclError:
+            pass
+
+    def changed(*_):
+        try:
+            if job["id"]:
+                widget.after_cancel(job["id"])
+            job["id"] = widget.after(AUTOSAVE_MS, fire)
+        except tk.TclError:
+            pass
+    for x in v.values():
+        x.trace_add("write", changed)
+
+
+def mark_saved(shown: dict, v: dict, stored) -> None:
+    """After a save, only the boxes edited here count as up to date. Marking every box hid a change the app had saved in
+    the meantime: this panel kept showing the old value for good (test_changes_from_both_places_are_both_kept)."""
+    for k, val in stored().items():
+        if k in v and v[k].get() != shown.get(k):
+            shown[k] = val
+
+
+def live_sync(widget, v: dict, stored, on_change=None) -> dict:
+    """2026-11-03 (David: changing auto / suggest / off in the app didn't reach AI-Prowler on a personal install).
+    The app saves through the server process; this tab is built once, so it kept showing the old choice until
+    AI-Prowler restarted. While the section exists it now re-reads what's saved every LIVE_SYNC_MS (a few small
+    SQLite reads, no AI call). A box follows a change made elsewhere unless the person has an unsaved edit in that
+    box; their edit stays, and autosave writes it. `stored()` returns {var key: value as the var holds it};
+    `on_change(shown)` gets the new saved values so the section's Save baseline stays right. Returns the dict of
+    what the boxes were last known to match: a successful save must call mark_saved at once, or a box
+    changed again before the next tick looks unedited and is put back to the value just saved."""
+    import tkinter as tk
+    shown = stored()
+
+    def tick():
+        try:
+            if not widget.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        try:
+            now, changed = stored(), False
+            for k, val in now.items():
+                if val == shown.get(k):
+                    continue
+                if v[k].get() == shown.get(k):
+                    v[k].set(val)
+                shown[k], changed = val, True
+            if changed and on_change:
+                on_change(shown)
+        except Exception:  # noqa: BLE001 — a missed refresh just waits for the next one
+            pass
+        try:
+            widget.after(LIVE_SYNC_MS, tick)
+        except tk.TclError:
+            pass
+    widget.after(LIVE_SYNC_MS, tick)
+    return shown
 
 
 KEY_PROVIDERS = (                                   # (provider, label, what the key looks like)
@@ -114,8 +198,8 @@ def clear_agent_key(provider: str) -> tuple[bool, str]:
 
 
 AGENT_KEY_TITLE = "🔑 Agent API Key"
-AGENT_KEY_NOTE = ("All agents (Service Desk, Jobs App and HR) need an API key on a server — they run on their own "
-                  "with it; there is no chat option on a server. Save the key for the AI chosen in Service Desk "
+AGENT_KEY_NOTE = ("The agents (Service Desk, Jobs App and HR) need a saved API key, and run on their own with it; "
+                  "without one they don't run. Save the key for the AI chosen in Service Desk "
                   "Agent & settings → 🤖 Agent → \"Which AI runs it\". Billed by the AI company per use (the "
                   "agents' monthly budget caps it). Kept on this PC only; never shown again after saving.")
 
@@ -168,9 +252,10 @@ def save_agent_budget(value, edition: str, warn_pct=None) -> tuple:
     try:
         tdb = desk_db.default_db_path()
         desk_db.init_db(tdb)
-        desk_db.set_setting(tdb, "agent_monthly_budget_usd", amount, edition=edition)
+        vals = {"agent_monthly_budget_usd": amount}
         if pct is not None:
-            desk_db.set_setting(tdb, "agent_budget_alert_pct", pct, edition=edition)
+            vals["agent_budget_alert_pct"] = pct
+        desk_db.set_settings(tdb, vals, edition=edition)          # both or neither (F-7, 2026-11-03)
         desk_agent_store.sync_shared(tdb)
         try:
             from pathlib import Path
@@ -185,6 +270,9 @@ def save_agent_budget(value, edition: str, warn_pct=None) -> tuple:
     if amount == 0:
         return True, "Saved — $0 means the agents don't run on their own." + warn
     return True, f"Saved — every agent stops running on its own once this month's AI spend reaches ${amount}." + warn
+
+
+FORECAST_REFRESH_MS = 60_000          # the "Spent this month" line re-reads the run records this often
 
 
 def _spent_text(spent, budget) -> str:
@@ -220,8 +308,8 @@ def alert_recipients_text(edition: str | None) -> str:
 
 def build_agent_key_section(parent, edition: str | None = None):
     """🔑 Agent API Key at the TOP of the Small Business tab: the agents' Claude / Grok keys and the monthly
-    dollar limit every agent shares. Server (2026-11-01): every agent needs a key — no Task Queue tab, no
-    chat runner. Personal (same day, David): here too. The agents use only these keys."""
+    dollar limit every agent shares, on a server and on a personal install. The agents use only these keys, and don't
+    run without one (David 2026-11-05)."""
     import tkinter as tk
     from tkinter import messagebox, ttk
     if edition is None:
@@ -342,7 +430,29 @@ def build_agent_key_section(parent, edition: str | None = None):
                     "hard stop, also set a spend limit with the AI company: Claude Console → Billing → Spend limits, "
                     "or the xAI console → Billing. " + alert_recipients_text(edition))
               ).grid(row=row, column=0, columnspan=5, sticky="w", pady=(2, 0))
-    out["budget"] = {"var": bvar, "warn": wvar, "save": do_save_budget, "spent": spent_var, "forecast": fvar}
+    # 2026-11-03 (David: "check if the spent this much value is real time updated, because I dont see these cost
+    # added to the number"): the line was worked out once when the tab was built and only again after a model
+    # pick, Save or closing the popup — the agents' and AI tasks' spend recorded since never showed. It now
+    # re-reads the run records every minute (a few small SQLite reads, no AI call) while the tab exists.
+    def _refresh_forecast():
+        try:
+            if not box.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        try:
+            c2, s3 = load_agent_budget()
+            spent_var.set(_spent_text(s3, c2))
+            fvar.set(forecast_line(edition))
+        except Exception:  # noqa: BLE001 — a missed refresh just waits for the next one
+            pass
+        try:
+            box.after(FORECAST_REFRESH_MS, _refresh_forecast)
+        except tk.TclError:
+            pass
+    box.after(FORECAST_REFRESH_MS, _refresh_forecast)
+    out["budget"] = {"var": bvar, "warn": wvar, "save": do_save_budget, "spent": spent_var, "forecast": fvar,
+                     "refresh": _refresh_forecast}
     return out
 
 
@@ -408,8 +518,13 @@ def open_cost_analysis(parent, edition: str | None, on_close=None, *, analysis_f
         f = a.get("forecast") or {}
         head.set(f.get("text") or "No agent runs this month yet.")
         cpd = a["calls_per_day"]
-        info.set((f"Your volume: about {cpd:.0f} AI calls a day (last 30 days)" if cpd else
-                  f"No agent runs in the last 30 days — the estimates assume {a['calls_per_day_used']:.0f} calls a day")
+        tk_ = a.get("tasks") or {}
+        info.set((f"Your volume: about {cpd:.1f} agent items a day — what the agents queued in the last "
+                  f"{a.get('window_days') or 30:g} day(s), one AI call each" if cpd else
+                  f"Nothing queued for the agents in the last 30 days — the estimates assume "
+                  f"{a['calls_per_day_used']:.0f} items a day")
+                 + (f" · AI Analysis Tasks: {tk_['runs_per_month']:g} scheduled run(s) a month at about "
+                    f"${tk_['per_run']:.2f} a run" if tk_.get("runs_per_month") else "")
                  + f" · about {a['call_tokens'][0]:,} tokens in and {a['call_tokens'][1]:,} out per call"
                  + (f" · {a['complex_share']:.0%} of queued items need the stronger model (complex steps and "
                     f"customer messages)" if a["complex_share"] is not None
@@ -507,6 +622,9 @@ def open_cost_analysis(parent, edition: str | None, on_close=None, *, analysis_f
             "head": head, "status": status}
 
 
+KEY_LIGHT_SAVED, KEY_LIGHT_NONE, KEY_NOT_SAVED, KEY_REFRESH_MS = "#2e7d32", "#9e9e9e", "Not saved", 2000
+
+
 def build_api_keys_panel(parent, title: str = AGENT_KEY_TITLE, note: str = AGENT_KEY_NOTE,
                          pack: dict | None = None, wrap: int = 520) -> dict:
     """One row per AI: a hidden entry box, Save, Remove and whether a key is saved. Used for
@@ -521,6 +639,9 @@ def build_api_keys_panel(parent, title: str = AGENT_KEY_TITLE, note: str = AGENT
     out = {"frame": box}
     for i, (prov, label, hint) in enumerate(KEY_PROVIDERS, start=1):
         var, status = tk.StringVar(), tk.StringVar(value=key_status(prov))
+        cell = ttk.Frame(box)
+        light = ttk.Label(cell, text="●", font=("Arial", 12))
+        light.pack(side="left")
         ttk.Label(box, text=label, width=14, font=small).grid(row=i, column=0, sticky="w", pady=(3, 0))
         ent = ttk.Entry(box, textvariable=var, width=34, show="•")
         ent.grid(row=i, column=1, sticky="w", pady=(3, 0))
@@ -544,8 +665,25 @@ def build_api_keys_panel(parent, title: str = AGENT_KEY_TITLE, note: str = AGENT
 
         ttk.Button(box, text="Save", width=6, command=do_save).grid(row=i, column=2, padx=(4, 0), pady=(3, 0))
         ttk.Button(box, text="Remove", width=8, command=do_clear).grid(row=i, column=3, padx=(4, 0), pady=(3, 0))
-        ttk.Label(box, textvariable=status, font=small).grid(row=i, column=4, sticky="w", padx=(6, 0), pady=(3, 0))
-        out[prov] = {"entry": ent, "var": var, "status": status, "save": do_save, "clear": do_clear}
+        ttk.Label(cell, textvariable=status, font=small).pack(side="left", padx=(3, 0))
+        cell.grid(row=i, column=4, sticky="w", padx=(6, 0), pady=(3, 0))
+        out[prov] = {"entry": ent, "var": var, "status": status, "save": do_save, "clear": do_clear, "light": light}
+
+    # 2026-11-04 (David): a green light shows at a glance that a key is saved. Grey, not red: one AI's key is enough.
+    # The row reads the saved state itself, so a key saved or removed elsewhere (the Setup popup) shows here too.
+    def refresh_keys():
+        try:
+            if not box.winfo_exists():
+                return
+            for p, _label, _hint in KEY_PROVIDERS:
+                now = key_status(p)
+                out[p]["status"].set(now)
+                out[p]["light"].configure(foreground=KEY_LIGHT_NONE if now == KEY_NOT_SAVED else KEY_LIGHT_SAVED)
+            box.after(KEY_REFRESH_MS, refresh_keys)
+        except tk.TclError:
+            pass
+    out["refresh_keys"] = refresh_keys
+    refresh_keys()
     return out
 
 
@@ -712,17 +850,11 @@ def build_agent_settings(app, parent, on_saved=None) -> dict:
     mode_tip = "\n\n".join(das.MODE_HELP.values())
 
     ttk.Label(parent, font=small, foreground="gray", wraplength=900, justify="left",
-              text=((("Works new tickets for you — sorts them, drafts replies, finds past fixes. Nothing "
-                     "reaches a customer until you allow it. It runs on its own on the AI chosen below, with "
-                     "the key saved in 🔑 Agent API Key at the top of the Small Business tab — every agent needs an API key "
-                     "on a server. Its suggestions wait in the Service Desk app's 🤖 Agent tab. On a server "
-                     "these settings are set here only. ")
-                    if edition == "business" else
-                    ("Works new tickets for you — sorts them, drafts replies, finds past fixes. Nothing "
-                     "reaches a customer until you allow it. It works now from a chat — say \"Run the "
-                     "AI-Prowler agent\" in Claude, Muse or Grok — and its suggestions wait in the Service "
-                     "Desk app's 🤖 Agent tab. With a Claude API key or the Grok bot "
-                     "(keys in 🔑 Agent API Key at the top of this tab) it also runs on its own. "
+              text=((("On a server these settings are set here only. " if edition == "business" else "")
+                     + ("Works new tickets for you — sorts them, drafts replies, finds past fixes. Nothing "
+                     "reaches a customer until you allow it. It runs on its own with a saved Claude or Grok key "
+                     "(🔑 Agent API Key at the top of this tab), and its suggestions wait in the Service "
+                     "Desk app's 🤖 Agent tab. With no key saved it doesn't run. "
                      "Same settings as the Service Desk app → Settings → 🤖 Agent. "))
                    + "Hover over anything for what it does.")
               ).pack(anchor="w", pady=(0, 4))
@@ -741,11 +873,6 @@ def build_agent_settings(app, parent, on_saved=None) -> dict:
     ttk.Label(row, text="Which AI runs it", width=16, font=small).pack(side="left")
     calm(ttk.Combobox(row, textvariable=v["agent_provider"], state="readonly", width=58,
                       values=[lab for _, lab in providers])).pack(side="left")
-    if edition == "business":
-        ttk.Label(parent, font=small, foreground="gray", wraplength=520, justify="left",
-                  text="On a server every agent runs on an API key — choose Claude or Grok here and save its "
-                       "key in 🔑 Agent API Key at the top of the Small Business tab. (The chat runner is for "
-                       "personal installs only.)").pack(anchor="w")
 
     stages = ttk.LabelFrame(parent, text="What the agent does  (hover for details)", padding=(6, 4))
     stages.pack(fill="x", pady=(6, 0))
@@ -852,16 +979,32 @@ def build_agent_settings(app, parent, on_saved=None) -> dict:
     ttk.Checkbutton(tim, text='Add the "request service" link to first replies',
                     variable=v["agent_include_service_link"]).pack(anchor="w", pady=(2, 0))
 
-    def current_form() -> dict:
-        form = {k: v[k].get() for k in BOOL_KEYS + STR_KEYS + INT_KEYS}
-        form["agent_provider"] = _value_for(providers, v["agent_provider"].get())
-        form["agent_label"] = v["agent_label"].get()
+    def current_form(src: dict | None = None) -> dict:
+        get = (lambda k: src[k]) if src is not None else (lambda k: v[k].get())
+        form = {k: get(k) for k in BOOL_KEYS + STR_KEYS + INT_KEYS}
+        form["agent_provider"] = _value_for(providers, get("agent_provider"))
+        form["agent_label"] = get("agent_label")
         for k, _ in das.STAGES:
-            form[f"agent_stage_{k}"] = _value_for(modes, v[f"agent_stage_{k}"].get())
+            form[f"agent_stage_{k}"] = _value_for(modes, get(f"agent_stage_{k}"))
         for k, _ in das.BK_STAGES:
-            form[f"agent_bk_stage_{k}"] = _value_for(modes, v[f"agent_bk_stage_{k}"].get())
-        form["agent_hours"] = [v["h0"].get(), v["h1"].get()]
+            form[f"agent_bk_stage_{k}"] = _value_for(modes, get(f"agent_bk_stage_{k}"))
+        form["agent_hours"] = [get("h0"), get("h1")]
         return form
+
+    def stored_view() -> dict:
+        """What's saved now, as this form's boxes hold it (live_sync)."""
+        x = load(db)
+        out = {k: bool(x[k]) for k in BOOL_KEYS}
+        out.update({k: str(x[k]) for k in STR_KEYS + INT_KEYS})
+        cur = das.effective_provider(x, edition)
+        out["agent_provider"] = _label_for(providers, cur) if any(p == cur for p, _ in providers) else ""
+        out["agent_label"] = x["agent_label"]
+        for k, _ in das.STAGES:
+            out[f"agent_stage_{k}"] = _label_for(modes, x[f"agent_stage_{k}"])
+        for k, _ in das.BK_STAGES:
+            out[f"agent_bk_stage_{k}"] = _label_for(modes, x[f"agent_bk_stage_{k}"])
+        out["h0"], out["h1"] = str(x["agent_hours"][0]), str(x["agent_hours"][1])
+        return out
 
     # Vicki 2026-10-31: "when I select auto in some fields and save, it undoes the autos saved in the
     # other agent setting". Every Save used to write the WHOLE form — untouched fields still held the
@@ -869,20 +1012,38 @@ def build_agent_settings(app, parent, on_saved=None) -> dict:
     # app, the Jobs section's runner, a chat tool). Now a Save writes only what changed on this form.
     baseline = {"form": current_form()}
 
-    def do_save():
+    def _synced(shown):
+        baseline["form"] = current_form(shown)
+        if on_saved:
+            on_saved()
+
+    synced = live_sync(outer, v, stored_view, _synced)
+
+    note = tk.StringVar(master=outer, value="")
+
+    def do_save(quiet=False):
         form = current_form()
         changed = changed_only(form, baseline["form"])
+        if quiet and not changed:
+            note.set("")
+            return
         ok, msg = save(db, changed, edition=edition) if changed else (True, "Nothing changed.")
         if ok:
+            note.set("")
             baseline["form"] = form
+            mark_saved(synced, v, stored_view)
             if on_saved:
                 on_saved()          # the section header shows the agent / practice switches as saved
             app.status_var.set("🤖  Agent settings saved" if changed else "🤖  Nothing to save")
             app.root.after(3000, lambda: app.status_var.set("Ready"))
+        elif quiet:
+            note.set("⚠  Not saved yet: " + msg)
         else:
             messagebox.showwarning("Agent settings", msg)
 
+    autosave(outer, v, lambda: do_save(quiet=True))
     ttk.Button(parent, text="💾 Save agent settings", command=do_save).pack(anchor="w", pady=(6, 0))
+    ttk.Label(parent, textvariable=note, foreground="#b45309", wraplength=520, justify="left").pack(anchor="w")
 
     # ── right column: the ticket flow, lit up live as the settings change (2026-10-30)
     ttk.Label(right, text="How a ticket moves — the top and bottom boxes are the agent's steps (hover for details)",
@@ -1024,8 +1185,7 @@ def save_jobs(form: dict, modes, edition: str, db: str | None = None,
         vals = jobs_form_values(form, modes)
         if baseline is not None:
             vals = changed_only(vals, jobs_form_values(baseline, modes))
-        for k, val in vals.items():
-            desk_agent_store.set_setting(k, val, edition=edition, db=db)
+        desk_agent_store.set_settings(vals, edition=edition, db=db)        # all or nothing (F-6)
     except (ValueError, desk_db.DeskError) as e:
         return False, str(e)
     return True, "Jobs agent settings saved." if vals else "Nothing changed."
@@ -1095,17 +1255,29 @@ def build_jobs_section(outer, modes, edition, scale, db: str | None = None, on_s
     ttk.Spinbox(row, textvariable=v["agent_jb_prep_hour"], from_=0, to=23, width=3).pack(side="left")
 
     jb_base: dict = {}
+    jb_sync: dict = {}
 
-    def do_save():
+    jb_note = tk.StringVar(master=outer, value="")
+
+    def do_save(quiet=False):
         form = {k: x.get() for k, x in v.items()}
+        if quiet and form == jb_base.get("form"):
+            jb_note.set("")
+            return
         ok, msg = save_jobs(form, modes, edition, db, baseline=jb_base.get("form"))
         if ok:
+            jb_note.set("")
             jb_base["form"] = form
+            mark_saved(jb_sync["shown"], v, jb_sync["view"])
             if on_saved:
                 on_saved()          # the section header shows what's now saved
-        (messagebox.showinfo if ok else messagebox.showerror)("Jobs agent", msg)
+        if quiet:
+            jb_note.set("" if ok else "⚠  Not saved yet: " + msg)
+        else:
+            (messagebox.showinfo if ok else messagebox.showerror)("Jobs agent", msg)
 
     ttk.Button(left, text="💾 Save Jobs agent settings", command=do_save).pack(anchor="w", pady=(6, 0))
+    ttk.Label(left, textvariable=jb_note, foreground="#b45309", wraplength=520, justify="left").pack(anchor="w")
 
     ttk.Label(right, text="How a job moves — the top and bottom boxes are the agent's steps (hover for details)",
               font=small, foreground="gray").pack(anchor="w")
@@ -1199,6 +1371,31 @@ def build_jobs_section(outer, modes, edition, scale, db: str | None = None, on_s
         v[k].trace_add("write", redraw_all)
     redraw_all()
     jb_base["form"] = {k: x.get() for k, x in v.items()}     # what the form showed when loaded
+
+    def stored_view() -> dict:
+        """What's saved now, as this form's boxes hold it (live_sync)."""
+        x = desk_agent_store.settings(db)
+        out = {k: bool(x[k]) for k in ("agent_jb_enabled", "agent_jb_shadow", "agent_jb_can_send_invoices",
+                                       "agent_jb_weather", "agent_jb_rt_enabled", "agent_jb_rt_shadow")}
+        for k, _ in das.JB_STAGES:
+            out[f"agent_jb_stage_{k}"] = label.get(x[f"agent_jb_stage_{k}"], x[f"agent_jb_stage_{k}"])
+        for k, _ in das.RT_STAGES:
+            out[f"agent_jb_rt_stage_{k}"] = label.get(x[f"agent_jb_rt_stage_{k}"], x[f"agent_jb_rt_stage_{k}"])
+        for k in ("agent_jb_invoice_max", "agent_jb_invoices_per_day", "agent_jb_quote_days", "agent_jb_prep_hour",
+                  "agent_jb_route_send_hour"):
+            out[k] = str(x[k])
+        out["agent_jb_remind_days"] = ", ".join(str(d) for d in x["agent_jb_remind_days"])
+        out["agent_jb_route_scope"] = dict(das.RT_SCOPES).get(x["agent_jb_route_scope"], "Each day")
+        out["agent_jb_sort_weekday"] = das.WEEKDAYS[int(x["agent_jb_sort_weekday"]) % 7]
+        return out
+
+    def _synced(shown):
+        jb_base["form"] = dict(shown)
+        if on_saved:
+            on_saved()
+
+    jb_sync.update(view=stored_view, shown=live_sync(box, v, stored_view, _synced))
+    autosave(box, v, lambda: do_save(quiet=True))
     return v
 
 
@@ -1244,8 +1441,7 @@ def save_hr(form: dict, modes, edition: str, db: str | None = None,
         vals = hr_form_values(form, modes)
         if baseline is not None:
             vals = changed_only(vals, hr_form_values(baseline, modes))
-        for k, val in vals.items():
-            desk_agent_hr_store.set_setting(k, val, edition=edition, db=db)
+        desk_agent_hr_store.set_settings(vals, edition=edition, db=db)     # all or nothing (F-6)
     except (ValueError, desk_db.DeskError) as e:
         return False, str(e)
     return True, "HR agent settings saved." if vals else "Nothing changed."
@@ -1336,17 +1532,28 @@ def build_hr_section(outer, modes, edition, scale, db: str | None = None, shared
     w.pack(anchor="w", pady=(4, 0)); _tooltip(w, das.HR_RUNNER_HELP)
 
     hr_base = {"form": {k: x.get() for k, x in v.items()}}       # what the form showed when loaded
+    hr_sync: dict = {}
 
-    def do_save():
+    hr_note = tk.StringVar(master=outer, value="")
+
+    def do_save(quiet=False):
         form = {k: x.get() for k, x in v.items()}
+        if quiet and form == hr_base["form"]:
+            hr_note.set("")
+            return
         ok, msg = save_hr(form, modes, edition, db, baseline=hr_base["form"])
         if ok:
             hr_base["form"] = form
+            mark_saved(hr_sync["shown"], v, hr_sync["view"])
             if on_saved:
                 on_saved()          # the section header shows what's now saved
-        (messagebox.showinfo if ok else messagebox.showerror)("HR agent", msg)
+        if quiet:
+            hr_note.set("" if ok else "⚠  Not saved yet: " + msg)
+        else:
+            (messagebox.showinfo if ok else messagebox.showerror)("HR agent", msg)
 
     ttk.Button(left, text="💾 Save HR agent settings", command=do_save).pack(anchor="w", pady=(6, 0))
+    ttk.Label(left, textvariable=hr_note, foreground="#b45309", wraplength=520, justify="left").pack(anchor="w")
 
     ttk.Label(right, text="How an employee moves — the top and bottom boxes are the agent's steps (hover for details)",
               font=small, foreground="gray").pack(anchor="w")
@@ -1372,6 +1579,28 @@ def build_hr_section(outer, modes, edition, scale, db: str | None = None, shared
               + tuple(f"agent_hr_stage_{k}" for k, _ in das.HR_STAGES)):
         v[k].trace_add("write", redraw)
     redraw()
+
+    def stored_view() -> dict:
+        """What's saved now, as this form's boxes hold it (live_sync)."""
+        x = desk_agent_hr_store.settings(db)
+        out = {k: bool(x[k]) for k in HR_BOOLS}
+        for k, _ in das.HR_STAGES:
+            out[f"agent_hr_stage_{k}"] = label.get(x[f"agent_hr_stage_{k}"], x[f"agent_hr_stage_{k}"])
+        for k in HR_INTS:
+            out[k] = str(x[k])
+        out["agent_hr_reviewers"] = dict(das.HR_REVIEWERS)[x["agent_hr_reviewers"]]
+        out["agent_hr_incidents_access"] = dict(das.HR_INCIDENTS)[x["agent_hr_incidents_access"]]
+        out["agent_hr_quiet_hours"] = "-".join(str(h) for h in x["agent_hr_quiet_hours"])
+        out["agent_hr_expiry_days"] = ", ".join(str(d) for d in x["agent_hr_expiry_days"])
+        return out
+
+    def _synced(shown):
+        hr_base["form"] = dict(shown)
+        if on_saved:
+            on_saved()
+
+    hr_sync.update(view=stored_view, shown=live_sync(box, v, stored_view, _synced))
+    autosave(box, v, lambda: do_save(quiet=True))
     return v
 
 
@@ -1431,8 +1660,25 @@ def agent_section_status(which: str) -> dict:
                                        ("routes ", "agent_jb_rt_enabled", "agent_jb_rt_shadow")]
     except Exception:  # noqa: BLE001
         return {"text": "", "color": "#6b7280", "on": False}
+    # David 2026-11-06: say what's really happening. The agent's own switches are kept, but they mean nothing while its
+    # app is off or no key is saved.
+    grey = "#6b7280"
+    if which == "jobs":
+        try:
+            import desk_gui_links
+            import tool_config_store
+            if not tool_config_store.group_enabled(desk_gui_links.mode_of(), "job_tracker"):
+                return {"text": "(not enabled)", "color": grey, "on": False}
+        except Exception:  # noqa: BLE001
+            pass
     states = [(lab, _on_text(s, on, pr)) for lab, on, pr in pairs]
     any_on = any(t != "off" for _, t in states)
+    try:
+        import desk_agent
+        if any_on and not desk_agent._has_key(s):
+            return {"text": "(not running: no API key saved)", "color": grey, "on": False}
+    except Exception:  # noqa: BLE001
+        pass
     text = "(" + " · ".join(f"{lab}{t}" for lab, t in states) + ")"
     if not any_on:
         color = "#6b7280"
@@ -1488,6 +1734,15 @@ def build_standalone_section(app, parent, which: str) -> dict:
         st = agent_section_status(which)
         status_lbl.configure(text=st["text"], foreground=st["color"])
 
+    def keep_fresh():                                   # follows the Jobs app switch, the key and the app's own changes
+        try:
+            if status_lbl.winfo_exists():
+                refresh()
+                status_lbl.after(2000, keep_fresh)
+        except tk.TclError:
+            pass
+    status_lbl.after(2000, keep_fresh)
+
     show = tk.BooleanVar(value=_section_shown(which))
     top = ttk.Frame(lf); top.pack(fill="x")
     ttk.Checkbutton(top, text="Show settings", variable=show).pack(side="left")
@@ -1526,15 +1781,32 @@ def build_standalone_section(app, parent, which: str) -> dict:
                  "One AI runs every agent. Keys go in "
                  + "🔑 Agent API Key at the top of the Small Business tab.")
 
-        def save_runner():
+        runner = {"saved": cur}
+
+        def save_runner(quiet=False):
             code = {lab: k for k, lab in provs}.get(pv.get())
+            if quiet and (not code or code == runner["saved"]):
+                return
             if not code:
                 messagebox.showerror("Agent", "Choose which AI runs it first.")
                 return
             ok, msg = save_shared_runner(code, edition)
-            (messagebox.showinfo if ok else messagebox.showerror)("Agent", msg)
+            if ok:
+                runner["saved"] = code
+            if not quiet:
+                (messagebox.showinfo if ok else messagebox.showerror)("Agent", msg)
 
         ttk.Button(row, text="💾 Save", command=save_runner).pack(side="left")
+
+        def _runner_view():
+            code = das.effective_provider(desk_agent_store.sync_shared(None), edition)
+            return {"runner": _label_for(provs, code) if any(p[0] == code for p in provs) else pv.get()}
+
+        def _runner_synced(shown):
+            runner["saved"] = {lab: k for k, lab in provs}.get(shown["runner"], runner["saved"])
+
+        live_sync(row, {"runner": pv}, _runner_view, _runner_synced)
+        autosave(row, {"runner": pv}, lambda: save_runner(quiet=True))
 
     modes = [(m, das.STAGE_MODE_LABELS[m]) for m in das.STAGE_MODES]
     scale = flow_scale(content)

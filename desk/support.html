@@ -29,6 +29,7 @@ button.bad{background:var(--bad)}
 .msg{border-left:3px solid var(--line);padding:6px 10px;margin:10px 0}
 .msg.me{border-color:var(--acc)}
 .msg .h{font-size:12px;color:var(--mute)}
+.msg .h img.agpic{width:24px;height:24px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:6px}
 .thumbs{display:flex;flex-wrap:wrap;gap:8px}
 .thumbs a{width:84px;height:84px;border:1px solid var(--line);border-radius:8px;overflow:hidden;display:block;font-size:11px;color:var(--mute);text-decoration:none;padding:4px}
 .thumbs img{width:100%;height:100%;object-fit:cover;margin:-4px}
@@ -124,7 +125,14 @@ function applyLook(L) {
   }
 }
 
+function msgWho(m, t) {
+  if (m.author_kind === t.who.role) return 'You';
+  const a = P.agent;
+  if (m.from_agent && a) return `${a.photo_url ? `<img class="agpic" alt="" src="${esc(a.photo_url)}">` : ''}${esc(a.display || a.name || 'Virtual assistant')}`;
+  return esc(P.business || 'Us');
+}
 async function boot() {
+  try { P.agent = await call('GET', '/agent'); } catch (e) { P.agent = null; }
   try { const i = await call('GET', '/info'); P.business = i.business || ''; P.sms = !!i.sms;
         P.paths = (i.paths && i.paths.length) ? i.paths : ['problem']; P.services = i.services || [];
         P.welcome = i.welcome || ''; P.backups = +(i.backups ?? 2); P.approval = i.approval || 'approve_all';
@@ -285,7 +293,8 @@ function showForm(path, opts) {
   if (path === 'book') {
     P.picks = []; P.hold = null;
     $('#fSvc').addEventListener('change', () => { P.picks = []; loadWins(); });
-    if ($('#toNew')) $('#toNew').addEventListener('click', e => { e.preventDefault(); showForm('new'); });
+    if ($('#toNew')) $('#toNew').addEventListener('click', e => { e.preventDefault(); toQuote(); });
+    $('#wins').addEventListener('click', e => { if (e.target.closest('[data-tonew]')) { e.preventDefault(); toQuote(); } });
     if (P.wantSvc && [...$('#fSvc').options].some(o => o.value === P.wantSvc)) $('#fSvc').value = P.wantSvc;
     loadWins();
   }
@@ -352,8 +361,21 @@ function drawOrder() {
 
 // ── arrival windows (booking-spec.md §3) ──────────────────────────────────
 // Shared by the booking form and the status page's "pick another" / "reschedule".
+// 2026-11-04 (David: "ask us to call you" did nothing when clicked): on the Book form it's a real link to Get a quote;
+// where that path isn't offered, or on a status page, it says to call or text instead of promising a link.
+// From Book to Get a quote, keeping everything already typed.
+function toQuote() {
+  const ids = ['#fName', '#fPhone', '#fEmail', '#fStreet', '#fCity', '#fState', '#fZip', '#fDesc'];
+  const kept = ids.map(i => $(i) ? $(i).value : '');
+  showForm('new');
+  ids.forEach((i, n) => { if ($(i)) $(i).value = kept[n]; });
+}
+function askUsToCall() {
+  return P.path === 'book' && P.paths.includes('new') && $('#wins')
+    ? 'please <a href="#" data-tonew="1">ask us to call you</a>' : 'please call or text us';
+}
 function winList(ws, picks, max) {
-  if (!ws.length) return '<p class="muted">No open times in the next few weeks — please ask us to call you.</p>';
+  if (!ws.length) return `<p class="muted">No open times in the next few weeks — ${askUsToCall()}.</p>`;
   const days = []; let cur = null;
   for (const w of ws) {
     const day = w.label.split(',')[0];
@@ -368,9 +390,10 @@ function winList(ws, picks, max) {
 }
 async function loadWins() {
   const box = $('#wins'), code = $('#fSvc') && $('#fSvc').value;
-  if (!code) { box.innerHTML = '<p class="muted">Online booking has no services yet — please ask us to call you.</p>'; return; }
+  if (!code) { box.innerHTML = `<p class="muted">Online booking has no services yet — ${askUsToCall()}.</p>`; return; }
   try { P.wins = (await call('GET', '/windows?service=' + encodeURIComponent(code))).windows; }
   catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  if (!$('#wins')) return;                                        // the customer has moved on to another form
   P.picks = P.picks.filter(k => P.wins.some(w => w.key === k));
   drawWins();
 }
@@ -402,9 +425,14 @@ function formProblem() {
     if (!$('#fStreet').value.trim() || !($('#fCity').value.trim() || $('#fZip').value.trim()))
       return 'Enter the address — street, and city or ZIP.';
   } else if (!$('#fTitle').value.trim()) return 'Tell us briefly what you need.';
+  if ($('#fZip') && $('#fZip').value.trim() && !/^\d{5}(-\d{4})?$/.test($('#fZip').value.trim()))
+    return 'That ZIP code doesn’t look right — use 5 digits, like 32169.';
+  if (!$('#fName').value.trim()) return 'Enter your name.';
   if (!$('#fPhone').value.trim()) return 'Enter your phone number so we can reach you.';
   if (!phoneOk($('#fPhone').value)) return 'That phone number doesn’t look right — use 10 digits, like 386-555-0100.';
   if (sendBy() === 'email' && !$('#fEmail').value.trim()) return 'Enter your email address so we can send your code.';
+  if ($('#fEmail').value.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test($('#fEmail').value.trim()))
+    return 'That email address doesn’t look right — like name@example.com.';
   return '';
 }
 async function sendCode() {
@@ -568,7 +596,7 @@ function render(d) {
   ${t.csat_score != null && !sub ? `<div class="card" id="rated"><b>Your rating</b><div class="stars" style="color:#f5a524;font-size:26px" aria-label="${+t.csat_score} of 5 stars">${'★'.repeat(+t.csat_score)}${'☆'.repeat(5 - +t.csat_score)}</div>
     ${t.csat_comment ? `<p style="white-space:pre-wrap;margin:6px 0 0">“${esc(t.csat_comment)}”</p>` : ''}<p class="muted" style="margin:6px 0 0">Thank you for the feedback.</p></div>` : ''}
   <div class="card"><b>Messages</b>
-    ${(t.messages || []).map(m => `<div class="msg ${m.author_kind === t.who.role ? 'me' : ''}"><div class="h">${m.author_kind === t.who.role ? 'You' : esc(P.business || 'Us')} · ${esc(when(m.at))}</div>${esc(m.body)}</div>`).join('') || '<p class="muted">No messages yet.</p>'}
+    ${(t.messages || []).map(m => `<div class="msg ${m.author_kind === t.who.role ? 'me' : ''}"><div class="h">${msgWho(m, t)} · ${esc(when(m.at))}</div>${esc(m.body)}</div>`).join('') || '<p class="muted">No messages yet.</p>'}
     ${t.state !== 'Closed' ? `<textarea id="reply" placeholder="Write a reply…"></textarea>
     <div class="row" style="margin-top:8px"><button id="send">Send</button>
       <label class="ghost" style="margin:0;text-align:center;border:1px solid var(--acc);border-radius:10px;padding:12px;color:var(--acc)">📷 Add photo<input type="file" accept="image/*,.pdf" multiple class="hide" id="up"></label></div>` : ''}</div>

@@ -151,8 +151,12 @@ def test_TQ_03_why_not_ready_names_what_is_missing(home, monkeypatch):
 
 def test_TQ_04_exact_cost_counts_caching_and_web_searches():
     u = {"input": 1_000, "cache_write": 20_000, "cache_read": 100_000, "output": 2_000}
-    # Sonnet $2/$10: 1k*2 + 20k*2.5 + 100k*0.2 + 2k*10 = 92,000 / 1M = $0.092, + 2 searches = $0.112
-    assert tqa.run_cost("claude-sonnet-5-5", u, 2) == pytest.approx(0.112)
+    # Sonnet $2/$10, cache reads $0.10 per 1M since Oct 2026 (2026-11-03 live cost test):
+    # 1k*2 + 20k*2.5 + 100k*0.1 + 2k*10 = 82,000 / 1M = $0.082, + 2 searches = $0.102
+    assert tqa.run_cost("claude-sonnet-5-5", u, 2) == pytest.approx(0.102)
+    # Haiku 5.5: a prompt over 100K tokens (new + cache) pays 5x on everything
+    big = {"input": 1_000, "cache_write": 0, "cache_read": 120_000, "output": 1_000}
+    assert tqa.run_cost("claude-haiku-5-5", big) == pytest.approx((1_000 * 0.5 + 120_000 * 0.05 + 1_000 * 2.5) / 1e6)
 
 
 # ── a run ────────────────────────────────────────────────────────────────────────────
@@ -190,7 +194,7 @@ def test_TQ_06_claude_run_uses_tools_caching_and_records_cost_on_the_task(home, 
     assert msgs[-1]["content"][-1]["type"] == "tool_result" and "cache_control" in msgs[-1]["content"][-1]
     assert "cache_control" not in json.dumps(msgs[:-1])
     assert FakeClient.calls == [("search_documents", {"query": "AR"})]
-    expect = (800 * 2 + 10_000 * 2.5 + 10_500 * 0.2 + 300 * 10) / 1_000_000 + 0.01
+    expect = (800 * 2 + 10_000 * 2.5 + 10_500 * 0.1 + 300 * 10) / 1_000_000 + 0.01     # Sonnet cache read $0.10/1M
     con = sqlite3.connect(tqa.runs_db_path())
     row = con.execute("SELECT provider, model, items, ok, cost_usd FROM agent_runs").fetchone()
     con.close()

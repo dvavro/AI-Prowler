@@ -352,7 +352,9 @@ def test_who_may_review(e):
 
 # ── decision 5: never from a chat ────────────────────────────────────────────
 
-def test_runs_only_on_a_key_or_the_cli(e):
+def test_runs_only_on_a_key_never_a_chat(e, monkeypatch):
+    import desk_agent_providers as prov
+    monkeypatch.setattr(prov, "_key", lambda p: "")
     s = dict(settings(e), agent_provider="chat_only")
     why = ag.why_not_run(e["a"], s, edition=S, now=dt.datetime.combine(WED, dt.time(10, 0)), force=True)
     assert "never runs from a chat" in why

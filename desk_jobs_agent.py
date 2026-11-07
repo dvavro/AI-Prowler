@@ -212,8 +212,12 @@ def _outdoor(jobs_db, service_type: str) -> bool:
     try:
         conn = get_connection(jobs_db)
         try:
-            r = conn.execute("SELECT outdoor FROM booking_services WHERE LOWER(name) = ? OR LOWER(service_code) = ?",
-                             (st, st)).fetchone()
+            # 2026-11-04 (F-16): this asked for booking_services.name, which doesn't exist, so it always errored and fell
+            # through to guessing from the words below: the owner's Outdoor tick was ignored. A job's service type is
+            # the Services & Pricing name, or the label shown online, or the code.
+            r = conn.execute("SELECT b.outdoor FROM booking_services b LEFT JOIN service_pricing p ON "
+                             "p.service_code = b.service_code WHERE LOWER(p.name) = ? OR LOWER(b.label) = ? OR "
+                             "LOWER(b.service_code) = ?", (st, st, st)).fetchone()
         finally:
             conn.close()
         if r is not None:
@@ -318,8 +322,12 @@ def _scan_schedule(adb, jobs_db, s, now, edition) -> int:
     n = 0
     for j in _rows(jobs_db, "SELECT job_id, version FROM jobs WHERE LOWER(COALESCE(job_status, '')) = 'unscheduled' "
                             "OR ((service_date IS NULL OR service_date = '') AND LOWER(COALESCE(job_status, '')) NOT IN "
-                            "('complete', 'completed', 'cancelled', 'canceled', 'declined')) ORDER BY job_id LIMIT 20"):
+                            "('complete', 'completed', 'cancelled', 'canceled', 'declined')) ORDER BY job_id"):
+        # 2026-11-04 (F-11): this was LIMIT 20 on the query, so with 20 jobs left unscheduled job 21 was never looked at.
+        # At most 20 NEW ones per pass; the ones already queued no longer use up the room.
         n += _q(adb, JOB, j["job_id"], "schedule", "unscheduled", f"unsched|{j['version']}", s)
+        if n >= 20:
+            break
     return n
 
 
@@ -499,17 +507,27 @@ def _scan_learn(adb, jobs_db, s, now, edition) -> int:
 
 # ── the Route flow's scan ────────────────────────────────────────────────────
 
+def _crew_names(cell) -> list:
+    return [n.strip() for n in str(cell or "").split(",") if n.strip()]
+
+
+def _on_crew(cell, crew: str) -> bool:
+    """F-23, 2026-11-04: a job shared as "A, B" is on each person's route (R-056), never a crew called "A, B"."""
+    names = _crew_names(cell)
+    return crew.strip().casefold() in [n.casefold() for n in names] if crew.strip() else not names
+
+
 def _crews(jobs, edition) -> list:
     if edition != "business":
         return [""]
-    return sorted({str(j["crew"] or "").strip() for j in jobs}) or [""]
+    return sorted({n for j in jobs for n in (_crew_names(j["crew"]) or [""])}) or [""]
 
 
 def _day_jobs(jobs_db, day: str, crew: str, edition: str, statuses=("scheduled",)) -> list:
     rows = _rows(jobs_db, "SELECT * FROM jobs WHERE service_date = ? ORDER BY start_time, job_id", (day,))
     rows = [r for r in rows if _low(r["job_status"]) in statuses]
     if edition == "business":
-        rows = [r for r in rows if str(r["crew"] or "").strip().casefold() == crew.casefold()]
+        rows = [r for r in rows if _on_crew(r["crew"], crew)]
     return rows
 
 
@@ -579,7 +597,7 @@ def _scan_route(adb, jobs_db, s, now, edition) -> int:
                                "LOWER(COALESCE(j.job_status, '')) IN ('cancelled', 'canceled') AND EXISTS (SELECT 1 FROM "
                                "route_stops r WHERE r.route_date = ? AND r.job_id = j.job_id)", (day, day))
     for crew in _crews(cancelled, edition) if cancelled else []:
-        ids = [c["job_id"] for c in cancelled if edition != "business" or str(c["crew"] or "").strip() == crew]
+        ids = [c["job_id"] for c in cancelled if edition != "business" or _on_crew(c["crew"], crew)]
         if ids:
             n += _q(adb, ROUTE, f"{day}|{crew}", "replan", "a job was cancelled", f"replan|{_sig(*ids)}", s)
     return n
@@ -685,7 +703,10 @@ def facts(adb, jobs_db, item, s, edition) -> dict | None:
                                     "receipt_sent": bool(j.get("receipt_sent_date"))}
             if stage in ("schedule", "prep"):
                 f["dates"] = schedule_dates(jobs_db, j, c, today)
-            if stage == "prep" and _outdoor(jobs_db, j.get("service_type")) and j.get("latitude") not in (None, ""):
+            # 2026-11-04 (David: an option to ignore weather): the scan obeyed this switch, the pack didn't, so the AI still
+            # got the forecast whenever Prep ran for another reason.
+            if stage == "prep" and s.get("agent_jb_weather", True) and _outdoor(jobs_db, j.get("service_type")) \
+                    and j.get("latitude") not in (None, ""):
                 f["weather"] = _weather(j, j.get("service_date") or "")
     finally:
         conn.close()
@@ -1103,8 +1124,16 @@ def apply(adb, jobs_db, item, act, s, edition, business, *, approved_by: str) ->
         _op("email_route", ctx["day"], ctx.get("crew") or "")
         return f"route for {ctx['day']} approved and sent to the crew"
     if name == "rt_replan":
+        was_approved = bool((ctx.get("route") or {}).get("approved"))
         _op("replan_route", ctx["day"], ctx.get("crew") or "")
-        return "the rest of today's route was re-ordered"
+        if not was_approved:                 # F-22: never approve what no one approved
+            return "the rest of today's route was re-ordered — it still needs approving"
+        try:
+            _op("approve_route", ctx["day"], ctx.get("crew") or "")   # F-22: re-planning clears the approval
+            _op("email_route", ctx["day"], ctx.get("crew") or "")
+        except JobsAgentError as e:
+            return f"the rest of today's route was re-ordered, but the crew wasn't told: {e}"
+        return "the rest of today's route was re-ordered and the crew was told"
     raise JobsAgentError(f"can't apply {name}")
 
 

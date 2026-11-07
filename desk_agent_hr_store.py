@@ -86,6 +86,15 @@ def set_setting(key: str, value, *, actor=None, edition: str = "business", db: s
     return settings(db)
 
 
+def set_settings(values: dict, *, actor=None, edition: str = "business", db: str | None = None) -> dict:
+    """Several at once, all or nothing (finding F-6, 2026-11-03)."""
+    bad = [k for k in values if k not in das.HR_KEYS]
+    if bad:
+        raise desk_db.DeskError(f"{bad[0]} isn't an HR agent setting")
+    desk_db.set_settings(init(db), dict(values), actor=actor, edition=edition)
+    return settings(db)
+
+
 def sync_shared(tickets_db: str | None, db: str | None = None) -> dict:
     """Copy the shared runner / persona settings from the Service Desk database (same as the Jobs
     agent's store). Returns the HR agent database's full settings."""

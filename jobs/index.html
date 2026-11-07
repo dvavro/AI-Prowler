@@ -963,7 +963,7 @@ textarea::placeholder{color:#c0c6d8}
     <div id="screen-agent" class="screen">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <h1 class="section-head">🤖 Agent</h1>
-        <button class="btn btn-ghost" style="width:auto;padding:8px 10px" onclick="loadAgent()" title="Refresh">↻</button>
+        <button class="btn btn-ghost" id="agRefresh" style="width:auto;min-width:120px;min-height:44px;padding:10px 18px;font-size:16px;font-weight:600" onclick="loadAgent()" title="Refresh">↻ Refresh</button>
       </div>
       <div class="card" style="margin-bottom:12px"><div class="card-body" id="agStatus" data-testid="agent-status">Loading…</div></div>
       <div id="agChips" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px"></div>
@@ -5316,7 +5316,8 @@ function showScreen(name, btn) {
 // Everything is decided server-side (desk_jobs_agent.py through the jobs_agent tool); this
 // screen shows what it suggested, lets the owner / a manager approve, edit or reject it, and
 // shows its settings with the two diagrams (the same model and colours as Service Desk).
-var AG = { data: null, filter: '', settings: null };
+var AG = { data: null, filter: '', settings: null, timer: null };
+var AG_SYNC_MS = 5000;
 var AG_STAGE = { quotes: 'Quotes', schedule: 'Schedule', prep: 'Prep the day', onsite: 'On site', closeout: 'Close out',
   collect: 'Get paid', repeat: 'Repeat', learn: 'Learn', sort: 'Sort the week', plan: 'Schedule week', route: 'Route',
   send: 'Send routes', replan: 'Re-plan day' };
@@ -5354,8 +5355,9 @@ function _agCard(p, practice) {
     ? '<button class="btn btn-ghost" style="width:auto;padding:6px 10px" data-ag="up">👍 Good</button>' +
       '<button class="btn btn-ghost" style="width:auto;padding:6px 10px" data-ag="down">👎 Not right</button>' +
       (p.feedback ? '<span style="font-size:12px;color:var(--muted)">you said ' + (p.feedback === 'up' ? '👍' : '👎') + '</span>' : '')
-    : '<button class="btn" style="width:auto;padding:6px 12px" data-ag="approve">✅ Approve</button>' +
-      (text ? '<button class="btn btn-ghost" style="width:auto;padding:6px 10px" data-ag="edit">✏️ Edit</button>' : '') +
+    : (p.paused || (p.payload && p.payload.refused) ? '' :   // its agent is off, or the rules refused it — Reject only
+        '<button class="btn" style="width:auto;padding:6px 12px" data-ag="approve">✅ Approve</button>' +
+        (text ? '<button class="btn btn-ghost" style="width:auto;padding:6px 10px" data-ag="edit">✏️ Edit</button>' : '')) +
       '<button class="btn btn-ghost" style="width:auto;padding:6px 10px;color:#f87171" data-ag="reject">✖ Reject</button>';
   return '<div class="card" style="margin-bottom:8px" data-pid="' + esc(p.proposal_id) + '" data-testid="agent-card"><div class="card-body">' +
     '<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><b>' + head + '</b>' +
@@ -5364,9 +5366,17 @@ function _agCard(p, practice) {
     (text ? '<div style="white-space:pre-wrap;margin:6px 0;padding:6px 8px;border-left:3px solid var(--muted)">' + esc(text) + '</div>' : '') +
     '<div style="font-size:13px;color:var(--muted)">Why: ' + esc(p.why || '—') +
     (p.confidence != null ? ' · ' + Math.round(p.confidence * 100) + '% sure' : '') +
-    (p.hold_reason && !practice ? ' · waiting because ' + esc(p.hold_reason) : '') + '</div>' +
+    (p.hold_reason && !practice && !p.paused && !(p.payload && p.payload.refused) ? ' · waiting because ' + esc(p.hold_reason) : '') + '</div>' +
+    (p.payload && p.payload.refused && !practice ? '<div class="agRefused" style="margin-top:6px;padding:6px 8px;border-left:3px solid #f87171">⛔ <b>' + esc(p.hold_reason || '') + '</b></div>' : '') +
+    (p.paused && !practice ? '<div style="font-size:13px;color:var(--muted);margin-top:4px" data-testid="agent-paused">⏸ Paused — ' +
+      esc(p.paused) + '</div>' : '') +
     '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">' + btns + '</div>' +
     '<p class="ag-err" style="color:#f87171;margin:6px 0 0;font-size:13px"></p></div></div>';
+}
+
+function _agHeadLine(st) {
+  return (st.enabled ? (st.practice ? '🟣 Jobs agent on — practice mode' : '🟢 Jobs agent on') : '⚪ Jobs agent off') + ' · ' +
+    (st.route_enabled ? (st.route_practice ? '🟣 Route flow on — practice mode' : '🟢 Route flow on') : '⚪ Route flow off');
 }
 
 async function loadAgent() {
@@ -5376,16 +5386,15 @@ async function loadAgent() {
         prac = await _agCall({ action: 'practice' });
   } catch (e) { box.textContent = e.message; return; }
   AG.data = { st: st, pending: pend.items, practice: prac.items };
-  var runs = st.provider === 'chat_only'
-    ? 'Runs in a chat — paste this in Claude, Muse or Grok: <i>' + esc(st.chat_prompt) + '</i>'
-    : (st.runs_on_its_own ? 'Runs on its own (' + esc(st.provider) + ') · $' + Number(st.spent_usd || 0).toFixed(2) +
+  var runs = st.runs_on_its_own ? 'Runs on its own (' + esc(st.provider) + ') · $' + Number(st.spent_usd || 0).toFixed(2) +
        ' of $' + Number(st.budget_usd || 0).toFixed(0) + ' this month'
-       : 'Can\'t run on its own: ' + esc(st.ready_note || ''));
-  box.innerHTML = '<b>' + (st.enabled ? (st.practice ? '🟣 Jobs agent on — practice mode' : '🟢 Jobs agent on')
-                                     : '⚪ Jobs agent off') + ' · ' +
-    (st.route_enabled ? (st.route_practice ? '🟣 Route flow on — practice mode' : '🟢 Route flow on')
-                      : '⚪ Route flow off') + '</b> · ' + st.waiting + ' waiting in its queue · ' +
+       : 'Can\'t run: ' + esc(st.ready_note || '');
+  box.innerHTML = '<b id="agHeadLine">' + _agHeadLine(st) + '</b> · ' + st.waiting + ' waiting in its queue · ' +
     st.pending + ' for your OK<div style="font-size:13px;color:var(--muted);margin-top:4px">' + runs + '</div>' +
+    (st.rated_good || st.rated_not_right ? '<div id="agRatings" style="font-size:13px;color:var(--muted);margin-top:4px"><b>Your practice ratings</b>' +
+      [['job', '🧰 Jobs'], ['route', '🚐 Routes']].filter(function (k) { return (st.rated_by || {})[k[0]]; }).map(function (k) {
+        return '<div data-rated="' + k[0] + '">' + k[1] + ': 👍 ' + st.rated_by[k[0]].good + ' good · 👎 ' + st.rated_by[k[0]].not_right + ' not right</div>';
+      }).join('') + 'Each has its own Practice switch: when you trust one, turn it off in the settings below.</div>' : '') +
     (!state.serverMode || (state.userRole || '').toLowerCase() === 'owner'
       ? '<button class="btn btn-ghost" style="width:auto;padding:6px 10px;margin-top:8px" id="agRunNow">▶ Run now</button>' : '');
   var rn = document.getElementById('agRunNow');
@@ -5448,7 +5457,8 @@ function _agFlow(f, id, noun) {
   var steps = f.steps.map(function (p) {
     var dim = p.mode === 'off' || p.mode === 'inactive';
     var ring = p.practice ? '<rect x="' + (p.x - 4) + '" y="' + (p.y - 4) + '" width="' + (p.w + 8) + '" height="' + (p.h + 8) + '" rx="11" fill="none" stroke="' + PURPLE + '" stroke-width="1.5" stroke-dasharray="5 3"/>' : '';
-    return '<g style="cursor:help"><title>' + esc(p.label + ' — ' + p.word + (p.practice ? ' (practice mode: shows only)' : '') + '\n\n' + p.help) + '</title>' + ring +
+    // data-step / data-chosen as in Service Desk's renderAgentFlow (2026-11-03: the agents GUI suite reads them)
+    return '<g class="agStep" data-step="' + esc(p.id) + '" data-chosen="' + esc(p.chosen) + '" style="cursor:help"><title>' + esc(p.label + ' — ' + p.word + (p.practice ? ' (practice mode: shows only)' : '') + '\n\n' + p.help) + '</title>' + ring +
       '<rect x="' + p.x + '" y="' + p.y + '" width="' + p.w + '" height="' + p.h + '" rx="8" fill="' + p.color + '" fill-opacity="' + (dim ? 0.06 : 0.2) + '" stroke="' + p.color + '" stroke-width="' + (p.mode === 'off' ? 1 : dim ? 1.5 : 2.5) + '"' + (dim ? ' stroke-dasharray="4 3"' : '') + '/>' +
       '<text x="' + (p.x + p.w / 2) + '" y="' + (p.y + 17) + '" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor">' + esc(p.label) + '</text>' +
       '<text x="' + (p.x + p.w / 2) + '" y="' + (p.y + 32) + '" text-anchor="middle" font-size="11" font-weight="600" fill="' + p.color + '">' + esc(p.word) + '</text>' +
@@ -5503,8 +5513,37 @@ async function _agSettings() {
     '</div><div style="flex:1 1 300px;min-width:0" id="agRtFlow"></div></div>';
   var draw = function (x) { _agFlow(x.jb_flow, 'agJbFlow', 'job'); _agFlow(x.rt_flow, 'agRtFlow', 'week of routes'); };
   draw(r);
+  // 2026-11-04 (David): a change saved in AI-Prowler shows here by itself, every AG_SYNC_MS, while this screen is open.
+  // A box follows unless the person is in it or has changed it without saving; their edit stays and Save writes it.
+  AG.settings = s;
+  clearInterval(AG.timer);
+  AG.timer = setInterval(async function () {
+    if (!box.isConnected || document.hidden || box.offsetParent === null && !document.getElementById('screen-agent').classList.contains('active')) return;
+    var n;
+    try { n = await _agCall({ action: 'settings' }); } catch (e) { return; }
+    if (AG.settings !== s) return;                                  // redrawn while this was on its way
+    var boxes = { agMax: 'agent_jb_invoice_max', agPerDay: 'agent_jb_invoices_per_day', agQuote: 'agent_jb_quote_days',
+      agPrep: 'agent_jb_prep_hour', agRtHour: 'agent_jb_route_send_hour' };
+    var changed = false;
+    var follow = function (el, was, now) {
+      var v = function (x) { return el.type === 'checkbox' ? !!x : String(x == null ? '' : x); };
+      if (v(was) === v(now)) return;
+      changed = true;
+      if (el !== document.activeElement && (el.type === 'checkbox' ? el.checked : el.value) === v(was)) {
+        if (el.type === 'checkbox') el.checked = v(now); else el.value = v(now);
+      }
+    };
+    box.querySelectorAll('[data-agk]').forEach(function (c) { follow(c, s[c.dataset.agk], n.settings[c.dataset.agk]); });
+    Object.keys(boxes).forEach(function (id) { follow(document.getElementById(id), s[boxes[id]], n.settings[boxes[id]]); });
+    follow(document.getElementById('agRemind'), (s.agent_jb_remind_days || []).join(', '), (n.settings.agent_jb_remind_days || []).join(', '));
+    Object.keys(s).forEach(function (k) { s[k] = n.settings[k]; });
+    if (!changed) return;
+    draw(n);
+    var head = document.getElementById('agHeadLine');
+    if (head) head.innerHTML = _agHeadLine(n);
+  }, AG_SYNC_MS);
   if (!can) return;
-  var save = async function (vals) { var x = await _agCall({ action: 'set', settings: JSON.stringify(vals) }); draw(x); showToast('Saved.'); loadAgent(); };
+  var save = async function (vals) { var x = await _agCall({ action: 'set', settings: JSON.stringify(vals) }); Object.assign(s, x.settings); draw(x); showToast('Saved.'); loadAgent(); };
   box.querySelectorAll('[data-agk]').forEach(function (c) {
     c.onchange = async function () {
       var v = c.type === 'checkbox' ? c.checked : c.dataset.num ? parseInt(c.value, 10) : c.value, o = {};
@@ -5516,13 +5555,24 @@ async function _agSettings() {
   document.getElementById('agSaveJ').onclick = async function () {
     var days = document.getElementById('agRemind').value.split(/[\s,]+/).filter(Boolean).map(function (x) { return parseInt(x, 10); });
     if (days.some(function (x) { return !(x >= 1 && x <= 120); })) { showToast('Reminder days: numbers 1 to 120, like 7, 14, 30.', 'error'); return; }
-    try { await save({ agent_jb_invoice_max: Math.max(0, n('agMax') || 0), agent_jb_invoices_per_day: n('agPerDay') || 10,
-      agent_jb_quote_days: n('agQuote') || 5, agent_jb_remind_days: days, agent_jb_prep_hour: n('agPrep') }); }
-    catch (e) { showToast(e.message, 'error'); }
+    // 2026-11-03 (F-3, F-4, F-5): a box that isn't a whole number in range is refused — never quietly turned into
+    // $0, 12 (from 12.50), 10 or 5. The server saves the whole card or nothing (F-6).
+    var whole = function (id, lo, hi, what) {
+      var t = String(document.getElementById(id).value).trim(), v = /^\d+$/.test(t) ? Number(t) : NaN;
+      if (!(v >= lo && v <= hi)) throw new Error(what + ' must be a whole number between ' + lo + ' and ' + hi + '.');
+      return v;
+    };
+    try {
+      var vals = { agent_jb_invoice_max: whole('agMax', 0, 100000, 'Invoice limit ($)'),
+        agent_jb_invoices_per_day: whole('agPerDay', 1, 100, 'Invoices a day'),
+        agent_jb_quote_days: whole('agQuote', 1, 60, 'Quote follow-up (days)'), agent_jb_remind_days: days,
+        agent_jb_prep_hour: whole('agPrep', 0, 23, 'Prep hour') };
+      await save(vals);
+    } catch (e) { showToast(e.message, 'error'); }
   };
   document.getElementById('agSaveR').onclick = async function () {
-    var h = n('agRtHour');
-    if (!(h >= 0 && h <= 23)) { showToast('Hour: 0 to 23.', 'error'); return; }
+    var t = String(document.getElementById('agRtHour').value).trim(), h = /^\d+$/.test(t) ? Number(t) : NaN;
+    if (!(h >= 0 && h <= 23)) { showToast('Hour: a whole number, 0 to 23.', 'error'); return; }
     try { await save({ agent_jb_route_send_hour: h }); } catch (e) { showToast(e.message, 'error'); }
   };
 }
@@ -7097,7 +7147,7 @@ function escapeHtml(s) {
 function setConn(ok) { const d=document.getElementById('connDot'); d.className='conn-dot'+(ok?'':' offline'); }
 function badge(s) { const m={'Scheduled':'badge-scheduled','Complete':'badge-complete','In Progress':'badge-inprogress','Cancelled':'badge-cancelled','Unscheduled':'badge-unscheduled'}; return `<span class="badge ${m[s]||'badge-scheduled'}">${s||'Scheduled'}</span>`; }
 function fmtElapsed(ms) { const s=Math.floor(ms/1000),h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=s%60; return [h,m,sc].map(n=>String(n).padStart(2,'0')).join(':'); }
-function showToast(msg,type='') { const t=document.getElementById('toast'); t.textContent=msg; t.className='toast show'+(type?' '+type:''); setTimeout(()=>t.className='toast',2800); }
+function showToast(msg,type='') { const t=document.getElementById('toast'); t.textContent=msg; t.className='toast show'+(type?' '+type:''); clearTimeout(showToast._t); showToast._t=setTimeout(()=>t.className='toast',2800); } // 2026-11-03: the last toast's timer used to hide this one early
 
 // Found 2026-08-23: Email/Text Invoice, Email/Text Receipt, and Text
 // Customer buttons used to render `disabled` with a `title` tooltip when

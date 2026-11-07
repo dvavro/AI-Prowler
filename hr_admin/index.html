@@ -2252,7 +2252,7 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
 
       <!-- ── 🤖 Agent Tab — the HR agent (2026-10-31, hr-agent-spec.md H3) ─────── -->
       <div id="tab-agent" class="tab-pane" style="display:none">
-        <div class="tab-header"><h2>🤖 HR agent</h2></div>
+        <div class="tab-header"><h2>🤖 HR agent</h2><button class="btn btn-secondary" id="hrag-refresh" onclick="loadHrAgent()" title="Refresh" style="min-width:120px;min-height:44px;padding:10px 18px;font-size:16px;font-weight:600">↻ Refresh</button></div>
         <div style="padding:0 16px 24px">
           <div id="hrag-status" data-testid="hrag-status" style="margin:8px 0 12px">Loading…</div>
           <h3 style="font-size:15px;margin:12px 0 6px">Waiting for your OK</h3>
@@ -3107,8 +3107,9 @@ function _hragCard(p, practice) {
   var btns = practice
     ? '<button class="btn-secondary" data-hrag="up">👍 Good</button> <button class="btn-secondary" data-hrag="down">👎 Not right</button>' +
       (p.feedback ? ' <span style="font-size:12px;opacity:.7">you said ' + (p.feedback === 'up' ? '👍' : '👎') + '</span>' : '')
-    : '<button class="btn-primary" data-hrag="approve">✅ Approve</button> ' +
-      (text ? '<button class="btn-secondary" data-hrag="edit">✏️ Edit</button> ' : '') +
+    : (p.paused || (p.payload && p.payload.refused) ? '' :   // the HR agent is off, or the rules refused it — Reject only
+        '<button class="btn-primary" data-hrag="approve">✅ Approve</button> ' +
+        (text ? '<button class="btn-secondary" data-hrag="edit">✏️ Edit</button> ' : '')) +
       '<button class="btn-secondary" style="color:#dc2626" data-hrag="reject">✖ Reject</button>';
   return '<div data-pid="' + escapeHtml(p.proposal_id) + '" data-testid="hrag-card" style="border:1px solid rgba(128,128,128,.35);border-radius:10px;padding:10px 12px;margin-bottom:8px">' +
     '<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><b>👥 ' + escapeHtml(p.ref) + ' — ' +
@@ -3117,7 +3118,10 @@ function _hragCard(p, practice) {
     (text ? '<div style="white-space:pre-wrap;margin:6px 0;padding:6px 8px;border-left:3px solid rgba(128,128,128,.6)">' + escapeHtml(text) + '</div>' : '') +
     '<div style="font-size:13px;opacity:.75">Why: ' + escapeHtml(p.why || '—') +
     (p.confidence != null ? ' · ' + Math.round(p.confidence * 100) + '% sure' : '') +
-    (p.hold_reason && !practice ? ' · waiting because ' + escapeHtml(p.hold_reason) : '') + '</div>' +
+    (p.hold_reason && !practice && !p.paused && !(p.payload && p.payload.refused) ? ' · waiting because ' + escapeHtml(p.hold_reason) : '') + '</div>' +
+    (p.payload && p.payload.refused && !practice ? '<div class="agRefused" style="margin-top:6px;padding:6px 8px;border-left:3px solid #dc2626">⛔ <b>' + escapeHtml(p.hold_reason || '') + '</b></div>' : '') +
+    (p.paused && !practice ? '<div style="font-size:13px;opacity:.75;margin-top:4px" data-testid="hrag-paused">⏸ Paused — ' +
+      escapeHtml(p.paused) + '</div>' : '') +
     '<div style="margin-top:8px">' + btns + '</div><p class="hrag-err" style="color:#dc2626;margin:6px 0 0;font-size:13px"></p></div>';
 }
 
@@ -3134,6 +3138,8 @@ async function loadHrAgent() {
   box.innerHTML = '<b>' + (st.enabled ? (st.practice ? '🟣 HR agent on — practice mode' : '🟢 HR agent on') : '⚪ HR agent off') +
     '</b> · ' + (st.waiting || 0) + ' waiting in its queue · ' + (st.pending || 0) + ' for your OK' +
     '<div style="font-size:13px;opacity:.75;margin-top:4px">' + runs + '</div>' +
+    (st.rated_good || st.rated_not_right ? '<div id="agRatings" style="font-size:13px;opacity:.75;margin-top:4px">Your practice ratings: 👍 ' +
+      st.rated_good + ' good · 👎 ' + st.rated_not_right + ' not right. When you trust it, turn Practice mode off in the settings below.</div>' : '') +
     '<div style="font-size:12px;opacity:.65;margin-top:4px">People make every decision about a person. The agent never hires, rejects, disciplines, ' +
     'terminates, changes pay or balances, edits time, verifies documents or deletes anything — and private details (ID numbers, birth date, ' +
     'address, phone, pay, bank, medical notes) are never sent to the AI.</div>' +
@@ -3187,7 +3193,8 @@ function _hragFlow(f, id) {
   var steps = f.steps.map(function (p) {
     var dim = p.mode === 'off' || p.mode === 'inactive';
     var ring = p.practice ? '<rect x="' + (p.x - 4) + '" y="' + (p.y - 4) + '" width="' + (p.w + 8) + '" height="' + (p.h + 8) + '" rx="11" fill="none" stroke="' + PURPLE + '" stroke-width="1.5" stroke-dasharray="5 3"/>' : '';
-    return '<g style="cursor:help"><title>' + esc(p.label + ' — ' + p.word + (p.practice ? ' (practice mode: shows only)' : '') + '\n\n' + p.help) + '</title>' + ring +
+    // data-step / data-chosen as in Service Desk's renderAgentFlow (2026-11-03: the agents GUI suite reads them)
+    return '<g class="agStep" data-step="' + esc(p.id) + '" data-chosen="' + esc(p.chosen) + '" style="cursor:help"><title>' + esc(p.label + ' — ' + p.word + (p.practice ? ' (practice mode: shows only)' : '') + '\n\n' + p.help) + '</title>' + ring +
       '<rect x="' + p.x + '" y="' + p.y + '" width="' + p.w + '" height="' + p.h + '" rx="8" fill="' + p.color + '" fill-opacity="' + (dim ? 0.06 : 0.2) + '" stroke="' + p.color + '" stroke-width="' + (p.mode === 'off' ? 1 : dim ? 1.5 : 2.5) + '"' + (dim ? ' stroke-dasharray="4 3"' : '') + '/>' +
       '<text x="' + (p.x + p.w / 2) + '" y="' + (p.y + 17) + '" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor">' + esc(p.label) + '</text>' +
       '<text x="' + (p.x + p.w / 2) + '" y="' + (p.y + 32) + '" text-anchor="middle" font-size="11" font-weight="600" fill="' + p.color + '">' + esc(p.word) + '</text>' +
@@ -3237,6 +3244,16 @@ async function _hragSettings() {
     (can ? '<button class="btn-primary" style="margin-top:8px" id="hragSave">Save HR agent settings</button>' : '') +
     '</div><div style="flex:1 1 320px;min-width:0" id="hragFlow"></div></div>';
   _hragFlow(r.flow, 'hragFlow');
+  // 2026-11-04 (David): a change saved in AI-Prowler on the server PC shows here by itself while the tab is open.
+  // Only redrawn when it's read-only (a server), so nothing half typed can be lost.
+  HRAG.shown = JSON.stringify(s);
+  clearInterval(HRAG.timer);
+  HRAG.timer = setInterval(async function () {
+    if (!box.isConnected || document.hidden || state.currentTab !== 'agent') return;
+    var n;
+    try { n = await apiGet('/agent/settings'); } catch (e) { return; }
+    if (JSON.stringify(n.settings) !== HRAG.shown && !n.can_change_settings) loadHrAgent();
+  }, 5000);
   if (!can) return;
   var save = async function (vals) { var x = await apiPost('/agent/settings', { settings: vals }); _hragFlow(x.flow, 'hragFlow'); showToast('Saved.'); loadHrAgent(); };
   box.querySelectorAll('[data-hrk]').forEach(function (c) {
@@ -3803,8 +3820,8 @@ function loadPhase3Settings() { renderPtoPolicySettings(); renderHolidayPolicySe
 // ── Settings → Time Off Policy ───────────────────────────────────────────
 async function renderPtoPolicySettings() {
   var el = document.getElementById('pto-policy-body'); if (!el) return;
-  var p;
-  try { p = (await apiGet('/pto/policy')).policy; } catch (e) { p = null; }
+  var p, blackouts = [];
+  try { var _pp = await apiGet('/pto/policy'); p = _pp.policy; blackouts = _pp.blackout_dates || []; } catch (e) { p = null; }
   if (!p) { el.textContent = 'Could not load the time-off policy.'; return; }
   var num = function (id, label, v) { return '<div><label class="form-label" for="' + id + '">' + label + '</label><input id="' + id + '" type="number" min="0" max="365" step="0.5" class="form-input" value="' + Number(v) + '"></div>'; };
   el.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:4px 12px">'
@@ -3812,13 +3829,17 @@ async function renderPtoPolicySettings() {
     + num('pp-sick', 'Sick days per year', p.sick_days_per_year) + '</div>'
     + '<label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-size:13px;color:var(--text)"><input type="checkbox" id="pp-prorate"' + (p.prorate_first_year ? ' checked' : '') + '> Prorate the first year by start month</label>'
     + '<div style="font-size:11px;margin-bottom:10px">Each employee gets these days per calendar year. Unused PTO carries over up to the cap; sick days don\'t carry over. Approved time off on weekends and paid company holidays isn\'t counted. A different allowance or a balance correction for one person is set on their record (Info → PTO this year).</div>'
+    + '<label class="form-label" for="pp-blackout">Blackout dates — one date or range per line, like 2026-12-24 or 2026-12-24 to 2026-12-31</label>'
+    + '<textarea id="pp-blackout" class="form-input" rows="3" style="width:100%">' + escapeHtml(blackouts.join('\n')) + '</textarea>'
+    + '<div style="font-size:11px;margin-bottom:10px">Employees can still ask for these days, and HR decides. The HR agent never approves time off that touches a blackout date or a paid company holiday; those wait for a person.</div>'
     + '<button class="btn-primary" onclick="savePtoPolicy()">Save policy</button>';
 }
 async function savePtoPolicy() {
   var v = function (id) { return document.getElementById(id).value; };
   try {
     await apiPost('/pto/policy', { days_per_year: v('pp-days'), carryover_max: v('pp-carry'), sick_days_per_year: v('pp-sick'),
-                                   prorate_first_year: document.getElementById('pp-prorate').checked });
+                                   prorate_first_year: document.getElementById('pp-prorate').checked,
+                                   blackout_dates: v('pp-blackout').split('\n') });
     showToast('Time-off policy saved', 'success');
     renderPtoPolicySettings();
   } catch (e) { showToast(e.serverError || 'Could not save the policy', 'error'); }
@@ -9570,6 +9591,7 @@ async function loadTimeOff() {
   }
   await loadBizEvents();
   await loadSelfReportedItems();
+  await _loadHragRecs();
   renderTimeOff();
 }
 
@@ -9718,6 +9740,7 @@ function renderTimeOffCard(r, color, statusLabels) {
     </div>
     ${r.notes?`<div style="padding:0 16px 8px;font-size:12px;color:var(--text2)">${escapeHtml(r.notes)}</div>`:''}
     <div style="padding:0 16px 8px;font-size:11px;color:var(--text3)">Submitted ${r.created_at ? r.created_at.slice(0,10) : '—'}</div>
+    ${r.status==='pending' && _hragRecLine('pto:' + r.id) ? `<div style="padding:0 16px 8px">${_hragRecLine('pto:' + r.id)}</div>` : ''}
     ${r.status==='pending'?`
     <div style="display:flex;gap:8px;padding:10px 16px;border-top:1px solid var(--border)">
       <button onclick="approveTimeOff('${r.id}')" style="flex:1;padding:9px;background:var(--green-dim);border:1px solid var(--green);border-radius:8px;color:var(--green);font-size:13px;font-weight:700;cursor:pointer">✅ Approve</button>

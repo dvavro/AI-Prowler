@@ -281,6 +281,39 @@ def _agent_ok(actor, edition) -> str:
     return ""
 
 
+def _agent_may(db_path, actor, edition, kind, ref) -> bool:
+    """David 2026-11-05: on a server a chat's agent tools follow the user's role and scope, not just "owner or manager".
+    The owner (and a personal install) sees everything; a manager gets a ticket only if they may view it (their queues
+    or the shared inbox), a booking only if they may approve bookings, and the Jobs agent's work as in the Jobs app.
+    HR never goes through these tools."""
+    a = rules.normalize_actor(actor)
+    if edition != rules.BUSINESS or a["role"] == rules.OWNER:
+        return True
+    if a["role"] != rules.MANAGER or kind == "hr":
+        return False
+    if kind == "ticket":
+        try:
+            t = desk_db.get_ticket(db_path, ref)
+        except desk_db.DeskError:
+            return False
+        d = rules.can(actor, "view", t, edition=edition)
+        return bool(getattr(d, "allowed", d))
+    if kind == "booking":
+        import booking_flow
+        return bool(booking_flow.can_approve(actor, edition, desk_db.get_settings(db_path)))
+    return kind in ("job", "route")
+
+
+def _agent_row(db, table, key, n):
+    import desk_agent
+    conn = desk_agent._conn(db)
+    try:
+        r = conn.execute(f"SELECT * FROM {table} WHERE {key} = ?", (int(n),)).fetchone()
+    finally:
+        conn.close()
+    return dict(r) if r else None
+
+
 JOBS_PREFIX = "J"           # Jobs agent items / suggestions live in the agent's own database
 
 
@@ -361,69 +394,6 @@ def _split_id(x):
     return "desk", int(s or 0)
 
 
-def desk_agent_next(db_path, actor, edition, *, limit=1, business="", jobs_db=None) -> str:
-    """Claim the next agent item(s) and return their context packs as JSON — Service Desk's
-    queue first (tickets, bookings), then the Jobs agent's (ids "J…")."""
-    import json as _json
-
-    import desk_agent
-    bad = _agent_ok(actor, edition)
-    if bad:
-        return bad
-    claimer = str(rules.normalize_actor(actor).get("id") or "chat")
-    out = desk_agent.next_items(db_path, edition=edition, limit=limit, business=business, jobs_db=jobs_db,
-                                claimer=claimer)
-    adb = _jobs_agent_db()
-    room = max(1, min(int(limit or 1), 10)) - len(out.get("items") or [])
-    if adb and room > 0:
-        import desk_agent_store
-        desk_agent_store.sync_shared(db_path, adb)
-        jo = desk_agent.next_items(adb, edition=edition, limit=room, business=business, jobs_db=jobs_db,
-                                   claimer=claimer)
-        for it in jo.get("items") or []:
-            it["item_id"] = f"{JOBS_PREFIX}{it['item_id']}"
-        if jo.get("items"):
-            out = {"items": (out.get("items") or []) + jo["items"],
-                   "instructions": out.get("instructions") or jo.get("instructions")}
-        elif not out.get("items"):
-            out = jo                                   # "The queue is empty …"
-    return _json.dumps(out, default=str, ensure_ascii=False)
-
-
-def desk_agent_submit(db_path, actor, edition, *, item_id, actions, summary="", provider="chat", business="",
-                      jobs_db=None) -> str:
-    import json as _json
-
-    import desk_agent
-    bad = _agent_ok(actor, edition)
-    if bad:
-        return bad
-    if isinstance(actions, str):
-        try:
-            actions = _json.loads(actions)
-        except ValueError:
-            return "❌ actions must be a JSON list of {action, …, why, confidence}"
-    try:
-        where, n = _split_id(item_id)
-    except ValueError:
-        return "❌ item_id must be a number (or J and a number for a Jobs agent item)"
-    db = db_path
-    if where == "jobs":
-        import desk_agent_store
-        db = desk_agent_store.path()
-    try:
-        out = desk_agent.submit(db, n, actions, edition=edition, summary=summary, provider=provider,
-                                business=business, jobs_db=jobs_db)
-    except desk_db.DeskError as e:
-        return f"❌ {e}"
-    if where == "jobs":
-        out["item_id"] = f"{JOBS_PREFIX}{n}"
-        for r in out.get("results") or []:
-            if r.get("proposal_id"):
-                r["proposal_id"] = f"{JOBS_PREFIX}{r['proposal_id']}"
-    return _json.dumps(out, default=str, ensure_ascii=False)
-
-
 def desk_agent_review(db_path, actor, edition, *, action="list", proposal_id=0, edits=None, kind="",
                       business="", jobs_db=None) -> str:
     """The person's side: list what's waiting, approve / edit / reject, 👍 (up) / 👎 (down) practice work.
@@ -437,11 +407,12 @@ def desk_agent_review(db_path, actor, edition, *, action="list", proposal_id=0, 
     action = (action or "list").strip().lower()
     if action in ("list", "practice"):
         st = "pending" if action == "list" else "practice"
-        rows = [] if kind in ("job", "route") else desk_agent.inbox(db_path, status=st, kind=kind)
+        rows = [] if kind in ("job", "route") else desk_agent.inbox(db_path, status=st, kind=kind, unrated=st == "practice")
         adb = _jobs_agent_db()
         if adb and kind in ("", "job", "route"):
             rows += [dict(x, proposal_id=f"{JOBS_PREFIX}{x['proposal_id']}")
-                     for x in desk_agent.inbox(adb, status=st, kind=kind)]
+                     for x in desk_agent.inbox(adb, status=st, kind=kind, unrated=st == "practice")]
+        rows = [r for r in rows if _agent_may(db_path, actor, edition, r["kind"], r["ref"])]
         if not rows:
             return "🤖 Nothing waiting for review." if action == "list" else "🤖 No practice results."
         return "\n".join([f"🤖 {len(rows)} item(s):"] + [
@@ -461,6 +432,9 @@ def desk_agent_review(db_path, actor, edition, *, action="list", proposal_id=0, 
     if where == "jobs":
         import desk_agent_store
         db = desk_agent_store.path()
+    row = _agent_row(db, "agent_proposals", "proposal_id", n)
+    if row and not _agent_may(db_path, actor, edition, row["kind"], row["ref"]):
+        return "❌ That suggestion is outside what you can see."
     try:
         out = desk_agent.review(db, n, action, actor_=actor, edition=edition,
                                 edits=edits or None, business=business, jobs_db=jobs_db)
@@ -479,7 +453,8 @@ def desk_agent_status(db_path, actor, edition) -> str:
            if st.get("runs_on_its_own") else (f" Doesn't run on its own: {st['ready_note']}." if st.get("ready_note") else ""))
     out = (f"🤖 Agent {'on' if st['enabled'] else 'off'} (bookings {'on' if st['booking_enabled'] else 'off'}), "
            f"runs on: {st['provider']}.{own} Waiting in the queue: {st['waiting']}. Waiting for review: "
-           f"{st['pending']}. Practice results: {st['practice']}. To run it in a chat: \"{st['chat_prompt']}\"")
+           f"{st['pending']}. Practice results: {st['practice']} (you rated {st['rated_good']} good, "
+           f"{st['rated_not_right']} not right).")
     adb = _jobs_agent_db()
     if adb:
         js = desk_agent.status(adb)
@@ -523,8 +498,9 @@ def jobs_agent(actor, edition, *, action="status", proposal_id="", edits=None, s
                    "route_practice": bool(jb.get("agent_jb_rt_shadow")),
                    "waiting": st["waiting"], "pending": st["pending"], "practice_results": st["practice"],
                    "provider": das.effective_provider(s, edition), "runs_on_its_own": st.get("runs_on_its_own"),
-                   "ready_note": st.get("ready_note"), "chat_prompt": desk_agent.CHAT_PROMPT, "by_stage": counts,
+                   "ready_note": st.get("ready_note"), "by_stage": counts,
                    "spent_usd": st.get("spent_usd"), "budget_usd": st.get("budget_usd"),
+                   "rated_good": st.get("rated_good"), "rated_not_right": st.get("rated_not_right"), "rated_by": st.get("rated_by"),
                    "can_change_settings": a["role"] == rules.OWNER and not rules.server_locked(edition)}
             if action == "settings":
                 out.update(settings=jb, options=das.jb_ui_options(), jb_flow=das.jobs_flow(jb, edition),
@@ -533,15 +509,18 @@ def jobs_agent(actor, edition, *, action="status", proposal_id="", edits=None, s
             return ok(**out)
         if action in ("list", "practice"):
             st = "pending" if action == "list" else "practice"
-            return ok(items=[dict(x, proposal_id=pid(x)) for x in desk_agent.inbox(adb, status=st, limit=100)])
+            rows = desk_agent.inbox(adb, status=st, limit=100, unrated=st == "practice")
+            if st == "pending":                       # 2026-11-03: paused while its agent is off (Reject only)
+                rows = desk_agent.mark_paused(adb, rows)
+            return ok(items=[dict(x, proposal_id=pid(x)) for x in rows])
         if action == "set":
             if a["role"] != rules.OWNER:
                 return _json.dumps({"ok": False, "error": "Only the owner can change the Jobs agent's settings."})
             if rules.server_locked(edition):
                 return _json.dumps({"ok": False, "error": rules.SERVER_LOCK_MSG})
             vals = _json.loads(settings) if isinstance(settings, str) else (settings or {})
-            for k, v in vals.items():
-                desk_agent_store.set_setting(str(k), v, actor=actor, edition=edition, db=adb)
+            desk_agent_store.set_settings({str(k): v for k, v in vals.items()}, actor=actor, edition=edition,
+                                          db=adb)                  # all or nothing (F-6)
             jb = desk_agent_store.settings(adb)
             return ok(settings=jb, jb_flow=das.jobs_flow(jb, edition), rt_flow=das.route_flow(jb, edition))
         if action == "flow":                                  # redraw for unsaved choices
@@ -749,7 +728,8 @@ def reply_to_customer(db_path, actor, edition, *, ticket_id, message, preview=Tr
 
 
 def create_job_from_ticket(db_path, actor, edition, *, ticket_id, service_date, create_job_fn,
-                           service_type="", customer_id="", notes="", notify_customer=True) -> str:
+                           service_type="", customer_id="", notes="", notify_customer=True,
+                           allow_unscheduled=False) -> str:
     """Turn a re-do or service request into a Jobs app job. create_job_fn(updates)
     is the Jobs app's create_job; it returns text with NEW_JOB_ID=JOB-####."""
     def go():
@@ -765,10 +745,14 @@ def create_job_from_ticket(db_path, actor, edition, *, ticket_id, service_date, 
         if not cust:
             return ("❌ This ticket isn't linked to a customer in the Jobs app. Link it first "
                     "(update_ticket customer_id=CUST-####) or pass customer_id.")
-        d = due_iso(service_date)      # validates the date
+        no_date = allow_unscheduled and not (service_date or "").strip()   # the agent's approved re-do with no date
+        d = None if no_date else due_iso(service_date)      # validates the date
         day = (service_date or "").strip()[:10]
-        updates = {"CustomerID": cust, "Service Date": day, "Job Status": "Scheduled",
-                   "Notes": (f"From Service Desk {tid}: {t['title']}" + (f" — {notes}" if notes else ""))[:500]}
+        updates = {"CustomerID": cust, "Job Status": "Unscheduled" if no_date else "Scheduled",
+                   # 2026-11-04: this key was "Notes", which jobs don't have, so the text was silently dropped
+                   "Service Details / Notes": (f"From Service Desk {tid}: {t['title']}" + (f" — {notes}" if notes else ""))[:500]}
+        if not no_date:
+            updates["Service Date"] = day
         if service_type:
             updates["Service Type"] = service_type
         out = str(create_job_fn(updates))
@@ -781,8 +765,11 @@ def create_job_from_ticket(db_path, actor, edition, *, ticket_id, service_date, 
         if not t.get("job_id"):
             fields["job_id"] = job
         desk_db.update_ticket(db_path, tid, fields, actor=actor, edition=edition)
-        desk_db.add_message(db_path, tid, f"Scheduled {job} for {day}" + (f" ({service_type})" if service_type else ""),
+        desk_db.add_message(db_path, tid, (f"Created {job}, not scheduled yet" if no_date else f"Scheduled {job} for {day}")
+                            + (f" ({service_type})" if service_type else ""),
                             actor=actor, edition=edition, visibility="internal", channel="claude")
+        if no_date:
+            return f"✅ Created {job} from {tid}, not scheduled yet."
         told = ""
         if notify_customer and t["kind"] == rules.EXTERNAL and t.get("contact_id"):
             desk_db.add_message(db_path, tid, f"We've scheduled a return visit for {day}.",
@@ -1211,7 +1198,7 @@ SETTING_HELP = {
     "backup_dir": "folder where Service Desk backups are saved (blank = standard place) — changed only in AI-Prowler on this PC",
     # Service Desk Agent (2026-10-29) — a named VIRTUAL ASSISTANT, never shown as a person
     "agent_enabled": "the Service Desk Agent (virtual assistant) is on",
-    "agent_provider": "which AI runs the agent: chat_only, claude_api or grok_api",
+    "agent_provider": "which AI runs the agent: claude_api or grok_api",
     "agent_shadow": "practice mode: the agent only shows what it would do",
     "agent_stage_intake": "agent intake (type, priority, routing): off, suggest or auto",
     "agent_stage_first_reply": "agent's first reply to the customer: off, suggest or auto",
@@ -1271,7 +1258,7 @@ SETTING_HELP = {
     "agent_jb_sort_weekday": "day the coming week is sorted, 0 = Monday … 6 = Sunday (default 4 = Friday)",
     "agent_jb_route_send_hour": "hour (0-23) crews get tomorrow's route (18 = the evening before)",
     # The HR agent (hr-agent-spec.md) — kept in its own database inside the HR data folder
-    "agent_hr_enabled": "the HR agent on (its own switch; runs only on a Claude API key, the Grok bot or the Claude CLI)",
+    "agent_hr_enabled": "the HR agent on (its own switch; runs only on a Claude API key or the Grok bot)",
     "agent_hr_shadow": "practice mode for the HR agent only: it shows what it would do, nothing is approved or sent",
     "agent_hr_stage_recruit": "HR agent — Recruit (acknowledge applicants; never ranks or rejects): off | suggest | auto",
     "agent_hr_stage_onboard": "HR agent — Onboard (I-9, W-4, new-hire report, checklist): off | suggest | auto",

@@ -72,7 +72,7 @@ def test_model_choice_is_saved_and_used(cfg):
 def test_subscription_runner_is_gone():
     assert not hasattr(prov, "_claude_code") and not hasattr(prov, "_claude_exe")
     ok, why = prov.ready("claude_code", "solo")
-    assert not ok and "removed" in why and "Agent API Key" in why
+    assert not ok and "unknown runner" in why          # F-26: an old saved value is converted when it's read
     with pytest.raises(prov.ProviderError):
         prov.ask("claude_code", "s", "u")
 

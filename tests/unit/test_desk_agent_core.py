@@ -208,6 +208,77 @@ def test_review_approve_edit_reject(env):
     assert body.startswith("Thanks, Maria!")
 
 
+def test_agent_off_stops_approvals_but_not_rejects(env):
+    """David 2026-11-03: turning the agent off stops its suggestions being approved; reject still clears them,
+    and they can be approved again once it's back on."""
+    t = customer_ticket(env)
+    submit(env, take(env), {"action": "set_type", "type": "Quality", "why": "x", "confidence": 0.9})
+    submit(env, take(env), {"action": "reply", "body": "Thanks!", "why": "ack", "confidence": 0.9})
+    pend = ag.inbox(env[0])
+    typ = next(x for x in pend if x["action"] == "set_type")
+    reply = next(x for x in pend if x["action"] == "reply")
+    setv(env, agent_enabled=False)
+    for how in ("approve", "edit"):
+        with pytest.raises(desk_db.DeskError, match="Service Desk agent is off"):
+            ag.review(env[0], typ["proposal_id"], how, actor_=None, edition=S, edits={"type": "Quality"})
+    assert desk_db.get_ticket(env[0], t["ticket_id"])["type"] != "Quality"
+    assert ag.review(env[0], reply["proposal_id"], "reject", actor_=None, edition=S)["status"] == "rejected"
+    setv(env, agent_enabled=True)
+    assert ag.review(env[0], typ["proposal_id"], "approve", actor_=None, edition=S)["status"] == "applied"
+
+
+def test_app_keeps_the_agent_tab_while_suggestions_wait_and_marks_them_paused(env):
+    """David 2026-11-03: with the agent off, the 🤖 tab stays while suggestions wait; they show as paused."""
+    import desk_http
+    owner, staff = {"id": "owner", "role": "owner"}, {"id": "sam", "role": "staff"}
+
+    def get(path, actor=owner):
+        st, _ct, body = desk_http.route("GET", path, query={}, body=b"", content_type="", actor=actor,
+                                        edition=S, db_path=env[0])
+        assert st == 200, body
+        return json.loads(body)
+
+    customer_ticket(env)
+    submit(env, take(env), {"action": "set_type", "type": "Quality", "why": "x", "confidence": 0.9})
+    assert get("/desk-api/me")["agent_pending"] == 1
+    assert [p["paused"] for p in get("/desk-api/agent/inbox")["pending"]] == [""]
+    setv(env, agent_enabled=False)
+    me = get("/desk-api/me")
+    assert me["agent_pending"] == 1 and not me["settings"]["agent_enabled"]          # tab stays (index.html)
+    d = get("/desk-api/agent/inbox")
+    assert "Service Desk agent is off" in d["pending"][0]["paused"] and d["status"]["enabled"] is False
+    assert get("/desk-api/me", actor=staff)["agent_pending"] == 0                      # staff never see the tab
+    page = (ROOT / "desk" / "index.html").read_text(encoding="utf-8")
+    assert "S.me.agent_pending > 0" in page and "⏸ Paused" in page and "p.paused || p.payload.refused ? ''" in page
+
+
+def test_agent_off_reason_follows_each_agents_own_switch():
+    on = {"agent_enabled": True, "agent_bk_enabled": True, "agent_jb_enabled": True, "agent_jb_rt_enabled": True,
+          "agent_hr_enabled": True}
+    kinds, scanners, risk, allowed = dict(ag.KINDS), list(ag.SCANNERS), dict(ag.RISK), dict(ag.ALLOWED)
+    try:
+        import desk_hr_agent  # noqa: F401  (registers the 'hr' kind)
+        import desk_jobs_agent  # noqa: F401  (registers 'job' and 'route')
+        desk_hr_agent._register()
+        desk_jobs_agent._register()
+        for kind, stage in (("ticket", "intake"), ("booking", "decide"), ("job", "closeout"), ("route", "send"),
+                            ("hr", "timeoff")):
+            assert ag.agent_off_reason(on, kind, stage) == "", kind
+        assert "Booking & scheduling is off" in ag.agent_off_reason({**on, "agent_bk_enabled": False}, "booking",
+                                                                   "decide")
+        assert "Booking & scheduling is off" in ag.agent_off_reason({**on, "agent_enabled": False}, "booking", "decide")
+        assert "Jobs agent is off" in ag.agent_off_reason({**on, "agent_jb_enabled": False}, "job", "closeout")
+        assert ag.agent_off_reason({**on, "agent_jb_enabled": False}, "route", "send") == ""   # routes have their own
+        assert "Route flow is off" in ag.agent_off_reason({**on, "agent_jb_rt_enabled": False}, "route", "send")
+        assert "HR agent is off" in ag.agent_off_reason({**on, "agent_hr_enabled": False}, "hr", "timeoff")
+        assert ag.agent_off_reason({**on, "agent_shadow": True}, "ticket", "intake") == ""     # practice isn't "off"
+    finally:                    # leave the engine as this file's other tests expect it
+        ag.KINDS.clear(); ag.KINDS.update(kinds)
+        ag.SCANNERS[:] = scanners
+        ag.RISK.clear(); ag.RISK.update(risk)
+        ag.ALLOWED.clear(); ag.ALLOWED.update(allowed)
+
+
 # ── bookings ─────────────────────────────────────────────────────────────────
 
 def make_booking(env, key=T7, phone="+13865550142", name="Maria Lopez", backups=()):
@@ -295,8 +366,11 @@ def test_offer_times_to_a_request_with_no_date(env):
     assert res["results"][0]["status"] == "applied"
     v = bf.view(jobs, job, desk_db.get_settings(tickets))
     assert v["state"] == "suggested" and v["can_accept"]
+    # F-19 (David, 2026-11-04): the agent's own offer isn't approved by anyone, so accepting holds the time for Decide.
     done = bf.customer_accept(jobs, tickets, job, edition=S, settings=desk_db.get_settings(tickets))
-    assert done["window"] == keys[0]
+    assert done["status"] == "pending"
+    b = bf.get(jobs, job)
+    assert b["held_key"] == keys[0] and b["job"]["job_status"] != "Scheduled"
 
 
 def test_a_customer_message_on_a_booking_goes_to_the_booking_agent(env):
@@ -311,16 +385,13 @@ def test_a_customer_message_on_a_booking_goes_to_the_booking_agent(env):
 
 # ── tools, digest ────────────────────────────────────────────────────────────
 
-def test_tools_for_claude_muse_grok(env):
+def test_the_tools_that_manage_the_agent(env):
     customer_ticket(env)
-    out = json.loads(desk_tools.desk_agent_next(env[0], None, S, jobs_db=env[1]))
-    item = out["items"][0]
-    assert "desk_agent_submit" in out["instructions"]
-    res = json.loads(desk_tools.desk_agent_submit(env[0], None, S, item_id=item["item_id"], jobs_db=env[1],
-                                                  actions='[{"action":"note","body":"x","why":"y","confidence":0.9}]'))
+    item = take(env)
+    res = submit(env, item, {"action": "note", "body": "x", "why": "y", "confidence": 0.9})
     assert res["results"][0]["status"] == "pending"
     assert "1 item(s)" in desk_tools.desk_agent_review(env[0], None, S)
-    assert desk_tools.desk_agent_next(env[0], {"id": "sam", "role": "staff"}, r.BUSINESS).startswith("❌")
+    assert desk_tools.desk_agent_review(env[0], {"id": "sam", "role": "staff"}, r.BUSINESS).startswith("❌")
     assert "Waiting for review: 1" in desk_tools.desk_agent_status(env[0], None, S)
     line = desk_scheduler.agent_digest_line(env[0], desk_db.get_settings(env[0]))
     assert "1 suggestion(s) waiting for your OK" in line

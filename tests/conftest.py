@@ -572,3 +572,15 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     terminalreporter.write_sep("-", "AI-Prowler Server test-data cleanup")
     for line in lines:
         terminalreporter.write_line(line)
+
+
+@pytest.fixture(autouse=True)
+def _agents_have_a_saved_key(request, monkeypatch):
+    """David 2026-11-05: an agent with no saved key doesn't run. These tests check what a running agent does, so they run
+    with a key; a test about having none says @pytest.mark.no_agent_key."""
+    if "no_agent_key" in request.keywords:
+        return
+    import sys as _sys
+    if "desk_agent" in _sys.modules or any(n in str(request.fspath) for n in ("agent", "desk", "hr_", "booking")):
+        import desk_agent as _da
+        monkeypatch.setattr(_da, "_has_key", lambda s: True)

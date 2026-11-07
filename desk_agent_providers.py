@@ -9,8 +9,7 @@ The AI never gets tools that could change anything, so it can't reach around the
     claude_api   Anthropic Messages API with the agents' own Claude API key — 🔑 Agent API Key at the top of the Small Business tab
                  (~/.ai-prowler/agent_claude_api_key.txt). The Task Queue runs on this same key.
     grok_api     the xAI API with the agents' own Grok key (same box; agent_grok_api_key.txt)
-    chat_only    nothing runs on its own — someone runs it from a chat (personal installs; on a
-                 server it means no runner chosen yet — every agent there needs an API key)
+    chat_only    no API key is saved: the agents don't run
 
 Models and prices are in ~/.ai-prowler/task_automation_config.json ("agent_claude_model",
 "agent_grok_model", "agent_prices" = {model: [usd per 1M input, usd per 1M output]}).
@@ -35,6 +34,14 @@ DEFAULT_PRICES = {                       # USD per 1M tokens [input, output]; ov
     "grok-4.3": [1.25, 2.50],
     "grok": [1.25, 2.50],                # any other grok-* model
 }
+# Prompt caching (2026-11-03, live cost test: AI-Prowler recorded 6-25 % more than the API charged because cached
+# tokens were priced as plain input). Cache writes (5-minute) cost 1.25x input; cache reads 0.1x input — except
+# Sonnet 5.5, whose cache reads were cut to $0.10 per 1M (0.05x) in Oct 2026. Haiku 5.5 charges 5x on everything
+# when one prompt is over 100,000 tokens (counting cache reads and writes).
+CACHE_WRITE_X = 1.25
+CACHE_READ_X = {"claude-sonnet-5-5": 0.05}
+DEFAULT_CACHE_READ_X = 0.10
+LONG_PROMPT = {"claude-haiku-5-5": (100_000, 5.0)}
 HTTP_TIMEOUT = 120
 MAX_TOKENS = 1500
 
@@ -43,7 +50,7 @@ You are running on your own (no person is watching). You get ONE item as JSON. D
 using only the actions in "allowed_actions". Reply with ONLY one JSON object, nothing else:
 {"actions": [{"action": "...", ...fields..., "why": "one line", "confidence": 0.0-1.0}], "summary": "one line"}
 Fields by action: set_type{type} set_priority{priority} route{assignee} note{body} reply{body}
-ask_customer{body} nudge_team{body} flag_duplicate{of_ticket_id} propose_job{notes} propose_merge{primary_id}
+ask_customer{body} nudge_team{body} flag_duplicate{of_ticket_id} propose_job{notes,service_date(optional, after today)} propose_merge{primary_id}
 propose_learning{title,body} bk_note{body} bk_flag{flag,detail} bk_recommend{choice,window_key,crew}
 bk_suggest_time{window_key,note} bk_offer_times{window_keys,note} bk_approve{window_key,crew}
 bk_decline{body,keep_request} bk_reply{body} bk_job_note{body} bk_nudge{body} bk_customer_note{body}
@@ -134,14 +141,8 @@ def model_for(provider: str, cfg: dict | None = None) -> str:
 def ready(provider: str, edition: str | None = None) -> tuple:
     """(True, '') when this runner can work now, else (False, what's missing in plain words)."""
     if provider == "chat_only":
-        if edition == "business":
-            return False, ("no AI chosen to run the agents — on a server every agent needs an API key: choose "
-                           "Claude API key or Grok bot (Service Desk Agent → 🤖 Agent) and save the key in "
-                           "🔑 Agent API Key at the top of the Small Business tab")
-        return False, "the agent runs from a chat (Claude, Muse or Grok) — nothing runs on its own"
-    if provider == "claude_code":                  # 2026-11-01: the Claude CLI runner was removed
-        return False, ("the Claude subscription (CLI) runner was removed — choose Claude API key or Grok bot "
-                       "and save the key in 🔑 Agent API Key at the top of the Small Business tab")
+        return False, ("no API key is saved, so the agents don't run — the apps and your chat work as usual. To turn "
+                       "them on, save a Claude or Grok key in 🔑 Agent API Key at the top of the Small Business tab")
     if provider in ("claude_api", "grok_api"):
         if not _key(provider):
             where = "🔑 Agent API Key at the top of the Small Business tab"
@@ -268,12 +269,28 @@ def price_for(model: str, cfg: dict | None = None):
     return prices.get(model) or (prices["grok"] if (model or "").startswith("grok") else None)
 
 
-def cost(model: str, usage: dict, cfg: dict | None = None) -> float:
+def token_cost(model: str, new_input: int, cache_write: int, cache_read: int, output: int,
+               cfg: dict | None = None) -> float:
+    """USD for one call's tokens: new input, cache writes (1.25x), cache reads (0.1x, Sonnet 5.5 0.05x), output;
+    Haiku 5.5's long-prompt rate when the whole prompt is over 100K tokens. Unrounded."""
     cfg = cfg if cfg is not None else _cfg()
     p = price_for(model, cfg)
     if not p:
         return 0.0
-    return round((usage.get("input", 0) * p[0] + usage.get("output", 0) * p[1]) / 1_000_000, 5)
+    pin, pout = float(p[0]), float(p[1])
+    lim = LONG_PROMPT.get(model)
+    if lim and new_input + cache_write + cache_read > lim[0]:
+        pin, pout = pin * lim[1], pout * lim[1]
+    return (new_input * pin + cache_write * pin * CACHE_WRITE_X
+            + cache_read * pin * CACHE_READ_X.get(model, DEFAULT_CACHE_READ_X) + output * pout) / 1_000_000
+
+
+def cost(model: str, usage: dict, cfg: dict | None = None) -> float:
+    """USD for one call. usage["input"] counts ALL input tokens; the optional "cache_read" / "cache_write" say how
+    many of them came from / went into the prompt cache (priced at the cache rates, not the input rate)."""
+    cr, cw = int(usage.get("cache_read", 0) or 0), int(usage.get("cache_write", 0) or 0)
+    new = max(int(usage.get("input", 0) or 0) - cr - cw, 0)
+    return round(token_cost(model, new, cw, cr, int(usage.get("output", 0) or 0), cfg), 5)
 
 
 # ── the calls ────────────────────────────────────────────────────────────────
@@ -315,8 +332,8 @@ def _claude_api(system, user, model):
                  {"Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01"})
     text = "".join(b.get("text", "") for b in data.get("content") or [] if b.get("type") == "text")
     u = data.get("usage") or {}
-    return text, {"input": int(u.get("input_tokens", 0)) + int(u.get("cache_read_input_tokens", 0) or 0)
-                  + int(u.get("cache_creation_input_tokens", 0) or 0),
+    cr, cw = int(u.get("cache_read_input_tokens", 0) or 0), int(u.get("cache_creation_input_tokens", 0) or 0)
+    return text, {"input": int(u.get("input_tokens", 0)) + cr + cw, "cache_read": cr, "cache_write": cw,
                   "output": int(u.get("output_tokens", 0))}
 
 
@@ -339,8 +356,8 @@ def _grok_api(system, user, model):
 
 
 # 2026-11-01 (David: "Remove CLI everywhere"): the claude_code runner (_claude_exe, _claude_code) is gone —
-# the agents run on an API key or from a chat. A saved "claude_code" choice reads as chat_only on a personal
-# install (desk_agent_settings.effective_provider).
+# the agents run on an API key. A saved "claude_code" choice reads as the saved key's runner
+# (desk_agent_settings.runner_for_removed).
 
 
 def parse_actions(text: str) -> tuple:

@@ -94,7 +94,7 @@ def test_cost_uses_prices_and_config_override():
 
 def test_ready_says_whats_missing(monkeypatch):
     assert prov.ready("chat_only")[0] is False
-    assert "removed" in prov.ready("claude_code", "solo")[1]          # 2026-11-01: no Claude CLI runner
+    assert prov.ready("claude_code", "solo")[0] is False              # 2026-11-01: no Claude CLI runner
     monkeypatch.setattr(prov, "_key", lambda p: "")
     assert "Claude API key" in prov.ready("claude_api")[1]
     assert "Grok API key" in prov.ready("grok_api")[1]
@@ -104,14 +104,16 @@ def test_ready_says_whats_missing(monkeypatch):
 
 # ── whether to start ─────────────────────────────────────────────────────────
 
-def test_why_not_run_reasons(db):
+def test_why_not_run_reasons(db, monkeypatch):
     now = ag._now()
     s = desk_db.get_settings(db)
     assert ag.why_not_run(db, s, edition=S, now=now) == "nothing waiting"
     ticket(db)
     assert ag.why_not_run(db, s, edition=S, now=now) == ""
     assert ag.why_not_run(db, dict(s, agent_enabled=False), edition=S, now=now) == "the agent is off"
-    assert "chat" in ag.why_not_run(db, dict(s, agent_provider="chat_only"), edition=S, now=now)
+    with monkeypatch.context() as m:
+        m.setattr(prov, "_key", lambda p: "")
+        assert "no API key" in ag.why_not_run(db, dict(s, agent_provider="chat_only"), edition=S, now=now)
     off_hours = [(now.hour + 1) % 24, (now.hour + 1) % 24 + 1]
     assert "outside" in ag.why_not_run(db, dict(s, agent_hours=off_hours), edition=S, now=now)
     assert ag.why_not_run(db, dict(s, agent_hours=off_hours), edition=S, now=now, force=True) == ""
@@ -201,12 +203,23 @@ def test_run_stops_when_the_budget_runs_out_mid_run(db):
     assert out["items"] == 1 and "stopped: monthly budget reached" in out["notes"]
 
 
-def test_chat_only_never_runs_on_its_own(db):
-    desk_db.set_setting(db, "agent_provider", "chat_only", edition=S)
+def _no_runner(db):
+    """An old saved chat_only; it can't be saved any more."""
+    import json
+    import sqlite3
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE desk_settings SET value = ? WHERE key = 'agent_provider'", (json.dumps("chat_only"),))
+    conn.commit()
+    conn.close()
+
+
+def test_no_key_never_runs(db, monkeypatch):
+    monkeypatch.setattr(prov, "_key", lambda p: "")
+    _no_runner(db)
     ticket(db)
     ag.transport = fake()
     out = ag.run(db, edition=S, force=True)
-    assert out["ran"] is False and "chat" in out["why"]
+    assert out["ran"] is False and "no API key" in out["why"]
 
 
 # ── who starts it ────────────────────────────────────────────────────────────
@@ -217,7 +230,8 @@ def test_scheduler_tick_starts_a_background_run(db, monkeypatch):
     monkeypatch.setattr(ag, "run_in_background", lambda d, **kw: started.append(kw) or True)
     did = desk_scheduler.run_once(db, edition=S)
     assert started and did.get("agent_run") is True
-    desk_db.set_setting(db, "agent_provider", "chat_only", edition=S)
+    monkeypatch.setattr(prov, "_key", lambda p: "")
+    _no_runner(db)
     started.clear()
     desk_scheduler.run_once(db, edition=S)
     assert not started

@@ -18,6 +18,7 @@ import setup_wizard as sw   # noqa: E402
 # The real Service Desk switch (tool_config_store) — kept for the one test that
 # checks it in a sandbox folder; every other test gets the in-memory one below.
 _REAL_DESK_ON, _REAL_SET_DESK = sw.desk_switched_on, sw.set_desk_switch
+_REAL_JOBS_ON, _REAL_SET_JOBS = sw.jobs_switched_on, sw.set_jobs_switch
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +33,20 @@ def desk_switch(monkeypatch):
         return True, "Service Desk is " + ("ON" if on else "OFF") + " — restart AI-Prowler to apply it."
     monkeypatch.setattr(sw, "desk_switched_on", lambda: state["on"])
     monkeypatch.setattr(sw, "set_desk_switch", _set)
+    # the Job Tracker switch the same way, and no real dialog can ever open and hang a run
+    jobs = {"on": False, "calls": []}
+
+    def _set_jobs(on):
+        jobs["calls"].append(bool(on))
+        jobs["on"] = bool(on)
+        return True, "Job Tracker & Routing is " + ("ON" if on else "OFF")
+    monkeypatch.setattr(sw, "jobs_switched_on", lambda: jobs["on"])
+    monkeypatch.setattr(sw, "set_jobs_switch", _set_jobs)
+    state["jobs"] = jobs
+    monkeypatch.setattr(sw, "SYNC_SWITCHES", False)
+    from tkinter import messagebox
+    monkeypatch.setattr(messagebox, "askyesno", lambda *a, **k: False)
+    monkeypatch.setattr(messagebox, "showinfo", lambda *a, **k: None)
     return state
 
 
@@ -91,9 +106,9 @@ def test_connect_ai_card_names_claude_grok_and_muse():
 
 # ── choices → plan (with dependencies) ──────────────────────────────────────
 def test_routes_pulls_in_jobs_and_phone_access():
-    ids = [m.id for m in sw.modules_for(["routes"])]
-    assert ids == ["remote", "jobs", "routes"], ids
-    assert set(sw.added_by_requirement(["routes"])) == {"remote", "jobs"}
+    ids = [m.id for m in sw.modules_for(["business"])]
+    assert {"email", "remote", "jobs", "payments", "routes"} == set(ids), ids     # crew routes are part of the Jobs app
+    assert set(sw.added_by_requirement(["business"])) == {"email", "remote"}
 
 
 def test_payments_pulls_in_email_and_jobs():
@@ -749,7 +764,7 @@ def test_remote_app_step_without_phone_access(tkroot, tmp_path, monkeypatch):
     flow = sw.RemotePwaFlow(panel)
     texts = [str(c.cget("text")) for c in flow.body.winfo_children() if hasattr(c, "cget")
              and "text" in c.keys()]
-    assert any("Set up Phone access first" in t for t in texts)
+    assert any("Set up Remote Access first" in t for t in texts)
     flow.win.destroy()
 
 
@@ -1193,7 +1208,7 @@ def test_overall_light_requirement_never_red(tmp_path, fake_states):
     p = sw.Progress(path=tmp_path / "p.json", picked=True)
     p.choose(["business"])                               # jobs, payments + remote, email
     assert p.overall_light() == sw.YELLOW                # not red: email is a requirement, not chosen
-    fake_states.update(remote=sw.DONE, jobs=sw.DONE, payments=sw.DONE)
+    fake_states.update(remote=sw.DONE, jobs=sw.DONE, payments=sw.DONE, routes=sw.DONE)
     assert p.overall_light() == sw.YELLOW                # email (requirement) still to do
     fake_states["email"] = sw.DONE
     assert p.overall_light() == sw.GREEN
@@ -1228,10 +1243,10 @@ def test_overall_light_only_counts_chosen_steps(tmp_path, fake_states):
 
 def test_overall_light_yellow_until_later_chosen_steps_done(tmp_path, fake_states):
     p = sw.Progress(path=tmp_path / "p.json", picked=True)
-    p.choose(["files", "routes"])                        # + remote, jobs, routes
+    p.choose(["files", "routes"])                        # an older choice: the Jobs app, its routes, and what they need
     fake_states.update({m: sw.DONE for m in ("index", "connect_ai", "auto_index", "learnings")})
     assert p.overall_light() == sw.YELLOW
-    fake_states.update(remote=sw.DONE, jobs=sw.DONE)
+    fake_states.update(remote=sw.DONE, jobs=sw.DONE, payments=sw.DONE, email=sw.DONE)
     assert p.overall_light() == sw.YELLOW                # routes still to do
     fake_states["routes"] = sw.SKIPPED                   # skipped = decided
     assert p.overall_light() == sw.GREEN
@@ -1285,7 +1300,7 @@ def _answer_picker(panel, tkroot, tick=(), untick=()):
     def walk(w):
         for c in w.winfo_children():
             if c.winfo_class() == "TCheckbutton":
-                boxes[c.cget("text")] = c
+                boxes[c.cget("text").replace(sw.NEEDS_REMOTE_MARK, "")] = c
             walk(c)
     walk(win)
     labels = {sid: label for sid, label, _ in sw.SERVICES}
@@ -1316,6 +1331,8 @@ def _row_lights(panel):
 def lit_panel(tkroot, tmp_path, fake_states, monkeypatch):
     """A panel whose 'files' steps are all done; nothing else is."""
     from tkinter import ttk
+    import tool_config_store as _tcs
+    monkeypatch.setattr(_tcs, "_state_dir", lambda: tmp_path)      # one test's feature switches stay in that test
     _orig_row = sw.SetupCenterPanel._row
 
     def tagged_row(self, parent, m):                       # remember which step each row is
@@ -1332,19 +1349,21 @@ def lit_panel(tkroot, tmp_path, fake_states, monkeypatch):
     return sw.SetupCenterPanel(ttk.Frame(tkroot), FakeApp(), progress=p), p
 
 
-def test_lights_follow_new_answers_add_a_service(lit_panel, tkroot):
+def test_lights_follow_new_answers_add_a_service(lit_panel, tkroot, monkeypatch):
     panel, p = lit_panel
+    _no_dialogs(monkeypatch)
     assert panel.light_lbl.cget("fg") == sw.LIGHT_COLOR[sw.GREEN]          # only "files" chosen, all done
-    _answer_picker(panel, tkroot, tick=["routes"])                          # now also crew routes
-    assert p.services == ["files", "routes"]
+    _answer_picker(panel, tkroot, tick=["business"])              # now also crew routes, which need the Jobs app
+    assert p.services == ["files", "phone", "business"]      # the Jobs app needs Remote Access, so it came too
     assert panel.light_lbl.cget("fg") == sw.LIGHT_COLOR[sw.YELLOW], "new later steps must turn it yellow"
     lights = _row_lights(panel)
     assert lights["routes"] == sw.RED and lights["jobs"] == sw.RED and lights["remote"] == sw.RED
     assert lights["index"] == sw.GREEN
 
 
-def test_lights_follow_new_answers_remove_a_service(lit_panel, tkroot, fake_states):
+def test_lights_follow_new_answers_remove_a_service(lit_panel, tkroot, fake_states, monkeypatch):
     panel, p = lit_panel
+    _no_dialogs(monkeypatch)
     _answer_picker(panel, tkroot, tick=["email"])
     assert panel.light_lbl.cget("fg") == sw.LIGHT_COLOR[sw.YELLOW]          # email chosen, not done
     assert "email" in _row_lights(panel)
@@ -1372,10 +1391,11 @@ def test_add_more_button_updates_lights(lit_panel, tkroot):
     assert {"remote", "remote_pwa"} <= set(_row_lights(panel))
 
 
-def test_lights_update_while_folded(lit_panel, tkroot):
+def test_lights_update_while_folded(lit_panel, tkroot, monkeypatch):
     panel, p = lit_panel
+    _no_dialogs(monkeypatch)
     panel._toggle(False)
-    _answer_picker(panel, tkroot, tick=["routes"])           # "➕ Add a service" from the folded header
+    _answer_picker(panel, tkroot, tick=["business"])           # "➕ Add a service" from the folded header
     assert panel.light_lbl.cget("fg") == sw.LIGHT_COLOR[sw.YELLOW]
 
 
@@ -1426,7 +1446,54 @@ def test_ticking_tickets_turns_service_desk_on(lit_panel, tkroot, desk_switch, m
     _answer_picker(panel, tkroot, tick=["desk"])
     assert desk_switch["calls"] == [True] and desk_switch["on"]
     assert "desk" in p.services and {"remote", "desk"} <= set(_row_lights(panel))
-    assert shown and "restart" in shown[-1][2], "must say a restart applies it"
+    asks = [s for s in shown if s[0] == "ask" and s[1] == "Restart AI-Prowler now?"]
+    assert len(asks) == 1, shown
+
+
+def test_saving_setup_with_no_tool_change_does_not_offer_a_restart(lit_panel, tkroot, desk_switch, monkeypatch):
+    panel, p = lit_panel
+    shown = _no_dialogs(monkeypatch)
+    _answer_picker(panel, tkroot, tick=["email"])
+    assert not shown
+
+
+@pytest.mark.parametrize("yes", [True, False])
+def test_leaving_setup_restarts_only_on_yes(lit_panel, tkroot, desk_switch, monkeypatch, yes):
+    panel, p = lit_panel
+    _no_dialogs(monkeypatch, answer_yes=yes)
+    restarts = []
+    panel.app._restart_after_tool_change = lambda: restarts.append(1) or True
+    _answer_picker(panel, tkroot, tick=["desk"])
+    assert desk_switch["on"], "the choice is saved either way"
+    assert restarts == ([1] if yes else [])
+
+
+def test_setup_says_so_when_it_cannot_restart_itself(lit_panel, tkroot, desk_switch, monkeypatch):
+    panel, p = lit_panel
+    shown = _no_dialogs(monkeypatch, answer_yes=True)
+    panel.app._restart_after_tool_change = lambda: False
+    _answer_picker(panel, tkroot, tick=["desk"])
+    assert shown[-1][0] == "info" and "start it again" in shown[-1][2]
+
+
+def test_desk_step_offers_one_restart_when_closed(cfg, tkroot, tmp_path, desk_switch, monkeypatch):
+    panel, prog = _panel(tkroot, tmp_path, services=("desk",))
+    shown = _no_dialogs(monkeypatch, answer_yes=False)
+    flow = sw.DeskFlow(panel)
+    flow.on_btn.invoke()
+    assert not shown, "not until the person leaves the step"
+    flow.win.destroy()
+    tkroot.update()
+    assert len([s for s in shown if s[0] == "ask"]) == 1
+
+
+def test_desk_step_closed_without_a_change_asks_nothing(cfg, tkroot, tmp_path, desk_switch, monkeypatch):
+    panel, prog = _panel(tkroot, tmp_path, services=("desk",))
+    shown = _no_dialogs(monkeypatch)
+    flow = sw.DeskFlow(panel)
+    flow.win.destroy()
+    tkroot.update()
+    assert not shown
 
 
 def test_picker_shows_the_real_switch_and_unticking_asks_first(lit_panel, tkroot, desk_switch, monkeypatch):
@@ -1442,7 +1509,8 @@ def test_picker_shows_the_real_switch_and_unticking_asks_first(lit_panel, tkroot
     assert desk_switch["calls"] == [False] and not desk_switch["on"] and "desk" not in p.services
 
 
-def test_desk_step_turns_it_on_and_shows_the_phone_links(cfg, tkroot, tmp_path, desk_switch):
+def test_desk_step_turns_it_on_and_shows_the_phone_links(cfg, tkroot, tmp_path, desk_switch, monkeypatch):
+    _no_dialogs(monkeypatch, answer_yes=False)
     panel, prog = _panel(tkroot, tmp_path, services=("desk",))
     flow = sw.DeskFlow(panel)
     assert prog.states.get("desk") != sw.DONE and "OFF" in flow.state_lbl.cget("text")
@@ -1453,6 +1521,7 @@ def test_desk_step_turns_it_on_and_shows_the_phone_links(cfg, tkroot, tmp_path, 
     flow._copy(flow.app_url)
     assert tkroot.clipboard_get() == "https://ap-test-123.ai-prowler.com/desk/"
     flow.win.destroy()
+    tkroot.update()                                     # its restart prompt fires now, not in the next test
 
 
 def test_desk_step_without_phone_access(tkroot, tmp_path, monkeypatch):
@@ -1469,5 +1538,223 @@ def test_desk_step_without_phone_access(tkroot, tmp_path, monkeypatch):
                 pass
             walk(c)
     walk(flow.body)
-    assert any("Set up Phone access first" in t for t in texts)
+    assert any("Set up Remote Access first" in t for t in texts)
     flow.win.destroy()
+
+
+# ── Job Tracker & Routing in "What do you want AI-Prowler to do?" (David 2026-11-04) ──
+@pytest.mark.parametrize("mode", ["personal", "server"])
+def test_real_jobs_switch_is_the_mcp_tool_configuration_group(tmp_path, monkeypatch, mode):
+    monkeypatch.setenv("AIPROWLER_TEST_STATE_DIR", str(tmp_path))
+    (tmp_path / "config.json").write_text(json.dumps({"mode": mode}), encoding="utf-8")
+    monkeypatch.setattr(sw, "CONFIG_PATH", tmp_path / "config.json")
+    import tool_config_store as tcs
+    assert _REAL_SET_JOBS(True)[0] and _REAL_JOBS_ON() is True
+    assert tcs.saved_group_choice(mode, "job_tracker") is True
+    other = "server" if mode == "personal" else "personal"
+    assert tcs.saved_group_choice(other, "job_tracker") is not True
+    assert _REAL_SET_JOBS(False)[0] and _REAL_JOBS_ON() is False
+
+
+@pytest.mark.parametrize("ticks", [["business"]])
+def test_ticking_business_turns_job_tracker_on_with_one_prompt(lit_panel, tkroot, desk_switch, monkeypatch, ticks):
+    panel, p = lit_panel
+    shown = _no_dialogs(monkeypatch)
+    _answer_picker(panel, tkroot, tick=ticks)
+    assert desk_switch["jobs"]["calls"] == [True] and set(ticks) <= set(p.services)
+    assert len([s for s in shown if s[0] == "ask" and s[1] == "Restart AI-Prowler now?"]) == 1
+
+
+def test_ticking_desk_and_business_together_is_still_one_prompt(lit_panel, tkroot, desk_switch, monkeypatch):
+    panel, p = lit_panel
+    shown = _no_dialogs(monkeypatch)
+    _answer_picker(panel, tkroot, tick=["desk", "business"])
+    assert desk_switch["on"] and desk_switch["jobs"]["on"]
+    assert len([s for s in shown if s[0] == "ask"]) == 1
+
+
+def test_unticking_business_turns_job_tracker_off(lit_panel, tkroot, desk_switch, monkeypatch):
+    """David 2026-11-06: crew routes are part of the Jobs app."""
+    panel, p = lit_panel
+    desk_switch["jobs"]["on"] = True
+    p.choose(["files", "business", "routes"])
+    _no_dialogs(monkeypatch, answer_yes=True)
+    _answer_picker(panel, tkroot, untick=["business"])
+    assert desk_switch["jobs"]["calls"] == [False] and p.services == ["files"]
+
+
+def test_picker_shows_the_real_jobs_switch_and_unticking_asks_first(lit_panel, tkroot, desk_switch, monkeypatch):
+    panel, p = lit_panel
+    desk_switch["jobs"]["on"] = True                        # on from Settings, never chosen here
+    shown = _no_dialogs(monkeypatch, answer_yes=False)
+    _answer_picker(panel, tkroot, untick=["business"])      # the box was ticked for them; untick → No
+    assert any(s[1] == "Turn Job Tracker off?" for s in shown if s[0] == "ask")
+    assert desk_switch["jobs"]["on"] and desk_switch["jobs"]["calls"] == []
+    shown = _no_dialogs(monkeypatch, answer_yes=True)
+    _answer_picker(panel, tkroot, untick=["business"])      # → Yes
+    assert desk_switch["jobs"]["calls"] == [False] and "business" not in p.services
+
+
+@pytest.mark.parametrize("sid,key", [("business", "jobs"), ("desk", "desk")])
+def test_add_more_turns_the_switch_on_too(lit_panel, tkroot, desk_switch, monkeypatch, sid, key):
+    panel, p = lit_panel
+    shown = _no_dialogs(monkeypatch)
+    panel._add(sid)
+    assert (desk_switch["jobs"]["on"] if key == "jobs" else desk_switch["on"]) is True
+    assert sid in p.services and len([s for s in shown if s[0] == "ask"]) == 1
+
+
+def test_add_more_with_the_switch_already_on_asks_nothing(lit_panel, tkroot, desk_switch, monkeypatch):
+    panel, p = lit_panel
+    desk_switch["jobs"]["on"] = True
+    shown = _no_dialogs(monkeypatch)
+    panel._add("business")
+    assert not shown and desk_switch["jobs"]["calls"] == []
+
+
+# ── Setup follows what's really true, both ways (David 2026-11-04) ──
+@pytest.mark.parametrize("mid", ["index", "auto_index", "links", "learnings", "email", "remote", "remote_pwa", "jobs",
+                                 "payments", "routes", "desk"])
+def test_a_step_undone_elsewhere_stops_being_green(prog, monkeypatch, mid):
+    m = sw.BY_ID[mid]
+    monkeypatch.setattr(prog, "states", {mid: sw.DONE})
+    import dataclasses
+    assert prog.state(dataclasses.replace(m, detect=lambda: False)) == sw.NOT_STARTED
+    assert prog.state(dataclasses.replace(m, detect=lambda: True)) == sw.DONE
+
+
+def test_cant_tell_keeps_what_was_saved(prog):
+    import dataclasses
+    prog.states = {"links": sw.DONE}
+    m = sw.BY_ID["links"]
+    assert prog.state(dataclasses.replace(m, detect=lambda: None)) == sw.DONE
+
+    def boom():
+        raise OSError("no file")
+    assert prog.state(dataclasses.replace(m, detect=boom)) == sw.DONE
+
+
+def test_connect_ai_has_no_check_and_keeps_done(prog):
+    prog.states = {"connect_ai": sw.DONE}
+    assert sw.BY_ID["connect_ai"].detect is None and prog.state(sw.BY_ID["connect_ai"]) == sw.DONE
+
+
+def test_a_skipped_step_stays_skipped_when_its_check_is_false(prog):
+    import dataclasses
+    prog.states = {"payments": sw.SKIPPED}
+    assert prog.state(dataclasses.replace(sw.BY_ID["payments"], detect=lambda: False)) == sw.SKIPPED
+
+
+def test_every_module_with_a_flow_uses_a_check_or_has_a_reason():
+    assert [m.id for m in sw.MODULES if m.detect is None and not m.info_only] == ["connect_ai"]
+
+
+def test_turning_desk_off_in_settings_removes_it_from_setup(lit_panel, desk_switch, monkeypatch):
+    panel, p = lit_panel
+    monkeypatch.setattr(sw, "SYNC_SWITCHES", True)
+    p.choose(["files", "desk"])
+    p.states["desk"] = sw.DONE                              # David's case: it had been finished
+    desk_switch["on"] = False
+    panel.render()
+    assert "desk" not in p.services and "desk" not in _row_lights(panel)
+
+
+def test_turning_desk_on_in_settings_adds_it_to_setup(lit_panel, desk_switch, monkeypatch):
+    panel, p = lit_panel
+    monkeypatch.setattr(sw, "SYNC_SWITCHES", True)
+    desk_switch["on"] = True
+    panel.render()
+    assert "desk" in p.services and "desk" in _row_lights(panel)
+
+
+def test_davids_case_the_real_desk_check_follows_the_switch(prog, desk_switch):
+    """Finished, then turned off in Settings: not green. On again: green."""
+    prog.states = {"desk": sw.DONE}
+    desk_switch["on"] = False
+    assert prog.state(sw.BY_ID["desk"]) == sw.NOT_STARTED and prog.light(sw.BY_ID["desk"]) == sw.RED
+    desk_switch["on"] = True
+    assert prog.state(sw.BY_ID["desk"]) == sw.DONE and prog.light(sw.BY_ID["desk"]) == sw.GREEN
+
+
+def test_turning_jobs_off_in_settings_removes_its_rows(lit_panel, desk_switch, monkeypatch):
+    panel, p = lit_panel
+    monkeypatch.setattr(sw, "SYNC_SWITCHES", True)
+    p.choose(["files", "business", "routes"])
+    desk_switch["jobs"]["on"] = False
+    panel.render()
+    assert p.services == ["files"] and not {"jobs", "routes", "payments"} & set(_row_lights(panel))
+
+
+def test_turning_jobs_on_in_settings_adds_business(lit_panel, desk_switch, monkeypatch):
+    panel, p = lit_panel
+    monkeypatch.setattr(sw, "SYNC_SWITCHES", True)
+    desk_switch["jobs"]["on"] = True
+    panel.render()
+    assert "business" in p.services and "jobs" in _row_lights(panel)
+
+
+def test_jobs_on_with_only_routes_chosen_adds_the_jobs_app(lit_panel, desk_switch, monkeypatch):
+    panel, p = lit_panel
+    monkeypatch.setattr(sw, "SYNC_SWITCHES", True)
+    p.choose(["files", "routes"])
+    desk_switch["jobs"]["on"] = True
+    panel.render()
+    assert p.services == ["files", "business"]
+
+
+def test_saving_with_nothing_changed_turns_nothing_off_and_asks_nothing(lit_panel, tkroot, monkeypatch):
+    """David 2026-11-06: only what's changed in the window. Boxes never ticked aren't a request to turn them off."""
+    import tool_config_store as tcs
+    panel, p = lit_panel
+    shown = _no_dialogs(monkeypatch)
+    _answer_picker(panel, tkroot)
+    assert not shown and all(tcs.feature_on(f) for f in sw.FEATURE_SERVICES), shown
+
+
+def test_a_new_user_who_hasnt_chosen_is_left_alone(tkroot, tmp_path, desk_switch, monkeypatch):
+    monkeypatch.setattr(sw, "SYNC_SWITCHES", True)
+    desk_switch["on"] = True
+    p = sw.Progress(path=tmp_path / "p.json", picked=False)
+    p.sync_switches()
+    assert p.services == []
+
+
+def test_a_steps_open_this_tab_closes_its_window_so_the_page_shows(cfg, tkroot, tmp_path, monkeypatch):
+    panel, prog = _panel(tkroot, tmp_path, services=("desk",))
+    flow = sw.DeskFlow(panel)
+    opened = []
+    monkeypatch.setattr(panel, "open_tab", lambda m, why=False: opened.append(m.id))
+    flow._go_to_tab()
+    assert opened == ["desk"] and not flow.win.winfo_exists()
+
+
+def test_analyses_popup_has_a_way_to_the_key_section(tkroot, tmp_path, monkeypatch):
+    monkeypatch.setattr(sw, "agent_key_status", lambda: {"claude": True, "grok": False, "provider": "claude", "ready": True})
+    panel, prog = _panel(tkroot, tmp_path, services=("analyses",))
+    flow = sw.LinksFlow(panel)
+    labels = [c.cget("text") for c in flow.cli_fix.winfo_children()]
+    assert "🔑 Change or remove my key →" in labels
+    opened = []
+    monkeypatch.setattr(panel, "open_tab", lambda m, why=False: opened.append(m))
+    next(c for c in flow.cli_fix.winfo_children() if "Change or remove" in c.cget("text")).invoke()
+    assert opened == [sw.AGENT_KEY_TARGET] and opened[0].tab == "🏢 Small Business"
+    assert not flow.win.winfo_exists()
+
+
+
+def test_jobs_and_routes_are_one_choice():
+    """David 2026-11-06: no separate routes box, and an older saved choice still works."""
+    assert "routes" not in sw.SERVICE_IDS
+    labels = dict((s, l) for s, l, _ in sw.SERVICES)
+    assert "crew routes" in labels["business"]
+    assert not [l for l in labels.values() if "Plan routes" in l]
+    assert {"jobs", "routes"} <= {m.id for m in sw.modules_for(["business"])}
+    assert sw.normalize_choices(["files", "routes"]) == ["files", "business"]
+
+
+def test_an_older_saved_routes_choice_loads_as_the_jobs_app(tmp_path):
+    import json
+    f = tmp_path / "p.json"
+    f.write_text(json.dumps({"services": ["files", "routes"], "picked": True, "states": {"routes": "done"}}), encoding="utf-8")
+    p = sw.Progress.load(f)
+    assert p.services == ["files", "business"] and p.states["routes"] == "done"

@@ -1,0 +1,140 @@
+{
+  "host": "DavidsAI_LAPTOP",
+  "edition": "solo",
+  "started": "2026-11-03T10:54:53",
+  "prices_per_1M": {
+    "claude-haiku-5-5": [
+      0.1,
+      0.5
+    ],
+    "claude-sonnet-5-5": [
+      2.0,
+      10.0
+    ],
+    "claude-opus-5-5": [
+      4.0,
+      20.0
+    ],
+    "grok-4.3": [
+      1.25,
+      2.5
+    ]
+  },
+  "rows": [
+    {
+      "test": "2 Service Desk \u2014 bookings",
+      "tokens": {
+        "calls": 2,
+        "input": 2610,
+        "cache_write": 0,
+        "cache_read": 2196,
+        "output": 1398,
+        "web_searches": 0,
+        "cost": 0.011354,
+        "by_model": {
+          "claude-haiku-5-5": {
+            "calls": 1,
+            "cost": 0.00043,
+            "input_all": 1971,
+            "output": 664
+          },
+          "claude-sonnet-5-5": {
+            "calls": 1,
+            "cost": 0.010924,
+            "input_all": 2835,
+            "output": 734
+          }
+        }
+      },
+      "exact_cost": 0.011354,
+      "recorded_cost": 0.01354,
+      "per_item": 0.005677,
+      "unit": "item (one AI call)",
+      "items": 2,
+      "calls": [
+        {
+          "input": 873,
+          "cache_write": 0,
+          "cache_read": 1098,
+          "output": 664,
+          "web_searches": 0,
+          "model": "claude-haiku-5-5",
+          "secs": 3.9,
+          "via": "agent",
+          "cost": 0.00043
+        },
+        {
+          "input": 1737,
+          "cache_write": 0,
+          "cache_read": 1098,
+          "output": 734,
+          "web_searches": 0,
+          "model": "claude-sonnet-5-5",
+          "secs": 6.7,
+          "via": "agent",
+          "cost": 0.010924
+        }
+      ],
+      "problems": [],
+      "warnings": [
+        "AI-Prowler recorded $0.01354 but the API charged $0.01135 (cache pricing in desk_agent_providers.cost)"
+      ],
+      "lines": [
+        "   booking/check: bk_note \u2014 Pending test booking JOB-LCT-B1 summarized for team approval; no confirmation or customer message sent.",
+        "      \u2022 bk_note (confidence 0.9): Records the held slot, backup, and test status so the team can approve or decline without re-reading the booking.",
+        "        \"Pending web booking JOB-LCT-B1 for Zz LiveCost Test (returning customer). Service: AI Prowler Server HW .5 TB SSD (Prod-001), 15 min, indoor. Address: 100 Flagler Ave, New Smyrna Beach 32169. Held slot Thu 05 Nov 7-9 (2026-11-05T07:00-09:00), backup Fri 06 Nov 7-9 (2026-11-06T07:00-09:00). Customer \u2026\"",
+        "   booking/decide: bk_recommend, bk_note \u2014 Recommended approving the Fri 06 Nov 7-9 backup, since the held Thu 05 Nov slot isn't open. Left a note for th",
+        "      \u2022 bk_recommend (confidence 0.7): The held slot (Thu 05 Nov, 7-9) is not in the open windows, but the customer's backup (Fri 06 Nov, 7-9) is open and 1.6 mi from another job  | {\"choice\": \"approve\", \"window_key\": \"2026-11-06T07:00-09:00\", \"crew\": \"\"}",
+        "      \u2022 bk_note (confidence 0.8): Give the team context and flag the access details that don't match.",
+        "        \"Held window Thu 05 Nov 7-9 is not in the open windows list, so I recommend the customer's backup, Fri 06 Nov 7-9. The customer is returning and in the service area. The booking notes mention a gate code and a dog in the back yard, while the customer file says the gate is unlocked, so please confirm \u2026\""
+      ],
+      "shown": "shown in Service Desk \u2192 \ud83e\udd16 Agent (2 highlighted)",
+      "predicted": "claude-haiku-5-5 $0.0144/call \u00b7 claude-sonnet-5-5 $0.2878/call \u00b7 smart mix $0.2132/call, $128.53/month",
+      "run_id": 2,
+      "cleanup": "removed booking_holds 1, booking_requests 1, invoices 1, quotes 1, jobs 6, customers 2",
+      "outcome": "passed",
+      "month_spent": 0.7573
+    }
+  ],
+  "total_exact_cost": 0.011354,
+  "popup_prediction_at_start": {
+    "calls_per_day_used": 20.1,
+    "call_tokens": [
+      136603,
+      1455
+    ],
+    "complex_share_used": 0.7272727272727273,
+    "estimates": [
+      {
+        "model": "claude-haiku-5-5",
+        "per_call": 0.01439,
+        "per_day": 0.2892,
+        "per_month": 8.68
+      },
+      {
+        "model": "claude-sonnet-5-5",
+        "per_call": 0.28776,
+        "per_day": 5.7827,
+        "per_month": 173.48
+      },
+      {
+        "model": "claude-opus-5-5",
+        "per_call": 0.57551,
+        "per_day": 11.5653,
+        "per_month": 346.96
+      },
+      {
+        "model": "grok-4.3",
+        "per_call": 0.17439,
+        "per_day": 3.5045,
+        "per_month": 105.13
+      },
+      {
+        "model": "claude-sonnet-5-5+claude-haiku-5-5",
+        "per_call": 0.213205,
+        "per_day": 4.2845,
+        "per_month": 128.53
+      }
+    ]
+  }
+}

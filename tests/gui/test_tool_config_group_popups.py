@@ -169,7 +169,7 @@ def test_locked_category_popup_has_descriptions_and_no_checkboxes(state_dir, gui
     assert not pop.winfo_exists()
 
 
-def test_popup_toggle_updates_group_row_tristate_and_save(state_dir, gui, dialogs):
+def test_popup_toggle_updates_group_row_tristate_and_save(state_dir, gui, dialogs, monkeypatch):
     dialogs.set_response("askyesno", True)   # accept any live-feature warning
     panel = _panel(gui)
     mode = _mode(panel)
@@ -197,7 +197,12 @@ def test_popup_toggle_updates_group_row_tristate_and_save(state_dir, gui, dialog
     _buttons(pop, "Close")[0].invoke()
     gui.pump()
 
-    _buttons(panel, "💾 Save (restart required)")[0].invoke()
+    import rag_gui
+    restarts = []
+    monkeypatch.setattr(rag_gui.messagebox, "askyesno", lambda *a, **k: True)
+    monkeypatch.setattr(rag_gui.RAGGui, "_on_window_close", lambda self, relaunch=None: restarts.append(relaunch))
+    _buttons(panel, "💾 Save and restart")[0].invoke()
+    assert len(restarts) == 1 and "RAG_RUN.bat" in restarts[0]
     data = json.loads((state_dir / "tool_config.json").read_text(encoding="utf-8"))
     assert set(data[mode]["disabled_tools"]) == set(toggle)
 
@@ -292,3 +297,54 @@ def test_panel_folds_like_setup_center_and_remembers(state_dir, gui):
     assert str(btn.cget("text")).startswith("▸") and not body.winfo_manager()
     saved = json.loads((state_dir / "gui_sections.json").read_text(encoding="utf-8"))
     assert saved["mcp_tool_config"] is True
+
+
+def _first_group_tool(panel, gui):
+    """A toggleable Service Desk tool, for the Save tests below."""
+    mode = _mode(panel)
+    return mode, [n for n in tc.tools_in_category("service_desk") if mode in tc.modes_of(n) and not tc.is_locked(n)]
+
+
+def test_save_no_saves_nothing_and_stays_open(state_dir, gui, monkeypatch):
+    import rag_gui
+    panel = _panel(gui)
+    cat = next(c for c, _t in _categories(_mode(panel)) if c.key == "service_desk")
+    cb, _c, _b = _row_widgets(panel, cat.label)
+    before = (state_dir / "tool_config.json").read_text(encoding="utf-8")
+    restarts = []
+    monkeypatch.setattr(rag_gui.messagebox, "askyesno", lambda *a, **k: False)
+    monkeypatch.setattr(rag_gui.RAGGui, "_on_window_close", lambda self, relaunch=None: restarts.append(relaunch))
+    cb.invoke()
+    gui.pump()
+    _buttons(panel, "💾 Save and restart")[0].invoke()
+    assert not restarts
+    assert (state_dir / "tool_config.json").read_text(encoding="utf-8") == before
+
+
+def test_save_with_nothing_changed_does_not_restart(state_dir, gui, monkeypatch):
+    import rag_gui
+    panel = _panel(gui)
+    asked, restarts = [], []
+    monkeypatch.setattr(rag_gui.messagebox, "askyesno", lambda *a, **k: asked.append(1) or True)
+    monkeypatch.setattr(rag_gui.RAGGui, "_on_window_close", lambda self, relaunch=None: restarts.append(relaunch))
+    _buttons(panel, "💾 Save and restart")[0].invoke()
+    assert not asked and not restarts
+
+
+def test_setup_center_change_shows_here_and_save_keeps_it(state_dir, gui, monkeypatch):
+    """David 4 Nov: Setup Center and this panel are one switch. A Save here must not undo a change made there."""
+    import rag_gui
+    import tool_config_store as tcs
+    panel = _panel(gui)
+    mode = _mode(panel)
+    tcs.set_group_enabled(mode, "service_desk", False)          # what the Setup Center does
+    monkeypatch.setattr(rag_gui.messagebox, "askyesno", lambda *a, **k: True)
+    monkeypatch.setattr(rag_gui.RAGGui, "_on_window_close", lambda self, relaunch=None: None)
+    _buttons(panel, "💾 Save and restart")[0].invoke()          # with no other change: no Save needed, and no undo
+    assert tcs.group_enabled(mode, "service_desk") is False
+    cat = next(c for c, _t in _categories(mode) if c.key == "job_tracker")
+    cb, _c, _b = _row_widgets(panel, cat.label)
+    cb.invoke()                                                 # a real change elsewhere, then Save
+    gui.pump()
+    _buttons(panel, "💾 Save and restart")[0].invoke()
+    assert tcs.group_enabled(mode, "service_desk") is False

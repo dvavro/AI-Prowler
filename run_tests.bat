@@ -40,6 +40,25 @@ REM      run_tests.bat tests\subscription\test_worker_api.py -v -m live_worker
 REM =====================================================================
 setlocal
 
+REM ── PAID live agent cost tests (2026-11-03, David) ───────────────────────────
+REM   run_tests.bat live-api-cost                  all five, asks before each, browser on
+REM   run_tests.bat live-api-cost -k jobs          just one (tickets/bookings/jobs/hr/task)
+REM   run_tests.bat live-api-cost --yes            don't ask (already agreed)
+REM   run_tests.bat live-api-cost --no-human       no browser
+REM They spend REAL API credits on the Agent API Key and work on the REAL install
+REM (practice mode, test records removed afterwards) — never part of a normal run.
+REM Results: tests\live_api_cost\results\live_cost_<PC>_<time>.md
+if /i "%~1"=="live-api-cost" goto :live_api_cost
+
+REM ── Agents GUI suite, $0 API cost (2026-11-03, David) ───────────────────────────
+REM   run_tests.bat agents-gui                 human mode: visible browser, slowed clicks, key-by-key typing
+REM   run_tests.bat agents-gui --fast          headless, full speed
+REM   run_tests.bat agents-gui -k smoke        one group
+REM Throwaway sandbox servers only (tests\gui_agents_e2e\ag_server.py); every AI call is answered by the
+REM stand-in AI inside the sandbox — never a paid API, never the real install. Never part of a normal run.
+REM Spec: tests\gui_agents_e2e\AGENTS_GUI_E2E_TEST_SPEC.md   Logs: tests\gui_agents_e2e\results\run_<time>\
+if /i "%~1"=="agents-gui" goto :agents_gui
+
 REM ── Database sandbox ──────────────────────────────────────────────────────────
 REM AIPROWLER_TEST_STATE_DIR is read by rag_preprocessor.py at module import
 REM time to redirect CHROMA_DB_PATH away from ~/AI-Prowler/rag_database to a
@@ -157,6 +176,52 @@ del "%LOGFILE_RAW%" >nul 2>&1
 echo.
 echo [run_tests] Full log saved to: %LOGFILE%
 
+endlocal & exit /b %TEST_RC%
+
+:live_api_cost
+set "PYTHON=%LocalAppData%\Programs\Python\Python311\python.exe"
+if not exist "%PYTHON%" set PYTHON=python
+set "AIPROWLER_LIVE_API_COST=1"
+set "AIPROWLER_TEST_STATE_DIR="
+set "LC_YES="
+set "LC_HUMAN=--live-human"
+set "LC_REST="
+:lc_loop
+shift
+if "%~1"=="" goto :lc_go
+if /i "%~1"=="--yes" (set "LC_YES=--live-yes"& goto :lc_loop)
+if /i "%~1"=="--no-human" (set "LC_HUMAN="& goto :lc_loop)
+if /i "%~1"=="--human" goto :lc_loop
+if /i "%~1"=="--dry" (set "LC_YES=--live-dry"& set "LC_HUMAN="& goto :lc_loop)
+set "LC_REST=%LC_REST% %1"
+goto :lc_loop
+:lc_go
+"%PYTHON%" -c "import pytest" 2>nul || "%PYTHON%" -m pip install pytest --quiet
+"%PYTHON%" -c "import playwright" 2>nul || "%PYTHON%" -m pip install playwright --quiet
+echo [run_tests] PAID live agent cost tests on this PC's real AI-Prowler (practice mode, test data removed)
+"%PYTHON%" -m pytest "%~dp0tests\live_api_cost" -m live_api_cost -s -v -p no:cacheprovider --rootdir "%~dp0." %LC_YES% %LC_HUMAN% %LC_REST%
+set "TEST_RC=%ERRORLEVEL%"
+endlocal & exit /b %TEST_RC%
+
+:agents_gui
+set "PYTHON=%LocalAppData%\Programs\Python\Python311\python.exe"
+if not exist "%PYTHON%" set PYTHON=python
+set "AIPROWLER_AGENTS_GUI=1"
+set "AIPROWLER_TEST_STATE_DIR="
+set "AG_FAST="
+set "AG_REST="
+:ag_loop
+shift
+if "%~1"=="" goto :ag_go
+if /i "%~1"=="--fast" (set "AG_FAST=1"& goto :ag_loop)
+if /i "%~1"=="--human" goto :ag_loop
+set "AG_REST=%AG_REST% %1"
+goto :ag_loop
+:ag_go
+"%PYTHON%" -c "import playwright, time_machine" 2>nul || "%PYTHON%" -m pip install playwright time-machine --quiet
+if defined AG_FAST (echo [run_tests] Agents GUI suite - headless, full speed) else (echo [run_tests] Agents GUI suite - HUMAN MODE: watch the browser windows)
+"%PYTHON%" -m pytest "%~dp0tests\gui_agents_e2e" -s -v -p no:cacheprovider --rootdir "%~dp0." %AG_REST%
+set "TEST_RC=%ERRORLEVEL%"
 endlocal & exit /b %TEST_RC%
 
 :jobs_sandbox

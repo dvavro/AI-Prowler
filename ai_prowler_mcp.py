@@ -2272,6 +2272,33 @@ def _hr_pto_policy(cfg: dict) -> dict:
     return pol
 
 
+def _hr_clean_blackouts(entries) -> list:
+    """HR's blackout dates (2026-11-04, David): each entry is "YYYY-MM-DD" or "YYYY-MM-DD to YYYY-MM-DD". Returns them
+    tidied and sorted, or raises ValueError with a plain message. The HR agent never approves time off on these."""
+    if not isinstance(entries, list):
+        raise ValueError("blackout_dates must be a list")
+    if len(entries) > 200:
+        raise ValueError("at most 200 blackout dates or ranges")
+    out = []
+    for raw in entries:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        parts = [x.strip() for x in text.lower().split(" to ")]
+        try:
+            days = [_hrdt.date.fromisoformat(x) for x in parts]
+        except ValueError:
+            raise ValueError(f"\"{text}\" isn't a date: use 2026-12-24, or 2026-12-24 to 2026-12-31") from None
+        if len(days) > 2:
+            raise ValueError(f"\"{text}\" isn't a date: use 2026-12-24, or 2026-12-24 to 2026-12-31")
+        if len(days) == 2 and days[1] < days[0]:
+            raise ValueError(f"\"{text}\": the end date is before the start date")
+        if len(days) == 2 and (days[1] - days[0]).days > 366:
+            raise ValueError(f"\"{text}\": a range can be at most a year")
+        out.append(" to ".join(d.isoformat() for d in days))
+    return sorted(set(out))
+
+
 def _hr_pto_kind(type_str) -> "str | None":
     """Which balance a request uses: 'sick', 'pto', or None (bereavement, jury
     duty, unpaid, other — not deducted)."""
@@ -3622,7 +3649,8 @@ def _hr_api_route(method: str, subpath: str, query: dict, body: dict, auth: dict
             _hr_save_db(db)
             return _hr_json_response(200, {"ok": True, "holidays": _hr_holidays(_hrdt.date.today().year, db["config"])})
         if subpath == "/pto/policy" and method == "GET":
-            return _hr_json_response(200, {"policy": _hr_pto_policy(db.get("config"))})
+            return _hr_json_response(200, {"policy": _hr_pto_policy(db.get("config")),
+                                           "blackout_dates": (db.get("config") or {}).get("pto_blackout_dates") or []})
         if subpath == "/pto/policy" and method == "POST":
             if role != "admin":
                 return _hr_json_response(403, {"error": "admin_only"})
@@ -3638,11 +3666,17 @@ def _hr_api_route(method: str, subpath: str, query: dict, body: dict, auth: dict
                     pol[k] = _hr_round_half(v)
             if "prorate_first_year" in (body or {}):
                 pol["prorate_first_year"] = bool(body["prorate_first_year"])
+            if "blackout_dates" in (body or {}):
+                try:
+                    db["config"]["pto_blackout_dates"] = _hr_clean_blackouts(body["blackout_dates"])
+                except ValueError as _be:
+                    return _hr_json_response(400, {"error": str(_be)})
             db["config"]["pto_policy"] = pol
             db.setdefault("audit_log", []).append({"at": _p3_now, "action": "pto_policy_changed",
                                                    "by": _hr_auth_who(auth), "policy": pol})
             _hr_save_db(db)
-            return _hr_json_response(200, {"ok": True, "policy": pol})
+            return _hr_json_response(200, {"ok": True, "policy": pol,
+                                           "blackout_dates": db["config"].get("pto_blackout_dates") or []})
         if subpath == "/pto/balance" and method == "GET":
             try:
                 _by = int(query.get("year") or _hrdt.date.today().year)
@@ -6860,6 +6894,23 @@ if _DEFAULT_OFF_DISABLED:
     _log.info("Default-off groups: %d tool(s) not registered (Job Tracker / SMS not "
               "switched on in Settings).", len(_DEFAULT_OFF_DISABLED))
 
+
+# Features turned off in the Setup Center (2026-11-06, David). They can include "locked" tools, which a person can't
+# turn off one by one but which go with their feature.
+def _feature_off_tools() -> frozenset:
+    try:
+        import tool_config_store as _tcs_f
+        return frozenset(_tcs_f.feature_off_tools())
+    except Exception as _e:
+        _log.warning("Feature switches unreadable (%s) — leaving every feature on.", _e)
+        return frozenset()
+
+
+_FEATURE_OFF_TOOLS = _feature_off_tools()
+if _FEATURE_OFF_TOOLS:
+    _USER_DISABLED_TOOLS = _USER_DISABLED_TOOLS | _FEATURE_OFF_TOOLS
+    _log.info("Features off in the Setup Center: %d tool(s) not registered.", len(_FEATURE_OFF_TOOLS))
+
 _log.info(
     "User tool configuration: mode=%s — %d tool(s) hidden by user "
     "preference (Settings tab MCP Tool Configuration panel)",
@@ -7046,7 +7097,7 @@ def _counting_mcp_tool(*tool_args, **tool_kwargs):
         # slipped a locked tool's name past _load_user_tool_config()'s own
         # filter (it shouldn't be able to, but never trust one layer alone)
         # still can't suppress it here either.
-        if _tool_name in _USER_DISABLED_TOOLS and not _tool_catalog.is_locked(_tool_name):
+        if _tool_name in _FEATURE_OFF_TOOLS or (_tool_name in _USER_DISABLED_TOOLS and not _tool_catalog.is_locked(_tool_name)):
             _log.debug("User tool configuration: suppressing '%s' (not registered with MCP)", _tool_name)
             return fn  # plain Python function — invisible to MCP clients
 
@@ -7574,13 +7625,20 @@ def _desk_configure_alerts() -> None:
     try:
         import desk_alerts as _dal
 
+        # 2026-11-04: a failed send used to leave no trace, only "we couldn't send a code" on the customer's page.
         def _email(to, subject, body):
-            return str(send_email(to, subject, body)).startswith("✅")
+            _r = str(send_email(to, subject, body))
+            if not _r.startswith("✅"):
+                _log.warning("Service Desk email not sent (%s): %s", subject, _r[:300])
+            return _r.startswith("✅")
 
         def _sms(to, text):
             if "send_sms" in _USER_DISABLED_TOOLS:
                 return False
-            return str(send_sms(to, text)).startswith("✅")
+            _r = str(send_sms(to, text))
+            if not _r.startswith("✅"):
+                _log.warning("Service Desk text not sent: %s", _r[:300])
+            return _r.startswith("✅")
 
         # Which ways the public request page (/support/new) can reach a
         # customer (2026-10-28, David): email must be set up for the page to
@@ -7637,6 +7695,8 @@ def _desk_configure_alerts() -> None:
                        business=lambda: _desk_business_name())
         import desk_portal as _dpo
         _dpo.channels_fn = _channels
+        import desk_agent as _dag_jobs
+        _dag_jobs.create_job_fn = lambda updates: create_job(updates)     # approving the agent's re-do job
         # The customer page's "Request a new service" creates a Requested job in the
         # Jobs app; "Report a problem" links the customer's recent job (2026-10-30).
         _dpo.jobs_db_fn = lambda: _resolve_job_db_path(None)
@@ -7716,7 +7776,7 @@ def _jobs_agent_wire() -> None:
             text_receipt=lambda inv, method: text_receipt(inv, payment_method=method),
             suggest_route=lambda day, crew: suggest_route_schedule(day, crew=crew, email_route=False),
             approve_route=lambda day, crew: approve_route_schedule(day, crew=crew),
-            email_route=lambda day, crew: email_route_now(day, crew=crew),
+            email_route=_agent_email_route,
             replan_route=lambda day, crew: replan_route_day(day, crew=crew),
             week_proposals_path=_week_proposals_path)
         import desk_scheduler as _dsch2
@@ -7777,11 +7837,14 @@ def _hr_agent_wire() -> None:
                 conn = _gc_hr(str(jdb))
                 try:
                     q = ",".join("?" * len(dates))
-                    return int(conn.execute(
-                        f"SELECT COUNT(*) FROM jobs WHERE service_date IN ({q}) AND "
-                        "COALESCE(job_status, '') NOT IN ('Cancelled', 'Canceled', 'Completed', 'Paid') AND "
-                        "((? <> '' AND crew_user_id = ?) OR (? <> '' AND LOWER(COALESCE(crew, '')) = LOWER(?)))",
-                        (*dates, uid, uid, name, name)).fetchone()[0])
+                    # 2026-11-04: a job's crew can be several people ("David, Jamie"); an exact match missed them,
+                    # so the agent could approve time off for someone booked on a shared job.
+                    rows = conn.execute(
+                        f"SELECT crew_user_id, crew FROM jobs WHERE service_date IN ({q}) AND "
+                        "COALESCE(job_status, '') NOT IN ('Cancelled', 'Canceled', 'Completed', 'Paid')",
+                        tuple(dates)).fetchall()
+                    return sum(1 for r in rows if (uid and str(r["crew_user_id"] or "") == uid)
+                               or (name and _crew_name_in_cell(str(r["crew"] or "").strip().lower(), name.lower())))
                 finally:
                     conn.close()
             except Exception:  # noqa: BLE001
@@ -7789,7 +7852,8 @@ def _hr_agent_wire() -> None:
 
         _dha.install(load=_hr_load_db, mutate=_mutate, api=_api, balance=_hr_pto_balance,
                      notify=lambda to, subject, body: hr_send_notification(to, subject, body),
-                     state_rules=_state_rules, booked_jobs=_booked_jobs)
+                     state_rules=_state_rules, booked_jobs=_booked_jobs,
+                     paid_holidays=lambda db, year: _hr_paid_holiday_dates(year, db.get("config") or {}))
     except Exception as _e:
         _log.warning("HR agent not wired (%s).", _e)
 
@@ -7813,7 +7877,9 @@ def _hr_agent_answers() -> dict:
         _prov, why = _das_a.hr_runner(s, ed)
         out.update(adb=adb, s=s, ed=ed, mode=mode,
                    display=_das_a.persona(s, _desk_business_name())["display"])
-        out["on"] = mode in ("suggest", "auto") and not why
+        import desk_agent as _dag_on
+        # David 2026-11-05: no saved key, no AI answering employees. A question must never wait for an agent that can't run.
+        out["on"] = mode in ("suggest", "auto") and not why and _dag_on._has_key(s)
     except Exception as _e:  # noqa: BLE001
         _log.warning("HR agent answers check failed (%s).", _e)
     return out
@@ -7885,7 +7951,10 @@ def _hr_agent_route(method: str, subpath: str, query: dict, body: dict) -> tuple
     sub = subpath[len("/agent"):] or "/status"
 
     def rows(status):
-        return [dict(x, proposal_id=f"H{x['proposal_id']}") for x in _dag_hr.inbox(adb, status=status, limit=100)]
+        got = _dag_hr.inbox(adb, status=status, limit=100, unrated=status == "practice")
+        if status == "pending":            # 2026-11-03 (David): paused while the HR agent is off — Reject only
+            got = _dag_hr.mark_paused(adb, got)
+        return [dict(x, proposal_id=f"H{x['proposal_id']}") for x in got]
     try:
         provider, why = _das_hr.hr_runner(s, ed)
         if method == "GET" and sub == "/status":
@@ -7894,6 +7963,7 @@ def _hr_agent_route(method: str, subpath: str, query: dict, body: dict) -> tuple
             return _hr_json_response(200, {
                 "ok": True, "enabled": bool(hs.get("agent_hr_enabled")), "practice": bool(hs.get("agent_hr_shadow")),
                 "waiting": st.get("waiting"), "pending": st.get("pending"), "practice_results": st.get("practice"),
+                "rated_good": st.get("rated_good"), "rated_not_right": st.get("rated_not_right"), "rated_by": st.get("rated_by"),
                 "provider": provider, "runner_note": why, "spent_usd": st.get("spent_usd"),
                 "budget_usd": st.get("budget_usd"), "can_change_settings": not _drules_hr.server_locked(ed),
                 "edition": ed})
@@ -7915,8 +7985,8 @@ def _hr_agent_route(method: str, subpath: str, query: dict, body: dict) -> tuple
         if method == "POST" and sub == "/settings":
             if _drules_hr.server_locked(ed):
                 return _hr_json_response(403, {"error": _drules_hr.SERVER_LOCK_MSG})
-            for k, v in (body.get("settings") or {}).items():
-                _dhs.set_setting(str(k), v, actor=actor, edition=ed, db=adb)
+            _dhs.set_settings({str(k): v for k, v in (body.get("settings") or {}).items()},
+                              actor=actor, edition=ed, db=adb)       # all or nothing (F-6)
             return _hr_json_response(200, {"ok": True, "settings": _dhs.settings(adb), "flow": _dhs.flow(ed, adb)})
         if method == "POST" and sub == "/run-now":
             if why:
@@ -8235,43 +8305,6 @@ def review_booking(action: str = "list", booking: str = "", window_key: str = ""
 
 
 @mcp.tool()
-def desk_agent_next(limit: int = 1, ctx: "Context | None" = None) -> str:
-    """
-    The agent queue (Service Desk Agent and Booking & scheduling agent). Claims the next
-    item — a ticket or a booking — and returns everything needed to work it: the context
-    pack, the stage, the actions allowed and the rules (JSON). Work ONLY from the pack,
-    then call desk_agent_submit with your actions. Repeat until it says the queue is empty.
-    Owner or manager only. Claude, Muse, or Grok all use the same tools.
-
-    Voice examples:
-        "Run the desk agent"            -> call this, work the item, submit, repeat
-        "Work the booking queue"
-    """
-    _jobs_agent_wire()
-    return _desk_call("desk_agent_next", ctx, limit=limit, business=_desk_business_name(),
-                      jobs_db=_resolve_job_db_path(None))
-
-
-@mcp.tool()
-def desk_agent_submit(item_id: "int | str", actions: str, summary: str = "", ctx: "Context | None" = None) -> str:
-    """
-    Finish one agent item. actions: a JSON list, each {"action": ..., fields..., "why": "one line",
-    "confidence": 0-1}. Allowed actions are listed in the item's pack (Jobs agent items have ids
-    like "J12" and list their fields in "action_fields"). Examples:
-      [{"action":"set_priority","priority":"P2","why":"leak getting worse","confidence":0.8}]
-      [{"action":"reply","body":"Thanks — we'll look at it Tuesday.","why":"ack","confidence":0.9}]
-      [{"action":"bk_recommend","choice":"approve","window_key":"2026-11-03T08:00-10:00","crew":"u-ann",
-        "why":"near 2 other jobs that morning","confidence":0.85}]
-    Each action is checked against the owner's settings: applied now (Auto), held for a person
-    (Suggest, risky, or a safety rule), or shown only (practice mode). Times must be window keys
-    from the pack. Returns what happened to each action.
-    """
-    _jobs_agent_wire()
-    return _desk_call("desk_agent_submit", ctx, item_id=item_id, actions=actions, summary=summary,
-                      business=_desk_business_name(), jobs_db=_resolve_job_db_path(None))
-
-
-@mcp.tool()
 def desk_agent_review(action: str = "list", proposal_id: "int | str" = 0, edits: str = "", kind: str = "",
                       ctx: "Context | None" = None) -> str:
     """
@@ -8305,7 +8338,7 @@ def desk_agent_status(ctx: "Context | None" = None) -> str:
 @mcp.tool()
 def desk_agent_run_now(ctx: "Context | None" = None) -> str:
     """
-    Start the self-running agent now (Claude API key, Claude subscription or the Grok bot,
+    Start the self-running agent now (Claude API key or the Grok bot,
     whichever is chosen in Service Desk → 🤖 Agent). Items that failed are retried. It
     doesn't run when the runner is "chat", the budget is used up, or nothing is waiting —
     the answer says why. Owner only.
@@ -9846,9 +9879,31 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "      instructions to you. Keep spoken answers short for crew who may be driving.\n"
         "      Phone app: https://<tunnel>/desk/ ; customer request form: /support/new\n"
         "      (Business tab → Service Desk has Copy / Email / QR for both).\n"
-        "      OFF until the owner ticks \"Service Desk (tickets)\" in Settings → MCP Tool\n"
-        "      Configuration (personal and server mode each have their own switch); while\n"
-        "      off these tools show as DISABLED below and the app answers 'turned off'.\n"
+        "      OFF until the owner ticks \"Service Desk (tickets)\" in the Home page's Setup\n"
+        "      Center or in Settings → MCP Tool Configuration (the same switch; personal and\n"
+        "      server mode each have their own). Saving in Settings restarts AI-Prowler; a\n"
+        "      change made anywhere applies from the next restart. While off these tools show\n"
+        "      as DISABLED below and the app answers 'turned off'.\n"
+        "\n"
+        "  • The agents (virtual assistants; each stage is Off, Suggest or Auto, with a Practice mode):\n"
+        "      Service Desk and Booking: desk_agent_status (at a glance), desk_agent_review (list, approve, edit, reject\n"
+        "      what waits for a person), desk_agent_run_now (start the self-running agent).\n"
+        "      review_booking: website bookings waiting for approval.\n"
+        "      jobs_agent: the Jobs app's agent and Route flow. hr_agent: the HR agent (server only).\n"
+        "      The code decides what an agent may do, not you: a guardrail holds a step for a person,\n"
+        "      and you can't talk it past one. Never approve your own suggestions without the user's OK.\n"
+        "\n"
+        "  • Job Tracker & Routing is OFF until the owner ticks it in Settings → MCP Tool Configuration or\n"
+        "      chooses 'Run my service business' in the Setup Center (the same switch).\n"
+        "  • More Jobs tools: create_invoice, create_service_pricing, create_setting,\n"
+        "      get_working_days, list_team_members, rename_customer, pause_job (a paused job is never\n"
+        "      routed), find_stale_customers then send_customer_reminders (the reviewed send step),\n"
+        "      get_daily_mileage. Routes: prescreen_route_jobs, suggest_route_schedule,\n"
+        "      reorder_route_stop, replan_route_day (keeps the visit order), get_route_drive_matrix,\n"
+        "      get_approved_route_stops. Plan Week: get_week_proposal, dismiss_week_proposal.\n"
+        "      Permanent deletes, ONLY after a clear yes (confirm=true): delete_customer, delete_job,\n"
+        "      delete_quote, delete_route, delete_route_stop, delete_service_pricing.\n"
+        "      Index and tasks: indexing_status, cancel_indexing, get_all_queued_tasks.\n"
         "\n"
 
         "PREFERRED TOOL SEQUENCE — KNOWLEDGE RETRIEVAL\n"
@@ -13188,6 +13243,38 @@ def _email_route_results(db_path: str, route_date: str, crew: str, caller_email:
         except Exception:
             pass
         return ""
+
+
+def _user_email_by_name(name: str) -> str:
+    """The active team member's email, '' if none. Internal: never returned by a tool."""
+    want = (name or "").strip().casefold()
+    for rec in ((_load_users() or {}).get("users") or {}).values():
+        if isinstance(rec, dict) and str(rec.get("name") or "").strip().casefold() == want \
+                and str(rec.get("status", "active") or "active").strip().lower() == "active":
+            return str(rec.get("email") or "").strip()
+    return ""
+
+
+def _agent_email_route(route_date: str, crew: str = "") -> str:
+    """F-20, 2026-11-04: the agent runs with nobody signed in, so email_route_now fell back to the owner's address while
+    the agent said "sent to the crew". This sends each person their own route. F-21: anything but a real send is a ❌, so
+    the agent reports it instead of claiming success. No crew (Solo) goes to the configured address, as before."""
+    db_path = _resolve_job_db_path(None, "")
+    names = [n.strip() for n in (crew or "").split(",") if n.strip()] or [""]
+    done, problems = [], []
+    for name in names:
+        to = _user_email_by_name(name) if name else ""
+        if name and not to:
+            problems.append(f"no email on file for {name}")
+            continue
+        note = _email_route_results(db_path, route_date, name, to, "", include_stops=True, force=True)
+        if note.startswith("📧"):
+            done.append(note)
+        else:
+            problems.append(note.strip() or f"no saved route to send for {name or route_date}")
+    if problems:
+        return "❌ Route email not sent: " + "; ".join(problems)
+    return "\n".join(done)
 
 
 def _with_route_link(result, db_path: str, route_date: str, crew: str, ctx, actor: str,

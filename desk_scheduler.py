@@ -101,7 +101,7 @@ def agent_digest_line(db_path: str, s: dict) -> str:
     parts = []
     if st["waiting"]:
         parts.append(f"{st['waiting']} item(s) waiting in its queue"
-                     + (f" — in Claude, Muse or Grok say: \"{st['chat_prompt']}\"" if st["provider"] == "chat_only" else ""))
+                     + (" — no API key is saved, so it won't run" if st["provider"] == "chat_only" else ""))
     if st["pending"]:
         parts.append(f"{st['pending']} suggestion(s) waiting for your OK (Service Desk app → 🤖 Agent)")
     return ("🤖 Agent: " + "; ".join(parts) + ".") if parts else ""
@@ -125,6 +125,15 @@ def jobs_agent_tick(tickets_db: str | None, *, edition: str, now: datetime.datet
         from pathlib import Path
         if not Path(desk_agent_store.path()).exists():
             return did                                     # never turned on — nothing to do
+        # David 2026-11-06: with the Jobs app off, its agent is off, whatever its own switches say. They're kept for when
+        # the app comes back.
+        try:
+            import desk_rules
+            import tool_config_store
+            if not tool_config_store.group_enabled("server" if edition == desk_rules.BUSINESS else "personal", "job_tracker"):
+                return did
+        except Exception:  # noqa: BLE001
+            pass
         s = desk_agent_store.sync_shared(tickets_db)
         if not (s.get("agent_jb_enabled") or s.get("agent_jb_rt_enabled")):     # jobs or the Route flow
             return did
@@ -153,7 +162,7 @@ def hr_agent_tick(tickets_db: str | None, *, edition: str, now: datetime.datetim
                   business: str = "") -> dict:
     """The HR agent (hr-agent-spec.md; its own database in the HR data folder): copy the shared
     runner settings, look at the HR data every 15 minutes, and start a run — only on a key-based
-    runner or the Claude CLI (decision 5; never a chat). Never raises."""
+    runner (decision 5; never a chat). Never raises."""
     did = {}
     try:
         from pathlib import Path
@@ -164,6 +173,14 @@ def hr_agent_tick(tickets_db: str | None, *, edition: str, now: datetime.datetim
         import desk_hr_agent
         if not Path(desk_agent_hr_store.path()).exists():
             return did
+        # David 2026-11-06: with the HR apps off, the HR agent is off, whatever its own switches say.
+        try:
+            import desk_rules
+            import tool_config_store
+            if edition == desk_rules.BUSINESS and not tool_config_store.hr_apps_enabled():
+                return did
+        except Exception:  # noqa: BLE001
+            pass
         adb = desk_agent_hr_store.path()
         s = desk_agent_hr_store.sync_shared(tickets_db, adb)
         if not s.get("agent_hr_enabled") or not desk_hr_agent.hr.get("load"):
@@ -219,8 +236,6 @@ def jobs_agent_digest_line() -> str:
     parts = []
     if st["pending"]:
         parts.append(f"{st['pending']} suggestion(s) waiting for your OK (Jobs app → 🤖 Agent)")
-    if st["waiting"] and st["provider"] == "chat_only":
-        parts.append(f"{st['waiting']} item(s) waiting — in Claude, Muse or Grok say: \"{st['chat_prompt']}\"")
     return ("🧰 Jobs agent: " + "; ".join(parts) + ".") if parts else ""
 
 
@@ -283,6 +298,14 @@ def run_once(db_path: str, *, edition: str, now: datetime.datetime | None = None
         log.warning("Service Desk booking sweep failed: %s", e)
     # The self-running agent (desk_agent.run; Claude API / Claude subscription / Grok bot). It decides
     # itself whether to start (hours, budget, batching, nothing waiting) and runs on its own thread.
+    if s.get("agent_enabled"):                     # Follow-through (F-12): tickets gone quiet, before deciding to run
+        try:
+            import desk_agent
+            quiet = desk_agent.scan_tickets(db_path, settings=s, edition=edition)
+            if quiet:
+                did["agent_quiet_queued"] = quiet
+        except Exception as e:  # noqa: BLE001
+            log.warning("Service Desk follow-through scan failed: %s", e)
     if s.get("agent_enabled") and s.get("agent_provider", "chat_only") != "chat_only":
         try:
             import desk_agent

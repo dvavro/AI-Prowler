@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 9.7.0 — updated October 22, 2026
+## Version 9.7.1 — updated October 22, 2026
 
 ---
 
@@ -805,8 +805,6 @@ The four AI agents (Service Desk, Booking & scheduling, Jobs with its Route flow
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `desk_agent_next` | Claims the next item(s) in the agent queue — tickets, bookings and Jobs agent items (ids like `J12`) — and returns the context pack, the allowed actions and the rules. Never returns HR items (HR data never goes to a chat). Owner or manager. | Personal + Server |
-| `desk_agent_submit` | Finishes one item: a JSON list of actions, each with `why` and `confidence`. AI-Prowler checks each against the owner's settings and applies it (Auto), holds it for a person (Suggest, risky or a safety rule) or only records it (practice mode). Owner or manager. | Personal + Server |
 | `desk_agent_review` | `list` / `practice` / `approve` / `edit` (edits = JSON like `{"body": "…"}`) / `reject` / `up` / `down`, optionally filtered by `kind` (ticket, booking, job, route). Owner or manager; approves only after a clear yes. | Personal + Server |
 | `desk_agent_status` | On/off for tickets, bookings and jobs, the runner, how many items wait in the queue and for a person. Owner or manager. | Personal + Server |
 | `desk_agent_run_now` | Starts the self-running agent now (Claude API key, Claude subscription on personal installs, or the Grok bot) and the Jobs agent if it's on; retries failed items. Owner. | Personal + Server |
@@ -3268,12 +3266,12 @@ AI-Prowler has **four AI agents**. They are one assistant — the same name, pho
 
 Choose the runner in AI-Prowler → 🏢 Small Business → Service Desk Agent & settings → 🤖 Agent (or Service Desk app → ⚙︎ Settings → 🤖 Agent). With Service Desk off, choose it in 🧰 Jobs App Agent & settings instead. Each agent has its own section on the Small Business tab: Service Desk + Booking under the Service Desk links, 🧰 Jobs under the Jobs App link, 👥 HR under the HR apps (server).
 
+**An agent needs a saved API key.** With none it doesn't run, and there's no AI answering customers or employees: the four apps work as they did before the agents, in the apps and in a chat with the normal tools. The owner pays for the API credits on a server.
+
 | Runner | How it runs | Service Desk / Booking / Jobs | HR |
 |---|---|---|---|
-| **Chat** (Claude.ai, Muse or Grok.com — no key) | Someone pastes *"Run the AI-Prowler agent…"* (📋 Copy in the 🤖 tab) and the chat works the queue with `desk_agent_next` / `desk_agent_submit` | ✅ | ❌ never |
 | **Claude API key** | On its own, when work arrives | ✅ | ✅ |
 | **Grok bot** (xAI API key) | On its own | ✅ | ✅ |
-| **Claude subscription** (this PC's Claude CLI) | On its own — **personal installs only** (a server has no single Claude login) | ✅ | — (HR is server-only) |
 
 Keys go in Task Queue → **Auth**. A runner that works on its own:
 - works only in the agent's **hours** (default: any time) and stops for the month at the **monthly budget** (default $20, shared by all four agents);
@@ -3369,8 +3367,6 @@ For the HR apps (HR Admin + HR Portal — AI-Prowler Server only). It **watches 
 
 | Tool | What it does | Who |
 |---|---|---|
-| `desk_agent_next` | Claims the next item(s) in the agent queue — tickets, bookings and Jobs agent items (ids like `J12`) — with the context pack, allowed actions and rules. Never returns HR items. | Owner, manager |
-| `desk_agent_submit` | Sends the actions for one item; AI-Prowler applies, holds or practises each one according to your settings. | Owner, manager |
 | `desk_agent_review` | Lists what waits for a person (or practice results) and approves, edits, rejects or rates them. `kind` filters ticket / booking / job / route. | Owner, manager |
 | `desk_agent_status` | On/off, runner, queue size and how many suggestions wait — for Service Desk, Booking and the Jobs agent. | Owner, manager |
 | `desk_agent_run_now` | Starts the self-running agent now (and the Jobs agent, if on); retries failures. | Owner |

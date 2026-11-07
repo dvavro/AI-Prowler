@@ -132,6 +132,7 @@ tests/gui_jobs_e2e/.auth/
 tests/gui_jobs_e2e_server/artifacts/
 tests/gui_jobs_timemachine/artifacts/
 tests/gui_remote_e2e/artifacts/
+tests/gui_agents_e2e/results/
 *.orig
 *.pid
 
@@ -173,3 +174,5 @@ seats.json
 update_install.bat
 update_install_server.bat
 update_install_shared_dir.bat
+# run_tests.bat's temporary copy of a run's log; left behind only when a run is stopped
+*.rawutf16

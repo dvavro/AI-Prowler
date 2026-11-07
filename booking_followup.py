@@ -195,7 +195,8 @@ def _agent_busy(tickets_db: str, job_id: str) -> bool:
                 "SELECT 1 FROM agent_queue WHERE kind = 'booking' AND ref = ? AND stage = 'track' AND "
                 "reason LIKE 'waitlist:%' AND status IN ('waiting', 'claimed') UNION ALL "
                 "SELECT 1 FROM agent_proposals WHERE kind = 'booking' AND ref = ? AND action = 'bk_offer_opening' "
-                "AND status = 'pending'", (job_id, job_id)).fetchone())
+                "AND status = 'pending' AND payload_json NOT LIKE '%\"refused\": true%'",   # F-25: a notice isn't an offer
+                (job_id, job_id)).fetchone())
         finally:
             conn.close()
     except Exception:  # noqa: BLE001

@@ -316,14 +316,41 @@ def saved_group_choice(mode, group):
     return val if isinstance(val, bool) else None
 
 
+def _group_tools(mode, group):
+    """The tools in this group that can be switched off, in this mode. [] if the catalog can't be read."""
+    try:
+        import mcp_tool_catalog as tc
+        return [n for n in tc.tools_in_category(group) if mode in tc.modes_of(n) and not tc.is_locked(n)]
+    except Exception:
+        return []
+
+
+def _every_tool_listed_off(mode, group):
+    tools = _group_tools(mode, group)
+    if not tools:
+        return False
+    listed = set(((load_tool_config().get(mode) or {}).get("disabled_tools")) or [])
+    return all(n in listed for n in tools)
+
+
 def group_enabled(mode, group):
     """Is a default-OFF group on for this mode? Saved choice first; otherwise
     on only if the install already uses it (existing installs keep working)."""
     if mode not in ("personal", "server"):
         raise ValueError(f"mode must be 'personal' or 'server', got {mode!r}")
+    if mode == "personal" and group in REMOTE_APP_GROUPS and not feature_on("phone"):
+        return False                     # no Remote Access, no app. Its own switch is kept for when it comes back.
     if group not in DEFAULT_OFF_GROUPS:
         return True
     saved = saved_group_choice(mode, group)
+    if saved is True and _every_tool_listed_off(mode, group):
+        # 2026-11-04 (David's three screens disagreed): the switch said on while every tool in the group was listed
+        # off, and the list is what really decides at startup. Off is the truth; record it so it stays one answer.
+        try:
+            set_group_enabled(mode, group, False)
+        except Exception:
+            pass
+        return False
     if saved is not None:
         return saved
     try:
@@ -355,6 +382,19 @@ def set_group_enabled(mode, group, enabled):
     section[group] = bool(enabled)
     groups[mode] = section
     data[OPTIONAL_GROUPS_KEY] = groups
+    if enabled and mode == "personal" and group in REMOTE_APP_GROUPS:
+        feats = data.get(FEATURES_KEY) if isinstance(data.get(FEATURES_KEY), dict) else {}
+        if feats.get("phone") is False:          # an app needs Remote Access, so turning one on turns it on
+            data[FEATURES_KEY] = {**feats, "phone": True}
+    if enabled:
+        # Turning a group on from the Setup Center: if every one of its tools is listed off, list them on again, or the
+        # switch says on and the tools stay off. A few tools the owner turned off by hand stay off.
+        tools = _group_tools(mode, group)
+        mine = data.get(mode) if isinstance(data.get(mode), dict) else {}
+        listed = list(mine.get("disabled_tools") or [])
+        if tools and all(n in listed for n in tools):
+            mine["disabled_tools"] = [n for n in listed if n not in tools]
+            data[mode] = mine
     data["schema_version"] = SCHEMA_VERSION
     try:
         _checked_write(tool_config_path(), data)
@@ -370,6 +410,56 @@ def set_group_enabled(mode, group, enabled):
 # list can't say "off unless turned on", so the choice is its own top-level
 # key in the same tool_config.json — written through the same guarded,
 # atomic, backed-up path as save_disabled_tools() (never config.json).
+# 2026-11-06 (David): the Setup Center's other choices are real switches too. Off stops the tools, the screens and the
+# automatic work; it never touches their settings or data, so off and on again loses nothing. No entry means on: an
+# install is only changed when someone turns a feature off.
+FEATURES_KEY = "features"
+FEATURE_CATEGORIES = {"analyses": "agentic_analysis", "email": "email"}
+
+
+def feature_on(name):
+    entry = load_tool_config().get(FEATURES_KEY)
+    return not (isinstance(entry, dict) and entry.get(name) is False)
+
+
+def set_feature_on(name, on):
+    """Only tool_config.json is written; every other settings file is verified (and put back if damaged) afterwards."""
+    snapshot = _protected_snapshot()
+    data = load_tool_config()
+    entry = data.get(FEATURES_KEY)
+    entry = dict(entry) if isinstance(entry, dict) else {}
+    entry[name] = bool(on)
+    data[FEATURES_KEY] = entry
+    data["schema_version"] = SCHEMA_VERSION
+    try:
+        _checked_write(tool_config_path(), data)
+    finally:
+        _restore_if_damaged(snapshot)
+    return data
+
+
+def feature_off_tools():
+    """The tools of every feature that's off, locked ones included. Separate from disabled_tools, so a person's own
+    choices are still there when the feature comes back."""
+    import mcp_tool_catalog as cat
+    off = set()
+    for name, category in FEATURE_CATEGORIES.items():
+        if not feature_on(name):
+            off.update(cat.tools_in_category(category))
+    return frozenset(off)
+
+
+# David 2026-11-06: Remote Access is the master switch on a personal install. The Jobs and Service Desk apps (and the
+# Remote app) only work through it, so with it off they're off everywhere: tools, screens, Setup lights and agents.
+REMOTE_APP_GROUPS = ("job_tracker", "service_desk")
+
+
+def http_server_wanted(mode):
+    """"Use AI-Prowler from my phone" (Remote Access) off stops the HTTP MCP server; Claude Desktop keeps working over
+    stdio. A server always needs it."""
+    return mode == "server" or feature_on("phone")
+
+
 HR_APPS_KEY = "hr_apps_enabled"
 
 

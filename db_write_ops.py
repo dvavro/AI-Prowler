@@ -4113,6 +4113,15 @@ def db_schedule_next_recurring_job(db_path: str, job_identifier: str, actor: str
     finally:
         conn.close()
 
+    # 2026-11-04 (F-17): a job set to repeat counts even when the customer's own Frequency is one-time or blank. The Jobs
+    # agent's Repeat stage proposed these, and approving one then failed with "is a one-time customer".
+    try:
+        job_recurrence = str(job["recurrence"] or "")
+    except (KeyError, IndexError):
+        job_recurrence = ""
+    if _freq_map_key(job_recurrence) not in ("OT", "ONE-TIME", "ONE TIME", "ONETIME", "", "NONE", "ONCE"):
+        frequency = job_recurrence
+
     freq_norm = _freq_map_key(frequency)
 
     if freq_norm in ("OT", "ONE-TIME", "ONE TIME", "ONETIME", ""):

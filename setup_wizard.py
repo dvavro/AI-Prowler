@@ -346,6 +346,106 @@ def set_desk_switch(on: bool) -> tuple[bool, str]:
         " — restart AI-Prowler to apply it (the app and Claude's ticket tools follow the switch)."
 
 
+# 2026-11-06 (David): the Jobs app and crew routes are one thing: "Run my service business" is the Job Tracker & Routing
+# switch (Settings → MCP Tool Configuration), the same way "File and track tickets" is the Service Desk switch.
+JOBS_SERVICES = ("business",)
+
+
+def jobs_switched_on() -> bool:
+    try:
+        import tool_config_store as tcs
+        return bool(tcs.group_enabled(desk_mode(), "job_tracker"))
+    except Exception:
+        return False
+
+
+def set_jobs_switch(on: bool) -> tuple[bool, str]:
+    """Turn Job Tracker & Routing on or off for this mode. (ok, message)."""
+    try:
+        import tool_config_store as tcs
+        tcs.set_group_enabled(desk_mode(), "job_tracker", bool(on))
+    except Exception as e:
+        return False, f"Couldn't change the Job Tracker switch: {e}"
+    return True, "Job Tracker & Routing is " + ("ON" if on else "OFF")
+
+
+# 2026-11-06 (David): the rest of the choices are switches too (tool_config_store.feature_on).
+FEATURE_SERVICES = ("analyses", "email", "phone")
+
+
+def feature_switched_on(sid: str) -> bool:
+    try:
+        import tool_config_store as tcs
+        return bool(tcs.feature_on(sid))
+    except Exception:
+        return True
+
+
+def set_feature_switch(sid: str, on: bool) -> tuple[bool, str]:
+    try:
+        import tool_config_store as tcs
+        tcs.set_feature_on(sid, bool(on))
+    except Exception as e:
+        return False, f"Couldn't change that choice: {e}"
+    return True, ""
+
+
+def http_wanted() -> bool:
+    try:
+        import tool_config_store as tcs
+        return bool(tcs.http_server_wanted(desk_mode()))
+    except Exception:
+        return True
+
+
+def normalize_choices(chosen) -> list:
+    """David 2026-11-06: crew routes are part of the Jobs app. An older saved "routes" choice reads as the Jobs app."""
+    chosen = {"business" if s == "routes" else s for s in chosen}
+    return [s for s in SERVICE_IDS if s in chosen]
+
+
+GATE_MS = 2000
+GATE_NOTE = "(not enabled)  Turn it on in Setup AI-Prowler → Change my choices. Your settings here are kept."
+
+
+def gate_section(root, frame, is_on, note: str = GATE_NOTE):
+    """A section of a tab says (not enabled) and folds up while its feature is off, and follows the switch. Its widgets
+    are only hidden, so nothing typed or saved in them is lost."""
+    from tkinter import ttk
+    label = ttk.Label(frame, text=note, foreground="#6b7280")
+    hidden: list = []
+
+    def apply():
+        try:
+            if not frame.winfo_exists():
+                return
+            try:
+                on = bool(is_on())
+            except Exception:
+                on = True
+            if not on and not hidden:
+                for c in frame.winfo_children():
+                    mgr = c.winfo_manager()
+                    if c is not label and mgr in ("pack", "grid", "place"):
+                        hidden.append((c, mgr, getattr(c, mgr + "_info")()))
+                        getattr(c, mgr + "_forget")()
+                if hidden:
+                    label.pack(anchor="w")
+            elif on and hidden:
+                label.pack_forget()
+                for c, mgr, info in hidden:
+                    getattr(c, mgr)(**info)
+                hidden.clear()
+            root.after(GATE_MS, apply)
+        except Exception:
+            pass                                       # the window is closing
+    root.after(1500, apply)                            # once the tab's been built
+    return apply
+
+
+SYNC_SWITCHES = True                               # tests that aren't about this turn it off
+
+
 def detect_desk() -> Optional[bool]:
     return desk_switched_on()
 
@@ -422,7 +522,7 @@ def link_reachable(domain: str | None = None, timeout: int = 15) -> bool:
 
 
 def detect_remote() -> Optional[bool]:
-    """Phone access set up: a secure-link domain and a Bearer Token (fast —
+    """Remote Access set up: a secure-link domain and a Bearer Token (fast —
     no network; the step's own window checks the link really answers)."""
     return bool(tunnel_domain() and bearer_token())
 
@@ -1098,7 +1198,7 @@ MODULES: list[Module] = [
     Module("email", "Email", 3,
            "Lets AI-Prowler send reports, invoices and alerts.", tab="⚙️ Settings",
            detect=detect_email),
-    Module("remote", "Phone access (secure link, power settings)", 10,
+    Module("remote", "Remote Access (mobile secure link, phone apps, power settings)", 10,
            "Reach your AI-Prowler — and your AI apps' connection to it — from your phone, anywhere. "
            "Your PC stays on and awake to answer.", tab="⚙️ Settings", detect=detect_remote),
     Module("remote_pwa", "Remote app on your phone", 3,
@@ -1133,12 +1233,17 @@ SERVICES: list[tuple[str, str, tuple]] = [
     ("analyses", "🤖 Have AI review things for me on a schedule  (needs an API key)",  ("links",)),
     ("email",    "✉️ Send emails and reports",                     ("email",)),
     ("phone",    "📱 Use AI-Prowler from my phone",                ("remote", "remote_pwa")),
-    ("business", "🧰 Run my service business (jobs, invoices)",    ("jobs", "payments")),
-    ("routes",   "🚚 Plan routes for my crew",                     ("routes",)),
+    ("business", "🧰 Run my service business (jobs, invoices, crew routes)",    ("jobs", "payments", "routes")),
     ("desk",     "🎫 File and track tickets (customer requests, to-dos)", ("desk",)),
     ("team",     "🏢 A shared AI-Prowler for my whole team",       ("server_info",)),
 ]
 SERVICE_IDS = [s[0] for s in SERVICES]
+# David 2026-11-06: say up front which choices need Remote Access, and that Remote Access needs a subscription.
+NEEDS_REMOTE = ("phone", "business", "desk")
+REMOTE_APPS = ("business", "desk")              # can't be on without Remote Access ("phone")
+NEEDS_REMOTE_MARK = "   \U0001F517"
+NEEDS_REMOTE_NOTE = ("\U0001F517 Needs Remote Access: the Jobs app, the Service Desk app and the Remote app reach AI-Prowler over "
+                     "Remote Access, which needs an AI-Prowler subscription.")
 DEFAULT_SERVICES = ["files"]
 
 
@@ -1226,7 +1331,7 @@ class Progress:
             d = json.loads(Path(path).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return cls(path=Path(path))
-        services = [s for s in d.get("services", []) if s in SERVICE_IDS]
+        services = normalize_choices(d.get("services", []))
         states = {k: v for k, v in (d.get("states") or {}).items()
                   if k in BY_ID and v in (NOT_STARTED, IN_PROGRESS, DONE, SKIPPED)}
         col = d.get("collapsed")
@@ -1294,26 +1399,53 @@ class Progress:
         self.collapsed = bool(value)
         self.save()
 
-    # the state shown for a module: detected-done beats anything saved
+    # The state shown for a module: what's really true beats anything saved, BOTH ways (David 2026-11-04: Service Desk
+    # turned off in Settings stayed green, because only "detected done" won and the saved DONE stayed forever).
+    # A step whose check can't tell (None, or no check, like Connect your AI) keeps what was saved. Skipped stays
+    # the person's own decision.
     def state(self, m: Module) -> str:
-        if m.detect is not None:
-            try:
-                if m.detect():
-                    return DONE
-            except Exception:
-                pass
-        return self.states.get(m.id, NOT_STARTED)
+        saved = self.states.get(m.id, NOT_STARTED)
+        if m.detect is None:
+            return saved
+        try:
+            found = m.detect()
+        except Exception:
+            return saved
+        if found:
+            return DONE
+        return NOT_STARTED if found is not None and saved == DONE else saved
+
+    def sync_switches(self) -> None:
+        """The list follows the two switches shared with Settings → MCP Tool Configuration, wherever they were changed."""
+        if not SYNC_SWITCHES or not self.picked:
+            return
+        now = list(self.services)
+        if desk_switched_on():
+            if "desk" not in now:
+                now.append("desk")
+        elif "desk" in now:
+            now.remove("desk")
+        if not jobs_switched_on():
+            now = [s for s in now if s not in JOBS_SERVICES]
+        elif "business" not in now:
+            now.append("business")
+        now = [s for s in now if s not in FEATURE_SERVICES or feature_switched_on(s)]
+        now = normalize_choices(now)
+        if now != self.services:
+            self.choose(now)
 
     def set_state(self, mid: str, state: str) -> None:
         self.states[mid] = state
         self.save()
 
     def choose(self, services) -> None:
-        self.services = [s for s in SERVICE_IDS if s in services]
+        self.services = normalize_choices(services)
         self.picked = True
         self.save()
 
     def add_service(self, sid: str) -> None:
+        if sid in FEATURE_SERVICES and not feature_switched_on(sid):
+            set_feature_switch(sid, True)              # "Add more" means it, or the list would take it straight off
         if sid not in self.services:
             self.choose(self.services + [sid])
 
@@ -1348,6 +1480,69 @@ GO_GREEN = ("#2e7d32", "white")
 STATE_ICON = {DONE: "✅", SKIPPED: "⏭", IN_PROGRESS: "🟡", NOT_STARTED: "⬜"}
 
 
+STARTUP_RECHECK_MS = 10000
+
+
+# Where each step is set up on its tab: the start of a heading or button there, the first one showing wins.
+SCROLL_DELAY_MS = 80
+SECTIONS = {
+    "index": ("Directory Queue",),
+    "connect_ai": ("📖 Connect Claude.ai", "📡 Remote Access"),
+    "auto_index": ("🐾  File Watchdog",),
+    "links": ("🧠  AI Analysis Tasks",),
+    "learnings": ("📚 All Learnings",),
+    "email": ("📧 Email Configuration",),
+    "remote": ("📡 Remote Access",),
+    "remote_pwa": ("Remote Control URL:",),
+    "jobs": ("📱 Jobs App",),
+    "payments": ("💳 Online Payment Links",),
+    "routes": ("🗺 Route flow", "🧰 Jobs App Agent", "📱 Jobs App"),
+    "desk": ("🎫 Service Desk — Mobile URL",),
+    "agent_key": ("🔑 Agent API Key",),
+}
+AGENT_KEY_TARGET = Module("agent_key", "Agent API Key", 0, "", tab="🏢 Small Business")   # a place, not a step
+
+
+def find_section(page, module_id: str):
+    """The showing widget that starts this step's section on its tab, or None."""
+    found = {}
+
+    def walk(w):
+        for c in w.winfo_children():
+            try:
+                text = str(c.cget("text")).strip()
+            except Exception:
+                text = ""
+            if text and c.winfo_ismapped():
+                for marker in SECTIONS.get(module_id, ()):
+                    if marker not in found and text.startswith(marker.strip()):
+                        found[marker] = c
+            walk(c)
+    walk(page)
+    for marker in SECTIONS.get(module_id, ()):
+        if marker in found:
+            return found[marker]
+    return None
+
+
+def scroll_to_section(page, module_id: str) -> bool:
+    """Scroll the tab so the step's section is at the top. False if it isn't on the page."""
+    w = find_section(page, module_id)
+    if w is None:
+        return False
+    box = w
+    while box is not None and box.winfo_class() != "Canvas":
+        inner = box
+        box = box.master
+    if box is None:
+        return True                                    # the page doesn't scroll: it's already showing
+    box.update_idletasks()
+    height = inner.winfo_height()
+    if height > 0:
+        box.yview_moveto(max(0.0, (w.winfo_rooty() - inner.winfo_rooty() - 12) / height))
+    return True
+
+
 class SetupCenterPanel:
     """🧭 Set up AI-Prowler — lives on the Home tab (SETUP_CENTER_SPEC §4)."""
 
@@ -1368,6 +1563,15 @@ class SetupCenterPanel:
         self.render()
         if first:
             self.frame.after(600, self.open_picker)
+        # Things that start just after the window (the File Watchdog) would otherwise look off until the next redraw.
+        self.frame.after(STARTUP_RECHECK_MS, self._recheck)
+
+    def _recheck(self):
+        try:
+            if self.frame.winfo_exists():
+                self.render()
+        except Exception:
+            pass
 
     @property
     def expanded(self) -> bool:
@@ -1385,6 +1589,7 @@ class SetupCenterPanel:
         return lbl
 
     def render(self):
+        self.progress.sync_switches()
         tk, ttk = self.tk, self.ttk
         # Clear the panel's own rows only — the step windows (Toplevels) are
         # children of this frame too, and destroying them here would close a
@@ -1475,6 +1680,7 @@ class SetupCenterPanel:
             ttk.Label(r, text="partly done", foreground=LIGHT_COLOR[YELLOW]).pack(side="left")
         if m.info_only:
             ttk.Button(r, text="Learn more", command=lambda: self.show_info(m)).pack(side="right")
+            self._leader(r)
             return
         if st == DONE:
             ttk.Button(r, text="Open this tab", command=lambda: self.open_tab(m)).pack(side="right")
@@ -1487,6 +1693,23 @@ class SetupCenterPanel:
             ttk.Button(r, text="Skip", command=lambda: self._set(m, SKIPPED)).pack(side="right", padx=(4, 0))
             ttk.Button(r, text="Continue" if st == IN_PROGRESS else "Start",
                        command=lambda: self.start(m)).pack(side="right")
+        self._leader(r)
+
+    def _leader(self, row):
+        """David 2026-11-06: a dashed line from the step's name to its buttons, which sit far across a wide window.
+        Packed last, so it fills exactly the gap between them."""
+        try:
+            bg = self.ttk.Style().lookup("TFrame", "background") or row.winfo_toplevel().cget("bg")
+        except Exception:
+            bg = ""
+        line = self.tk.Canvas(row, height=3, highlightthickness=0, bd=0, **({"bg": bg} if bg else {}))
+        line.leader = True                             # for tests
+
+        def draw(e=None):
+            line.delete("all")
+            line.create_line(0, 2, line.winfo_width(), 2, dash=(3, 4), fill="#8a8a8a")
+        line.bind("<Configure>", draw)
+        line.pack(side="left", fill="x", expand=True, padx=(8, 8))
 
     # ── new-user nudge: blinking red buttons (David 2026-10-21) ────────────
     def _start_blink(self, btn):
@@ -1545,9 +1768,16 @@ class SetupCenterPanel:
         self.render()
 
     def _add(self, sid: str):
+        changed = False
+        if sid == "desk" and not desk_switched_on():
+            changed = set_desk_switch(True)[0]
+        elif sid in JOBS_SERVICES and not jobs_switched_on():
+            changed = set_jobs_switch(True)[0]
         self.progress.add_service(sid)
         self.progress.set_collapsed(False)
         self.render()
+        if changed:
+            self.offer_tool_restart()
 
     def start(self, m: Module):
         """Guided modules open their own step-by-step window; the rest (until
@@ -1577,6 +1807,11 @@ class SetupCenterPanel:
                                 parent=self.frame)
         if target is not None:
             nb.select(target)
+            # 2026-11-04 (David): the right place on the page too, not just the tab.
+            page = self.frame.nametowidget(target)     # it has to be drawn before it can be measured
+            self.frame.after(SCROLL_DELAY_MS, lambda: scroll_to_section(page, m.id))
+        elif nb is not None and m.tab:
+            messagebox.showinfo(m.title, f"The {m.tab} tab isn't available on this AI-Prowler.", parent=self.frame)
 
     def show_info(self, m: Module):
         from tkinter import messagebox
@@ -1586,6 +1821,25 @@ class SetupCenterPanel:
                                "\"AI-Prowler Server\").\n\nOpen the AI-Prowler website to learn more?",
                                parent=self.frame):
             webbrowser.open(SERVER_INFO_URL)
+
+    def offer_tool_restart(self):
+        """Leaving Setup after a tool choice changed (David 2026-11-04): one question, restart now or later."""
+        from tkinter import messagebox
+        parent = self.frame.winfo_toplevel()
+        if not messagebox.askyesno(
+                "Restart AI-Prowler now?",
+                "Your tool choices changed, and they only take effect after a restart.\n\nRestart AI-Prowler now? "
+                "It closes and opens again (about 30 seconds). The apps, crew phones and Claude, Muse or Grok lose "
+                "the connection while it restarts, then reconnect.\n\nIf you choose No, your choices are saved and "
+                "apply the next time AI-Prowler starts.", icon="warning", parent=parent):
+            return False
+        restart = getattr(self.app, "_restart_after_tool_change", None)
+        if restart and restart():
+            return True
+        messagebox.showinfo("Restart AI-Prowler",
+                            "AI-Prowler can't restart itself from here. Your choices are saved: close it (File → Exit "
+                            "AI-Prowler) and start it again to apply them.", parent=parent)
+        return False
 
     def open_picker(self):
         tk, ttk = self.tk, self.ttk
@@ -1604,19 +1858,51 @@ class SetupCenterPanel:
             current.add("desk")
         else:
             current.discard("desk")
+        jobs_was_on = jobs_switched_on()            # …and so do the job boxes
+        if not jobs_was_on:
+            current -= set(JOBS_SERVICES)
+        else:
+            current.add("business")
+        current -= {s for s in FEATURE_SERVICES if not feature_switched_on(s)}
         vars_ = {}
+        boxes = {}
         for sid, label, _mods in SERVICES:
             v = tk.BooleanVar(master=win, value=sid in current)
             vars_[sid] = v
-            ttk.Checkbutton(body, text=label, variable=v).pack(anchor="w", pady=2)
+            boxes[sid] = ttk.Checkbutton(body, text=label + (NEEDS_REMOTE_MARK if sid in NEEDS_REMOTE else ""), variable=v)
+            boxes[sid].pack(anchor="w", pady=2)
+        ttk.Label(body, text=NEEDS_REMOTE_NOTE, foreground="#666", wraplength=460, justify="left").pack(anchor="w", pady=(8, 0))
         note = ttk.Label(body, text="", foreground="#666", wraplength=420, justify="left")
         note.pack(anchor="w", pady=(10, 0))
+
+        tie = {"busy": False, "phone": vars_["phone"].get()}
+
+        def tie_to_remote(*_):
+            """No Remote Access, no apps: unticking it unticks them, and ticking an app ticks it."""
+            if tie["busy"]:
+                return
+            tie["busy"] = True
+            try:
+                phone = vars_["phone"].get()
+                if tie["phone"] and not phone:
+                    for a in REMOTE_APPS:
+                        vars_[a].set(False)
+                elif not phone and any(vars_[a].get() for a in REMOTE_APPS):
+                    vars_["phone"].set(True)
+                tie["phone"] = vars_["phone"].get()
+            finally:
+                tie["busy"] = False
+        for v in vars_.values():
+            v.trace_add("write", tie_to_remote)
 
         def refresh_note(*_):
             chosen = [s for s, v in vars_.items() if v.get()]
             extra = added_by_requirement(chosen)
-            note.config(text=("Also added because they're needed: " +
-                              ", ".join(BY_ID[x].title for x in extra)) if extra else "")
+            lines = (["Also added because they're needed: " + ", ".join(BY_ID[x].title for x in extra)] if extra else [])
+            if not vars_["phone"].get():
+                lines.append("Without Remote Access the Jobs app, the Service Desk app and the Remote app can't work, so "
+                             "they're off too.")
+            note.config(text="\n".join(lines))
         for v in vars_.values():
             v.trace_add("write", refresh_note)
         refresh_note()
@@ -1626,24 +1912,59 @@ class SetupCenterPanel:
 
         def save():
             from tkinter import messagebox
-            chosen = [s for s, v in vars_.items() if v.get()] or list(DEFAULT_SERVICES)
+            chosen = normalize_choices([s for s, v in vars_.items() if v.get()] or list(DEFAULT_SERVICES))
             want_desk = "desk" in chosen
+            want_jobs = "business" in chosen
+            tools_changed = False
+            # Only what was changed in this window. A box that was never ticked isn't someone asking to turn it off.
+            going_off = [s for s in FEATURE_SERVICES if s in current and s not in chosen and feature_switched_on(s)]
+            going_on = [s for s in FEATURE_SERVICES if s in chosen and not feature_switched_on(s)]
+            apps_off = ([s for s in ("business",) if jobs_was_on and not want_jobs] +
+                        [s for s in ("desk",) if desk_was_on and not want_desk])
+            together = "phone" in going_off      # one question for Remote Access and the apps that go with it
+            listed = going_off + (apps_off if together else [])
+            if listed and not messagebox.askyesno(
+                    "Turn these off?",
+                    "Turn these off?\n\n" + "\n".join(next(l for i, l, _m in SERVICES if i == s) for s in listed) +
+                    ("\n\nThe HTTP server stops too. Claude Desktop keeps working." if together else "") +
+                    "\n\nTheir tools and screens stop after the restart. Nothing you've set up is lost: tick them "
+                    "again any time and everything's as you left it.", parent=win):
+                return
+            if jobs_was_on and not want_jobs and not together and not messagebox.askyesno(
+                    "Turn Job Tracker off?",
+                    "Turn Job Tracker & Routing off?\n\nClaude's job, invoice and route tools stop after the restart. "
+                    "Your jobs are kept — tick it again any time to turn it back on.", parent=win):
+                return
             if want_desk != desk_was_on:            # tick / untick = turn Service Desk on / off
-                if not want_desk and not messagebox.askyesno(
+                if not want_desk and not together and not messagebox.askyesno(
                         "Turn Service Desk off?",
                         "Turn Service Desk off?\n\nThe Service Desk app, the customer request page and "
                         "Claude's ticket tools stop after the restart. Your tickets are kept — tick it "
                         "again any time to turn it back on.", parent=win):
                     return
                 ok, msg = set_desk_switch(want_desk)
-                (messagebox.showinfo if ok else messagebox.showerror)("Service Desk", msg, parent=win)
+                tools_changed = ok
                 if not ok:
+                    messagebox.showerror("Service Desk", msg, parent=win)
                     chosen = [s for s in chosen if s != "desk"] if want_desk else chosen + ["desk"]
+            if want_jobs != jobs_was_on:
+                ok, msg = set_jobs_switch(want_jobs)
+                tools_changed = tools_changed or ok
+                if not ok:
+                    messagebox.showerror("Job Tracker", msg, parent=win)
+                    chosen = [s for s in chosen if s not in JOBS_SERVICES] if want_jobs else chosen + ["business"]
+            for s in going_off + going_on:
+                ok, msg = set_feature_switch(s, s in going_on)
+                tools_changed = tools_changed or ok
+                if not ok:
+                    messagebox.showerror("Setup", msg, parent=win)
             self.progress.choose(chosen)
             self.progress.set_collapsed(False)              # show what they just chose
             self._picker_closed()
             win.destroy()
             self.render()
+            if tools_changed:
+                self.offer_tool_restart()
 
         def cancel():
             self._picker_closed()                           # in and out counts too
@@ -2274,10 +2595,14 @@ class _SimpleFlow:
         b.pack(fill="x", pady=(10, 0))
         self._footer_bar = b
         ttk.Button(b, text="Close", command=self.win.destroy).pack(side="right")
-        ttk.Button(b, text="Open this tab",
-                   command=lambda: self.panel.open_tab(BY_ID[self.module_id])).pack(side="right", padx=6)
+        ttk.Button(b, text="Open this tab", command=self._go_to_tab).pack(side="right", padx=6)
         if action_text:
             ttk.Button(b, text=action_text, command=action).pack(side="right")
+
+    def _go_to_tab(self):
+        """To the section on the page; this window closes, or it would sit on top of it. Check again reopens it."""
+        self.panel.open_tab(BY_ID[self.module_id])
+        self.win.destroy()
 
     def _say(self, text: str, ok: bool = True):
         self.msg.config(text=text, foreground="#2e7d32" if ok else "#b00020")
@@ -2342,8 +2667,15 @@ class LinksFlow(_SimpleFlow):
                    ).pack(side="left", padx=(0, 6))
         ttk.Button(self.cli_fix, text="🌐 Get a Grok key", command=lambda: _open_web(XAI_CONSOLE_URL)
                    ).pack(side="left")
+        # 2026-11-04 (David): where to change or remove the key later.
+        ttk.Button(self.cli_fix, text="🔑 Change or remove my key →", command=self._go_to_key
+                   ).pack(side="left", padx=(6, 0))
         self.cli_ready = None
         self.win.after(150, self._check_cli)
+
+    def _go_to_key(self):
+        self.panel.open_tab(AGENT_KEY_TARGET)
+        self.win.destroy()
 
     def _check_cli(self):
         self._show_cli_status(agent_key_status())
@@ -2498,7 +2830,7 @@ class EmailFlow(_SimpleFlow):
 
 
 class RemoteFlow(_SimpleFlow):
-    """Phone access — four checks, each with its one-click fix:
+    """Remote Access — four checks, each with its one-click fix:
       1. Secure link: domain set (Settings → activate → ⚡ Configure Mobile Access)
          AND it answers from the internet.
       2. Bearer Token set (the password for phone apps / AI connectors).
@@ -2510,7 +2842,7 @@ class RemoteFlow(_SimpleFlow):
     strongly recommended, shown, but not required)."""
 
     def __init__(self, panel: "SetupCenterPanel"):
-        super().__init__(panel, "Phone access", "remote")
+        super().__init__(panel, "Remote Access", "remote")
         ttk = self.ttk
         self.rows = {}
         for key, label in (("link", "Secure link to your phone (subscription + ⚡ Configure Mobile Access)"),
@@ -2544,7 +2876,7 @@ class RemoteFlow(_SimpleFlow):
         self._row("link", False, "Checking…" if d else "")
         self._row("token", bool(bearer_token()),
                   "Set." if bearer_token() else "Not set — set one on the Settings tab (Remote access).",
-                  "Open Settings", lambda: self.panel.open_tab(BY_ID["remote"]))
+                  "Open Settings", self._go_to_tab)
         ps = power_status()
         bad = [label for k, label in POWER_CHECKS if not ps[k][0]]
         self._row("power", not bad, "All four are set." if not bad else "Not yet: " + "; ".join(bad) + ".",
@@ -2556,7 +2888,7 @@ class RemoteFlow(_SimpleFlow):
         if not d:
             self._row("link", False, "Not set up yet: on the Settings tab, activate your subscription "
                       "(Manage Subscription), then click ⚡ Configure Mobile Access.",
-                      "Open Settings", lambda: self.panel.open_tab(BY_ID["remote"]))
+                      "Open Settings", self._go_to_tab)
             return self._finish(False)
         import threading
         box = {}
@@ -2574,13 +2906,13 @@ class RemoteFlow(_SimpleFlow):
             self._row("link", ok, f"https://{d} answers from the internet." if ok else
                       f"https://{d} isn't answering — is AI-Prowler's secure link running? Try "
                       "⚡ Configure Mobile Access again on the Settings tab.",
-                      "Open Settings", lambda: self.panel.open_tab(BY_ID["remote"]))
+                      "Open Settings", self._go_to_tab)
             self._finish(ok)
         self.win.after(200, collect)
 
     def _finish(self, link_ok: bool):
         if link_ok and bearer_token():
-            self._say("✅ Phone access is set up. Next: the Remote app on your phone.")
+            self._say("✅ Remote Access is set up. Next: the Remote app on your phone.")
             self._done()
         else:
             self._say("Fix the ❌ items above, then click Check again.", ok=False)
@@ -2612,7 +2944,7 @@ class RemotePwaFlow(_SimpleFlow):
         tk, ttk = self.tk, self.ttk
         self.url = remote_app_url()
         if not self.url:
-            ttk.Label(self.body, text="Set up Phone access first — the Remote app reaches your PC through "
+            ttk.Label(self.body, text="Set up Remote Access first — the Remote app reaches your PC through "
                       "your secure link.", wraplength=500, justify="left").pack(anchor="w")
             self._footer("", None)
             return
@@ -2757,7 +3089,7 @@ class JobsFlow(_SimpleFlow):
             self.phone_lbl.pack(anchor="w", pady=(6, 0))
         else:
             self.phone_lbl = None
-            ttk.Label(app, text="Set up Phone access first — the Jobs app reaches your PC through your "
+            ttk.Label(app, text="Set up Remote Access first — the Jobs app reaches your PC through your "
                       "secure link.", wraplength=480).pack(anchor="w")
         self._footer("", None)
         self._refresh()
@@ -3137,7 +3469,7 @@ class DeskFlow(_SimpleFlow):
         box2 = ttk.LabelFrame(self.body, text=" 2. The Service Desk app on your phone ", padding=8)
         box2.pack(fill="x", pady=(8, 0))
         if not self.app_url:
-            ttk.Label(box2, text="Set up Phone access first — the Service Desk app reaches your PC through "
+            ttk.Label(box2, text="Set up Remote Access first — the Service Desk app reaches your PC through "
                       "your secure link.", wraplength=500, justify="left").pack(anchor="w")
         else:
             row = ttk.Frame(box2)
@@ -3171,7 +3503,14 @@ class DeskFlow(_SimpleFlow):
             ttk.Button(box3, text="📋 Copy request-page link",
                        command=lambda: self._copy(self.req_url)).pack(anchor="w", pady=(6, 0))
         self._footer("", None)
+        self._tools_changed = False
+        self.win.bind("<Destroy>", self._on_closed)
         self._show_state()
+
+    def _on_closed(self, e):
+        if e.widget is self.win and self._tools_changed:
+            self._tools_changed = False
+            self.panel.frame.after_idle(self.panel.offer_tool_restart)
 
     def _show_state(self):
         on = desk_switched_on()
@@ -3187,6 +3526,7 @@ class DeskFlow(_SimpleFlow):
 
     def _turn_on(self):
         ok, msg = set_desk_switch(True)
+        self._tools_changed = self._tools_changed or ok
         self._say(("✅ " if ok else "❌ ") + msg, ok=ok)
         self._show_state()
 

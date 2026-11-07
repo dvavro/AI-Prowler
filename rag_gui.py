@@ -1699,6 +1699,17 @@ class RAGGui:
         if fn is None:
             return
 
+        # 2026-11-06 (David): "Use AI-Prowler from my phone" off stops the HTTP server. Claude Desktop is unaffected: it
+        # starts its own connection over stdio.
+        try:
+            import setup_wizard as _sw_http
+            if not _sw_http.http_wanted():
+                self.status_var.set("HTTP server off: phone use isn't chosen in Setup AI-Prowler")
+                self.root.after(5000, lambda: self.status_var.set("Ready"))
+                return
+        except Exception:
+            pass
+
         # Only auto-start if a Bearer token is saved in config.
         # Exception: Business server mode uses per-user tokens from users.json,
         # so there is no single remote_token — skip the token check in that mode.
@@ -5335,6 +5346,15 @@ or from the Help menu."""
         self._on_window_close(relaunch=self._update_relaunch_command(bat))
         return True
 
+    def _restart_after_tool_change(self):
+        """Close and reopen so changed tool choices apply (Settings' Save, and leaving Setup). The person has
+        already said yes. False if AI-Prowler can't restart itself from here."""
+        bat = Path(__file__).resolve().parent / 'RAG_RUN.bat'
+        if not bat.exists():
+            return False
+        self._on_window_close(relaunch=self._update_relaunch_command(bat))
+        return True
+
     @staticmethod
     def _update_relaunch_command(bat):
         """cmd line that waits ~4 s (so this process and its children have
@@ -7393,6 +7413,11 @@ or from the Help menu."""
                                                  server=_in_server_mode)
             self._tqa_available = True
             _analysis_banner = self._tqa_panel["banner"]
+            try:
+                import setup_wizard as _sw_g
+                _sw_g.gate_section(self.root, _analysis_banner, lambda: _sw_g.feature_switched_on("analyses"))
+            except Exception:
+                pass
             self._custom_count_var = self._tqa_panel["count_var"]       # exposed for tests/polling
             self._custom_list_frame = self._tqa_panel["list_frame"]
             self._poll_custom_tasks_file = self._tqa_panel["poll_file"]
@@ -9934,6 +9959,8 @@ or from the Help menu."""
                 _tool_cfg_default_off = {}
 
             _tool_cfg_vars = {}  # tool_name -> tk.BooleanVar (True = ENABLED)
+            _tool_cfg_loaded_disabled = {"set": set()}   # what's saved, to tell whether Save has anything to do
+            _tool_cfg_group_shown = {}   # group -> on/off as this panel last knew it from the saved file
             _tool_cfg_counter_var = tk.StringVar()
 
             # ── Compact layout (2026-09-24, group popups) ─────────────────────
@@ -9949,8 +9976,15 @@ or from the Help menu."""
             # locked. Vars exist for toggleable tools only, created up front
             # (not inside the popup) so Save/Reset work without ever opening
             # a popup, and a popup reopened later shows the pending state.
+            # 2026-11-06 (David): a feature off in the Setup Center shows here as off, and can't be ticked here.
+            try:
+                import tool_config_store as _tcs_f
+                _tool_cfg_feature_off = set(_tcs_f.feature_off_tools())
+            except Exception:
+                _tool_cfg_feature_off = set()
+
             def _tool_cfg_fixed(name):
-                return (_tc.is_locked(name)
+                return (name in _tool_cfg_feature_off or _tc.is_locked(name)
                         or _tc.category_is_locked(_tc.category_of(name) or ""))
 
             _tool_cfg_cats = []   # (CategoryMeta, [tools in this mode], cat_locked)
@@ -9973,10 +10007,48 @@ or from the Help menu."""
                     (_cat, _cat_tools, _tc.category_is_locked(_cat.key)))
 
             _tool_cfg_row_refreshers = []
+            _tool_cfg_loaded_disabled["set"] = {n for n, v in _tool_cfg_vars.items() if not v.get()}
+            try:
+                import tool_config_store as _tcs_s
+                _tool_cfg_group_shown.update({_g: bool(_tcs_s.group_enabled(_tool_cfg_mode_key, _g))
+                                              for _g in _tool_cfg_default_off})
+            except Exception:
+                pass
+            self.root.after(2000, lambda: _tool_cfg_follow_loop())
+
+            # 2026-11-04: the Setup Center's "Service Desk (tickets)" and this panel are one switch, but
+            # the panel never noticed a change made there, so it showed the old state and its next Save
+            # wrote that old state back. It now follows the saved switch.
+            def _tool_cfg_pull_saved_groups():
+                try:
+                    import tool_config_store as _tcs_p
+                    _moved = False
+                    for _g, _t in _tool_cfg_default_off.items():
+                        _on = bool(_tcs_p.group_enabled(_tool_cfg_mode_key, _g))
+                        if _on != _tool_cfg_group_shown.get(_g):
+                            _tool_cfg_group_shown[_g] = _on
+                            for n in _t:
+                                if n in _tool_cfg_vars:
+                                    _tool_cfg_vars[n].set(_on)
+                                    (_tool_cfg_loaded_disabled["set"].discard if _on
+                                     else _tool_cfg_loaded_disabled["set"].add)(n)
+                            _moved = True
+                    if _moved:
+                        _tool_cfg_changed()
+                except Exception:
+                    pass
+
+            def _tool_cfg_follow_loop():
+                _tool_cfg_pull_saved_groups()
+                try:
+                    self.root.after(2000, _tool_cfg_follow_loop)
+                except Exception:
+                    pass
 
             def _tool_cfg_refresh_counter():
                 _total = sum(len(t) for _c, t, _l in _tool_cfg_cats)
-                _off = sum(1 for v in _tool_cfg_vars.values() if not v.get())
+                _off = (sum(1 for v in _tool_cfg_vars.values() if not v.get())
+                        + sum(1 for _c, t, _l in _tool_cfg_cats for n in t if n in _tool_cfg_feature_off))
                 _tool_cfg_counter_var.set(
                     f"{_total - _off} of {_total} tools "
                     f"enabled in {_tool_cfg_mode_key} mode"
@@ -10183,9 +10255,12 @@ or from the Help menu."""
                                       var=_grp_var, cb=_grp_cb, lbl=_count_lbl):
                     def _refresh():
                         if not toggle:
-                            lbl.configure(text=f"{len(tools)} tools · always on")
+                            _foff = sum(1 for n in tools if n in _tool_cfg_feature_off)
+                            lbl.configure(text=(f"{len(tools) - _foff} of {len(tools)} on — turned off in Setup AI-Prowler"
+                                                if _foff else f"{len(tools)} tools · always on"))
                             return
-                        _off = sum(1 for n in toggle if not _tool_cfg_vars[n].get())
+                        _off = (sum(1 for n in toggle if not _tool_cfg_vars[n].get())
+                                + sum(1 for n in tools if n in _tool_cfg_feature_off))
                         lbl.configure(text=f"{len(tools) - _off} of {len(tools)} enabled")
                         cb.state(['!alternate'])
                         if _off == 0:
@@ -10213,7 +10288,21 @@ or from the Help menu."""
                 # and puts back any that came out missing or damaged. If that
                 # module can't load, refuse to save rather than fall back to a
                 # less careful write.
+                # 2026-11-04 (David): the choices only take effect after a restart, so Save restarts.
+                # Saying No saves nothing, and nothing changed means no restart.
+                _tool_cfg_pull_saved_groups()
                 _disabled_now = [n for n, v in _tool_cfg_vars.items() if not v.get()]
+                if set(_disabled_now) == _tool_cfg_loaded_disabled["set"]:
+                    _tool_cfg_status_var.set("Nothing changed, so there's nothing to save and no restart is needed.")
+                    return
+                if not messagebox.askyesno(
+                        "Save and restart AI-Prowler?",
+                        "These tool choices only take effect after a restart, so AI-Prowler will save them, "
+                        "close and open again (about 30 seconds).\n\nThe apps, crew phones and Claude, Muse "
+                        "or Grok lose the connection while it restarts, then reconnect.\n\nSave and restart now?",
+                        icon='warning', parent=self.root):
+                    _tool_cfg_status_var.set("Not saved. Your tool choices are still only in this panel.")
+                    return
                 try:
                     import tool_config_store as _tcs
                 except Exception as _e:
@@ -10222,7 +10311,10 @@ or from the Help menu."""
                         f"Your settings were not touched.")
                     return
                 try:
-                    _tcs.save_disabled_tools(_disabled_now, _tool_cfg_mode_key)
+                    # A tool of a feature that's off has no box here: keep the person's own choice for it.
+                    _kept_off = [n for n in (_tcs.load_tool_config().get(_tool_cfg_mode_key) or {}).get("disabled_tools", [])
+                                 if n in _tool_cfg_feature_off]
+                    _tcs.save_disabled_tools(_disabled_now + _kept_off, _tool_cfg_mode_key)
                     _hr_msg = ""
                     if _tool_cfg_hr_tools:
                         # HR apps switch (server only): on while any HR tool is ticked.
@@ -10237,12 +10329,20 @@ or from the Help menu."""
                         _tcs.set_group_enabled(
                             _tool_cfg_mode_key, _grp,
                             any(_tool_cfg_vars[n].get() for n in _gt if n in _tool_cfg_vars))
-                    _tool_cfg_status_var.set(
-                        "✅ Saved MCP tool choices only — your other settings were not "
-                        "changed. Restart AI-Prowler to apply." + _hr_msg)
+                    _tool_cfg_loaded_disabled["set"] = set(_disabled_now)
+                    _tool_cfg_group_shown.update(
+                        {_g: any(_tool_cfg_vars[n].get() for n in _t if n in _tool_cfg_vars)
+                         for _g, _t in _tool_cfg_default_off.items()})
                 except Exception as _e:
                     _tool_cfg_status_var.set(
                         f"❌ Could not save: {_e}. Your other settings were not changed.")
+                    return
+                _tool_cfg_status_var.set("✅ Saved. Restarting AI-Prowler…" + _hr_msg)
+                self.root.update_idletasks()
+                if not self._restart_after_tool_change():
+                    _tool_cfg_status_var.set(
+                        "✅ Saved, but AI-Prowler can't restart itself from here. Close it (File → Exit "
+                        "AI-Prowler) and start it again to apply." + _hr_msg)
 
             def _reset_tool_config_defaults():
                 # Only re-ticks the boxes in this panel. Nothing is written to
@@ -10259,11 +10359,11 @@ or from the Help menu."""
                 _tool_cfg_changed()
                 _tool_cfg_status_var.set(
                     "Reset in this panel only — click Save to keep it (MCP tools "
-                    "only; other settings are not affected), then restart.")
+                    "only; other settings are not affected). Save restarts AI-Prowler.")
 
             _tool_cfg_btn_row = ttk.Frame(_tool_cfg_frame)
             _tool_cfg_btn_row.pack(fill='x', pady=(4, 0))
-            ttk.Button(_tool_cfg_btn_row, text="💾 Save (restart required)",
+            ttk.Button(_tool_cfg_btn_row, text="💾 Save and restart",
                        command=_save_tool_config).pack(side='left')
             ttk.Button(_tool_cfg_btn_row, text="↺ Reset to Defaults",
                        command=_reset_tool_config_defaults).pack(side='left', padx=(8, 0))
@@ -10552,6 +10652,11 @@ or from the Help menu."""
             text=_email_section_title,
             padding=10)
         email_cfg_frame.pack(fill='x', padx=20, pady=(0, 10))
+        try:
+            import setup_wizard as _sw_g
+            _sw_g.gate_section(self.root, email_cfg_frame, lambda: _sw_g.feature_switched_on("email"))
+        except Exception:
+            pass
 
         # ── Detect Outlook — calls the authoritative MCP module function ──────
         def _run_outlook_check() -> tuple:
@@ -12475,6 +12580,11 @@ or from the Help menu."""
                                       text="📡 Remote Access — Claude, Muse, or Grok on Mobile",
                                       padding=(10, 8))
         remote_frame.pack(fill='x', padx=20, pady=(5, 10))
+        try:
+            import setup_wizard as _sw_g
+            _sw_g.gate_section(self.root, remote_frame, _sw_g.http_wanted)
+        except Exception:
+            pass
 
         # Intro
         ttk.Label(remote_frame, justify='left', font=('Arial', 9),
@@ -15817,6 +15927,11 @@ or from the Help menu."""
                                  text="📱 Jobs App — Mobile URL for Job Updates",
                                  padding=(8, 4))
         pwa_lf.pack(fill='x', pady=(8, 0))
+        try:
+            import setup_wizard as _sw_g
+            _sw_g.gate_section(self.root, pwa_lf, _sw_g.jobs_switched_on)
+        except Exception:
+            pass
 
 
         def _load_jobs_url():
@@ -15939,6 +16054,11 @@ or from the Help menu."""
             import desk_gui_agent as _dga_j
             self._jobs_agent_section = _dga_j.build_standalone_section(self, banner, "jobs")
             self._jobs_agent_section["frame"].pack(fill='x', pady=(8, 0))
+            try:
+                import setup_wizard as _sw_g
+                _sw_g.gate_section(self.root, self._jobs_agent_section["frame"], _sw_g.jobs_switched_on)
+            except Exception:
+                pass
         except Exception as _e_jag:
             ttk.Label(banner, text=f"Jobs agent settings unavailable: {_e_jag}",
                       font=('Arial', 8), foreground='gray').pack(anchor='w', pady=(8, 0))

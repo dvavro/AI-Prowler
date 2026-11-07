@@ -270,12 +270,13 @@ def _alert_budget(model: str) -> None:
 
 
 def run_cost(model: str, usage: dict, web_searches: int = 0) -> float:
-    """Exact cost: cache writes at 1.25x input, cache reads at 0.1x input, web searches $0.01 each."""
+    """Exact cost of one call's usage ("input" = new, uncached input here): cache writes 1.25x input, cache reads
+    0.1x (Sonnet 5.5: 0.05x since Oct 2026), Haiku's long-prompt rate, web searches $0.01 each — the same price
+    rules as the agents (desk_agent_providers.token_cost; 2026-11-03 live cost test)."""
     import desk_agent_providers as prov
-    pr = prov.price_for(model) or (0.0, 0.0)
-    c = (usage.get("input", 0) * pr[0] + usage.get("cache_write", 0) * pr[0] * 1.25
-         + usage.get("cache_read", 0) * pr[0] * 0.10 + usage.get("output", 0) * pr[1]) / 1_000_000
-    return round(c + 0.01 * int(web_searches or usage.get("web_searches", 0)), 5)
+    c = prov.token_cost(model, int(usage.get("input", 0) or 0), int(usage.get("cache_write", 0) or 0),
+                        int(usage.get("cache_read", 0) or 0), int(usage.get("output", 0) or 0))
+    return round(c + 0.01 * int(web_searches or usage.get("web_searches", 0) or 0), 5)
 
 
 # ── the running AI-Prowler on this PC ────────────────────────────────────────────────
@@ -554,14 +555,18 @@ class _Spend:
     def __init__(self, model: str, ceiling: float):
         self.model, self.ceiling = model, ceiling
         self.usage = {"input": 0, "cache_write": 0, "cache_read": 0, "output": 0, "web_searches": 0}
+        self._cost = 0.0
 
     def add(self, **kw):
-        for k, v in kw.items():
-            self.usage[k] = self.usage.get(k, 0) + int(v or 0)
+        """One API round's usage. Priced per round: a prompt-size price tier (Haiku over 100K) is per request."""
+        one = {k: int(v or 0) for k, v in kw.items()}
+        for k, v in one.items():
+            self.usage[k] = self.usage.get(k, 0) + v
+        self._cost += run_cost(self.model, one)
 
     @property
     def cost(self) -> float:
-        return run_cost(self.model, self.usage)
+        return round(self._cost, 5)
 
     def over(self) -> bool:
         return self.cost >= self.ceiling
@@ -834,6 +839,12 @@ def scheduler_tick(now: datetime | None = None, run_fn=None) -> list:
     import custom_tasks_manager as ctm
     if load_config().get("paused"):
         return ["paused"]
+    try:
+        import tool_config_store as _tcs
+        if not _tcs.feature_on("analyses"):      # 2026-11-06 (David): off in the Setup Center; its tasks are kept
+            return ["paused"]
+    except Exception:
+        pass
     now = now or datetime.now()
     out = []
     for t in ctm.load_custom_tasks():
