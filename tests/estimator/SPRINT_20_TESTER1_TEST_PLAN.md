@@ -35,3 +35,12 @@ run_tests_estimate.bat -k sprint20 -s
 ## Still to do by hand (needs a real AI)
 
 The same scenarios typed in chat with Claude, then Grok, on the deployed AI-Prowler. Note any step where the AI calls the wrong tool or misreads `next_step`.
+
+### Chat check results
+
+| Date | AI | Steps | Result |
+|---|---|---|---|
+| 2026-11-07 | Claude (Opus 5.5) on the deployed build, through the AI-Prowler connector | setup status, list service trades, practice project create, get estimate, validate, compare history, assign to maria, maria's my work, pack-up, practice delete | All passed. Roof math checked by hand. Reviewer flagged sample prices and the 0% margin (markups not set). Practice job left out of my work and the pack-up as designed; delete asked first and removed the job and the notice. One `est_assign` call lost the connection (Bad Gateway, nothing saved); the retry worked. No emails sent, no prices changed. |
+| — | Grok | the five prompts: set up my company; 1200 sq ft driveway wash; Miller roof; assign to Maria; pack up my data | to do (Jamie) |
+
+Notes: assigning a practice job gives a notice but the job is not listed in "my work" (by design; could show it labelled). Using the practice project adds the roofing and pressure-washing sample prices to the price book; they stay after the delete.
