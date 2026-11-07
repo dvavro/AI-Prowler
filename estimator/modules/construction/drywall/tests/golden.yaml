@@ -1,0 +1,13 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: Room addition, 120 ft of 8 ft walls, 400 sq ft ceiling, 100 sq ft openings
+  answers: {wall_lf: 120, ceiling_sqft: 400, openings_sqft: 100}
+  # 120 x 8 + 400 - 100 = 1,260 sq ft; board 1,260 x 1.12 x $0.50 = $705.60
+  expected_lines: {board_standard: 70560, supplies: 15120, hang: 56700, ceiling_extra: 10000, finish_l4: 81900}
+  expected_total_cents: 234280
+- name: Bathroom, 40 ft of 9 ft wall, moisture-resistant, level 5, tear-out
+  answers: {wall_lf: 40, wall_height: "9", board: moisture, finish: "5", remove_existing: true}
+  expected_lines: {removal: 21600, board_moisture: 30240, supplies: 4320, hang: 16200, finish_l5: 34200}
+  expected_total_cents: 106560
+- name: Small patch comes to the $750 minimum
+  answers: {wall_lf: 10}
+  expected_total_cents: 75000

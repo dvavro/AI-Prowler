@@ -1,0 +1,74 @@
+# Insulation from typed attic, wall and spray-foam areas (no plans needed).
+# Blown bags = attic area x R-value / 1,500 (about 40 sq ft per bag at R-38), +5%; wall batts = wall area, 5% waste;
+# spray foam board-feet = area x inches.
+id: insulation
+name: Insulation
+version: 0.1.0
+category: construction
+path: both
+description: Blown-in attic insulation by R-value, wall batts (R-13 to R-19), spray foam by thickness, with old-insulation removal, air sealing and vapor barrier.
+minimum_charge: "500.00"
+keywords: [insulation, insulate, attic insulation, blown-in, blown in insulation, spray foam, batts, wall insulation]
+required_any: [attic_sqft, wall_sqft, spray_foam_sqft]
+notes:
+  - "Hot attics: R-38 to R-49 pays back fast; keep insulation clear of recessed lights that aren't IC-rated and keep soffit vents open."
+
+questions:
+  - {id: attic_sqft, label: "Attic area (blown-in)", type: number, unit: sqft, default: 0, min: 0, max: 100000}
+  - id: attic_r
+    label: "Attic R-value"
+    type: choice
+    default: "38"
+    # factor is the R-value
+    choices:
+      - {value: "30", label: "R-30", factor: "30"}
+      - {value: "38", label: "R-38", factor: "38"}
+      - {value: "49", label: "R-49", factor: "49"}
+  - {id: remove_old, label: "Remove the old attic insulation?", type: boolean, default: false}
+  - {id: air_seal, label: "Air-seal the attic floor first?", type: boolean, default: false}
+  - {id: wall_sqft, label: "Open wall area (batts)", type: number, unit: sqft, default: 0, min: 0, max: 100000}
+  - id: wall_r
+    label: "Wall batts"
+    type: choice
+    default: "13"
+    choices:
+      - {value: "13", label: "R-13 (2x4)", factor: "13"}
+      - {value: "15", label: "R-15 (2x4, dense)", factor: "15"}
+      - {value: "19", label: "R-19 (2x6)", factor: "19"}
+  - {id: vapor_barrier, label: "Vapor barrier on the walls?", type: boolean, default: false}
+  - {id: spray_foam_sqft, label: "Spray foam area", type: number, unit: sqft, default: 0, min: 0, max: 50000}
+  - id: foam_inches
+    label: "Spray foam thickness"
+    type: choice
+    default: "3"
+    choices:
+      - {value: "2", label: "2 in", factor: "2"}
+      - {value: "3", label: "3 in", factor: "3"}
+      - {value: "5.5", label: "5.5 in (full 2x6)", factor: "5.5"}
+
+scenarios:
+  - {id: good, label: "Good: R-30 attic", answers: {attic_r: "30"}}
+  - {id: better, label: "Better: R-38 attic", answers: {attic_r: "38"}}
+  - {id: best, label: "Best: R-49 attic", answers: {attic_r: "49"}}
+
+lines:
+  - {id: removal, description: "Vacuum out old attic insulation", kind: labor, unit: sqft, quantity: "attic_sqft",
+     price_key: in_removal_sqft, when: "remove_old and attic_sqft > 0"}
+  - {id: air_seal, description: "Air-seal attic floor (top plates, penetrations)", kind: labor, unit: sqft,
+     quantity: "attic_sqft", price_key: in_air_seal_sqft, when: "air_seal and attic_sqft > 0"}
+  - {id: blown_bags, description: "Blown-in insulation", kind: material, unit: ea,
+     quantity: "ceil(attic_sqft * attic_r / 1500 * 1.05)", price_key: in_blown_bag_ea, when: "attic_sqft > 0"}
+  - {id: blown_labor, description: "Blow in attic insulation", kind: labor, unit: sqft, quantity: "attic_sqft",
+     price_key: in_blown_lab_sqft, when: "attic_sqft > 0"}
+  - {id: batts_r13, description: "R-13 wall batts", kind: material, unit: sqft, quantity: "wall_sqft", waste: "0.05",
+     price_key: in_r13_sqft, when: "wall_sqft > 0 and wall_r == 13"}
+  - {id: batts_r15, description: "R-15 wall batts", kind: material, unit: sqft, quantity: "wall_sqft", waste: "0.05",
+     price_key: in_r15_sqft, when: "wall_sqft > 0 and wall_r == 15"}
+  - {id: batts_r19, description: "R-19 wall batts", kind: material, unit: sqft, quantity: "wall_sqft", waste: "0.05",
+     price_key: in_r19_sqft, when: "wall_sqft > 0 and wall_r == 19"}
+  - {id: batt_labor, description: "Install wall batts", kind: labor, unit: sqft, quantity: "wall_sqft",
+     price_key: in_batt_lab_sqft, when: "wall_sqft > 0"}
+  - {id: vapor_barrier, description: "Vapor barrier", kind: material, unit: sqft, quantity: "wall_sqft", waste: "0.10",
+     price_key: in_vapor_sqft, when: "vapor_barrier and wall_sqft > 0"}
+  - {id: spray_foam, description: "Closed-cell spray foam (board feet = sq ft x inches)", kind: other, unit: sqft,
+     quantity: "spray_foam_sqft * foam_inches", price_key: in_foam_bf, when: "spray_foam_sqft > 0"}

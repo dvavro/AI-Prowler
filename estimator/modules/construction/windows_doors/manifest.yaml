@@ -1,0 +1,84 @@
+# Windows and doors from unit counts by type and size (no plans needed).
+# Labor per unit by size and type; casing lf = opening perimeter; flashing per exterior opening on new construction.
+id: windows_doors
+name: Windows and Doors
+version: 0.1.0
+category: construction
+path: both
+description: Replacement or new-construction windows (small and large), patio sliders, exterior and interior doors and garage doors, with removal, flashing or sealant, hardware and interior casing.
+minimum_charge: "300.00"
+keywords: [replace windows, replace the windows, new windows, window replacement, replacement windows, install windows, new doors, front door, entry door, patio door, sliding door, slider, garage door, interior doors, door install, replace the doors]
+required_any: [windows_small, windows_large, patio_doors, exterior_doors, interior_doors, garage_doors]
+notes:
+  - "Measure every opening before ordering; replacement units are made to size and usually can't be returned."
+
+questions:
+  - id: install
+    label: "Type of install"
+    type: choice
+    default: retrofit
+    # factor is a code: 1 retrofit (replacement in the old frame), 2 new construction (flanged, flashed)
+    choices:
+      - {value: retrofit, label: "Replacement (retrofit)", factor: "1"}
+      - {value: new, label: "New construction", factor: "2"}
+  - {id: windows_small, label: "Windows under 15 sq ft", type: integer, default: 0, min: 0, max: 500}
+  - {id: windows_large, label: "Windows 15 sq ft and over", type: integer, default: 0, min: 0, max: 500}
+  - {id: patio_doors, label: "Patio sliders or French doors", type: integer, default: 0, min: 0, max: 50}
+  - {id: exterior_doors, label: "Exterior doors (prehung)", type: integer, default: 0, min: 0, max: 50}
+  - {id: interior_doors, label: "Interior doors (prehung)", type: integer, default: 0, min: 0, max: 200}
+  - {id: garage_doors, label: "Garage doors", type: integer, default: 0, min: 0, max: 10}
+  - id: window_grade
+    label: "Window type"
+    type: choice
+    default: vinyl
+    # factor is a code: 1 vinyl, 2 fiberglass
+    choices:
+      - {value: vinyl, label: "Vinyl, dual pane low-E", factor: "1"}
+      - {value: fiberglass, label: "Fiberglass, dual pane low-E", factor: "2"}
+  - {id: casing, label: "New interior casing (trim)?", type: boolean, default: true}
+  - {id: remove_old, label: "Remove the old units?", type: boolean, default: true}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+
+scenarios:
+  - {id: good, label: "Good: vinyl windows", answers: {window_grade: vinyl}}
+  - {id: better, label: "Better: fiberglass windows", answers: {window_grade: fiberglass}}
+
+lines:
+  - {id: removal, description: "Remove and haul away old units", kind: labor, unit: hr,
+     quantity: "(windows_small + windows_large + patio_doors + exterior_doors + interior_doors + garage_doors) * 0.75",
+     price_key: wd_labor_hr, when: "remove_old"}
+  - {id: vinyl_small, description: "Vinyl windows, under 15 sq ft", kind: material, unit: ea, quantity: "windows_small",
+     price_key: wd_vinyl_small_ea, when: "window_grade == 1 and windows_small > 0"}
+  - {id: vinyl_large, description: "Vinyl windows, 15 sq ft and over", kind: material, unit: ea, quantity: "windows_large",
+     price_key: wd_vinyl_large_ea, when: "window_grade == 1 and windows_large > 0"}
+  - {id: fiberglass_small, description: "Fiberglass windows, under 15 sq ft", kind: material, unit: ea,
+     quantity: "windows_small", price_key: wd_fg_small_ea, when: "window_grade == 2 and windows_small > 0"}
+  - {id: fiberglass_large, description: "Fiberglass windows, 15 sq ft and over", kind: material, unit: ea,
+     quantity: "windows_large", price_key: wd_fg_large_ea, when: "window_grade == 2 and windows_large > 0"}
+  - {id: patio_doors, description: "Patio doors", kind: material, unit: ea, quantity: "patio_doors",
+     price_key: wd_patio_ea, when: "patio_doors > 0"}
+  - {id: exterior_doors, description: "Exterior doors, prehung", kind: material, unit: ea, quantity: "exterior_doors",
+     price_key: wd_ext_door_ea, when: "exterior_doors > 0"}
+  - {id: interior_doors, description: "Interior doors, prehung", kind: material, unit: ea, quantity: "interior_doors",
+     price_key: wd_int_door_ea, when: "interior_doors > 0"}
+  - {id: garage_doors, description: "Garage doors with track and opener hookup", kind: material, unit: ea,
+     quantity: "garage_doors", price_key: wd_garage_ea, when: "garage_doors > 0"}
+  # install hours: small window 1.5, large 2.5, patio door 4, exterior door 3, interior door 1.5, garage door 6
+  - {id: install, description: "Install units", kind: labor, unit: hr,
+     quantity: "windows_small * 1.5 + windows_large * 2.5 + patio_doors * 4 + exterior_doors * 3 + interior_doors * 1.5 + garage_doors * 6",
+     price_key: wd_labor_hr}
+  - {id: flashing, description: "Flashing tape and sill pans", kind: material, unit: ea,
+     quantity: "windows_small + windows_large + patio_doors + exterior_doors", price_key: wd_flashing_ea,
+     when: "install == 2 and windows_small + windows_large + patio_doors + exterior_doors > 0"}
+  - {id: sealant, description: "Sealant and shims", kind: material, unit: ea,
+     quantity: "windows_small + windows_large + patio_doors + exterior_doors", price_key: wd_sealant_ea,
+     when: "install == 1 and windows_small + windows_large + patio_doors + exterior_doors > 0"}
+  - {id: hardware, description: "Locksets and hinges", kind: material, unit: ea, quantity: "exterior_doors + interior_doors",
+     price_key: wd_hardware_ea, when: "exterior_doors + interior_doors > 0"}
+  # casing = opening perimeter: small window 14 ft, large 20, patio 22, exterior door 18, interior door 34 (both sides)
+  - {id: casing, description: "Interior casing, supplied and installed", kind: material, unit: lf,
+     quantity: "windows_small * 14 + windows_large * 20 + patio_doors * 22 + exterior_doors * 18 + interior_doors * 34",
+     waste: "0.05", price_key: wd_casing_lf,
+     when: "casing and windows_small + windows_large + patio_doors + exterior_doors + interior_doors > 0"}
+  - {id: permit, description: "Building permit", kind: other, unit: ea, quantity: "1", price_key: wd_permit_ea,
+     when: "permit"}

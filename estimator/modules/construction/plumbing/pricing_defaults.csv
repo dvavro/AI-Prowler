@@ -1,0 +1,14 @@
+price_key,description,kind,unit,cost
+pl_labor_hr,Plumber labor per hour (sample),labor,hr,85.00
+pl_pex_lf,PEX supply pipe per linear ft (sample),material,lf,1.10
+pl_pex_fit_lf,Supply fittings and valves per ft of pipe (sample),material,lf,0.40
+pl_dwv_lf,Drain and vent pipe per linear ft (sample),material,lf,3.25
+pl_dwv_fit_lf,Drain fittings per ft of pipe (sample),material,lf,1.20
+pl_toilet_ea,Toilet supplied (sample),material,ea,250.00
+pl_sink_ea,Bathroom sink and faucet supplied (sample),material,ea,175.00
+pl_kitchen_ea,Kitchen sink and faucet supplied (sample),material,ea,300.00
+pl_shower_valve_ea,Shower valve and trim supplied (sample),material,ea,225.00
+pl_wh_tank_ea,50 gal water heater with fittings (sample),material,ea,1100.00
+pl_wh_tankless_ea,Tankless water heater with venting (sample),material,ea,2400.00
+pl_gas_lf,Gas line installed per linear ft (sample),other,lf,14.00
+pl_permit_ea,Plumbing permit (sample),other,ea,250.00

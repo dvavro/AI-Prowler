@@ -1,0 +1,17 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: 120 ft of 6 ft wood privacy, a walk gate, old fence out
+  answers: {length_lf: 120, material: wood, walk_gates: 1, remove_old: true}
+  # face 720 sq ft x 1.05 x $4.50; posts ceil(120 / 8) + 1 = 16; install 120 x 0.25 = 30 hr x $65
+  expected_lines: {removal: 48000, wood: 340200, posts: 40000, install: 195000, walk_gates: 25000, gate_labor: 13000}
+  expected_total_cents: 661200
+- name: 160 ft of 6 ft block wall with a drive gate and permit
+  answers: {length_lf: 160, material: block, drive_gates: 1, permit: true}
+  # face 960 sq ft; blocks 960 x 1.125 = 1,080 x 1.05 x $2.75 = $3,118.50
+  expected_lines: {footing: 288000, blocks: 311850, grout: 144000, block_labor: 864000, drive_gates: 90000,
+                   gate_labor: 26000, permit: 15000}
+  expected_total_cents: 1738850
+- name: 150 ft of 4 ft chain link
+  answers: {length_lf: 150, material: chain_link, height: "4"}
+  # posts ceil(18.75) + 1 = 20; install 150 x 0.12 x 4 / 6 = 12 hr
+  expected_lines: {chain_link: 126000, posts: 50000, install: 78000}
+  expected_total_cents: 254000

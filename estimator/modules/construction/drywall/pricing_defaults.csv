@@ -1,0 +1,11 @@
+price_key,description,kind,unit,cost
+dw_demo_sqft,Drywall tear-out per sq ft (sample),labor,sqft,0.60
+dw_board_sqft,1/2 in drywall per sq ft (sample),material,sqft,0.50
+dw_fire_sqft,5/8 in Type X drywall per sq ft (sample),material,sqft,0.65
+dw_mr_sqft,Moisture-resistant drywall per sq ft (sample),material,sqft,0.75
+dw_supplies_sqft,Mud tape screws per sq ft (sample),material,sqft,0.12
+dw_hang_sqft,Hang drywall per sq ft (sample),labor,sqft,0.45
+dw_ceiling_sqft,Ceiling hanging extra per sq ft (sample),labor,sqft,0.25
+dw_finish3_sqft,Finish level 3 per sq ft (sample),labor,sqft,0.50
+dw_finish4_sqft,Finish level 4 per sq ft (sample),labor,sqft,0.65
+dw_finish5_sqft,Finish level 5 per sq ft (sample),labor,sqft,0.95

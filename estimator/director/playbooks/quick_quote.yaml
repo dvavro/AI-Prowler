@@ -1,0 +1,13 @@
+# Quick quote lane: service jobs priced from a few answers (no plans).
+id: quick_quote
+name: Quick quote
+version: 0.1.0
+lane: quick_quote
+available: true
+description: Service jobs priced from a few questions, often while the customer is on the phone.
+stages:
+  - {id: collect_answers, agent: intake, action: collect_answers, label: "Ask the service questions"}
+  - {id: price, agent: quick_pricer, action: price_quick, label: "Price the job"}
+  - {id: approve, agent: director, action: approve, label: "Approve the quote", checkpoint: true}
+  - {id: write_bid, agent: bid_writer, action: write_bid, label: "Write and send the quote"}
+  - {id: follow_up, agent: follow_up, action: follow_up, label: "Follow up and convert to a job"}

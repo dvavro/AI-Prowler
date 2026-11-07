@@ -1,0 +1,89 @@
+# Plumbing from fixture counts and pipe runs (no plans needed).
+# Labor = fixtures x hours per fixture (rough-in for new work, trim for every fixture); pipe lf by run plus fittings.
+id: plumbing
+name: Plumbing
+version: 0.1.0
+category: construction
+path: both
+description: Fixture rough-in and trim (toilets, sinks, showers and tubs, dishwashers, laundry, hose bibs), supply and drain pipe with fittings, water heaters, gas line and permit, priced by labor hours per fixture.
+minimum_charge: "250.00"
+keywords: [plumbing, plumber, toilet, faucet, water heater, tankless, repipe, shower valve, new bathroom plumbing, rough-in plumbing, gas line, hose bib]
+required_any: [toilets, sinks, kitchen_sinks, showers, dishwashers, washers, hose_bibs, water_heater, water_line_lf, drain_lf, gas_line_lf]
+notes:
+  - "Water heater, gas and new rough-in work need a permit and inspection in most cities."
+  - "Hard water: mention a softener or expansion tank with a new water heater."
+
+questions:
+  - id: work
+    label: "Type of work"
+    type: choice
+    default: new
+    # factor is a code: 1 new or remodel (rough-in + trim), 2 replace fixtures only
+    choices:
+      - {value: new, label: "New or remodel (rough-in and trim)", factor: "1"}
+      - {value: replace, label: "Replace fixtures only", factor: "2"}
+  - {id: toilets, label: "Toilets", type: integer, default: 0, min: 0, max: 200}
+  - {id: sinks, label: "Bathroom sinks", type: integer, default: 0, min: 0, max: 200}
+  - {id: kitchen_sinks, label: "Kitchen or bar sinks", type: integer, default: 0, min: 0, max: 100}
+  - {id: showers, label: "Showers and tubs", type: integer, default: 0, min: 0, max: 100}
+  - {id: dishwashers, label: "Dishwashers to hook up", type: integer, default: 0, min: 0, max: 50}
+  - {id: washers, label: "Washer boxes (laundry)", type: integer, default: 0, min: 0, max: 50}
+  - {id: hose_bibs, label: "Hose bibs", type: integer, default: 0, min: 0, max: 50}
+  - id: water_heater
+    label: "Water heater"
+    type: choice
+    default: none
+    choices:
+      - {value: none, label: "None", factor: "0"}
+      - {value: tank, label: "50 gal tank", factor: "1"}
+      - {value: tankless, label: "Tankless", factor: "2"}
+  - {id: water_line_lf, label: "Supply pipe (PEX)", type: number, unit: lf, default: 0, min: 0, max: 20000,
+     help: "Leave 0 to allow 25 ft per fixture on new work."}
+  - {id: drain_lf, label: "Drain and vent pipe", type: number, unit: lf, default: 0, min: 0, max: 20000,
+     help: "Leave 0 to allow 15 ft per fixture on new work."}
+  - {id: gas_line_lf, label: "Gas line", type: number, unit: lf, default: 0, min: 0, max: 2000}
+  - {id: supply_fixtures, label: "Supply the fixtures (not the customer)?", type: boolean, default: false}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+
+lines:
+  - {id: removal, description: "Remove old fixtures", kind: labor, unit: hr,
+     quantity: "(toilets + sinks + kitchen_sinks + showers + dishwashers + washers + hose_bibs) * 0.5",
+     price_key: pl_labor_hr, when: "work == 2 and toilets + sinks + kitchen_sinks + showers + dishwashers + washers + hose_bibs > 0"}
+  # rough-in hours: toilet 3, sink 3, kitchen sink 3.5, shower/tub 5, dishwasher 1.5, washer box 2.5, hose bib 1.5
+  - {id: rough_in, description: "Rough-in labor", kind: labor, unit: hr,
+     quantity: "toilets * 3 + sinks * 3 + kitchen_sinks * 3.5 + showers * 5 + dishwashers * 1.5 + washers * 2.5 + hose_bibs * 1.5",
+     price_key: pl_labor_hr, when: "work == 1 and toilets + sinks + kitchen_sinks + showers + dishwashers + washers + hose_bibs > 0"}
+  # trim hours: toilet 1.5, sink 1.5, kitchen sink 2, shower/tub 2, dishwasher 1, washer box 0.5, hose bib 0.5
+  - {id: trim, description: "Set and trim fixtures", kind: labor, unit: hr,
+     quantity: "toilets * 1.5 + sinks * 1.5 + kitchen_sinks * 2 + showers * 2 + dishwashers * 1 + washers * 0.5 + hose_bibs * 0.5",
+     price_key: pl_labor_hr, when: "toilets + sinks + kitchen_sinks + showers + dishwashers + washers + hose_bibs > 0"}
+  - {id: supply_pipe, description: "PEX supply pipe", kind: material, unit: lf,
+     quantity: "water_line_lf if water_line_lf > 0 else (toilets + sinks + kitchen_sinks + showers + dishwashers + washers + hose_bibs) * 25",
+     waste: "0.10", price_key: pl_pex_lf, when: "work == 1 and (water_line_lf > 0 or toilets + sinks + kitchen_sinks + showers + dishwashers + washers + hose_bibs > 0)"}
+  - {id: supply_fittings, description: "Supply fittings and valves", kind: material, unit: lf,
+     quantity: "water_line_lf if water_line_lf > 0 else (toilets + sinks + kitchen_sinks + showers + dishwashers + washers + hose_bibs) * 25",
+     price_key: pl_pex_fit_lf, when: "work == 1 and (water_line_lf > 0 or toilets + sinks + kitchen_sinks + showers + dishwashers + washers + hose_bibs > 0)"}
+  - {id: drain_pipe, description: "Drain and vent pipe (DWV)", kind: material, unit: lf,
+     quantity: "drain_lf if drain_lf > 0 else (toilets + sinks + kitchen_sinks + showers + dishwashers + washers) * 15",
+     waste: "0.10", price_key: pl_dwv_lf, when: "work == 1 and (drain_lf > 0 or toilets + sinks + kitchen_sinks + showers + dishwashers + washers > 0)"}
+  - {id: drain_fittings, description: "Drain fittings", kind: material, unit: lf,
+     quantity: "drain_lf if drain_lf > 0 else (toilets + sinks + kitchen_sinks + showers + dishwashers + washers) * 15",
+     price_key: pl_dwv_fit_lf, when: "work == 1 and (drain_lf > 0 or toilets + sinks + kitchen_sinks + showers + dishwashers + washers > 0)"}
+  - {id: toilet_fixtures, description: "Toilets (supplied)", kind: material, unit: ea, quantity: "toilets",
+     price_key: pl_toilet_ea, when: "supply_fixtures and toilets > 0"}
+  - {id: sink_fixtures, description: "Bathroom sinks and faucets (supplied)", kind: material, unit: ea, quantity: "sinks",
+     price_key: pl_sink_ea, when: "supply_fixtures and sinks > 0"}
+  - {id: kitchen_fixtures, description: "Kitchen sinks and faucets (supplied)", kind: material, unit: ea,
+     quantity: "kitchen_sinks", price_key: pl_kitchen_ea, when: "supply_fixtures and kitchen_sinks > 0"}
+  - {id: shower_valves, description: "Shower valves and trim (supplied)", kind: material, unit: ea, quantity: "showers",
+     price_key: pl_shower_valve_ea, when: "supply_fixtures and showers > 0"}
+  - {id: tank_heater, description: "50 gal water heater with fittings", kind: material, unit: ea, quantity: "1",
+     price_key: pl_wh_tank_ea, when: "water_heater == 1"}
+  - {id: tankless_heater, description: "Tankless water heater with venting and fittings", kind: material, unit: ea,
+     quantity: "1", price_key: pl_wh_tankless_ea, when: "water_heater == 2"}
+  - {id: heater_labor, description: "Install water heater", kind: labor, unit: hr,
+     quantity: "4 if water_heater == 1 else 8", price_key: pl_labor_hr, when: "water_heater > 0"}
+  - {id: gas_line, description: "Gas line, installed", kind: other, unit: lf, quantity: "gas_line_lf",
+     price_key: pl_gas_lf, when: "gas_line_lf > 0"}
+  - {id: permit, description: "Plumbing permit", kind: other, unit: ea, quantity: "1", price_key: pl_permit_ea,
+     when: "permit"}

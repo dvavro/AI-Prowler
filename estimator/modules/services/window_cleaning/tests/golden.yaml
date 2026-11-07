@@ -1,0 +1,10 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: 20 windows outside, one story, hits the minimum
+  answers: {windows: 20}
+  expected_subtotal_cents: 12000
+  expected_total_cents: 12500
+- name: 25 windows, two stories, inside and out, 10 screens, hard water
+  answers: {windows: 25, stories: 2, sides: inside_and_out, screens: 10, hard_water: true}
+  # 25 x 1.8 x 1.2 = 54 window-cleans x $6 = $324; screens $30; hard water 25 x $4 = $100
+  expected_lines: {windows: 32400, screens: 3000, hard_water: 10000}
+  expected_total_cents: 45400

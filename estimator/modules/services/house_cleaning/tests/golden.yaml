@@ -1,0 +1,16 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: 3 bed 2 bath average one-time
+  answers: {bedrooms: 3, bathrooms: 2, sqft: 1800, condition: "3", frequency: one_time}
+  # hours = (1 + 1.5 + 1.5 + 1.35) x 1.0 = 5.35 -> 5.35 x $50
+  expected_lines: {labor: 26750}
+  expected_total_cents: 26750
+- name: dirty 2 bed with pets, biweekly, oven and 10 windows
+  answers: {bedrooms: 2, bathrooms: 1, sqft: 1000, condition: "4", pets: true, frequency: biweekly,
+            oven: true, interior_windows: 10}
+  # hours = round(3.5 x 1.2 + 0.25, 2) x 0.85 = 3.7825 -> $189.125 -> 18913 cents (half up)
+  expected_lines: {labor: 18913, oven: 3500, windows: 6000}
+  expected_total_cents: 28413
+- name: small clean home monthly hits the minimum
+  answers: {bedrooms: 1, bathrooms: 1, sqft: 500, condition: "2", frequency: monthly}
+  expected_subtotal_cents: 10620
+  expected_total_cents: 12000

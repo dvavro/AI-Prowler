@@ -1,0 +1,79 @@
+# Drywall from typed wall length, height and ceiling area (no plans needed).
+# Board sq ft = wall lf x height + ceiling - openings, 12% waste; mud, tape and screws per sq ft hung.
+id: drywall
+name: Drywall
+version: 0.1.0
+category: construction
+path: both
+description: Hang and finish drywall on walls and ceilings (standard, fire-rated or moisture-resistant board, finish level 3 to 5), with openings deducted and optional tear-out.
+minimum_charge: "750.00"
+keywords: [drywall, sheetrock, gypsum board, hang drywall, tape and mud, mud and tape, drywall install, drywall finish]
+required_any: [wall_lf, ceiling_sqft]
+notes:
+  - "Garage walls and ceilings shared with living space usually need 5/8 in fire-rated board; check local code."
+
+questions:
+  - {id: wall_lf, label: "Wall length (all walls added up)", type: number, unit: lf, default: 0, min: 0, max: 20000}
+  - id: wall_height
+    label: "Wall height"
+    type: choice
+    default: "8"
+    choices:
+      - {value: "8", label: "8 ft", factor: "8"}
+      - {value: "9", label: "9 ft", factor: "9"}
+      - {value: "10", label: "10 ft", factor: "10"}
+  - {id: ceiling_sqft, label: "Ceiling area", type: number, unit: sqft, default: 0, min: 0, max: 100000}
+  - {id: openings_sqft, label: "Door and window area to leave out", type: number, unit: sqft, default: 0, min: 0,
+     max: 100000, help: "About 20 sq ft per door and 15 per window."}
+  - id: board
+    label: "Board"
+    type: choice
+    default: standard
+    # factor is a code: 1 standard 1/2 in, 2 fire-rated 5/8 in, 3 moisture-resistant
+    choices:
+      - {value: standard, label: "Standard 1/2 in", factor: "1"}
+      - {value: fire, label: "Fire-rated 5/8 in Type X", factor: "2"}
+      - {value: moisture, label: "Moisture-resistant (baths)", factor: "3"}
+  - id: finish
+    label: "Finish level"
+    type: choice
+    default: "4"
+    choices:
+      - {value: "3", label: "Level 3 (under texture)", factor: "3"}
+      - {value: "4", label: "Level 4 (flat paint)", factor: "4"}
+      - {value: "5", label: "Level 5 (skim coat, smooth)", factor: "5"}
+  - {id: remove_existing, label: "Tear out the old drywall?", type: boolean, default: false}
+
+scenarios:
+  - {id: good, label: "Good: level 3 finish (for texture)", answers: {finish: "3"}}
+  - {id: better, label: "Better: level 4 finish", answers: {finish: "4"}}
+  - {id: best, label: "Best: level 5 smooth finish", answers: {finish: "5"}}
+
+lines:
+  - {id: removal, description: "Tear out and haul away old drywall", kind: labor, unit: sqft,
+     quantity: "max(wall_lf * wall_height + ceiling_sqft - openings_sqft, 0)", price_key: dw_demo_sqft,
+     when: "remove_existing"}
+  - {id: board_standard, description: "Drywall board, 1/2 in", kind: material, unit: sqft,
+     quantity: "max(wall_lf * wall_height + ceiling_sqft - openings_sqft, 0)", waste: "0.12", price_key: dw_board_sqft,
+     when: "board == 1"}
+  - {id: board_fire, description: "Drywall board, 5/8 in Type X", kind: material, unit: sqft,
+     quantity: "max(wall_lf * wall_height + ceiling_sqft - openings_sqft, 0)", waste: "0.12", price_key: dw_fire_sqft,
+     when: "board == 2"}
+  - {id: board_moisture, description: "Moisture-resistant drywall board", kind: material, unit: sqft,
+     quantity: "max(wall_lf * wall_height + ceiling_sqft - openings_sqft, 0)", waste: "0.12", price_key: dw_mr_sqft,
+     when: "board == 3"}
+  - {id: supplies, description: "Mud, tape, screws and corner bead", kind: material, unit: sqft,
+     quantity: "max(wall_lf * wall_height + ceiling_sqft - openings_sqft, 0)", price_key: dw_supplies_sqft}
+  - {id: hang, description: "Hang drywall", kind: labor, unit: sqft,
+     quantity: "max(wall_lf * wall_height + ceiling_sqft - openings_sqft, 0)", price_key: dw_hang_sqft}
+  - {id: ceiling_extra, description: "Ceiling hanging (extra)", kind: labor, unit: sqft, quantity: "ceiling_sqft",
+     price_key: dw_ceiling_sqft, when: "ceiling_sqft > 0"}
+  - {id: finish_l3, description: "Tape and finish, level 3", kind: labor, unit: sqft,
+     quantity: "max(wall_lf * wall_height + ceiling_sqft - openings_sqft, 0)", price_key: dw_finish3_sqft,
+     when: "finish == 3"}
+  - {id: finish_l4, description: "Tape and finish, level 4", kind: labor, unit: sqft,
+     quantity: "max(wall_lf * wall_height + ceiling_sqft - openings_sqft, 0)", price_key: dw_finish4_sqft,
+     when: "finish == 4"}
+  - {id: finish_l5, description: "Tape and finish, level 5 skim coat", kind: labor, unit: sqft,
+     quantity: "max(wall_lf * wall_height + ceiling_sqft - openings_sqft, 0)", price_key: dw_finish5_sqft,
+     when: "finish == 5"}

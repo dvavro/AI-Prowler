@@ -1,0 +1,19 @@
+price_key,description,kind,unit,cost
+rf_tearoff_sq,Tear-off and disposal per square per layer (sample),labor,sq,55.00
+rf_deck_ea,Decking sheet replaced (sample),material,ea,75.00
+rf_underlay_sq,Synthetic underlayment per square (sample),material,sq,25.00
+rf_tile_underlay_sq,Tile underlayment two layers per square (sample),material,sq,60.00
+rf_3tab_sq,3-tab shingles per square (sample),material,sq,95.00
+rf_arch_sq,Architectural shingles per square (sample),material,sq,125.00
+rf_tile_sq,Concrete tile per square (sample),material,sq,250.00
+rf_metal_sq,Standing seam metal per square (sample),material,sq,450.00
+rf_tpo_sq,TPO membrane per square (sample),material,sq,200.00
+rf_lab_shingle_sq,Shingle install labor per square (sample),labor,sq,85.00
+rf_lab_tile_sq,Tile install labor per square (sample),labor,sq,180.00
+rf_lab_metal_sq,Metal install labor per square (sample),labor,sq,250.00
+rf_lab_flat_sq,Flat roof install labor per square (sample),labor,sq,120.00
+rf_drip_lf,Drip edge per linear ft (sample),material,lf,2.50
+rf_starter_lf,Starter strip per linear ft (sample),material,lf,1.20
+rf_ridge_lf,Ridge cap per linear ft (sample),material,lf,3.50
+rf_access_sq,Two-story access per square (sample),labor,sq,25.00
+rf_permit_ea,Roofing permit (sample),other,ea,350.00

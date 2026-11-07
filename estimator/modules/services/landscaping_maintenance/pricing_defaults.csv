@@ -1,0 +1,6 @@
+price_key,description,kind,unit,cost
+lm_mow_sqft,Mowing per sq ft per visit (sample),other,sqft,0.01
+lm_edge_ea,Edging per visit (sample),other,ea,10.00
+lm_hedge_lf,Hedge trimming per linear ft (sample),other,lf,1.50
+lm_bed_sqft,Bed weeding per sq ft per visit (sample),other,sqft,0.02
+lm_leaf_ea,Leaf cleanup (sample),other,ea,150.00

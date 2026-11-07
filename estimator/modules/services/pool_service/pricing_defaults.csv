@@ -1,0 +1,5 @@
+price_key,description,kind,unit,cost
+ps_visit_ea,Pool service visit (sample),other,ea,30.00
+ps_chemicals_ea,Chemicals per visit (sample),material,ea,10.00
+ps_filter_ea,Filter cleaning (sample),other,ea,75.00
+ps_cleanup_ea,Cleanup unit (sample),other,ea,100.00

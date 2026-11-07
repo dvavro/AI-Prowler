@@ -1,0 +1,100 @@
+# Siding and stucco from typed wall area, openings, corners and eaves (no plans needed).
+# Squares = (wall area - openings) / 100; corners = corners x wall height; J-channel = opening perimeter; soffit = eave lf x depth.
+id: siding
+name: Siding
+version: 0.1.0
+category: construction
+path: both
+description: Vinyl, fiber cement or wood siding, stucco, or stone veneer, priced in squares with removal, house wrap, corners, J-channel or casing bead, soffit and fascia.
+minimum_charge: "1500.00"
+keywords: [siding, new siding, re-side, reside, stucco, restucco, fiber cement, hardie, vinyl siding, stone veneer, soffit, fascia]
+notes:
+  - "Hot sun: fiber cement and stucco hold up better than vinyl, which can warp next to reflective windows."
+
+questions:
+  - {id: wall_sqft, label: "Outside wall area (all sides)", type: number, unit: sqft, required: true, min: 50, max: 100000}
+  - {id: openings, label: "Windows and doors in those walls", type: integer, default: 0, min: 0, max: 500,
+     help: "Each takes about 15 sq ft off the wall and needs about 16 ft of trim around it."}
+  - id: material
+    label: "Material"
+    type: choice
+    required: true
+    # factor is a code: 1 vinyl, 2 fiber cement, 3 wood, 4 stucco, 5 stone veneer
+    choices:
+      - {value: vinyl, label: "Vinyl", factor: "1"}
+      - {value: fiber_cement, label: "Fiber cement (lap)", factor: "2"}
+      - {value: wood, label: "Wood lap", factor: "3"}
+      - {value: stucco, label: "Stucco (3-coat)", factor: "4"}
+      - {value: stone, label: "Stone veneer", factor: "5"}
+  - id: walls
+    label: "Walls"
+    type: choice
+    default: simple
+    # factor is the waste
+    choices:
+      - {value: simple, label: "Simple (few corners)", factor: "0.10"}
+      - {value: complex, label: "Complex (many corners, gables)", factor: "0.15"}
+  - id: stories
+    label: "Stories"
+    type: choice
+    default: one
+    # factor is the corner height in feet
+    choices:
+      - {value: one, label: "One story", factor: "10"}
+      - {value: two, label: "Two stories", factor: "20"}
+  - {id: outside_corners, label: "Outside corners", type: integer, default: 4, min: 0, max: 100}
+  - {id: inside_corners, label: "Inside corners", type: integer, default: 0, min: 0, max: 100}
+  - {id: eave_lf, label: "Eaves (soffit and fascia)", type: number, unit: lf, default: 0, min: 0, max: 5000}
+  - id: soffit_depth
+    label: "Soffit depth"
+    type: choice
+    default: "12"
+    # factor is the depth in feet
+    choices:
+      - {value: "12", label: "12 in", factor: "1"}
+      - {value: "18", label: "18 in", factor: "1.5"}
+      - {value: "24", label: "24 in", factor: "2"}
+  - {id: house_wrap, label: "New house wrap or paper?", type: boolean, default: true}
+  - {id: remove_old, label: "Remove the old siding?", type: boolean, default: true}
+
+scenarios:
+  - {id: good, label: "Good: vinyl", answers: {material: vinyl}}
+  - {id: better, label: "Better: fiber cement", answers: {material: fiber_cement}}
+  - {id: best, label: "Best: wood lap", answers: {material: wood}}
+
+lines:
+  - {id: removal, description: "Remove and haul away old siding", kind: labor, unit: sq,
+     quantity: "max(wall_sqft - openings * 15, 0) / 100", price_key: sd_tearoff_sq, when: "remove_old"}
+  - {id: house_wrap, description: "House wrap or building paper", kind: material, unit: sq,
+     quantity: "max(wall_sqft - openings * 15, 0) / 100", waste: "0.10", price_key: sd_wrap_sq, when: "house_wrap"}
+  - {id: vinyl, description: "Vinyl siding", kind: material, unit: sq, quantity: "max(wall_sqft - openings * 15, 0) / 100",
+     waste: "walls", price_key: sd_vinyl_sq, when: "material == 1"}
+  - {id: fiber_cement, description: "Fiber cement lap siding", kind: material, unit: sq,
+     quantity: "max(wall_sqft - openings * 15, 0) / 100", waste: "walls", price_key: sd_fc_sq, when: "material == 2"}
+  - {id: wood, description: "Wood lap siding", kind: material, unit: sq, quantity: "max(wall_sqft - openings * 15, 0) / 100",
+     waste: "walls", price_key: sd_wood_sq, when: "material == 3"}
+  - {id: stucco, description: "Stucco lath, scratch, brown and finish coats", kind: material, unit: sq,
+     quantity: "max(wall_sqft - openings * 15, 0) / 100", waste: "walls", price_key: sd_stucco_sq, when: "material == 4"}
+  - {id: stone, description: "Stone veneer with lath and mortar", kind: material, unit: sq,
+     quantity: "max(wall_sqft - openings * 15, 0) / 100", waste: "walls", price_key: sd_stone_sq, when: "material == 5"}
+  - {id: install_vinyl, description: "Install vinyl siding", kind: labor, unit: sq,
+     quantity: "max(wall_sqft - openings * 15, 0) / 100", price_key: sd_lab_vinyl_sq, when: "material == 1"}
+  - {id: install_fiber_cement, description: "Install fiber cement siding", kind: labor, unit: sq,
+     quantity: "max(wall_sqft - openings * 15, 0) / 100", price_key: sd_lab_fc_sq, when: "material == 2"}
+  - {id: install_wood, description: "Install wood siding", kind: labor, unit: sq,
+     quantity: "max(wall_sqft - openings * 15, 0) / 100", price_key: sd_lab_wood_sq, when: "material == 3"}
+  - {id: install_stucco, description: "Apply stucco", kind: labor, unit: sq,
+     quantity: "max(wall_sqft - openings * 15, 0) / 100", price_key: sd_lab_stucco_sq, when: "material == 4"}
+  - {id: install_stone, description: "Set stone veneer", kind: labor, unit: sq,
+     quantity: "max(wall_sqft - openings * 15, 0) / 100", price_key: sd_lab_stone_sq, when: "material == 5"}
+  - {id: corners, description: "Outside and inside corners", kind: material, unit: lf,
+     quantity: "(outside_corners + inside_corners) * stories", waste: "0.05", price_key: sd_corner_lf,
+     when: "material <= 3 and outside_corners + inside_corners > 0"}
+  - {id: j_channel, description: "J-channel and trim around openings", kind: material, unit: lf,
+     quantity: "openings * 16", waste: "0.05", price_key: sd_jchannel_lf, when: "material <= 3 and openings > 0"}
+  - {id: casing_bead, description: "Casing bead around openings", kind: material, unit: lf, quantity: "openings * 16",
+     waste: "0.05", price_key: sd_bead_lf, when: "material >= 4 and openings > 0"}
+  - {id: soffit, description: "Soffit", kind: material, unit: sqft, quantity: "eave_lf * soffit_depth", waste: "0.10",
+     price_key: sd_soffit_sqft, when: "eave_lf > 0"}
+  - {id: fascia, description: "Fascia", kind: material, unit: lf, quantity: "eave_lf", waste: "0.05", price_key: sd_fascia_lf,
+     when: "eave_lf > 0"}

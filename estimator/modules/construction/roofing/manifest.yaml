@@ -1,0 +1,110 @@
+# Roof replacement from the plan (top-down) area, pitch and roof shape (no plans needed).
+# Squares = plan area x pitch factor / 100. Waste: 10% gable, 15% hip or complex.
+id: roofing
+name: Roofing
+version: 0.1.0
+category: construction
+path: both
+description: Roof replacement priced in squares from the top-down roof area and pitch, with tear-off, underlayment, shingles, tile, metal or flat roofing, edges, ridge, decking and permit.
+minimum_charge: "1500.00"
+keywords: [roof, roofing, re-roof, reroof, new roof, roof replacement, replace the roof, shingle, shingles, tile roof, metal roof, flat roof, tpo]
+notes:
+  - "Hot climate: tile roofs usually need a heavier (two-layer) underlayment; check local code."
+  - "Confirm the number of layers to tear off on site; extra layers change the price a lot."
+# Good / better / best for the bid: same roof, different roofing.
+scenarios:
+  - {id: good, label: "Good: 3-tab shingles", answers: {material: three_tab}}
+  - {id: better, label: "Better: architectural shingles", answers: {material: architectural}}
+  - {id: best, label: "Best: standing seam metal", answers: {material: metal}}
+
+questions:
+  - {id: roof_area_sqft, label: "Roof area seen from above (include overhangs)", type: number, unit: sqft,
+     required: true, min: 50, max: 100000,
+     help: "Measure the footprint of the roof from above; the pitch adds the slope."}
+  - id: pitch
+    label: "Roof pitch"
+    type: choice
+    required: true
+    # factor is the pitch multiplier (slope length / run)
+    choices:
+      - {value: flat, label: "Flat / low slope (0-2 in 12)", factor: "1.0"}
+      - {value: "4/12", label: "4 in 12", factor: "1.054"}
+      - {value: "5/12", label: "5 in 12", factor: "1.083"}
+      - {value: "6/12", label: "6 in 12", factor: "1.118"}
+      - {value: "7/12", label: "7 in 12", factor: "1.158"}
+      - {value: "8/12", label: "8 in 12", factor: "1.202"}
+      - {value: "9/12", label: "9 in 12", factor: "1.250"}
+      - {value: "10/12", label: "10 in 12", factor: "1.302"}
+      - {value: "12/12", label: "12 in 12", factor: "1.414"}
+  - id: shape
+    label: "Roof shape"
+    type: choice
+    default: gable
+    # factor is the material waste
+    choices:
+      - {value: gable, label: "Gable (simple)", factor: "0.10"}
+      - {value: hip, label: "Hip or complex", factor: "0.15"}
+  - id: material
+    label: "New roofing"
+    type: choice
+    required: true
+    # factor is a code used by the line rules
+    choices:
+      - {value: three_tab, label: "3-tab shingles", factor: "1"}
+      - {value: architectural, label: "Architectural shingles", factor: "2"}
+      - {value: tile, label: "Concrete tile", factor: "3"}
+      - {value: metal, label: "Standing seam metal", factor: "4"}
+      - {value: flat, label: "Flat roof (TPO)", factor: "5"}
+  - {id: layers, label: "Layers to tear off", type: integer, default: 1, min: 0, max: 3}
+  - {id: edges_lf, label: "Eaves and rakes (drip edge)", type: number, unit: lf, default: 0, min: 0, max: 10000,
+     help: "Leave 0 to estimate from the roof area."}
+  - {id: ridge_lf, label: "Ridges and hips", type: number, unit: lf, default: 0, min: 0, max: 5000,
+     help: "Leave 0 to estimate from the roof area."}
+  - {id: decking_sheets, label: "Decking sheets to replace", type: integer, default: 0, min: 0, max: 500}
+  - id: stories
+    label: "Stories"
+    type: choice
+    default: one
+    choices:
+      - {value: one, label: "One story", factor: "1"}
+      - {value: two, label: "Two or more stories", factor: "2"}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+
+lines:
+  - {id: tearoff, description: "Tear off and haul away old roofing (per layer)", kind: labor, unit: sq,
+     quantity: "roof_area_sqft * pitch / 100 * layers", price_key: rf_tearoff_sq, when: "layers > 0"}
+  - {id: decking, description: "Replace decking sheets", kind: material, unit: ea, quantity: "decking_sheets",
+     price_key: rf_deck_ea, when: "decking_sheets > 0"}
+  - {id: underlayment, description: "Synthetic underlayment", kind: material, unit: sq,
+     quantity: "roof_area_sqft * pitch / 100", waste: "0.10", price_key: rf_underlay_sq, when: "material != 3"}
+  - {id: tile_underlayment, description: "Tile underlayment (two layers)", kind: material, unit: sq,
+     quantity: "roof_area_sqft * pitch / 100", waste: "0.10", price_key: rf_tile_underlay_sq, when: "material == 3"}
+  - {id: three_tab, description: "3-tab shingles", kind: material, unit: sq, quantity: "roof_area_sqft * pitch / 100",
+     waste: "shape", price_key: rf_3tab_sq, when: "material == 1"}
+  - {id: architectural, description: "Architectural shingles", kind: material, unit: sq,
+     quantity: "roof_area_sqft * pitch / 100", waste: "shape", price_key: rf_arch_sq, when: "material == 2"}
+  - {id: tile, description: "Concrete roof tile", kind: material, unit: sq, quantity: "roof_area_sqft * pitch / 100",
+     waste: "shape", price_key: rf_tile_sq, when: "material == 3"}
+  - {id: metal, description: "Standing seam metal panels", kind: material, unit: sq,
+     quantity: "roof_area_sqft * pitch / 100", waste: "shape", price_key: rf_metal_sq, when: "material == 4"}
+  - {id: tpo, description: "TPO membrane", kind: material, unit: sq, quantity: "roof_area_sqft * pitch / 100",
+     waste: "0.05", price_key: rf_tpo_sq, when: "material == 5"}
+  - {id: install_shingle, description: "Install shingles", kind: labor, unit: sq, quantity: "roof_area_sqft * pitch / 100",
+     price_key: rf_lab_shingle_sq, when: "material <= 2"}
+  - {id: install_tile, description: "Install tile", kind: labor, unit: sq, quantity: "roof_area_sqft * pitch / 100",
+     price_key: rf_lab_tile_sq, when: "material == 3"}
+  - {id: install_metal, description: "Install metal roofing", kind: labor, unit: sq,
+     quantity: "roof_area_sqft * pitch / 100", price_key: rf_lab_metal_sq, when: "material == 4"}
+  - {id: install_flat, description: "Install flat roofing", kind: labor, unit: sq, quantity: "roof_area_sqft * pitch / 100",
+     price_key: rf_lab_flat_sq, when: "material == 5"}
+  - {id: drip_edge, description: "Drip edge", kind: material, unit: lf,
+     quantity: "edges_lf if edges_lf > 0 else ceil(4 * sqrt(roof_area_sqft))", waste: "0.05", price_key: rf_drip_lf}
+  - {id: starter, description: "Starter strip", kind: material, unit: lf,
+     quantity: "edges_lf if edges_lf > 0 else ceil(4 * sqrt(roof_area_sqft))", waste: "0.05", price_key: rf_starter_lf,
+     when: "material <= 2"}
+  - {id: ridge, description: "Ridge and hip cap", kind: material, unit: lf,
+     quantity: "ridge_lf if ridge_lf > 0 else ceil(sqrt(roof_area_sqft))", waste: "0.05", price_key: rf_ridge_lf,
+     when: "material != 5"}
+  - {id: two_story, description: "Two-story access and safety", kind: labor, unit: sq,
+     quantity: "roof_area_sqft * pitch / 100", price_key: rf_access_sq, when: "stories == 2"}
+  - {id: permit, description: "Permit", kind: other, unit: ea, quantity: "1", price_key: rf_permit_ea, when: "permit"}

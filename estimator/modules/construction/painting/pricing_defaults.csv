@@ -1,0 +1,14 @@
+price_key,description,kind,unit,cost
+pt_prep_sqft,Prep per sq ft (sample),labor,sqft,0.10
+pt_primer_gal,Primer per gallon (sample),material,gal,28.00
+pt_lab_prime_sqft,Priming labor per sq ft (sample),labor,sqft,0.35
+pt_paint_gal,Interior paint per gallon (sample),material,gal,38.00
+pt_premium_gal,Premium interior paint per gallon (sample),material,gal,58.00
+pt_ext_gal,Exterior paint per gallon (sample),material,gal,48.00
+pt_ext_premium_gal,Premium exterior paint per gallon (sample),material,gal,68.00
+pt_supplies_sqft,Painting supplies per sq ft (sample),material,sqft,0.06
+pt_lab_wall_sqft,Wall painting labor per sq ft per coat (sample),labor,sqft,0.55
+pt_lab_ceiling_sqft,Ceiling painting labor per sq ft per coat (sample),labor,sqft,0.65
+pt_lab_ext_sqft,Exterior painting labor per sq ft per coat (sample),labor,sqft,0.70
+pt_trim_lf,Trim painting per linear ft (sample),labor,lf,1.50
+pt_door_ea,Door painting (sample),labor,ea,65.00

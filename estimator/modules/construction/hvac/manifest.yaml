@@ -1,0 +1,97 @@
+# Heating and cooling from conditioned area or tonnage, ducts and registers (no plans needed).
+# Tons = sq ft / sq ft per ton (editable rule), rounded up to the half ton; labor by system plus per duct drop.
+id: hvac
+name: HVAC
+version: 0.1.0
+category: construction
+path: both
+description: Split AC and furnace, heat pump, package unit or ductless mini-splits, sized by tonnage, with removal, line set, new or sealed ducts, registers and returns, thermostats and permit.
+minimum_charge: "500.00"
+keywords: [hvac, air conditioner, ac unit, new ac, ac replacement, replace the ac, heat pump, furnace, mini split, mini-split, ductless, ductwork, new ducts, air handler, package unit]
+required_any: [conditioned_sqft, tons, zones]
+notes:
+  - "Hot climate: a Manual J load calculation beats the square-feet-per-ton rule; size for 110 F days."
+  - "Refrigerant work needs EPA 608 certification and most cities need a permit for equipment changes."
+
+questions:
+  - id: system
+    label: "System"
+    type: choice
+    required: true
+    # factor is a code: 1 split AC + furnace, 2 heat pump, 3 ductless mini-split, 4 package unit
+    choices:
+      - {value: split, label: "Split AC and gas furnace", factor: "1"}
+      - {value: heat_pump, label: "Heat pump split system", factor: "2"}
+      - {value: mini_split, label: "Ductless mini-split", factor: "3"}
+      - {value: package, label: "Package unit (rooftop or ground)", factor: "4"}
+  - {id: conditioned_sqft, label: "Area to heat and cool", type: number, unit: sqft, default: 0, min: 0, max: 50000}
+  - {id: tons, label: "Tons, if you already know them", type: number, default: 0, min: 0, max: 50,
+     help: "Leave 0 to size from the area."}
+  - {id: sqft_per_ton, label: "Square feet per ton (sizing rule)", type: number, unit: sqft, default: 500, min: 200,
+     max: 1000}
+  - {id: zones, label: "Mini-split indoor heads", type: integer, default: 0, min: 0, max: 20,
+     help: "Leave 0 to allow one head per 400 sq ft."}
+  - id: ducts
+    label: "Ducts"
+    type: choice
+    default: reuse
+    # factor is a code: 0 reuse, 1 new ducts, 2 seal and repair
+    choices:
+      - {value: reuse, label: "Reuse the existing ducts", factor: "0"}
+      - {value: new, label: "New ducts", factor: "1"}
+      - {value: seal, label: "Seal and repair the existing ducts", factor: "2"}
+  - {id: registers, label: "Supply registers", type: integer, default: 0, min: 0, max: 200,
+     help: "Leave 0 to allow one per 150 sq ft on new ducts."}
+  - {id: returns, label: "Return grilles", type: integer, default: 1, min: 0, max: 50}
+  - {id: branch_run_ft, label: "Average branch duct run", type: number, unit: ft, default: 20, min: 5, max: 100}
+  - {id: line_set_ft, label: "Refrigerant line set length", type: number, unit: ft, default: 25, min: 0, max: 200}
+  - {id: thermostats, label: "Thermostats", type: integer, default: 1, min: 0, max: 20}
+  - {id: remove_old, label: "Remove the old equipment?", type: boolean, default: true}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+
+lines:
+  - {id: removal, description: "Remove and dispose of old equipment", kind: labor, unit: hr, quantity: "4",
+     price_key: hv_labor_hr, when: "remove_old"}
+  - {id: disposal, description: "Equipment and refrigerant disposal", kind: other, unit: ea, quantity: "1",
+     price_key: hv_disposal_ea, when: "remove_old"}
+  # equipment is priced per ton of capacity: tons given, or area / sq ft per ton rounded up to the half ton (1.5 minimum)
+  - {id: split_equipment, description: "AC condenser, coil and gas furnace (per ton)", kind: material, unit: ea,
+     quantity: "tons if tons > 0 else max(ceil_to(conditioned_sqft / sqft_per_ton, 0.5), 1.5)", price_key: hv_split_ton,
+     when: "system == 1"}
+  - {id: heat_pump_equipment, description: "Heat pump and air handler (per ton)", kind: material, unit: ea,
+     quantity: "tons if tons > 0 else max(ceil_to(conditioned_sqft / sqft_per_ton, 0.5), 1.5)",
+     price_key: hv_heat_pump_ton, when: "system == 2"}
+  - {id: package_equipment, description: "Package unit (per ton)", kind: material, unit: ea,
+     quantity: "tons if tons > 0 else max(ceil_to(conditioned_sqft / sqft_per_ton, 0.5), 1.5)", price_key: hv_package_ton,
+     when: "system == 4"}
+  - {id: mini_split_heads, description: "Mini-split heads with outdoor capacity (per head)", kind: material, unit: ea,
+     quantity: "zones if zones > 0 else max(ceil(conditioned_sqft / 400), 1)", price_key: hv_mini_split_head,
+     when: "system == 3"}
+  # install hours: split or heat pump 16, package 10, mini-split 8 per head
+  - {id: install_labor, description: "Install equipment", kind: labor, unit: hr,
+     quantity: "(zones if zones > 0 else max(ceil(conditioned_sqft / 400), 1)) * 8 if system == 3 else (10 if system == 4 else 16)",
+     price_key: hv_labor_hr}
+  - {id: line_set, description: "Refrigerant line set", kind: material, unit: lf, quantity: "line_set_ft", waste: "0.05",
+     price_key: hv_line_set_lf, when: "system != 4 and line_set_ft > 0"}
+  - {id: trunk, description: "Supply and return trunk duct", kind: material, unit: lf,
+     quantity: "ceil(conditioned_sqft / 25)", waste: "0.10", price_key: hv_trunk_lf, when: "ducts == 1 and system != 3"}
+  - {id: branches, description: "Branch ducts", kind: material, unit: lf,
+     quantity: "(registers if registers > 0 else ceil(conditioned_sqft / 150)) * branch_run_ft", waste: "0.10",
+     price_key: hv_flex_lf, when: "ducts == 1 and system != 3"}
+  - {id: boots, description: "Boots and fittings", kind: material, unit: ea,
+     quantity: "registers if registers > 0 else ceil(conditioned_sqft / 150)", price_key: hv_boot_ea,
+     when: "ducts == 1 and system != 3"}
+  - {id: registers, description: "Supply registers", kind: material, unit: ea,
+     quantity: "registers if registers > 0 else ceil(conditioned_sqft / 150)", price_key: hv_register_ea,
+     when: "ducts == 1 and system != 3"}
+  - {id: returns, description: "Return grilles and filter boxes", kind: material, unit: ea, quantity: "returns",
+     price_key: hv_return_ea, when: "ducts == 1 and system != 3 and returns > 0"}
+  - {id: duct_labor, description: "Run ducts (2 hr per drop)", kind: labor, unit: hr,
+     quantity: "((registers if registers > 0 else ceil(conditioned_sqft / 150)) + returns) * 2", price_key: hv_labor_hr,
+     when: "ducts == 1 and system != 3"}
+  - {id: duct_sealing, description: "Seal and repair existing ducts", kind: labor, unit: sqft, quantity: "conditioned_sqft",
+     price_key: hv_seal_sqft, when: "ducts == 2 and conditioned_sqft > 0"}
+  - {id: thermostats, description: "Thermostats", kind: material, unit: ea, quantity: "thermostats",
+     price_key: hv_thermostat_ea, when: "thermostats > 0"}
+  - {id: permit, description: "Mechanical permit", kind: other, unit: ea, quantity: "1", price_key: hv_permit_ea,
+     when: "permit"}

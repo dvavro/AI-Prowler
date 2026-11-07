@@ -1,0 +1,11 @@
+# Golden cases: sample prices, no markups. Totals in cents (one month).
+- name: 5,000 sq ft lawn every 2 weeks
+  answers: {lawn_sqft: 5000}
+  # 5,000 x 2 visits x $0.01
+  expected_lines: {mowing: 10000}
+  expected_total_cents: 10000
+- name: 8,000 sq ft weekly with edging, 60 ft hedges, 200 sq ft beds, leaf cleanup
+  answers: {lawn_sqft: 8000, visits: weekly, edging: true, hedge_lf: 60, beds_sqft: 200, leaf_cleanup: true}
+  # mow 32,000 x $0.01 = $320; edge 4 x $10; hedges 60 x $1.50 = $90; beds 800 x $0.02 = $16; leaves $150
+  expected_lines: {mowing: 32000, edging: 4000, hedges: 9000, beds: 1600, leaves: 15000}
+  expected_total_cents: 61600

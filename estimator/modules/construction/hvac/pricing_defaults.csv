@@ -1,0 +1,16 @@
+price_key,description,kind,unit,cost
+hv_labor_hr,HVAC labor per hour (sample),labor,hr,95.00
+hv_disposal_ea,Equipment and refrigerant disposal (sample),other,ea,150.00
+hv_split_ton,Split AC and furnace per ton (sample),material,ea,1400.00
+hv_heat_pump_ton,Heat pump system per ton (sample),material,ea,1600.00
+hv_package_ton,Package unit per ton (sample),material,ea,1500.00
+hv_mini_split_head,Mini-split per head (sample),material,ea,1800.00
+hv_line_set_lf,Line set per linear ft (sample),material,lf,12.00
+hv_trunk_lf,Trunk duct per linear ft (sample),material,lf,18.00
+hv_flex_lf,Branch duct per linear ft (sample),material,lf,6.00
+hv_boot_ea,Boot and fittings per drop (sample),material,ea,35.00
+hv_register_ea,Supply register (sample),material,ea,25.00
+hv_return_ea,Return grille and filter box (sample),material,ea,60.00
+hv_seal_sqft,Duct sealing per sq ft served (sample),labor,sqft,0.50
+hv_thermostat_ea,Thermostat (sample),material,ea,180.00
+hv_permit_ea,Mechanical permit (sample),other,ea,300.00

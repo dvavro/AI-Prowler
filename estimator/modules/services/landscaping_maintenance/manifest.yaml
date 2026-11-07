@@ -1,0 +1,39 @@
+# Landscaping maintenance: monthly mowing and upkeep priced by area and visits.
+id: landscaping_maintenance
+name: Landscaping Maintenance
+version: 0.1.0
+category: service
+path: quick_estimate
+description: Monthly lawn and yard upkeep priced by lawn area and visits, with edging, hedge trimming, weeding beds and leaf cleanup.
+minimum_charge: "80.00"
+keywords: [landscaping maintenance, lawn care, lawn service, lawn mowing, mow, mowing, mow my lawn, yard maintenance, yard work, hedge trimming, hedges, weeding, leaf cleanup, edging, gardener]
+required_any: [lawn_sqft, hedge_lf, beds_sqft]
+# A won quote with one of these answers becomes a repeating job in AI-Prowler.
+recurrence: {question: visits, map: {weekly: Weekly, biweekly: Biweekly, monthly: Monthly}}
+
+questions:
+  - {id: lawn_sqft, label: "Lawn area to mow", type: number, unit: sqft, default: 0, min: 0, max: 200000}
+  - id: visits
+    label: "How often?"
+    type: choice
+    default: biweekly
+    choices:
+      - {value: weekly, label: "Weekly (4 visits a month)", factor: "4"}
+      - {value: biweekly, label: "Every 2 weeks (2 visits a month)", factor: "2"}
+      - {value: monthly, label: "Monthly (1 visit)", factor: "1"}
+  - {id: edging, label: "Edging each visit?", type: boolean, default: false}
+  - {id: hedge_lf, label: "Hedges to trim (once a month)", type: number, unit: lf, default: 0, min: 0, max: 5000}
+  - {id: beds_sqft, label: "Flower beds to weed", type: number, unit: sqft, default: 0, min: 0, max: 50000}
+  - {id: leaf_cleanup, label: "One-time leaf cleanup?", type: boolean, default: false}
+
+lines:
+  - {id: mowing, description: "Mowing (per month)", kind: other, unit: sqft, quantity: "lawn_sqft * visits",
+     price_key: lm_mow_sqft, when: "lawn_sqft > 0"}
+  - {id: edging, description: "Edging (per month)", kind: other, unit: ea, quantity: "visits",
+     price_key: lm_edge_ea, when: "edging"}
+  - {id: hedges, description: "Hedge trimming", kind: other, unit: lf, quantity: "hedge_lf",
+     price_key: lm_hedge_lf, when: "hedge_lf > 0"}
+  - {id: beds, description: "Bed weeding (per month)", kind: other, unit: sqft, quantity: "beds_sqft * visits",
+     price_key: lm_bed_sqft, when: "beds_sqft > 0"}
+  - {id: leaves, description: "Leaf cleanup (one time)", kind: other, unit: ea, quantity: "1",
+     price_key: lm_leaf_ea, when: "leaf_cleanup"}

@@ -1,0 +1,20 @@
+price_key,description,kind,unit,cost
+fl_remove_soft_sqft,Remove carpet or vinyl per sq ft (sample),labor,sqft,0.75
+fl_remove_hard_sqft,Remove tile or hardwood per sq ft (sample),labor,sqft,2.00
+fl_prep_sqft,Subfloor leveling per sq ft (sample),labor,sqft,1.25
+fl_lvp_sqft,LVP per sq ft (sample),material,sqft,2.75
+fl_laminate_sqft,Laminate per sq ft (sample),material,sqft,2.25
+fl_tile_sqft,Tile per sq ft (sample),material,sqft,3.50
+fl_hardwood_sqft,Hardwood per sq ft (sample),material,sqft,5.50
+fl_carpet_sqft,Carpet per sq ft (sample),material,sqft,2.75
+fl_underlay_sqft,Underlayment per sq ft (sample),material,sqft,0.45
+fl_pad_sqft,Carpet pad per sq ft (sample),material,sqft,0.65
+fl_setting_sqft,Tile setting materials per sq ft (sample),material,sqft,1.50
+fl_lab_plank_sqft,Plank install labor per sq ft (sample),labor,sqft,2.00
+fl_lab_tile_sqft,Tile install labor per sq ft (sample),labor,sqft,5.50
+fl_lab_hardwood_sqft,Hardwood install labor per sq ft (sample),labor,sqft,4.50
+fl_lab_carpet_sqft,Carpet install labor per sq ft (sample),labor,sqft,1.25
+fl_diagonal_sqft,Diagonal layout extra labor per sq ft (sample),labor,sqft,0.75
+fl_baseboard_lf,Baseboard supplied and installed per linear ft (sample),material,lf,3.25
+fl_stair_ea,Stair step (sample),labor,ea,60.00
+fl_transition_ea,Transition strip (sample),material,ea,25.00

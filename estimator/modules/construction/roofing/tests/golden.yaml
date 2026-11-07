@@ -1,0 +1,19 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: 2,000 sq ft gable roof, 5/12, architectural shingles, 1 layer off
+  answers: {roof_area_sqft: 2000, pitch: "5/12", material: architectural}
+  # squares = 2,000 x 1.083 / 100 = 21.66; shingles 21.66 x 1.10 x $125 = $2,978.25
+  # drip edge ceil(4 x sqrt 2000) = 179 lf x 1.05 x $2.50 = $469.88; ridge ceil(sqrt 2000) = 45 lf
+  expected_lines: {tearoff: 119130, underlayment: 59565, architectural: 297825, install_shingle: 184110,
+                   drip_edge: 46988, starter: 22554, ridge: 16538, permit: 35000}
+  expected_total_cents: 781710
+- name: 2,400 sq ft hip tile roof, 6/12, two story, measured edges and ridge, 6 decking sheets
+  answers: {roof_area_sqft: 2400, pitch: "6/12", shape: hip, material: tile, layers: 1, edges_lf: 260,
+            ridge_lf: 90, decking_sheets: 6, stories: two}
+  # squares = 26.832; tile 26.832 x 1.15 x $250 = $7,714.20
+  expected_lines: {tearoff: 147576, decking: 45000, tile_underlayment: 177091, tile: 771420, install_tile: 482976,
+                   drip_edge: 68250, ridge: 33075, two_story: 67080, permit: 35000}
+  expected_total_cents: 1827468
+- name: 1,200 sq ft flat TPO roof, 2 layers off, no permit
+  answers: {roof_area_sqft: 1200, pitch: flat, material: flat, layers: 2, permit: false}
+  expected_lines: {tearoff: 132000, underlayment: 33000, tpo: 252000, install_flat: 144000, drip_edge: 36488}
+  expected_total_cents: 597488

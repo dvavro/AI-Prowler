@@ -1,0 +1,9 @@
+price_key,description,kind,unit,cost
+dm_test_ea,Asbestos and lead test (sample),other,ea,450.00
+dm_protect_ea,Dust walls and floor protection (sample),other,ea,250.00
+dm_labor_hr,Demolition labor per hour (sample),labor,hr,55.00
+dm_concrete_sqft,Concrete break-out per sq ft (sample),other,sqft,3.00
+dm_concrete_ton,Concrete haul and dump per ton (sample),other,ton,40.00
+dm_structure_sqft,Structure demolition per sq ft (sample),other,sqft,6.00
+dm_dumpster_ea,20 cu yd dumpster (sample),other,ea,550.00
+dm_permit_ea,Demolition permit (sample),other,ea,200.00

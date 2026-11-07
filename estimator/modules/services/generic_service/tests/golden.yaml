@@ -1,0 +1,15 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: two hours, one person, trip fee, no materials
+  answers: {hours: 2}
+  # 2 x $60 = $120 + $45 trip = $165
+  expected_lines: {labor: 12000, trip: 4500}
+  expected_total_cents: 16500
+- name: 3 hours, crew of 2, next day, $85.50 materials, no trip fee
+  answers: {hours: 3, crew_size: 2, urgency: next_day, materials_dollars: "85.50", trip_fee: false}
+  # labor 3 x 2 x 1.15 = 6.9 hr x $60 = $414.00; materials $85.50
+  expected_lines: {labor: 41400, materials: 8550}
+  expected_total_cents: 49950
+- name: quick half hour hits the minimum
+  answers: {hours: "0.5", trip_fee: false}
+  expected_subtotal_cents: 3000
+  expected_total_cents: 10000

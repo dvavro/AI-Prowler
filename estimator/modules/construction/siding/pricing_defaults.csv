@@ -1,0 +1,18 @@
+price_key,description,kind,unit,cost
+sd_tearoff_sq,Siding tear-off per square (sample),labor,sq,75.00
+sd_wrap_sq,House wrap per square (sample),material,sq,20.00
+sd_vinyl_sq,Vinyl siding per square (sample),material,sq,160.00
+sd_fc_sq,Fiber cement siding per square (sample),material,sq,280.00
+sd_wood_sq,Wood lap siding per square (sample),material,sq,400.00
+sd_stucco_sq,Stucco materials per square (sample),material,sq,450.00
+sd_stone_sq,Stone veneer materials per square (sample),material,sq,1200.00
+sd_lab_vinyl_sq,Vinyl install labor per square (sample),labor,sq,150.00
+sd_lab_fc_sq,Fiber cement install labor per square (sample),labor,sq,250.00
+sd_lab_wood_sq,Wood siding install labor per square (sample),labor,sq,300.00
+sd_lab_stucco_sq,Stucco labor per square (sample),labor,sq,550.00
+sd_lab_stone_sq,Stone veneer labor per square (sample),labor,sq,1400.00
+sd_corner_lf,Corner trim per linear ft (sample),material,lf,6.00
+sd_jchannel_lf,J-channel and opening trim per linear ft (sample),material,lf,3.50
+sd_bead_lf,Casing bead per linear ft (sample),material,lf,2.00
+sd_soffit_sqft,Soffit supplied and installed per sq ft (sample),material,sqft,9.00
+sd_fascia_lf,Fascia supplied and installed per linear ft (sample),material,lf,8.00

@@ -1,0 +1,33 @@
+# Generic service: any service job that has no module of its own yet.
+# Priced from estimated labor hours, crew size, materials at cost and an optional trip fee.
+id: generic_service
+name: General Service Job
+version: 0.1.0
+category: service
+path: quick_estimate
+description: Any service job without its own module, priced from hours, crew size, materials and a trip fee.
+minimum_charge: "100.00"
+keywords: [handyman, odd job, general service, service call, repair, install, haul, gutter, gutters, gutter cleaning, carpet cleaning, clean the carpets, steam clean, upholstery cleaning]
+
+questions:
+  - {id: hours, label: "Estimated hours on site", type: number, required: true, min: "0.25", max: 200,
+     help: "Hours for one person; crew size multiplies the labor."}
+  - {id: crew_size, label: "Crew size", type: integer, default: 1, min: 1, max: 10}
+  - {id: materials_dollars, label: "Materials at cost ($)", type: number, default: 0, min: 0, max: 100000,
+     help: "What the materials cost you; markups are applied by the pricing stack."}
+  - {id: trip_fee, label: "Charge a trip fee?", type: boolean, default: true}
+  - id: urgency
+    label: "When is it needed?"
+    type: choice
+    default: standard
+    choices:
+      - {value: standard, label: "Standard scheduling", factor: "1.0"}
+      - {value: next_day, label: "Next day (+15%)", factor: "1.15"}
+      - {value: same_day, label: "Same day / emergency (+50%)", factor: "1.5"}
+
+lines:
+  - {id: labor, description: "Service labor", kind: labor, unit: hr,
+     quantity: "hours * crew_size * urgency", price_key: gs_labor_hr}
+  - {id: materials, description: "Materials (at cost)", kind: material, unit: ea,
+     quantity: "materials_dollars", price_key: gs_material_dollar, when: "materials_dollars > 0"}
+  - {id: trip, description: "Trip fee", kind: other, unit: ea, quantity: "1", price_key: gs_trip_ea, when: "trip_fee"}

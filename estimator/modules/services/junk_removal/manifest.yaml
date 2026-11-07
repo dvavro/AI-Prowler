@@ -1,0 +1,37 @@
+# Junk removal: priced by how much of the truck the load fills, plus item fees.
+id: junk_removal
+name: Junk Removal
+version: 0.1.0
+category: service
+path: quick_estimate
+description: Junk hauling priced by truck-load size, with fees for mattresses, appliances, stairs and same-day service.
+minimum_charge: "95.00"
+keywords: [junk removal, junk, haul away, hauling, haul off, trash removal, debris removal, clean out, cleanout, dump run, furniture removal, appliance removal, mattress]
+
+questions:
+  - id: load
+    label: "How much of a truck will it fill?"
+    type: choice
+    required: true
+    choices:
+      - {value: minimum, label: "Minimum (a few items)", factor: "0.125"}
+      - {value: quarter, label: "Quarter truck", factor: "0.25"}
+      - {value: half, label: "Half truck", factor: "0.5"}
+      - {value: three_quarter, label: "Three-quarter truck", factor: "0.75"}
+      - {value: full, label: "Full truck", factor: "1.0"}
+  - {id: mattresses, label: "Mattresses / box springs", type: integer, default: 0, min: 0, max: 20}
+  - {id: appliances, label: "Appliances (fridges, washers…)", type: integer, default: 0, min: 0, max: 20}
+  - {id: stairs, label: "Flights of stairs to carry down", type: integer, default: 0, min: 0, max: 10}
+  - {id: same_day, label: "Same-day pickup?", type: boolean, default: false}
+
+lines:
+  - {id: load, description: "Truck load (hauling and disposal)", kind: other, unit: ea, quantity: "load",
+     price_key: jr_truck_load_ea}
+  - {id: mattresses, description: "Mattress disposal fee", kind: other, unit: ea, quantity: "mattresses",
+     price_key: jr_mattress_ea, when: "mattresses > 0"}
+  - {id: appliances, description: "Appliance disposal fee", kind: other, unit: ea, quantity: "appliances",
+     price_key: jr_appliance_ea, when: "appliances > 0"}
+  - {id: stairs, description: "Stairs", kind: other, unit: ea, quantity: "stairs", price_key: jr_stairs_ea,
+     when: "stairs > 0"}
+  - {id: same_day, description: "Same-day service", kind: other, unit: ea, quantity: "1", price_key: jr_rush_ea,
+     when: "same_day"}

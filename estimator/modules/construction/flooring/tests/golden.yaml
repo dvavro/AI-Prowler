@@ -1,0 +1,22 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: 500 sq ft LVP
+  answers: {area_sqft: 500, material: lvp}
+  # 500 x 1.07 x $2.75 = $1,471.25; install 500 x $2.00
+  expected_lines: {lvp: 147125, install_plank: 100000}
+  expected_total_cents: 247125
+- name: 300 sq ft diagonal tile, carpet removed, prep, 80 ft baseboard, 2 transitions
+  answers: {area_sqft: 300, material: tile, pattern: diagonal, remove_old: carpet, subfloor_prep: true,
+            baseboard_lf: 80, transitions: 2}
+  # tile 300 x 1.17 x $3.50 = $1,228.50; baseboard 88 x $3.25 = $286
+  expected_lines: {remove_soft: 22500, prep: 37500, tile: 122850, setting: 45000, install_tile: 165000,
+                   diagonal: 22500, baseboard: 28600, transitions: 5000}
+  expected_total_cents: 448950
+- name: 800 sq ft carpet with 13 stairs, old carpet removed
+  answers: {area_sqft: 800, material: carpet, stairs: 13, remove_old: carpet}
+  expected_lines: {remove_soft: 60000, carpet: 242000, pad: 54600, install_carpet: 100000, stairs: 78000}
+  expected_total_cents: 534600
+- name: 600 sq ft hardwood, old tile removed
+  answers: {area_sqft: 600, material: hardwood, remove_old: hard}
+  # hardwood 600 x 1.08 x $5.50 = $3,564; underlayment 630 x $0.45 = $283.50
+  expected_lines: {remove_hard: 120000, hardwood: 356400, underlayment: 28350, install_hardwood: 270000}
+  expected_total_cents: 774750

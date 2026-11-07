@@ -1,0 +1,18 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: 100 ft of 8 ft 2x4 interior wall at 16 in, defaults
+  answers: {wall_lf: 100}
+  # studs: ceil(100 x 12 / 16) = 75 + 4 corners x 2 = 83 studs x 8 ft = 664 lf x 1.10 x $0.60 = $438.24
+  # plates: 300 lf x 1.10 x $0.60 = $198; hardware 100 x $0.60; labor 100 x $9
+  expected_lines: {studs_2x4: 43824, plates_2x4: 19800, hardware: 6000, wall_labor: 90000}
+  expected_total_cents: 159624
+- name: 160 ft of 9 ft 2x6 exterior wall, 6 corners, 8 openings, sheathed
+  answers: {wall_lf: 160, wall_height: "9", stud_size: 2x6, corners: 6, openings: 8, exterior: true}
+  # studs: (120 + 12 + 16) x 9 ft = 1,332 lf x 1.10 x $0.95 = $1,391.94; sheathing ceil(1,440 / 32) = 45 x 1.10 x $18
+  expected_lines: {studs_2x6: 139194, plates_2x6: 50160, headers: 28000, sheathing: 89100, hardware: 9600,
+                   wall_labor: 144000}
+  expected_total_cents: 460054
+- name: 400 sq ft floor and 20 trusses
+  answers: {floor_sqft: 400, trusses: 20}
+  # subfloor ceil(400 / 32) = 13 sheets x 1.10 x $32 = $457.60
+  expected_lines: {joists: 99000, subfloor: 45760, floor_labor: 80000, trusses: 330000, truss_labor: 90000}
+  expected_total_cents: 644760

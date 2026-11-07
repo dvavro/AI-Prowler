@@ -1,0 +1,20 @@
+price_key,description,kind,unit,cost
+ls_clear_sqft,Clear and haul per sq ft (sample),other,sqft,0.75
+ls_grade_sqft,Rough grading per sq ft (sample),labor,sqft,0.30
+ls_sod_sqft,Sod per sq ft (sample),material,sqft,0.60
+ls_sod_lab_sqft,Sod laying labor per sq ft (sample),labor,sqft,0.50
+ls_turf_sqft,Artificial turf and infill per sq ft (sample),material,sqft,4.00
+ls_base_cy,Compacted base per cu yd (sample),material,cuyd,45.00
+ls_turf_lab_sqft,Turf install labor per sq ft (sample),labor,sqft,3.00
+ls_barrier_sqft,Weed barrier per sq ft (sample),material,sqft,0.15
+ls_rock_ton,Decorative rock per ton (sample),material,ton,60.00
+ls_rock_lab_sqft,Rock spreading labor per sq ft (sample),labor,sqft,0.40
+ls_paver_sqft,Pavers and sand per sq ft (sample),material,sqft,5.00
+ls_paver_lab_sqft,Paver laying labor per sq ft (sample),labor,sqft,7.00
+ls_shrub_ea,Shrub 5 gal planted (sample),material,ea,45.00
+ls_tree_ea,Tree 24 in box planted (sample),material,ea,350.00
+ls_drip_zone_ea,Drip zone installed (sample),other,ea,300.00
+ls_emitter_ea,Emitter (sample),material,ea,3.00
+ls_spr_zone_ea,Sprinkler zone installed (sample),other,ea,550.00
+ls_controller_ea,Irrigation timer (sample),material,ea,180.00
+ls_edging_lf,Edging or curbing per linear ft (sample),other,lf,8.00

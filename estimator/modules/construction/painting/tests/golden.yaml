@@ -1,0 +1,15 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: Interior, 1,200 sq ft walls and 400 sq ft ceilings, 2 coats standard
+  answers: {wall_sqft: 1200, ceiling_sqft: 400}
+  # paint ceil(1,600 x 2 / 375 x 1.07) = 10 gal x $38; walls 2,400 sq ft-coats x $0.55
+  expected_lines: {prep: 16000, interior_paint: 38000, supplies: 9600, walls: 132000, ceilings: 52000}
+  expected_total_cents: 247600
+- name: Exterior 2,000 sq ft, primed, premium, 200 ft trim, 2 doors
+  answers: {exterior_sqft: 2000, primer: true, grade: premium, trim_lf: 200, doors: 2}
+  # primer ceil(2,000 / 300 x 1.07) = 8 gal; paint ceil(2,000 x 2 / 350 x 1.07) = 13 gal x $68
+  expected_lines: {prep: 20000, primer: 22400, prime_labor: 70000, exterior_premium: 88400, supplies: 12000,
+                   exterior: 280000, trim: 30000, doors: 13000}
+  expected_total_cents: 535800
+- name: Two doors only comes to the $400 minimum
+  answers: {doors: 2}
+  expected_total_cents: 40000

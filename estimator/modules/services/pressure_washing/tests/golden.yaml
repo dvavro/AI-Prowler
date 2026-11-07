@@ -1,0 +1,12 @@
+# Golden cases: sample prices, no markups (Personal-mode defaults). Totals in cents.
+- name: small driveway hits the minimum charge
+  answers: {driveway_sqft: 800, condition: normal}
+  expected_subtotal_cents: 13800
+  expected_total_cents: 15000
+- name: driveway, two-story heavy siding, oil stains, sealing
+  answers: {driveway_sqft: 1000, house_siding_sqft: 2000, stories: 2, condition: heavy,
+            oil_stains: 2, seal_driveway: true}
+  # driveway 1000 x 1.35 x 0.15 = 202.50; siding 2000 x 1.35 x 1.15 x 0.25 = 776.25;
+  # oil 2 x 25 = 50; sealer 1000 x 0.30 = 300
+  expected_lines: {driveway: 20250, siding: 77625, oil_stains: 5000, sealer: 30000}
+  expected_total_cents: 132875

@@ -1,0 +1,12 @@
+price_key,description,kind,unit,cost
+fr_2x4_lf,2x4 lumber per linear ft (sample),material,lf,0.60
+fr_2x6_lf,2x6 lumber per linear ft (sample),material,lf,0.95
+fr_header_ea,Header over an opening (sample),material,ea,35.00
+fr_osb_ea,OSB sheathing sheet 4x8 (sample),material,ea,18.00
+fr_hardware_lf,Nails anchors and hardware per wall ft (sample),material,lf,0.60
+fr_lab_wall_lf,Wall framing labor per linear ft (sample),labor,lf,9.00
+fr_joist_sqft,Floor joists per sq ft (sample),material,sqft,2.25
+fr_subfloor_ea,Subfloor sheet 3/4 in (sample),material,ea,32.00
+fr_lab_floor_sqft,Floor framing labor per sq ft (sample),labor,sqft,2.00
+fr_truss_ea,Roof truss (sample),material,ea,165.00
+fr_lab_truss_ea,Truss setting labor (sample),labor,ea,45.00

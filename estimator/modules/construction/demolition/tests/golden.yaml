@@ -1,0 +1,17 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: Kitchen gut - 200 sq ft, 25 ft of cabinets, sink, tile floor
+  answers: {interior_sqft: 200, level: gut, cabinets_lf: 25, fixtures: 1, flooring_sqft: 200, floor_type: tile}
+  # interior 200 x 0.08 = 16 hr; cabinets 7.5 hr; tile 2 x 2.5 = 5 hr
+  # debris 8 + 5 + 0.5 + 2 = 15.5 cu yd -> 1 dumpster
+  expected_lines: {protection: 25000, interior: 88000, cabinets: 41250, fixtures: 5500, flooring: 27500, dumpsters: 55000}
+  expected_total_cents: 242250
+- name: Break out a 600 sq ft concrete patio
+  answers: {concrete_sqft: 600}
+  # 600 x 0.025 = 15 tons
+  expected_lines: {concrete: 180000, concrete_haul: 60000}
+  expected_total_cents: 240000
+- name: Tear down a 200 sq ft shed, tested and permitted
+  answers: {structure_sqft: 200, hazard_test: true, permit: true}
+  # debris 200 x 0.15 = 30 cu yd -> 2 dumpsters
+  expected_lines: {hazard_test: 45000, structure: 120000, dumpsters: 110000, permit: 20000}
+  expected_total_cents: 295000

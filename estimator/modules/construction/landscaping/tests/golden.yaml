@@ -1,0 +1,16 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: Desert front yard - rock, shrubs, trees, drip, edging
+  answers: {clear_sqft: 1200, rock_sqft: 1000, shrubs: 10, trees: 2, drip_zones: 2, edging_lf: 80}
+  # rock 1,000 x 2 / 12 / 27 x 1.4 = 8.64 -> 9 tons; emitters 10 + 2 x 4 = 18
+  expected_lines: {clearing: 90000, grading: 30000, weed_barrier: 16500, rock: 54000, rock_labor: 40000, shrubs: 45000,
+                   trees: 70000, drip: 60000, emitters: 5400, controller: 18000, edging: 64000}
+  expected_total_cents: 492900
+- name: Back yard - 500 sq ft turf and a 300 sq ft paver patio
+  answers: {turf_sqft: 500, pavers_sqft: 300}
+  # base 800 x 4 / 12 / 27 = 9.88 -> 10 cu yd
+  expected_lines: {grading: 24000, turf: 220000, base: 45000, turf_labor: 150000, pavers: 165000, paver_labor: 210000}
+  expected_total_cents: 814000
+- name: 2,000 sq ft of sod on 3 sprinkler zones, no grading
+  answers: {sod_sqft: 2000, sprinkler_zones: 3, grading: false}
+  expected_lines: {sod: 126000, sod_labor: 100000, sprinklers: 165000, controller: 18000}
+  expected_total_cents: 409000

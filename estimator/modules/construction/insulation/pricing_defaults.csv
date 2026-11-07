@@ -1,0 +1,11 @@
+price_key,description,kind,unit,cost
+in_removal_sqft,Old insulation removal per sq ft (sample),labor,sqft,1.50
+in_air_seal_sqft,Attic air sealing per sq ft (sample),labor,sqft,0.50
+in_blown_bag_ea,Blown-in insulation bag (sample),material,ea,45.00
+in_blown_lab_sqft,Blowing labor per sq ft (sample),labor,sqft,0.35
+in_r13_sqft,R-13 batts per sq ft (sample),material,sqft,0.70
+in_r15_sqft,R-15 batts per sq ft (sample),material,sqft,0.85
+in_r19_sqft,R-19 batts per sq ft (sample),material,sqft,1.00
+in_batt_lab_sqft,Batt install labor per sq ft (sample),labor,sqft,0.45
+in_vapor_sqft,Vapor barrier per sq ft (sample),material,sqft,0.15
+in_foam_bf,Spray foam installed per board foot (sample),other,sqft,1.20

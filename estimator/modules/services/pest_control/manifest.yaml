@@ -1,0 +1,44 @@
+# Pest control: service call plus treatment by home size, with plan discounts and add-ons.
+id: pest_control
+name: Pest Control
+version: 0.1.0
+category: service
+path: quick_estimate
+description: Residential pest treatment priced by home size, pest level and plan (one-time, quarterly, monthly), with termite inspection, rodent stations and yard treatment.
+minimum_charge: "99.00"
+keywords: [pest control, pest, pests, exterminator, bugs, ants, roaches, cockroaches, spiders, scorpions, termite, termites, rodent, rodents, mice, rats]
+# A won quote with one of these answers becomes a repeating job in AI-Prowler.
+recurrence: {question: plan, map: {quarterly: Quarterly, monthly: Monthly}}
+
+questions:
+  - {id: sqft, label: "Home size", type: number, unit: sqft, required: true, min: 200, max: 20000}
+  - id: level
+    label: "How bad is it?"
+    type: choice
+    default: light
+    choices:
+      - {value: light, label: "Prevention / light", factor: "1.0"}
+      - {value: moderate, label: "Moderate", factor: "1.25"}
+      - {value: heavy, label: "Heavy infestation", factor: "1.6"}
+  - id: plan
+    label: "Service plan (price per visit)"
+    type: choice
+    default: one_time
+    choices:
+      - {value: one_time, label: "One time", factor: "1.0"}
+      - {value: quarterly, label: "Quarterly (25% off each visit)", factor: "0.75"}
+      - {value: monthly, label: "Monthly (45% off each visit)", factor: "0.55"}
+  - {id: termite_inspection, label: "Termite inspection?", type: boolean, default: false}
+  - {id: rodent_stations, label: "Rodent bait stations", type: integer, default: 0, min: 0, max: 50}
+  - {id: yard_sqft, label: "Yard to treat", type: number, unit: sqft, default: 0, min: 0, max: 200000}
+
+lines:
+  - {id: visit, description: "Service call", kind: other, unit: ea, quantity: "1", price_key: pc_visit_ea}
+  - {id: treatment, description: "Interior and exterior treatment", kind: other, unit: sqft,
+     quantity: "sqft * level * plan", price_key: pc_treatment_sqft}
+  - {id: termite, description: "Termite inspection", kind: other, unit: ea, quantity: "1",
+     price_key: pc_termite_ea, when: "termite_inspection"}
+  - {id: rodents, description: "Rodent bait stations", kind: other, unit: ea, quantity: "rodent_stations",
+     price_key: pc_rodent_station_ea, when: "rodent_stations > 0"}
+  - {id: yard, description: "Yard treatment", kind: other, unit: sqft, quantity: "yard_sqft",
+     price_key: pc_yard_sqft, when: "yard_sqft > 0"}

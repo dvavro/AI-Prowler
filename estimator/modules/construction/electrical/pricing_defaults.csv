@@ -1,0 +1,14 @@
+price_key,description,kind,unit,cost
+el_labor_hr,Electrician labor per hour (sample),labor,hr,90.00
+el_outlet_ea,Outlet and plate (sample),material,ea,4.00
+el_switch_ea,Switch and plate (sample),material,ea,4.00
+el_gfci_ea,GFCI outlet (sample),material,ea,22.00
+el_fan_box_ea,Fan-rated box and brace (sample),material,ea,15.00
+el_box_ea,Electrical box (sample),material,ea,3.00
+el_wire_lf,12/2 wire per linear ft (sample),material,lf,0.55
+el_heavy_wire_lf,Heavy-gauge wire per linear ft (sample),material,lf,2.50
+el_breaker_ea,Breaker (sample),material,ea,35.00
+el_lv_drop_ea,Low-voltage drop installed (sample),other,ea,85.00
+el_subpanel_ea,Subpanel installed (sample),other,ea,1200.00
+el_panel_upgrade_ea,200 A panel upgrade installed (sample),other,ea,3500.00
+el_permit_ea,Electrical permit (sample),other,ea,200.00

@@ -1,0 +1,5 @@
+price_key,description,kind,unit,cost
+wc_window_ea,Window cleaning per window (sample),other,ea,6.00
+wc_screen_ea,Screen cleaning (sample),other,ea,3.00
+wc_skylight_ea,Skylight cleaning (sample),other,ea,15.00
+wc_hard_water_ea,Hard-water spot removal per window (sample),other,ea,4.00

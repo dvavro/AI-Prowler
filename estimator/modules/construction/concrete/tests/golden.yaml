@@ -1,0 +1,18 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: 400 sq ft patio, defaults (4 in, mesh, broom, gravel base)
+  answers: {area_sqft: 400}
+  # base 400 x $0.75; forms ceil(4 x sqrt 400) = 80 lf x $3.50; mesh 440 x $0.35;
+  # concrete 4.9383 cy x 1.05 x $165 = $855.56; finish 400 x $2.25; joints 400 x $0.15
+  expected_lines: {base: 30000, forms: 28000, mesh: 15400, concrete: 85556, place_finish: 90000, joints: 6000}
+  expected_total_cents: 254956
+- name: 600 sq ft stamped driveway, 5 in, rebar, removal, 40 ft footing, pump
+  answers: {area_sqft: 600, thickness_in: "5", perimeter_lf: 110, reinforcement: rebar, finish: stamped,
+            remove_existing: true, footing_lf: 40, pump: true}
+  # concrete (600 x 5 / 12 / 27 + 40 / 27) = 10.7407 cy x 1.05 x $165 = $1,860.83
+  # rebar 800 lf x 1.10 x $0.85 = $748; footing rebar 80 x 1.10 x $0.85 = $74.80
+  expected_lines: {removal: 120000, base: 45000, forms: 38500, footing: 24000, rebar: 74800, footing_rebar: 7480,
+                   concrete: 186083, place_finish: 135000, stamped: 270000, joints: 9000, pump: 65000}
+  expected_total_cents: 974863
+- name: Small 40 sq ft pad comes to the $1,200 minimum
+  answers: {area_sqft: 40, base: false, reinforcement: none}
+  expected_total_cents: 120000

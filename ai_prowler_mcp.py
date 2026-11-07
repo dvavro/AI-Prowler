@@ -7090,6 +7090,14 @@ _log.info("Monkeypatched mcp.tool() — all subsequent @mcp.tool decorators "
           "on success, and append to ~/.ai-prowler/autonomous_run_audit.log "
           "on every call (success or failure)")
 
+# Estimator tools (AI-Prowler Estimator, Sprint 2). Registered after the
+# mcp.tool monkeypatch above so they are counted and audited like every tool.
+try:
+    from estimator.mcp_tools.est_tools import register as _register_estimator
+    _log.info("Estimator tools registered: %s", _register_estimator(mcp))
+except Exception as _exc:  # the Estimator must never stop AI-Prowler starting
+    _log.warning("Estimator tools not loaded: %s", _exc)
+
 # Module-level event set by the background prewarm thread when ChromaDB and
 # the embedding model are fully loaded.  Tool handlers that need ChromaDB
 # wait on this event (max 60s) before proceeding.

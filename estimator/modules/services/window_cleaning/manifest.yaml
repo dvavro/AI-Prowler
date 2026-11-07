@@ -1,0 +1,39 @@
+# Window cleaning: quick estimate priced per window, with height, inside/outside and add-ons.
+id: window_cleaning
+name: Window Cleaning
+version: 0.1.0
+category: service
+path: quick_estimate
+description: Residential window cleaning priced per window, adjusted for stories and inside/outside, plus screens, skylights and hard-water treatment.
+minimum_charge: "125.00"
+keywords: [window cleaning, window washing, clean windows, clean the windows, wash windows, wash my windows, windows, window, panes, screens, skylights, hard water]
+# Good / better / best for the quote.
+scenarios:
+  - {id: good, label: "Good: outside only", answers: {sides: outside, hard_water: false}}
+  - {id: better, label: "Better: inside and out", answers: {sides: inside_and_out, hard_water: false}}
+  - {id: best, label: "Best: inside and out with hard-water removal", answers: {sides: inside_and_out, hard_water: true}}
+
+questions:
+  - {id: windows, label: "Number of windows (panes)", type: integer, required: true, min: 1, max: 500}
+  - {id: stories, label: "Number of stories", type: integer, default: 1, min: 1, max: 3,
+     help: "Each story above the first adds 20% (ladders and reach)."}
+  - id: sides
+    label: "Outside only, or inside and out?"
+    type: choice
+    default: outside
+    choices:
+      - {value: outside, label: "Outside only", factor: "1.0"}
+      - {value: inside_and_out, label: "Inside and out", factor: "1.8"}
+  - {id: screens, label: "Screens to clean", type: integer, default: 0, min: 0, max: 500}
+  - {id: skylights, label: "Skylights", type: integer, default: 0, min: 0, max: 50}
+  - {id: hard_water, label: "Hard-water spots to remove?", type: boolean, default: false}
+
+lines:
+  - {id: windows, description: "Window cleaning", kind: other, unit: ea,
+     quantity: "windows * sides * (1 + 0.2 * (stories - 1))", price_key: wc_window_ea}
+  - {id: screens, description: "Screen cleaning", kind: other, unit: ea, quantity: "screens",
+     price_key: wc_screen_ea, when: "screens > 0"}
+  - {id: skylights, description: "Skylight cleaning", kind: other, unit: ea, quantity: "skylights",
+     price_key: wc_skylight_ea, when: "skylights > 0"}
+  - {id: hard_water, description: "Hard-water spot removal", kind: other, unit: ea, quantity: "windows",
+     price_key: wc_hard_water_ea, when: "hard_water"}

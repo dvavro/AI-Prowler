@@ -1,0 +1,78 @@
+# Electrical from device and circuit counts (no plans needed).
+# Labor = devices x hours per device x work factor; wire lf = devices x average run, 15% waste; one box per device.
+id: electrical
+name: Electrical
+version: 0.1.0
+category: construction
+path: both
+description: Outlets, switches, GFCIs, lights, ceiling fans, dedicated appliance and EV circuits, low-voltage drops, subpanels and panel upgrades, priced by labor hours per device with wire, boxes, breakers and permit.
+minimum_charge: "200.00"
+keywords: [electrical, electrician, outlet, outlets, lights, install lights, wiring, light fixture, ceiling fan, recessed lights, can lights, panel upgrade, subpanel, ev charger, gfci, rewire, new circuit, dedicated circuit]
+required_any: [outlets, switches, gfci, lights, fans, appliance_circuits, low_voltage, panel]
+notes:
+  - "Panel upgrades and new circuits need a permit and inspection; a service upgrade may need the utility to schedule a disconnect."
+
+questions:
+  - id: work
+    label: "Type of work"
+    type: choice
+    default: new
+    # factor is the labor multiplier: new (open walls) 1.0, remodel (fishing through finished walls) 1.6, swap only 0.5
+    choices:
+      - {value: new, label: "New work (open walls)", factor: "1.0"}
+      - {value: remodel, label: "Old work (finished walls)", factor: "1.6"}
+      - {value: replace, label: "Swap devices only", factor: "0.5"}
+  - {id: outlets, label: "Outlets", type: integer, default: 0, min: 0, max: 1000}
+  - {id: switches, label: "Switches", type: integer, default: 0, min: 0, max: 1000}
+  - {id: gfci, label: "GFCI outlets", type: integer, default: 0, min: 0, max: 500}
+  - {id: lights, label: "Light fixtures or recessed lights", type: integer, default: 0, min: 0, max: 1000,
+     help: "Fixtures themselves are supplied by the customer."}
+  - {id: fans, label: "Ceiling fans", type: integer, default: 0, min: 0, max: 200}
+  - {id: appliance_circuits, label: "Dedicated circuits (range, dryer, AC, EV charger)", type: integer, default: 0, min: 0,
+     max: 100}
+  - {id: low_voltage, label: "Data or TV drops", type: integer, default: 0, min: 0, max: 500}
+  - {id: avg_run_ft, label: "Average wire run per device", type: number, unit: ft, default: 25, min: 5, max: 200}
+  - id: panel
+    label: "Panel work"
+    type: choice
+    default: none
+    choices:
+      - {value: none, label: "None", factor: "0"}
+      - {value: subpanel, label: "Add a subpanel", factor: "1"}
+      - {value: upgrade, label: "Upgrade to 200 A service", factor: "2"}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+
+lines:
+  # hours per device: outlet 0.5, switch 0.5, GFCI 0.75, light 0.75, fan 1.5
+  - {id: device_labor, description: "Install devices and lights", kind: labor, unit: hr,
+     quantity: "(outlets * 0.5 + switches * 0.5 + gfci * 0.75 + lights * 0.75 + fans * 1.5) * work",
+     price_key: el_labor_hr, when: "outlets + switches + gfci + lights + fans > 0"}
+  - {id: circuit_labor, description: "Run dedicated circuits", kind: labor, unit: hr,
+     quantity: "appliance_circuits * 3 * work", price_key: el_labor_hr, when: "appliance_circuits > 0"}
+  - {id: outlets, description: "Outlets and plates", kind: material, unit: ea, quantity: "outlets",
+     price_key: el_outlet_ea, when: "outlets > 0"}
+  - {id: switches, description: "Switches and plates", kind: material, unit: ea, quantity: "switches",
+     price_key: el_switch_ea, when: "switches > 0"}
+  - {id: gfci, description: "GFCI outlets", kind: material, unit: ea, quantity: "gfci", price_key: el_gfci_ea,
+     when: "gfci > 0"}
+  - {id: fan_boxes, description: "Fan-rated boxes and bracing", kind: material, unit: ea, quantity: "fans",
+     price_key: el_fan_box_ea, when: "fans > 0"}
+  - {id: boxes, description: "Electrical boxes", kind: material, unit: ea, quantity: "outlets + switches + gfci + lights",
+     price_key: el_box_ea, when: "work >= 1 and outlets + switches + gfci + lights > 0"}
+  - {id: wire, description: "Branch circuit wire (12/2)", kind: material, unit: lf,
+     quantity: "(outlets + switches + gfci + lights + fans) * avg_run_ft", waste: "0.15", price_key: el_wire_lf,
+     when: "work >= 1 and outlets + switches + gfci + lights + fans > 0"}
+  - {id: heavy_wire, description: "Heavy-gauge wire for dedicated circuits", kind: material, unit: lf,
+     quantity: "appliance_circuits * avg_run_ft", waste: "0.15", price_key: el_heavy_wire_lf,
+     when: "appliance_circuits > 0"}
+  - {id: breakers, description: "Breakers", kind: material, unit: ea,
+     quantity: "appliance_circuits + (ceil((outlets + switches + gfci + lights + fans) / 10) if work >= 1 else 0)",
+     price_key: el_breaker_ea, when: "appliance_circuits > 0 or (work >= 1 and outlets + switches + gfci + lights + fans > 0)"}
+  - {id: low_voltage, description: "Data or TV drop, cable and jack", kind: other, unit: ea, quantity: "low_voltage",
+     price_key: el_lv_drop_ea, when: "low_voltage > 0"}
+  - {id: subpanel, description: "Subpanel, installed", kind: other, unit: ea, quantity: "1", price_key: el_subpanel_ea,
+     when: "panel == 1"}
+  - {id: panel_upgrade, description: "200 A panel and service upgrade, installed", kind: other, unit: ea, quantity: "1",
+     price_key: el_panel_upgrade_ea, when: "panel == 2"}
+  - {id: permit, description: "Electrical permit", kind: other, unit: ea, quantity: "1", price_key: el_permit_ea,
+     when: "permit"}

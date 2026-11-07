@@ -1,0 +1,19 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: New bathroom, toilet, 2 sinks, shower (pipe allowed per fixture)
+  answers: {toilets: 1, sinks: 2, showers: 1}
+  # rough-in 3 + 2 x 3 + 5 = 14 hr x $85; trim 1.5 + 2 x 1.5 + 2 = 6.5 hr
+  # supply 4 fixtures x 25 = 100 lf x 1.10 x $1.10 = $121; drain 4 x 15 = 60 lf x 1.10 x $3.25 = $214.50
+  expected_lines: {rough_in: 119000, trim: 55250, supply_pipe: 12100, supply_fittings: 4000, drain_pipe: 21450,
+                   drain_fittings: 7200, permit: 25000}
+  expected_total_cents: 244000
+- name: Replace 2 toilets and 2 sinks, fixtures supplied, no permit
+  answers: {work: replace, toilets: 2, sinks: 2, supply_fixtures: true, permit: false}
+  expected_lines: {removal: 17000, trim: 51000, toilet_fixtures: 50000, sink_fixtures: 35000}
+  expected_total_cents: 153000
+- name: Tankless water heater with 20 ft of gas line
+  answers: {water_heater: tankless, gas_line_lf: 20}
+  expected_lines: {tankless_heater: 240000, heater_labor: 68000, gas_line: 28000, permit: 25000}
+  expected_total_cents: 361000
+- name: Replace one hose bib comes to the $250 minimum
+  answers: {work: replace, hose_bibs: 1, permit: false}
+  expected_total_cents: 25000

@@ -1,0 +1,89 @@
+# Flooring from typed room areas (no plans needed).
+# Waste follows the spec: LVP/laminate 7%, tile 12%, hardwood 8%, carpet 10%, diagonal +5%.
+id: flooring
+name: Flooring
+version: 0.1.0
+category: construction
+path: both
+description: LVP, laminate, tile, hardwood and carpet priced from floor area, with waste, underlayment, removal, prep, baseboard, stairs and transitions.
+minimum_charge: "500.00"
+keywords: [flooring, floor install, new floors, new floor, tile floor, hardwood, laminate, carpet install, install carpet, new carpet, install lvp, install tile, install hardwood, install laminate, install flooring, lvp, vinyl plank, luxury vinyl]
+# Good / better / best for the bid: same rooms, different flooring.
+scenarios:
+  - {id: good, label: "Good: laminate", answers: {material: laminate}}
+  - {id: better, label: "Better: luxury vinyl plank", answers: {material: lvp}}
+  - {id: best, label: "Best: hardwood", answers: {material: hardwood}}
+
+questions:
+  - {id: area_sqft, label: "Floor area", type: number, unit: sqft, required: true, min: 10, max: 50000}
+  - id: material
+    label: "Flooring type"
+    type: choice
+    required: true
+    # factor is a code used by the line rules
+    choices:
+      - {value: lvp, label: "Luxury vinyl plank (LVP)", factor: "1"}
+      - {value: laminate, label: "Laminate", factor: "2"}
+      - {value: tile, label: "Ceramic / porcelain tile", factor: "3"}
+      - {value: hardwood, label: "Hardwood", factor: "4"}
+      - {value: carpet, label: "Carpet", factor: "5"}
+  - id: pattern
+    label: "Layout"
+    type: choice
+    default: straight
+    # factor is the extra waste
+    choices:
+      - {value: straight, label: "Straight", factor: "0"}
+      - {value: diagonal, label: "Diagonal or herringbone (+5% waste)", factor: "0.05"}
+  - id: remove_old
+    label: "Remove the old floor?"
+    type: choice
+    default: none
+    choices:
+      - {value: none, label: "No", factor: "0"}
+      - {value: carpet, label: "Carpet or vinyl", factor: "1"}
+      - {value: hard, label: "Tile or hardwood", factor: "2"}
+  - {id: subfloor_prep, label: "Level / patch the subfloor?", type: boolean, default: false}
+  - {id: baseboard_lf, label: "New baseboard", type: number, unit: lf, default: 0, min: 0, max: 10000}
+  - {id: stairs, label: "Stairs (steps)", type: integer, default: 0, min: 0, max: 100}
+  - {id: transitions, label: "Transition strips", type: integer, default: 0, min: 0, max: 100}
+
+lines:
+  - {id: remove_soft, description: "Remove old carpet / vinyl", kind: labor, unit: sqft, quantity: "area_sqft",
+     price_key: fl_remove_soft_sqft, when: "remove_old == 1"}
+  - {id: remove_hard, description: "Remove old tile / hardwood", kind: labor, unit: sqft, quantity: "area_sqft",
+     price_key: fl_remove_hard_sqft, when: "remove_old == 2"}
+  - {id: prep, description: "Level and patch subfloor", kind: labor, unit: sqft, quantity: "area_sqft",
+     price_key: fl_prep_sqft, when: "subfloor_prep"}
+  - {id: lvp, description: "Luxury vinyl plank", kind: material, unit: sqft, quantity: "area_sqft",
+     waste: "0.07 + pattern", price_key: fl_lvp_sqft, when: "material == 1"}
+  - {id: laminate, description: "Laminate flooring", kind: material, unit: sqft, quantity: "area_sqft",
+     waste: "0.07 + pattern", price_key: fl_laminate_sqft, when: "material == 2"}
+  - {id: tile, description: "Tile", kind: material, unit: sqft, quantity: "area_sqft",
+     waste: "0.12 + pattern", price_key: fl_tile_sqft, when: "material == 3"}
+  - {id: hardwood, description: "Hardwood flooring", kind: material, unit: sqft, quantity: "area_sqft",
+     waste: "0.08 + pattern", price_key: fl_hardwood_sqft, when: "material == 4"}
+  - {id: carpet, description: "Carpet", kind: material, unit: sqft, quantity: "area_sqft",
+     waste: "0.10", price_key: fl_carpet_sqft, when: "material == 5"}
+  - {id: underlayment, description: "Underlayment", kind: material, unit: sqft, quantity: "area_sqft",
+     waste: "0.05", price_key: fl_underlay_sqft, when: "material == 2 or material == 4"}
+  - {id: pad, description: "Carpet pad", kind: material, unit: sqft, quantity: "area_sqft",
+     waste: "0.05", price_key: fl_pad_sqft, when: "material == 5"}
+  - {id: setting, description: "Thinset, grout and backer", kind: material, unit: sqft, quantity: "area_sqft",
+     price_key: fl_setting_sqft, when: "material == 3"}
+  - {id: install_plank, description: "Install plank flooring", kind: labor, unit: sqft, quantity: "area_sqft",
+     price_key: fl_lab_plank_sqft, when: "material == 1 or material == 2"}
+  - {id: install_tile, description: "Install tile", kind: labor, unit: sqft, quantity: "area_sqft",
+     price_key: fl_lab_tile_sqft, when: "material == 3"}
+  - {id: install_hardwood, description: "Install hardwood", kind: labor, unit: sqft, quantity: "area_sqft",
+     price_key: fl_lab_hardwood_sqft, when: "material == 4"}
+  - {id: install_carpet, description: "Install carpet", kind: labor, unit: sqft, quantity: "area_sqft",
+     price_key: fl_lab_carpet_sqft, when: "material == 5"}
+  - {id: diagonal, description: "Diagonal / herringbone layout (extra labor)", kind: labor, unit: sqft,
+     quantity: "area_sqft", price_key: fl_diagonal_sqft, when: "pattern > 0"}
+  - {id: baseboard, description: "Baseboard, supplied and installed", kind: material, unit: lf, quantity: "baseboard_lf",
+     waste: "0.10", price_key: fl_baseboard_lf, when: "baseboard_lf > 0"}
+  - {id: stairs, description: "Stairs", kind: labor, unit: ea, quantity: "stairs", price_key: fl_stair_ea,
+     when: "stairs > 0"}
+  - {id: transitions, description: "Transition strips", kind: material, unit: ea, quantity: "transitions",
+     price_key: fl_transition_ea, when: "transitions > 0"}

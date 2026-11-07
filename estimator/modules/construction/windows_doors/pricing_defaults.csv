@@ -1,0 +1,15 @@
+price_key,description,kind,unit,cost
+wd_labor_hr,Window and door labor per hour (sample),labor,hr,75.00
+wd_vinyl_small_ea,Vinyl window under 15 sq ft (sample),material,ea,350.00
+wd_vinyl_large_ea,Vinyl window 15 sq ft and over (sample),material,ea,600.00
+wd_fg_small_ea,Fiberglass window under 15 sq ft (sample),material,ea,550.00
+wd_fg_large_ea,Fiberglass window 15 sq ft and over (sample),material,ea,900.00
+wd_patio_ea,Patio door (sample),material,ea,1400.00
+wd_ext_door_ea,Exterior prehung door (sample),material,ea,700.00
+wd_int_door_ea,Interior prehung door (sample),material,ea,180.00
+wd_garage_ea,Garage door (sample),material,ea,1300.00
+wd_flashing_ea,Flashing per opening (sample),material,ea,25.00
+wd_sealant_ea,Sealant and shims per opening (sample),material,ea,8.00
+wd_hardware_ea,Door hardware (sample),material,ea,45.00
+wd_casing_lf,Casing supplied and installed per linear ft (sample),material,lf,2.75
+wd_permit_ea,Building permit (sample),other,ea,150.00

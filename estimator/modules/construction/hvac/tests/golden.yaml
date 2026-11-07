@@ -1,0 +1,23 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: Heat pump for 1,800 sq ft, reuse ducts
+  answers: {system: heat_pump, conditioned_sqft: 1800}
+  # 1,800 / 500 = 3.6 -> 4 tons x $1,600; install 16 hr x $95; line set 25 ft x 1.05 x $12
+  expected_lines: {removal: 38000, disposal: 15000, heat_pump_equipment: 640000, install_labor: 152000,
+                   line_set: 31500, thermostats: 18000, permit: 30000}
+  expected_total_cents: 924500
+- name: Split AC and furnace for 2,000 sq ft with new ducts
+  answers: {system: split, conditioned_sqft: 2000, ducts: new, returns: 2}
+  # trunk 2,000 / 25 = 80 lf; registers ceil(2,000 / 150) = 14; branches 14 x 20 = 280 lf; duct labor (14 + 2) x 2 hr
+  expected_lines: {removal: 38000, disposal: 15000, split_equipment: 560000, install_labor: 152000, line_set: 31500,
+                   trunk: 158400, branches: 184800, boots: 49000, registers: 35000, returns: 12000, duct_labor: 304000,
+                   thermostats: 18000, permit: 30000}
+  expected_total_cents: 1587700
+- name: Three-head mini-split, nothing to remove
+  answers: {system: mini_split, zones: 3, remove_old: false, thermostats: 0}
+  expected_lines: {mini_split_heads: 540000, install_labor: 228000, line_set: 31500, permit: 30000}
+  expected_total_cents: 829500
+- name: 4-ton package unit with duct sealing
+  answers: {system: package, tons: 4, ducts: seal, conditioned_sqft: 1600}
+  expected_lines: {removal: 38000, disposal: 15000, package_equipment: 600000, install_labor: 95000,
+                   duct_sealing: 80000, thermostats: 18000, permit: 30000}
+  expected_total_cents: 876000

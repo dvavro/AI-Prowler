@@ -1,0 +1,17 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: Replace 6 small and 4 large vinyl windows
+  answers: {windows_small: 6, windows_large: 4}
+  # install 6 x 1.5 + 4 x 2.5 = 19 hr x $75; casing 6 x 14 + 4 x 20 = 164 lf x 1.05 x $2.75 = $473.55
+  expected_lines: {removal: 56250, vinyl_small: 210000, vinyl_large: 240000, install: 142500, sealant: 8000,
+                   casing: 47355, permit: 15000}
+  expected_total_cents: 719105
+- name: New construction, 2 large windows, patio door, entry door, 4 interior doors
+  answers: {install: new, windows_large: 2, patio_doors: 1, exterior_doors: 1, interior_doors: 4, remove_old: false}
+  # casing 2 x 20 + 22 + 18 + 4 x 34 = 216 lf
+  expected_lines: {vinyl_large: 120000, patio_doors: 140000, exterior_doors: 70000, interior_doors: 72000,
+                   install: 135000, flashing: 10000, hardware: 22500, casing: 62370, permit: 15000}
+  expected_total_cents: 646870
+- name: One garage door, no casing or permit
+  answers: {garage_doors: 1, casing: false, permit: false}
+  expected_lines: {removal: 5625, garage_doors: 130000, install: 45000}
+  expected_total_cents: 180625

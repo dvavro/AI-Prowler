@@ -1,0 +1,78 @@
+# Interior and exterior painting from typed areas and counts (no plans needed).
+# Gallons = area x coats / coverage (375 sq ft per gallon inside, 350 outside), plus 7%, rounded up.
+id: painting
+name: Painting
+version: 0.1.0
+category: construction
+path: both
+description: Interior walls and ceilings, exterior siding, trim and doors, priced by area, coats and paint grade, with primer, prep and supplies.
+minimum_charge: "400.00"
+keywords: [paint, painting, painter, repaint, interior painting, exterior painting, paint the house, paint the walls, paint the ceilings]
+required_any: [wall_sqft, ceiling_sqft, exterior_sqft, trim_lf, doors]
+notes:
+  - "Hot weather: plan exterior painting for mornings; most paints shouldn't go on surfaces in direct sun over about 90 F."
+
+questions:
+  - {id: wall_sqft, label: "Interior wall area", type: number, unit: sqft, default: 0, min: 0, max: 200000}
+  - {id: ceiling_sqft, label: "Ceiling area", type: number, unit: sqft, default: 0, min: 0, max: 200000}
+  - {id: exterior_sqft, label: "Exterior wall area (siding, stucco)", type: number, unit: sqft, default: 0, min: 0,
+     max: 200000}
+  - {id: trim_lf, label: "Trim and baseboard", type: number, unit: lf, default: 0, min: 0, max: 50000}
+  - {id: doors, label: "Doors (both sides)", type: integer, default: 0, min: 0, max: 500}
+  - id: coats
+    label: "Coats"
+    type: choice
+    default: "2"
+    choices:
+      - {value: "1", label: "1 coat (same colour refresh)", factor: "1"}
+      - {value: "2", label: "2 coats", factor: "2"}
+      - {value: "3", label: "3 coats (big colour change)", factor: "3"}
+  - {id: primer, label: "Prime first?", type: boolean, default: false}
+  - id: grade
+    label: "Paint"
+    type: choice
+    default: standard
+    # factor is a code: 1 standard, 2 premium
+    choices:
+      - {value: standard, label: "Standard", factor: "1"}
+      - {value: premium, label: "Premium", factor: "2"}
+
+scenarios:
+  - {id: good, label: "Good: standard paint, 1 coat", answers: {grade: standard, coats: "1"}}
+  - {id: better, label: "Better: standard paint, 2 coats", answers: {grade: standard, coats: "2"}}
+  - {id: best, label: "Best: premium paint, 2 coats", answers: {grade: premium, coats: "2"}}
+
+lines:
+  - {id: prep, description: "Prep: patch, caulk, sand and protect", kind: labor, unit: sqft,
+     quantity: "wall_sqft + ceiling_sqft + exterior_sqft", price_key: pt_prep_sqft,
+     when: "wall_sqft + ceiling_sqft + exterior_sqft > 0"}
+  - {id: primer, description: "Primer", kind: material, unit: gal,
+     quantity: "ceil((wall_sqft + ceiling_sqft + exterior_sqft) / 300 * 1.07)", price_key: pt_primer_gal,
+     when: "primer and wall_sqft + ceiling_sqft + exterior_sqft > 0"}
+  - {id: prime_labor, description: "Apply primer", kind: labor, unit: sqft,
+     quantity: "wall_sqft + ceiling_sqft + exterior_sqft", price_key: pt_lab_prime_sqft,
+     when: "primer and wall_sqft + ceiling_sqft + exterior_sqft > 0"}
+  - {id: interior_paint, description: "Interior paint", kind: material, unit: gal,
+     quantity: "ceil((wall_sqft + ceiling_sqft) * coats / 375 * 1.07)", price_key: pt_paint_gal,
+     when: "grade == 1 and wall_sqft + ceiling_sqft > 0"}
+  - {id: interior_premium, description: "Interior paint, premium", kind: material, unit: gal,
+     quantity: "ceil((wall_sqft + ceiling_sqft) * coats / 375 * 1.07)", price_key: pt_premium_gal,
+     when: "grade == 2 and wall_sqft + ceiling_sqft > 0"}
+  - {id: exterior_paint, description: "Exterior paint", kind: material, unit: gal,
+     quantity: "ceil(exterior_sqft * coats / 350 * 1.07)", price_key: pt_ext_gal, when: "grade == 1 and exterior_sqft > 0"}
+  - {id: exterior_premium, description: "Exterior paint, premium", kind: material, unit: gal,
+     quantity: "ceil(exterior_sqft * coats / 350 * 1.07)", price_key: pt_ext_premium_gal,
+     when: "grade == 2 and exterior_sqft > 0"}
+  - {id: supplies, description: "Rollers, brushes, tape and plastic", kind: material, unit: sqft,
+     quantity: "wall_sqft + ceiling_sqft + exterior_sqft", price_key: pt_supplies_sqft,
+     when: "wall_sqft + ceiling_sqft + exterior_sqft > 0"}
+  - {id: walls, description: "Paint walls (sq ft x coats)", kind: labor, unit: sqft, quantity: "wall_sqft * coats",
+     price_key: pt_lab_wall_sqft, when: "wall_sqft > 0"}
+  - {id: ceilings, description: "Paint ceilings (sq ft x coats)", kind: labor, unit: sqft, quantity: "ceiling_sqft * coats",
+     price_key: pt_lab_ceiling_sqft, when: "ceiling_sqft > 0"}
+  - {id: exterior, description: "Paint exterior (sq ft x coats)", kind: labor, unit: sqft,
+     quantity: "exterior_sqft * coats", price_key: pt_lab_ext_sqft, when: "exterior_sqft > 0"}
+  - {id: trim, description: "Paint trim and baseboard", kind: labor, unit: lf, quantity: "trim_lf", price_key: pt_trim_lf,
+     when: "trim_lf > 0"}
+  - {id: doors, description: "Paint doors", kind: labor, unit: ea, quantity: "doors", price_key: pt_door_ea,
+     when: "doors > 0"}

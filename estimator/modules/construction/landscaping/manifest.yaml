@@ -1,0 +1,78 @@
+# Landscape installation from typed areas and counts (no plans needed). Upkeep is the Landscaping Maintenance service.
+# Rock tons = area x depth / 12 / 27 cu yd x 1.4 tons per cu yd; turf and paver base = area x 4 in / 12 / 27 cu yd.
+id: landscaping
+name: Landscaping
+version: 0.1.0
+category: construction
+path: both
+description: New landscape installs - clearing and grading, sod, artificial turf, decorative rock over weed barrier, pavers, shrubs and trees, drip and sprinkler zones, edging.
+minimum_charge: "500.00"
+keywords: [landscaping, new landscaping, landscape install, landscape the, desert landscaping, xeriscape, sod, lay sod, new lawn, new grass, artificial turf, synthetic turf, synthetic grass, fake grass, turf install, decorative rock, landscape rock, decomposed granite, pavers, paver patio, paver walkway, drip system, drip irrigation, irrigation, sprinkler system, sprinklers, plant trees, plant shrubs, landscape edging]
+required_any: [sod_sqft, turf_sqft, rock_sqft, pavers_sqft, shrubs, trees, drip_zones, sprinkler_zones, edging_lf]
+notes:
+  - "Desert yards: put plants on drip with a timer, keep rock 2 to 3 in deep over weed barrier, and check the HOA plant list."
+  - "Call 811 before trenching irrigation or setting trees."
+
+questions:
+  - {id: clear_sqft, label: "Area to clear and haul (old grass, rock, weeds)", type: number, unit: sqft, default: 0,
+     min: 0, max: 200000}
+  - {id: grading, label: "Rough grade the new areas?", type: boolean, default: true}
+  - {id: sod_sqft, label: "Sod", type: number, unit: sqft, default: 0, min: 0, max: 200000}
+  - {id: turf_sqft, label: "Artificial turf", type: number, unit: sqft, default: 0, min: 0, max: 100000}
+  - {id: rock_sqft, label: "Decorative rock or decomposed granite", type: number, unit: sqft, default: 0, min: 0, max: 200000}
+  - id: rock_depth
+    label: "Rock depth"
+    type: choice
+    default: "2"
+    # factor is the depth in inches
+    choices:
+      - {value: "2", label: "2 in", factor: "2"}
+      - {value: "3", label: "3 in", factor: "3"}
+  - {id: weed_barrier, label: "Weed barrier under the rock?", type: boolean, default: true}
+  - {id: pavers_sqft, label: "Pavers", type: number, unit: sqft, default: 0, min: 0, max: 50000}
+  - {id: shrubs, label: "Shrubs (5 gal)", type: integer, default: 0, min: 0, max: 1000}
+  - {id: trees, label: "Trees (24 in box)", type: integer, default: 0, min: 0, max: 200}
+  - {id: drip_zones, label: "Drip zones", type: integer, default: 0, min: 0, max: 40}
+  - {id: sprinkler_zones, label: "Sprinkler zones", type: integer, default: 0, min: 0, max: 40}
+  - {id: edging_lf, label: "Landscape edging or curbing", type: number, unit: lf, default: 0, min: 0, max: 10000}
+
+lines:
+  - {id: clearing, description: "Clear and haul away", kind: other, unit: sqft, quantity: "clear_sqft",
+     price_key: ls_clear_sqft, when: "clear_sqft > 0"}
+  - {id: grading, description: "Rough grade", kind: labor, unit: sqft, quantity: "sod_sqft + turf_sqft + rock_sqft + pavers_sqft",
+     price_key: ls_grade_sqft, when: "grading"}
+  - {id: sod, description: "Sod", kind: material, unit: sqft, quantity: "sod_sqft", waste: "0.05", price_key: ls_sod_sqft,
+     when: "sod_sqft > 0"}
+  - {id: sod_labor, description: "Lay sod", kind: labor, unit: sqft, quantity: "sod_sqft", price_key: ls_sod_lab_sqft,
+     when: "sod_sqft > 0"}
+  - {id: turf, description: "Artificial turf and infill", kind: material, unit: sqft, quantity: "turf_sqft", waste: "0.10",
+     price_key: ls_turf_sqft, when: "turf_sqft > 0"}
+  - {id: base, description: "Compacted base (turf and pavers, 4 in)", kind: material, unit: cuyd,
+     quantity: "ceil_to((turf_sqft + pavers_sqft) * 4 / 12 / 27, 0.5)", price_key: ls_base_cy,
+     when: "turf_sqft + pavers_sqft > 0"}
+  - {id: turf_labor, description: "Install turf", kind: labor, unit: sqft, quantity: "turf_sqft", price_key: ls_turf_lab_sqft,
+     when: "turf_sqft > 0"}
+  - {id: weed_barrier, description: "Weed barrier", kind: material, unit: sqft, quantity: "rock_sqft", waste: "0.10",
+     price_key: ls_barrier_sqft, when: "weed_barrier and rock_sqft > 0"}
+  - {id: rock, description: "Decorative rock", kind: material, unit: ton,
+     quantity: "ceil_to(rock_sqft * rock_depth / 12 / 27 * 1.4, 0.5)", price_key: ls_rock_ton, when: "rock_sqft > 0"}
+  - {id: rock_labor, description: "Spread rock", kind: labor, unit: sqft, quantity: "rock_sqft", price_key: ls_rock_lab_sqft,
+     when: "rock_sqft > 0"}
+  - {id: pavers, description: "Pavers and sand", kind: material, unit: sqft, quantity: "pavers_sqft", waste: "0.10",
+     price_key: ls_paver_sqft, when: "pavers_sqft > 0"}
+  - {id: paver_labor, description: "Lay pavers", kind: labor, unit: sqft, quantity: "pavers_sqft", price_key: ls_paver_lab_sqft,
+     when: "pavers_sqft > 0"}
+  - {id: shrubs, description: "Shrubs, planted", kind: material, unit: ea, quantity: "shrubs", price_key: ls_shrub_ea,
+     when: "shrubs > 0"}
+  - {id: trees, description: "Trees, planted and staked", kind: material, unit: ea, quantity: "trees", price_key: ls_tree_ea,
+     when: "trees > 0"}
+  - {id: drip, description: "Drip zones (valve, line and fittings)", kind: other, unit: ea, quantity: "drip_zones",
+     price_key: ls_drip_zone_ea, when: "drip_zones > 0"}
+  - {id: emitters, description: "Emitters at each plant", kind: material, unit: ea, quantity: "shrubs + trees * 4",
+     price_key: ls_emitter_ea, when: "drip_zones > 0 and shrubs + trees > 0"}
+  - {id: sprinklers, description: "Sprinkler zones (valve, pipe and heads)", kind: other, unit: ea, quantity: "sprinkler_zones",
+     price_key: ls_spr_zone_ea, when: "sprinkler_zones > 0"}
+  - {id: controller, description: "Irrigation timer", kind: material, unit: ea, quantity: "1", price_key: ls_controller_ea,
+     when: "drip_zones + sprinkler_zones > 0"}
+  - {id: edging, description: "Edging or curbing", kind: other, unit: lf, quantity: "edging_lf", price_key: ls_edging_lf,
+     when: "edging_lf > 0"}

@@ -1,0 +1,16 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: Blow R-38 into a 1,500 sq ft attic
+  answers: {attic_sqft: 1500}
+  # bags ceil(1,500 x 38 / 1,500 x 1.05) = ceil(39.9) = 40 x $45
+  expected_lines: {blown_bags: 180000, blown_labor: 52500}
+  expected_total_cents: 232500
+- name: R-49 attic, old insulation out, air sealed
+  answers: {attic_sqft: 1200, attic_r: "49", remove_old: true, air_seal: true}
+  # bags ceil(1,200 x 49 / 1,500 x 1.05) = ceil(41.16) = 42
+  expected_lines: {removal: 180000, air_seal: 60000, blown_bags: 189000, blown_labor: 42000}
+  expected_total_cents: 471000
+- name: R-19 walls with vapor barrier and 200 sq ft of 3 in spray foam
+  answers: {wall_sqft: 800, wall_r: "19", vapor_barrier: true, spray_foam_sqft: 200}
+  # foam 200 x 3 = 600 board feet x $1.20
+  expected_lines: {batts_r19: 84000, batt_labor: 36000, vapor_barrier: 13200, spray_foam: 72000}
+  expected_total_cents: 205200

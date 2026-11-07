@@ -1,0 +1,11 @@
+# Golden cases: sample prices, no markups. Totals in cents (per visit).
+- name: 2,000 sq ft light one-time treatment
+  answers: {sqft: 2000}
+  # $60 call + 2,000 x $0.04 = $80
+  expected_lines: {visit: 6000, treatment: 8000}
+  expected_total_cents: 14000
+- name: 2,500 sq ft moderate, quarterly, termite inspection, 3 rodent stations
+  answers: {sqft: 2500, level: moderate, plan: quarterly, termite_inspection: true, rodent_stations: 3}
+  # 2,500 x 1.25 x 0.75 = 2,343.75 sq ft x $0.04 = $93.75; $60 + $95 + 3 x $35
+  expected_lines: {visit: 6000, treatment: 9375, termite: 9500, rodents: 10500}
+  expected_total_cents: 35375

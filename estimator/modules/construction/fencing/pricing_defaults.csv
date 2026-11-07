@@ -1,0 +1,15 @@
+price_key,description,kind,unit,cost
+fn_removal_lf,Old fence removal per linear ft (sample),labor,lf,4.00
+fn_wood_sqft,Wood fence materials per sq ft of face (sample),material,sqft,4.50
+fn_vinyl_sqft,Vinyl fence materials per sq ft of face (sample),material,sqft,6.50
+fn_chain_sqft,Chain link materials per sq ft of face (sample),material,sqft,2.00
+fn_iron_sqft,Wrought iron panels per sq ft of face (sample),material,sqft,9.00
+fn_post_ea,Post set in concrete (sample),material,ea,25.00
+fn_labor_hr,Fence labor per hour (sample),labor,hr,65.00
+fn_footing_lf,Wall footing per linear ft (sample),other,lf,18.00
+fn_block_ea,8x8x16 block (sample),material,ea,2.75
+fn_grout_sqft,Mortar grout rebar and cap per sq ft (sample),material,sqft,1.50
+fn_block_lab_sqft,Block laying labor per sq ft (sample),labor,sqft,9.00
+fn_walk_gate_ea,Walk gate (sample),material,ea,250.00
+fn_drive_gate_ea,Drive gate (sample),material,ea,900.00
+fn_permit_ea,Fence or wall permit (sample),other,ea,150.00

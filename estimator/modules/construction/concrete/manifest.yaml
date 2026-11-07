@@ -1,0 +1,82 @@
+# Concrete flatwork and slabs from typed measurements (no plans needed).
+# Plan takeoff (slab polygons, footing lines) plugs into the same questions in Phase 4.
+id: concrete
+name: Concrete
+version: 0.1.0
+category: construction
+path: both
+description: Slabs, driveways, patios and sidewalks priced from area, thickness and perimeter, with reinforcement, base, footings, finish, removal and pump.
+minimum_charge: "1200.00"
+keywords: [concrete, slab, flatwork, footing, footings, patio slab, concrete driveway, sidewalk, pour, stamped concrete]
+notes:
+  - "Hot weather: schedule pours early in the morning in summer and allow for retarder or ice if the company uses them."
+  - "Check whether a permit or inspection is needed for slabs and footings in this city."
+# Good / better / best for the bid.
+scenarios:
+  - {id: good, label: "Good: broom finish with wire mesh", answers: {finish: broom, reinforcement: mesh}}
+  - {id: better, label: "Better: broom finish with rebar", answers: {finish: broom, reinforcement: rebar}}
+  - {id: best, label: "Best: stamped and coloured with rebar", answers: {finish: stamped, reinforcement: rebar}}
+
+questions:
+  - {id: area_sqft, label: "Slab / flatwork area", type: number, unit: sqft, required: true, min: 10, max: 100000}
+  - id: thickness_in
+    label: "Thickness"
+    type: choice
+    default: "4"
+    choices:
+      - {value: "4", label: "4 in (patios, sidewalks)", factor: "4"}
+      - {value: "5", label: "5 in (driveways)", factor: "5"}
+      - {value: "6", label: "6 in (heavy vehicles, RV pads)", factor: "6"}
+  - {id: perimeter_lf, label: "Edge length to form", type: number, unit: lf, default: 0, min: 0, max: 20000,
+     help: "Leave 0 to estimate it as a square pour."}
+  - id: reinforcement
+    label: "Reinforcement"
+    type: choice
+    default: mesh
+    # factor is a code used by the line rules: 0 none, 1 wire mesh, 2 rebar grid
+    choices:
+      - {value: none, label: "None (fibre mix only)", factor: "0"}
+      - {value: mesh, label: "Wire mesh", factor: "1"}
+      - {value: rebar, label: "#4 rebar at 18 in each way", factor: "2"}
+  - id: finish
+    label: "Finish"
+    type: choice
+    default: broom
+    # factor is a code: 1 broom, 2 stamped, 3 exposed aggregate
+    choices:
+      - {value: broom, label: "Broom finish", factor: "1"}
+      - {value: stamped, label: "Stamped and coloured", factor: "2"}
+      - {value: exposed, label: "Exposed aggregate", factor: "3"}
+  - {id: base, label: "Gravel base (4 in ABC)?", type: boolean, default: true}
+  - {id: remove_existing, label: "Remove existing concrete?", type: boolean, default: false}
+  - {id: footing_lf, label: "Thickened edge / footing (12 x 12 in)", type: number, unit: lf, default: 0, min: 0, max: 5000}
+  - {id: pump, label: "Pump truck needed?", type: boolean, default: false,
+     help: "When the truck can't reach the pour."}
+
+lines:
+  - {id: removal, description: "Break out and haul away existing concrete", kind: labor, unit: sqft,
+     quantity: "area_sqft", price_key: cc_demo_sqft, when: "remove_existing"}
+  - {id: base, description: "Gravel base, 4 in, compacted", kind: material, unit: sqft, quantity: "area_sqft",
+     price_key: cc_base_sqft, when: "base"}
+  - {id: forms, description: "Forms and layout", kind: labor, unit: lf,
+     quantity: "perimeter_lf if perimeter_lf > 0 else ceil(4 * sqrt(area_sqft))", price_key: cc_form_lf}
+  - {id: footing, description: "Dig thickened edge / footing", kind: labor, unit: lf, quantity: "footing_lf",
+     price_key: cc_footing_lf, when: "footing_lf > 0"}
+  - {id: mesh, description: "Wire mesh", kind: material, unit: sqft, quantity: "area_sqft", waste: "0.10",
+     price_key: cc_mesh_sqft, when: "reinforcement == 1"}
+  - {id: rebar, description: "#4 rebar grid at 18 in, placed", kind: material, unit: lf,
+     quantity: "area_sqft * 2 * 12 / 18", waste: "0.10", price_key: cc_rebar_lf, when: "reinforcement == 2"}
+  - {id: footing_rebar, description: "Footing rebar, 2 continuous #4 bars", kind: material, unit: lf,
+     quantity: "footing_lf * 2", waste: "0.10", price_key: cc_rebar_lf, when: "footing_lf > 0"}
+  # cubic yards = sq ft x thickness in / 12 / 27, plus 12 x 12 in footing = lf / 27
+  - {id: concrete, description: "Ready-mix concrete", kind: material, unit: cuyd,
+     quantity: "area_sqft * thickness_in / 12 / 27 + footing_lf / 27", waste: "0.05", price_key: cc_concrete_cy}
+  - {id: place_finish, description: "Place and finish concrete", kind: labor, unit: sqft, quantity: "area_sqft",
+     price_key: cc_finish_sqft}
+  - {id: stamped, description: "Stamped and coloured finish (extra)", kind: labor, unit: sqft, quantity: "area_sqft",
+     price_key: cc_stamp_sqft, when: "finish == 2"}
+  - {id: exposed, description: "Exposed aggregate finish (extra)", kind: labor, unit: sqft, quantity: "area_sqft",
+     price_key: cc_exposed_sqft, when: "finish == 3"}
+  - {id: joints, description: "Saw-cut control joints", kind: labor, unit: sqft, quantity: "area_sqft",
+     price_key: cc_joint_sqft}
+  - {id: pump, description: "Pump truck", kind: equipment, unit: ea, quantity: "1", price_key: cc_pump_ea, when: "pump"}

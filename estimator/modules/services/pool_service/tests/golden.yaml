@@ -1,0 +1,11 @@
+# Golden cases: sample prices, no markups. Totals in cents (one month).
+- name: weekly, medium pool, chemicals included
+  answers: {visits: weekly}
+  # 4 visits x $30 = $120; chemicals 4 x $10 = $40
+  expected_lines: {service: 12000, chemicals: 4000}
+  expected_total_cents: 16000
+- name: biweekly large pool and spa, no chemicals, filter clean, green cleanup
+  answers: {visits: biweekly, pool_type: pool_and_spa, size: large, chemicals: false, filter_clean: true, cleanup: green}
+  # 2 x 1.3 x 1.25 = 3.25 x $30 = $97.50; filter $75; cleanup 2.5 x $100 = $250
+  expected_lines: {service: 9750, filter: 7500, cleanup: 25000}
+  expected_total_cents: 42250

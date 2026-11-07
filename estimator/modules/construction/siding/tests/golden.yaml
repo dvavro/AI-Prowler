@@ -1,0 +1,13 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: Fiber cement, 2,000 sq ft walls, 12 openings, 160 ft of eaves
+  answers: {wall_sqft: 2000, openings: 12, material: fiber_cement, eave_lf: 160}
+  # (2,000 - 12 x 15) / 100 = 18.2 squares; siding 18.2 x 1.10 x $280 = $5,605.60
+  # corners 4 x 10 ft = 40 lf; J-channel 12 x 16 = 192 lf; soffit 160 x 1 ft = 160 sq ft
+  expected_lines: {removal: 136500, house_wrap: 40040, fiber_cement: 560560, install_fiber_cement: 455000,
+                   corners: 25200, j_channel: 70560, soffit: 158400, fascia: 134400}
+  expected_total_cents: 1580660
+- name: Two-story stucco, 1,800 sq ft, 10 openings, complex walls
+  answers: {wall_sqft: 1800, openings: 10, material: stucco, stories: two, walls: complex}
+  # 16.5 squares; stucco 16.5 x 1.15 x $450 = $8,538.75; casing bead 160 lf
+  expected_lines: {removal: 123750, house_wrap: 36300, stucco: 853875, install_stucco: 907500, casing_bead: 33600}
+  expected_total_cents: 1955025

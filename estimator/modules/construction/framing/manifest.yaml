@@ -1,0 +1,77 @@
+# Wood framing from typed wall lengths and floor area (no plans needed).
+# Studs = wall lf x 12 / spacing + 2 per corner + 2 per opening; plates = wall lf x 3; sheathing = wall area / 32.
+id: framing
+name: Framing
+version: 0.1.0
+category: construction
+path: both
+description: Wall framing (2x4 or 2x6 at 16 or 24 in), headers, exterior sheathing, floor joists and subfloor, and roof trusses, priced from wall length, height and floor area.
+minimum_charge: "1500.00"
+keywords: [framing, frame, frame the, framer, stud wall, studs, new walls, build a wall, interior walls, trusses, joists, subfloor, addition]
+required_any: [wall_lf, floor_sqft, trusses]
+notes:
+  - "Check local code and any engineered plans for header sizes, stud spacing and shear walls; these are rules of thumb."
+
+questions:
+  - {id: wall_lf, label: "Wall length (all walls added up)", type: number, unit: lf, default: 0, min: 0, max: 20000}
+  - id: wall_height
+    label: "Wall height"
+    type: choice
+    default: "8"
+    # factor is the height in feet
+    choices:
+      - {value: "8", label: "8 ft", factor: "8"}
+      - {value: "9", label: "9 ft", factor: "9"}
+      - {value: "10", label: "10 ft", factor: "10"}
+  - id: stud_size
+    label: "Studs"
+    type: choice
+    default: 2x4
+    # factor is a code: 1 = 2x4, 2 = 2x6
+    choices:
+      - {value: 2x4, label: "2x4", factor: "1"}
+      - {value: 2x6, label: "2x6 (exterior, plumbing walls)", factor: "2"}
+  - id: spacing
+    label: "Stud spacing"
+    type: choice
+    default: "16"
+    choices:
+      - {value: "16", label: "16 in on center", factor: "16"}
+      - {value: "24", label: "24 in on center", factor: "24"}
+  - {id: corners, label: "Corners and wall ends", type: integer, default: 4, min: 0, max: 500}
+  - {id: openings, label: "Door and window openings", type: integer, default: 0, min: 0, max: 500}
+  - {id: exterior, label: "Exterior walls (add sheathing)?", type: boolean, default: false}
+  - {id: floor_sqft, label: "Floor to frame (joists and subfloor)", type: number, unit: sqft, default: 0, min: 0,
+     max: 100000}
+  - {id: trusses, label: "Roof trusses to set", type: integer, default: 0, min: 0, max: 500}
+
+lines:
+  # stud lumber in linear feet so taller walls cost more: studs x wall height
+  - {id: studs_2x4, description: "2x4 studs", kind: material, unit: lf,
+     quantity: "(ceil(wall_lf * 12 / spacing) + corners * 2 + openings * 2) * wall_height", waste: "0.10",
+     price_key: fr_2x4_lf, when: "wall_lf > 0 and stud_size == 1"}
+  - {id: studs_2x6, description: "2x6 studs", kind: material, unit: lf,
+     quantity: "(ceil(wall_lf * 12 / spacing) + corners * 2 + openings * 2) * wall_height", waste: "0.10",
+     price_key: fr_2x6_lf, when: "wall_lf > 0 and stud_size == 2"}
+  - {id: plates_2x4, description: "2x4 plates (bottom and double top)", kind: material, unit: lf,
+     quantity: "wall_lf * 3", waste: "0.10", price_key: fr_2x4_lf, when: "wall_lf > 0 and stud_size == 1"}
+  - {id: plates_2x6, description: "2x6 plates (bottom and double top)", kind: material, unit: lf,
+     quantity: "wall_lf * 3", waste: "0.10", price_key: fr_2x6_lf, when: "wall_lf > 0 and stud_size == 2"}
+  - {id: headers, description: "Headers over openings", kind: material, unit: ea, quantity: "openings",
+     price_key: fr_header_ea, when: "openings > 0"}
+  - {id: sheathing, description: "Wall sheathing (4x8 OSB)", kind: material, unit: ea,
+     quantity: "ceil(wall_lf * wall_height / 32)", waste: "0.10", price_key: fr_osb_ea, when: "exterior and wall_lf > 0"}
+  - {id: hardware, description: "Nails, anchors and hardware", kind: material, unit: lf, quantity: "wall_lf",
+     price_key: fr_hardware_lf, when: "wall_lf > 0"}
+  - {id: wall_labor, description: "Frame walls", kind: labor, unit: lf, quantity: "wall_lf", price_key: fr_lab_wall_lf,
+     when: "wall_lf > 0"}
+  - {id: joists, description: "Floor joists, rim and blocking", kind: material, unit: sqft, quantity: "floor_sqft",
+     waste: "0.10", price_key: fr_joist_sqft, when: "floor_sqft > 0"}
+  - {id: subfloor, description: "Subfloor (3/4 in tongue and groove)", kind: material, unit: ea,
+     quantity: "ceil(floor_sqft / 32)", waste: "0.10", price_key: fr_subfloor_ea, when: "floor_sqft > 0"}
+  - {id: floor_labor, description: "Frame floor and lay subfloor", kind: labor, unit: sqft, quantity: "floor_sqft",
+     price_key: fr_lab_floor_sqft, when: "floor_sqft > 0"}
+  - {id: trusses, description: "Roof trusses", kind: material, unit: ea, quantity: "trusses", price_key: fr_truss_ea,
+     when: "trusses > 0"}
+  - {id: truss_labor, description: "Set and brace trusses", kind: labor, unit: ea, quantity: "trusses",
+     price_key: fr_lab_truss_ea, when: "trusses > 0"}

@@ -1,0 +1,15 @@
+# Standard estimate lane: single-trade jobs from measurements or a site visit.
+id: standard_estimate
+name: Standard estimate
+version: 0.1.0
+lane: standard_estimate
+available: true
+available_from: "Sprint 7"
+description: Single-trade jobs (concrete, flooring, roofing so far) from typed measurements or a site visit, with a Reviewer check by job size.
+stages:
+  - {id: collect_job, agent: intake, action: collect_job, label: "Collect job details and measurements"}
+  - {id: price, agent: pricer, action: price, label: "Apply assemblies and price"}
+  - {id: review, agent: reviewer, action: review, label: "Reviewer checks", checkpoint: true}
+  - {id: approve, agent: director, action: approve, label: "Approve the estimate", checkpoint: true}
+  - {id: write_bid, agent: bid_writer, action: write_bid, label: "Write and send the bid"}
+  - {id: follow_up, agent: follow_up, action: follow_up, label: "Follow up and convert to a job"}

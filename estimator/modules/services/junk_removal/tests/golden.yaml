@@ -1,0 +1,14 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: quarter truck
+  answers: {load: quarter}
+  expected_lines: {load: 15000}
+  expected_total_cents: 15000
+- name: half truck, 2 mattresses, 1 appliance, 2 flights, same day
+  answers: {load: half, mattresses: 2, appliances: 1, stairs: 2, same_day: true}
+  # $300 + $50 + $40 + $50 + $50
+  expected_lines: {load: 30000, mattresses: 5000, appliances: 4000, stairs: 5000, same_day: 5000}
+  expected_total_cents: 49000
+- name: minimum load hits the minimum charge
+  answers: {load: minimum}
+  expected_subtotal_cents: 7500
+  expected_total_cents: 9500

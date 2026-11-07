@@ -1,0 +1,72 @@
+# Demolition from typed areas and counts (no plans needed). Debris goes in 20 cu yd dumpsters:
+# gut 0.04 cu yd per sq ft (selective 0.015), wall 0.25 per lf, cabinets 0.2 per lf, fixture 0.5 each,
+# flooring 0.01 per sq ft, structure 0.15 per sq ft. Concrete is hauled by weight: 4 in slab = 0.025 ton per sq ft.
+id: demolition
+name: Demolition
+version: 0.1.0
+category: construction
+path: both
+description: Interior selective or gut demolition, non-bearing walls, cabinets, fixtures, flooring tear-out, concrete break-out and small structures, with dumpsters, dust protection and hazard testing.
+minimum_charge: "400.00"
+keywords: [demolition, demo, demo the, tear out, tear-out, rip out, gut the, gut a, knock down, knock out a wall, remove a wall, take out a wall, tear down, tear down the, break out, concrete removal, remove the concrete, old concrete, remove the cabinets, interior demo, gut the bathroom, gut the master, gut the kitchen, gut the house, demo the bathroom, demo the kitchen, bathroom demo, kitchen demo]
+required_any: [interior_sqft, walls_lf, cabinets_lf, fixtures, flooring_sqft, concrete_sqft, structure_sqft]
+notes:
+  - "Homes built before 1981: test for asbestos and lead paint before demolition."
+  - "Never take out a bearing wall without an engineer's beam design and a permit."
+
+questions:
+  - {id: interior_sqft, label: "Interior area to demo", type: number, unit: sqft, default: 0, min: 0, max: 100000}
+  - id: level
+    label: "How much comes out?"
+    type: choice
+    default: selective
+    # factor is a code: 1 selective (finishes and fixtures), 2 gut to the studs
+    choices:
+      - {value: selective, label: "Selective (finishes, fixtures)", factor: "1"}
+      - {value: gut, label: "Gut to the studs", factor: "2"}
+  - {id: walls_lf, label: "Non-bearing walls to remove", type: number, unit: lf, default: 0, min: 0, max: 2000}
+  - {id: cabinets_lf, label: "Cabinets to remove", type: number, unit: lf, default: 0, min: 0, max: 1000}
+  - {id: fixtures, label: "Fixtures to remove (toilets, tubs, sinks)", type: integer, default: 0, min: 0, max: 200}
+  - {id: flooring_sqft, label: "Flooring to tear out", type: number, unit: sqft, default: 0, min: 0, max: 100000}
+  - id: floor_type
+    label: "Flooring type"
+    type: choice
+    default: carpet
+    # factor is labor hours per 100 sq ft
+    choices:
+      - {value: carpet, label: "Carpet and pad", factor: "0.5"}
+      - {value: wood, label: "Wood, laminate or vinyl", factor: "1.5"}
+      - {value: tile, label: "Tile on mortar", factor: "2.5"}
+  - {id: concrete_sqft, label: "Concrete to break out (4 in)", type: number, unit: sqft, default: 0, min: 0, max: 50000}
+  - {id: structure_sqft, label: "Shed, carport or small structure footprint", type: number, unit: sqft, default: 0, min: 0,
+     max: 5000}
+  - {id: protection, label: "Dust walls and floor protection?", type: boolean, default: true}
+  - {id: hazard_test, label: "Asbestos and lead test first?", type: boolean, default: false}
+  - {id: permit, label: "Pull a demolition permit?", type: boolean, default: false}
+
+lines:
+  - {id: hazard_test, description: "Asbestos and lead testing", kind: other, unit: ea, quantity: "1", price_key: dm_test_ea,
+     when: "hazard_test"}
+  - {id: protection, description: "Dust walls and floor protection", kind: other, unit: ea, quantity: "1",
+     price_key: dm_protect_ea, when: "protection and interior_sqft + walls_lf + cabinets_lf + fixtures + flooring_sqft > 0"}
+  - {id: interior, description: "Interior demolition", kind: labor, unit: hr,
+     quantity: "interior_sqft * (0.08 if level == 2 else 0.03)", price_key: dm_labor_hr, when: "interior_sqft > 0"}
+  - {id: walls, description: "Remove non-bearing walls", kind: labor, unit: hr, quantity: "walls_lf * 0.75",
+     price_key: dm_labor_hr, when: "walls_lf > 0"}
+  - {id: cabinets, description: "Remove cabinets and tops", kind: labor, unit: hr, quantity: "cabinets_lf * 0.3",
+     price_key: dm_labor_hr, when: "cabinets_lf > 0"}
+  - {id: fixtures, description: "Disconnect and remove fixtures", kind: labor, unit: hr, quantity: "fixtures",
+     price_key: dm_labor_hr, when: "fixtures > 0"}
+  - {id: flooring, description: "Tear out flooring", kind: labor, unit: hr, quantity: "flooring_sqft / 100 * floor_type",
+     price_key: dm_labor_hr, when: "flooring_sqft > 0"}
+  - {id: concrete, description: "Break out concrete (saw, breaker, loader)", kind: other, unit: sqft, quantity: "concrete_sqft",
+     price_key: dm_concrete_sqft, when: "concrete_sqft > 0"}
+  - {id: concrete_haul, description: "Haul and dump concrete", kind: other, unit: ton,
+     quantity: "ceil_to(concrete_sqft * 0.025, 0.5)", price_key: dm_concrete_ton, when: "concrete_sqft > 0"}
+  - {id: structure, description: "Demolish structure", kind: other, unit: sqft, quantity: "structure_sqft",
+     price_key: dm_structure_sqft, when: "structure_sqft > 0"}
+  - {id: dumpsters, description: "20 cu yd dumpsters", kind: other, unit: ea,
+     quantity: "ceil((interior_sqft * (0.04 if level == 2 else 0.015) + walls_lf * 0.25 + cabinets_lf * 0.2 + fixtures * 0.5 + flooring_sqft * 0.01 + structure_sqft * 0.15) / 20)",
+     price_key: dm_dumpster_ea}
+  - {id: permit, description: "Demolition permit", kind: other, unit: ea, quantity: "1", price_key: dm_permit_ea,
+     when: "permit"}

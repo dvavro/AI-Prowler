@@ -1,0 +1,4 @@
+price_key,description,kind,unit,cost
+gs_labor_hr,Service labor per hour (sample),labor,hr,60.00
+gs_material_dollar,Materials at cost (one dollar),material,ea,1.00
+gs_trip_ea,Trip fee (sample),other,ea,45.00

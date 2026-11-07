@@ -1,0 +1,80 @@
+# Fences and block walls from typed length, height and gates (no plans needed).
+# Fence face = length x height; posts every 8 ft plus one; block wall = 1.125 blocks per sq ft of face.
+id: fencing
+name: Fencing
+version: 0.1.0
+category: construction
+path: both
+description: Wood privacy, vinyl, chain link and wrought iron fences, and block walls, priced from length and height, with posts, walk and drive gates, footings and old fence removal.
+minimum_charge: "500.00"
+keywords: [fence, fencing, new fence, fence install, install a fence, build a fence, replace the fence, privacy fence, chain link, vinyl fence, wood fence, wrought iron, iron fence, block wall, cmu wall, garden wall, gate install, new gate]
+notes:
+  - "Call 811 before digging post holes or footings, and check HOA and city rules on fence height and material."
+  - "Block walls over 6 ft, or retaining soil, usually need an engineered footing and a permit."
+
+questions:
+  - {id: length_lf, label: "Fence length", type: number, unit: lf, required: true, min: 4, max: 10000}
+  - id: material
+    label: "Material"
+    type: choice
+    required: true
+    # factor is a code: 1 wood, 2 vinyl, 3 chain link, 4 block wall, 5 wrought iron
+    choices:
+      - {value: wood, label: "Wood privacy", factor: "1"}
+      - {value: vinyl, label: "Vinyl", factor: "2"}
+      - {value: chain_link, label: "Chain link", factor: "3"}
+      - {value: block, label: "Block wall (CMU)", factor: "4"}
+      - {value: iron, label: "Wrought iron", factor: "5"}
+  - id: height
+    label: "Height"
+    type: choice
+    default: "6"
+    # factor is the height in feet
+    choices:
+      - {value: "4", label: "4 ft", factor: "4"}
+      - {value: "5", label: "5 ft", factor: "5"}
+      - {value: "6", label: "6 ft", factor: "6"}
+      - {value: "8", label: "8 ft", factor: "8"}
+  - {id: walk_gates, label: "Walk gates", type: integer, default: 0, min: 0, max: 20}
+  - {id: drive_gates, label: "Drive (double) gates", type: integer, default: 0, min: 0, max: 10}
+  - {id: remove_old, label: "Remove the old fence?", type: boolean, default: false}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+
+scenarios:
+  - {id: good, label: "Good: wood privacy", answers: {material: wood}}
+  - {id: better, label: "Better: vinyl", answers: {material: vinyl}}
+  - {id: best, label: "Best: block wall", answers: {material: block}}
+
+lines:
+  - {id: removal, description: "Remove and haul away old fence", kind: labor, unit: lf, quantity: "length_lf",
+     price_key: fn_removal_lf, when: "remove_old"}
+  - {id: wood, description: "Wood pickets, rails and hardware", kind: material, unit: sqft, quantity: "length_lf * height",
+     waste: "0.05", price_key: fn_wood_sqft, when: "material == 1"}
+  - {id: vinyl, description: "Vinyl panels and rails", kind: material, unit: sqft, quantity: "length_lf * height",
+     waste: "0.05", price_key: fn_vinyl_sqft, when: "material == 2"}
+  - {id: chain_link, description: "Chain link fabric, top rail and ties", kind: material, unit: sqft,
+     quantity: "length_lf * height", waste: "0.05", price_key: fn_chain_sqft, when: "material == 3"}
+  - {id: iron, description: "Wrought iron panels", kind: material, unit: sqft, quantity: "length_lf * height",
+     price_key: fn_iron_sqft, when: "material == 5"}
+  - {id: posts, description: "Posts set in concrete (every 8 ft)", kind: material, unit: ea,
+     quantity: "ceil(length_lf / 8) + 1", price_key: fn_post_ea, when: "material != 4"}
+  # install hours per lf for a 6 ft fence: wood 0.25, vinyl 0.2, chain link 0.12, iron 0.3; scaled by height / 6
+  - {id: install, description: "Install fence", kind: labor, unit: hr,
+     quantity: "length_lf * (0.25 if material == 1 else 0.2 if material == 2 else 0.12 if material == 3 else 0.3) * height / 6",
+     price_key: fn_labor_hr, when: "material != 4"}
+  - {id: footing, description: "Dig and pour wall footing", kind: other, unit: lf, quantity: "length_lf",
+     price_key: fn_footing_lf, when: "material == 4"}
+  - {id: blocks, description: "8x8x16 block", kind: material, unit: ea, quantity: "ceil(length_lf * height * 1.125)",
+     waste: "0.05", price_key: fn_block_ea, when: "material == 4"}
+  - {id: grout, description: "Mortar, grout, rebar and cap", kind: material, unit: sqft, quantity: "length_lf * height",
+     price_key: fn_grout_sqft, when: "material == 4"}
+  - {id: block_labor, description: "Lay block wall", kind: labor, unit: sqft, quantity: "length_lf * height",
+     price_key: fn_block_lab_sqft, when: "material == 4"}
+  - {id: walk_gates, description: "Walk gates", kind: material, unit: ea, quantity: "walk_gates",
+     price_key: fn_walk_gate_ea, when: "walk_gates > 0"}
+  - {id: drive_gates, description: "Drive gates", kind: material, unit: ea, quantity: "drive_gates",
+     price_key: fn_drive_gate_ea, when: "drive_gates > 0"}
+  - {id: gate_labor, description: "Hang gates", kind: labor, unit: hr, quantity: "walk_gates * 2 + drive_gates * 4",
+     price_key: fn_labor_hr, when: "walk_gates + drive_gates > 0"}
+  - {id: permit, description: "Fence or wall permit", kind: other, unit: ea, quantity: "1", price_key: fn_permit_ea,
+     when: "permit"}

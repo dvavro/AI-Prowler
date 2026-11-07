@@ -1,0 +1,8 @@
+price_key,description,kind,unit,cost
+pw_driveway_sqft,Driveway / flatwork wash (sample),other,sqft,0.15
+pw_siding_sqft,House siding wash (sample),other,sqft,0.25
+pw_deck_sqft,Deck wash (sample),other,sqft,0.35
+pw_roof_sqft,Roof soft wash (sample),other,sqft,0.40
+pw_fence_lf,Fence wash (sample),other,lf,1.50
+pw_oil_stain_ea,Oil stain treatment (sample),other,ea,25.00
+pw_sealer_sqft,Driveway sealing (sample),other,sqft,0.30

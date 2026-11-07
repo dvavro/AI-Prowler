@@ -1,0 +1,21 @@
+# Golden cases: sample prices, no markups. Totals in cents.
+- name: New work, 10 outlets, 4 switches, 6 lights
+  answers: {outlets: 10, switches: 4, lights: 6}
+  # labor 10 x 0.5 + 4 x 0.5 + 6 x 0.75 = 11.5 hr x $90; wire 20 x 25 = 500 lf x 1.15 x $0.55 = $316.25
+  # breakers ceil(20 / 10) = 2
+  expected_lines: {device_labor: 103500, outlets: 4000, switches: 1600, boxes: 6000, wire: 31625, breakers: 7000,
+                   permit: 20000}
+  expected_total_cents: 173725
+- name: Old work, 2 fans, 2 GFCIs, 1 dedicated circuit, 40 ft runs
+  answers: {work: remodel, fans: 2, gfci: 2, appliance_circuits: 1, avg_run_ft: 40}
+  # devices (2 x 0.75 + 2 x 1.5) x 1.6 = 7.2 hr; circuit 3 x 1.6 = 4.8 hr
+  expected_lines: {device_labor: 64800, circuit_labor: 43200, gfci: 4400, fan_boxes: 3000, boxes: 600, wire: 10120,
+                   heavy_wire: 11500, breakers: 7000, permit: 20000}
+  expected_total_cents: 164620
+- name: 200 A panel upgrade
+  answers: {panel: upgrade}
+  expected_lines: {panel_upgrade: 350000, permit: 20000}
+  expected_total_cents: 370000
+- name: Swap 5 outlets comes to the $200 minimum
+  answers: {work: replace, outlets: 5, permit: false}
+  expected_total_cents: 20000

@@ -1,0 +1,6 @@
+price_key,description,kind,unit,cost
+pc_visit_ea,Service call (sample),other,ea,60.00
+pc_treatment_sqft,Treatment per sq ft (sample),other,sqft,0.04
+pc_termite_ea,Termite inspection (sample),other,ea,95.00
+pc_rodent_station_ea,Rodent bait station (sample),other,ea,35.00
+pc_yard_sqft,Yard treatment per sq ft (sample),other,sqft,0.01
