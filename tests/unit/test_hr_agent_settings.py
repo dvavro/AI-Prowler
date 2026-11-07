@@ -54,12 +54,14 @@ def test_stage_mode_and_time_off_switch():
     assert not das.can_approve_timeoff(s)                                  # practice never approves
 
 
-def test_runner_is_api_keys_only_never_a_chat():
+def test_runner_is_api_keys_only_never_a_chat(monkeypatch):
+    import desk_agent_providers as _prov
+    monkeypatch.setattr(_prov, "_key", lambda p: "")
     for p in ("claude_api", "grok_api"):
         assert das.hr_runner({"agent_provider": p}, B) == (p, "")
     for ed in ("solo", B):                                                 # 2026-11-01: no Claude CLI anywhere
         p, why = das.hr_runner({"agent_provider": "claude_code"}, ed)
-        assert p == "" and "Claude API key or the Grok bot" in why
+        assert p == "" and "Agent API Key" in why
     p, why = das.hr_runner({"agent_provider": "chat_only"}, "solo")
     assert p == "" and "never runs from a chat" in why and "Claude subscription" not in why
     assert "Muse" in das.HR_RUNNER_HELP and "CLI" not in das.HR_RUNNER_HELP
@@ -119,7 +121,13 @@ def test_flow_colours_each_step_and_says_the_choices(hr_db):
     assert "A person approves all time off" in f["summary"] and "type only" in f["summary"]
     assert "never changes pay" in f["summary"] and "⚠" not in f["summary"]
     # a chat runner is called out
-    assert "never runs from a chat" in store.flow(B, shared={"agent_provider": "chat_only"})["summary"]
+    import desk_agent_providers as _prov
+    _saved = _prov._key
+    _prov._key = lambda p: ""
+    try:
+        assert "never runs from a chat" in store.flow(B, shared={"agent_provider": "chat_only"})["summary"]
+    finally:
+        _prov._key = _saved
     g = store.flow(B, overrides={"agent_hr_incidents_access": "read", "agent_hr_reviewers": "hr_admin_managers"},
                    shared={"agent_provider": "grok_api"})
     assert "it reads them" in g["summary"] and "managers" in g["summary"]
@@ -174,3 +182,13 @@ def test_chat_settings_tool_routes_hr_keys(hr_db, tmp_path):
     assert "Saved" in out and store.settings()["agent_hr_enabled"] is True
     assert "agent_hr_enabled = on" in out and desk_db.get_settings(tickets).get("agent_hr_enabled") is False
     assert all(k in desk_tools.SETTING_HELP for k in das.HR_KEYS)
+
+
+def test_an_old_chat_setting_runs_on_the_saved_key(monkeypatch):
+    """David 2026-11-05: a saved key is what runs an agent, HR included."""
+    import desk_agent_providers as _prov
+    monkeypatch.setattr(_prov, "_key", lambda p: "k" if p == "grok_api" else "")
+    assert das.hr_runner({"agent_provider": "chat_only"}, B) == ("grok_api", "")
+    monkeypatch.setattr(_prov, "_key", lambda p: "k")
+    assert das.hr_runner({"agent_provider": "chat_only"}, "solo") == ("claude_api", "")
+    assert das.effective_provider({"agent_provider": "chat_only"}, B) == "claude_api"

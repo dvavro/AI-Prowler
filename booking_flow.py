@@ -426,7 +426,7 @@ def approve(jobs_db: str, tickets_db: str, job_id: str, *, actor, edition: str, 
 
 
 def suggest(jobs_db: str, tickets_db: str, job_id: str, window_key: str, *, actor, edition: str,
-            settings: dict, note: str = "", now=None) -> dict:
+            settings: dict, note: str = "", by_agent: bool = False, now=None) -> dict:
     """↔ Suggest another time: hold it for the customer (booking_suggest_hours) and ask them."""
     _check(actor, edition, settings, False)
     now = _now(now)
@@ -455,7 +455,7 @@ def suggest(jobs_db: str, tickets_db: str, job_id: str, window_key: str, *, acto
                          "version = version + 1 WHERE job_id = ?", (_actor_name(actor), utcnow_iso(), job_id))
         conn.execute("UPDATE booking_requests SET status = 'suggested', suggested_json = ?, decided_by = ?, "
                      "decided_at = ?, decision = 'suggested', note = ? WHERE job_id = ?",
-                     (json.dumps({"key": window_key, "label": label, "reschedule": resched}), _actor_name(actor),
+                     (json.dumps({"key": window_key, "label": label, "reschedule": resched, "by_agent": bool(by_agent)}), _actor_name(actor),
                       utcnow_iso(), (note or "").strip()[:500] or None, job_id))
     _tell(tickets_db, b["req"]["ticket_id"],
           f"We'd like to come {label} instead (arrival window)."
@@ -466,7 +466,7 @@ def suggest(jobs_db: str, tickets_db: str, job_id: str, window_key: str, *, acto
 
 
 def offer(jobs_db: str, tickets_db: str, job_id: str, window_keys: list, *, edition: str, settings: dict,
-          note: str = "", by: str = "assistant", now=None) -> dict:
+          note: str = "", by: str = "assistant", by_agent: bool = False, now=None) -> dict:
     """Offer times to a request with no date (a new service request, or a booking that was
     released / declined-keep) — booking-agent-spec §4 "Offer times". The first open time is held
     for the customer as a suggestion (booking_suggest_hours); the others are listed in the
@@ -492,7 +492,7 @@ def offer(jobs_db: str, tickets_db: str, job_id: str, window_keys: list, *, edit
                      "version = version + 1 WHERE job_id = ?", (by, utcnow_iso(), job_id))
         conn.execute("UPDATE booking_requests SET path = 'book', status = 'suggested', suggested_json = ?, "
                      "decided_by = ?, decided_at = ?, decision = 'offered', note = ? WHERE job_id = ?",
-                     (json.dumps({"key": keys[0], "label": label, "reschedule": False, "others": keys[1:]}), by,
+                     (json.dumps({"key": keys[0], "label": label, "reschedule": False, "others": keys[1:], "by_agent": bool(by_agent)}), by,
                       utcnow_iso(), (note or "").strip()[:500] or None, job_id))
     _tell(tickets_db, b["req"]["ticket_id"],
           f"We can come {label} (arrival window)."
@@ -547,10 +547,16 @@ def _actor_name(actor, system: bool = False) -> str:
 
 def customer_accept(jobs_db: str, tickets_db: str, job_id: str, *, edition: str, settings: dict,
                     now=None) -> dict:
-    """Accept the suggested time — confirmed at once (the approver proposed it)."""
+    """Accept the suggested time — confirmed at once when a person proposed it.
+
+    F-19, 2026-11-04 (David): when the agent proposed a new visit on its own, no person has approved it. It goes back to
+    pending, so Decide applies Let the agent confirm, the daily limit and the other checks; or a person approves it.
+    A move of a visit already confirmed isn't new: it stays as it was."""
     b = get(jobs_db, job_id)
     if b["req"]["status"] != "suggested" or not b["suggested"]:
         raise BookingError("there's no suggested time to accept")
+    if b["suggested"].get("by_agent") and not b["suggested"].get("reschedule"):
+        return customer_pick(jobs_db, tickets_db, job_id, b["suggested"]["key"], edition=edition, settings=settings, now=now)
     out = approve(jobs_db, tickets_db, job_id, actor=SYSTEM, edition=edition, settings=settings,
                   window_key=b["suggested"]["key"], now=now, system=True)
     return out

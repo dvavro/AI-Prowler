@@ -103,13 +103,13 @@ def test_a_run_uses_the_cheap_model_for_a_simple_step_and_records_it(desk, monke
     def fake_ask(provider, system, user, *, model=""):
         seen.append((json.loads(user).get("stage"), model))
         return json.dumps({"actions": [{"action": "no_action", "why": "x", "confidence": 1}]}), \
-            {"input": 1_000_000, "output": 0}
+            {"input": 50_000, "output": 0}        # under Haiku's 100K long-prompt tier (2026-11-03)
     monkeypatch.setattr(prov, "ask", fake_ask)
     out = ag.run(desk, edition=r.SOLO, force=True)
     assert seen and all(m == ("claude-sonnet-5-5" if prov.uses_strong_model("ticket", st) else "claude-haiku-5-5")
                         for st, m in seen)
     # $0.10 per 1M input on Haiku (internal steps), $2 on Sonnet (customer messages / complex)
-    assert out["cost_usd"] == pytest.approx(sum(0.10 if m == "claude-haiku-5-5" else 2.0 for _, m in seen))
+    assert out["cost_usd"] == pytest.approx(sum(0.10 if m == "claude-haiku-5-5" else 2.0 for _, m in seen) * 0.05)
     con = sqlite3.connect(desk)
     model = con.execute("SELECT model FROM agent_runs ORDER BY run_id DESC").fetchone()[0]
     con.close()
@@ -142,15 +142,84 @@ def test_analysis_volume_mix_and_estimates(tmp_path, monkeypatch):
                  [("route", "route", "2026-11-03T09:00:00Z"), ("job", "collect", "2026-11-03T09:00:00Z"),
                   ("ticket", "intake", "2026-11-03T09:00:00Z"), ("job", "prep", "2026-11-03T09:00:00Z")])
     a = ab.analysis("solo", NOW, paths=[db])
-    days = (NOW - dt.datetime(2026, 11, 3, 10, 0, tzinfo=dt.timezone.utc)).total_seconds() / 86400
-    assert a["items"] == 105 and a["calls_per_day"] == pytest.approx(105 / days)     # Oct 3 is outside 30 days
+    # 2026-11-03: volume = the items the agents QUEUED (4 since Nov 3 09:00), not the runs' item counts
+    days = (NOW - dt.datetime(2026, 11, 3, 9, 0, tzinfo=dt.timezone.utc)).total_seconds() / 86400
+    assert a["items"] == 105 and a["calls_per_day"] == pytest.approx(4 / days)       # Oct 3 is outside 30 days
     assert a["call_tokens"] == (1800, 550) and a["complex_share"] == pytest.approx(0.5)   # route + collect (customer)
     est = {e["model"]: e for e in a["estimates"]}
     assert est["claude-sonnet-5-5"]["per_call"] == pytest.approx(0.0091)         # 1800×$2 + 550×$10 per 1M
     smart = est["claude-sonnet-5-5+claude-haiku-5-5"]
-    assert est["claude-haiku-5-5"]["per_month"] < smart["per_month"] < est["claude-sonnet-5-5"]["per_month"]
-    assert smart["per_call"] == pytest.approx(0.5 * 0.0091 + 0.5 * 0.000455, rel=1e-2)
+    assert est["claude-haiku-5-5"]["per_call"] < smart["per_call"] < est["claude-sonnet-5-5"]["per_call"]
+    # 105 items really ran on the API: the smart mix uses what they really cost per item
+    assert smart["measured"] is True and smart["per_call"] == pytest.approx(0.95 / 105, rel=1e-3)
+    assert est["total"]["per_month"] == pytest.approx(smart["per_month"])            # no scheduled AI tasks here
     assert a["agents"][0]["items"] == 105 and a["models"][0]["per_call"] == pytest.approx(0.95 / 105, rel=1e-3)
+
+
+def _runs_db_full(path, runs, queue=()):
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE agent_runs (run_id INTEGER PRIMARY KEY, provider TEXT, model TEXT, started_at TEXT, "
+                "ended_at TEXT, items INT, ok INT, input_tokens INT, output_tokens INT, cost_usd REAL, summary TEXT)")
+    con.execute("CREATE TABLE agent_queue (item_id INTEGER PRIMARY KEY, kind TEXT, ref TEXT, stage TEXT, reason TEXT, "
+                "created_at TEXT)")
+    for provider, model, started, items, ti, to, cost, summary in runs:
+        con.execute("INSERT INTO agent_runs (provider, model, started_at, items, input_tokens, output_tokens, cost_usd, "
+                    "summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (provider, model, started, items, ti, to, cost, summary))
+    for kind, ref, stage, reason, created in queue:
+        con.execute("INSERT INTO agent_queue (kind, ref, stage, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (kind, ref, stage, reason, created))
+    con.commit()
+    con.close()
+    return str(path)
+
+
+def test_analysis_ignores_free_cli_runs_and_keeps_ai_tasks_apart(tmp_path, monkeypatch):
+    """2026-11-03 live cost test: the popup forecast ~$300-400 a month because 54 failed Claude-CLI items ($0)
+    counted as API calls and a whole AI-task run (339K tokens, many rounds) counted as one 'call'."""
+    monkeypatch.setattr(prov, "_cfg", lambda: dict(LIGHT))
+    monkeypatch.setattr(ab, "current", lambda *a, **k: {"text": "x"})
+    monkeypatch.setattr(ab, "scheduled_task_runs_per_month", lambda tasks=None: 34.3)
+    agent = _runs_db_full(tmp_path / "agent.db", [
+        ("claude_code", "subscription", "2026-11-09T10:00:00Z", 54, 0, 0, 0.0, "the Claude CLI failed"),
+        ("claude_api", "claude-haiku-5-5+claude-sonnet-5-5", "2026-11-10T10:00:00Z", 5, 9_600, 1_900, 0.0223,
+         "[live cost test] "),
+        ("claude_api", "claude-sonnet-5-5", "2026-11-10T11:00:00Z", 5, 10_000, 2_000, 0.0230, "")],
+        [("job", "JOB-1", "repeat", "recurring", "2026-11-10T00:00:00Z")] * 7
+        + [("job", "QTE-LCT-1", "quotes", "quote still open", "2026-11-10T12:00:00Z")])     # a test leftover
+    tq_dir = tmp_path / "tq"
+    tq_dir.mkdir()
+    task_db = _runs_db_full(tq_dir / "task_queue.db", [
+        ("claude_api", "claude-sonnet-5-5", "2026-11-09T12:00:00Z", 1, 355_448, 3_032, 0.35, "Check NSB: ok"),
+        ("claude_api", "claude-sonnet-5-5", "2026-11-10T12:00:00Z", 1, 192_856, 1_584, 0.20, "Daily: ok")])
+    monkeypatch.setattr(tqa, "runs_db_path", lambda: task_db)
+    w = ab.window_totals([agent, task_db], NOW)
+    assert w["queued"] == 7 and w["items"] == 5                  # the CLI's 54 and the test's 5 aren't volume
+    assert w["call_tokens"] == (19_600 // 10, 3_900 // 10)        # agent items only — never a task run
+    assert w["cost_per_item"] == pytest.approx((0.0223 + 0.0230) / 10)
+    assert w["task_runs"] == 2 and w["task_cost_per_run"] == pytest.approx(0.275)
+    a = ab.analysis("solo", NOW, paths=[agent, task_db])
+    est = {e["model"]: e for e in a["estimates"]}
+    assert est["tasks"]["per_month"] == pytest.approx(34.3 * 0.275, rel=1e-3)
+    assert est["total"]["per_month"] == pytest.approx(est["claude-sonnet-5-5+claude-haiku-5-5"]["per_month"]
+                                                      + est["tasks"]["per_month"], abs=0.01)
+    assert est["claude-sonnet-5-5"]["per_call"] < 0.02            # was $0.707 a 'call' in the 2026-11-01 popup
+
+
+def test_scheduled_task_runs_per_month():
+    tasks = [{"auto_run": True, "schedule": "daily", "daily_times_per_day": 2},
+             {"auto_run": True, "schedule": "weekly"}, {"auto_run": False, "schedule": "daily"},
+             {"auto_run": True, "schedule": "none"}, {"auto_run": True, "schedule": "monthly"}]
+    assert ab.scheduled_task_runs_per_month(tasks) == pytest.approx(60 + 52 / 12 + 1, abs=0.1)
+
+
+def test_cost_prices_prompt_caching():
+    """Cached tokens cost less than new input (2026-11-03: records were 6-25 % above the API's charge)."""
+    u = {"input": 4_806, "cache_read": 2_196, "cache_write": 0, "output": 1_398}
+    plain = prov.cost("claude-sonnet-5-5", {"input": 4_806, "output": 1_398}, {})
+    cached = prov.cost("claude-sonnet-5-5", u, {})
+    assert cached == pytest.approx(((4_806 - 2_196) * 2 + 2_196 * 0.1 + 1_398 * 10) / 1e6, abs=1e-5) and cached < plain
+    w = prov.cost("claude-haiku-5-5", {"input": 3_000, "cache_write": 2_000, "output": 100}, {})
+    assert w == pytest.approx((1_000 * 0.1 + 2_000 * 0.125 + 100 * 0.5) / 1e6, abs=1e-6)
 
 
 def test_measure_reads_answers_and_never_submits():

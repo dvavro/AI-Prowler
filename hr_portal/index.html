@@ -1326,8 +1326,8 @@
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;">
               <div style="background:linear-gradient(135deg,#0f2236,#0a1628);border:1px solid #1e3a5f;border-radius:10px;padding:14px;">
                 <div style="font-size:20px;margin-bottom:6px;">🤖</div>
-                <div style="font-weight:700;font-size:13px;color:#60a5fa;">AI Assistant</div>
-                <div style="font-size:11.5px;color:#94a3b8;margin-top:4px;">Ask the AI anything about HR policies, your schedule, benefits, or company info using the chat button.</div>
+                <div style="font-weight:700;font-size:13px;color:#60a5fa;">Help</div>
+                <div style="font-size:11.5px;color:#94a3b8;margin-top:4px;">Ask about HR policies, your schedule, benefits, or company info using the chat button.</div>
               </div>
               <div class="tc-only" style="background:linear-gradient(135deg,#0f2236,#0a1628);border:1px solid #1e3a5f;border-radius:10px;padding:14px;">
                 <div style="font-size:20px;margin-bottom:6px;">📊</div>
@@ -2316,7 +2316,7 @@
               <div style="display:flex;align-items:flex-start;gap:8px">
                 <div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#7c3aed);display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0">🤖</div>
                 <div style="background:var(--surface2);border-radius:8px;padding:9px 12px;font-size:13px;color:var(--text);max-width:85%;line-height:1.6">
-                  Hi! I'm your AI-Prowler HR assistant. Ask me anything — HR policies, time off, pay, benefits, or how to use the portal. I'm here to help! 😊
+                  Hi! This is AI-Prowler Help. Ask about HR policies, time off, pay, benefits, or how to use the portal. I'm here to help! 😊
                 </div>
               </div>
             </div>
@@ -2383,7 +2383,7 @@
           'Add your <b>🚨 Emergency Contacts</b> once and they go straight to HR. Keep them up to date!',
           'Your <b>PTO &amp; Time Off</b> page shows how many days you have left this year.',
           'Your <b>Portfolio</b> shows a new inspirational quote every time you open it.',
-          'Need an answer fast? The <b>AI Assistant</b> in Help / Support can answer HR questions any time.',
+          'Need an answer fast? <b>Help / Support</b> can answer common HR questions any time.',
           'Plan your week: set <b>🔁 Daily reminders</b> in your Portfolio and they reset every morning.',
           'Request time off early — go to <b>PTO / Time Off</b>, pick your dates, and submit. HR is notified instantly.'
         ];
@@ -4628,7 +4628,7 @@
   function loadPortfolioAI() {
     const el = document.getElementById('portfolio-ai-response');
     if (!el) return;
-    el.textContent = `Welcome back, ${authState.name || 'there'}! Your AI-Prowler assistant is here to help with HR questions, schedules, pay, and more. Have a great day!`;
+    el.textContent = `Welcome back, ${authState.name || 'there'}! AI-Prowler is here to help with HR questions, schedules, pay, and more. Have a great day!`;
   }
 
   // ── Manager viewing one direct report's fuller record ──────────────────

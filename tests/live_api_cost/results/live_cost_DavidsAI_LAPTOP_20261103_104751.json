@@ -1,0 +1,345 @@
+{
+  "host": "DavidsAI_LAPTOP",
+  "edition": "solo",
+  "started": "2026-11-03T10:47:51",
+  "prices_per_1M": {
+    "claude-haiku-5-5": [
+      0.1,
+      0.5
+    ],
+    "claude-sonnet-5-5": [
+      2.0,
+      10.0
+    ],
+    "claude-opus-5-5": [
+      4.0,
+      20.0
+    ],
+    "grok-4.3": [
+      1.25,
+      2.5
+    ]
+  },
+  "rows": [
+    {
+      "test": "1 Service Desk \u2014 tickets (DRY \u2014 no AI call)",
+      "tokens": {
+        "calls": 3,
+        "input": 0,
+        "cache_write": 0,
+        "cache_read": 0,
+        "output": 0,
+        "web_searches": 0,
+        "cost": 0.0,
+        "by_model": {
+          "claude-haiku-5-5": {
+            "calls": 1,
+            "cost": 0.0,
+            "input_all": 0,
+            "output": 0
+          },
+          "claude-sonnet-5-5": {
+            "calls": 2,
+            "cost": 0.0,
+            "input_all": 0,
+            "output": 0
+          }
+        }
+      },
+      "exact_cost": 0.0,
+      "recorded_cost": 0.0,
+      "per_item": 0.0,
+      "unit": "item (one AI call)",
+      "items": 3,
+      "calls": [
+        {
+          "input": 0,
+          "cache_write": 0,
+          "cache_read": 0,
+          "output": 0,
+          "web_searches": 0,
+          "model": "claude-haiku-5-5",
+          "secs": 0.0,
+          "via": "agent",
+          "cost": 0.0
+        },
+        {
+          "input": 0,
+          "cache_write": 0,
+          "cache_read": 0,
+          "output": 0,
+          "web_searches": 0,
+          "model": "claude-sonnet-5-5",
+          "secs": 0.0,
+          "via": "agent",
+          "cost": 0.0
+        },
+        {
+          "input": 0,
+          "cache_write": 0,
+          "cache_read": 0,
+          "output": 0,
+          "web_searches": 0,
+          "model": "claude-sonnet-5-5",
+          "secs": 0.0,
+          "via": "agent",
+          "cost": 0.0
+        }
+      ],
+      "problems": [],
+      "warnings": [
+        "('ticket', 'first_reply'): expected one of ['ask_customer', 'reply'], the AI chose ['note']"
+      ],
+      "lines": [
+        "   ticket/intake: note \u2014 dry run",
+        "      \u2022 note (confidence 1): dry run",
+        "        \"Dry run \u2014 no AI was called.\"",
+        "   ticket/first_reply: note \u2014 dry run",
+        "      \u2022 note (confidence 1): dry run",
+        "        \"Dry run \u2014 no AI was called.\"",
+        "   ticket/resolution: note \u2014 dry run",
+        "      \u2022 note (confidence 1): dry run",
+        "        \"Dry run \u2014 no AI was called.\""
+      ],
+      "shown": "not shown (human mode off)",
+      "predicted": "claude-haiku-5-5 $0.0354/call \u00b7 claude-sonnet-5-5 $0.7072/call \u00b7 smart mix $0.5240/call, $300.32/month",
+      "run_id": 1,
+      "cleanup": "removed ticket_messages 1, ticket_events 3, tickets 1, customer_contacts 1, folder 1",
+      "outcome": "passed",
+      "month_spent": 0.7283
+    },
+    {
+      "test": "2 Service Desk \u2014 bookings (DRY \u2014 no AI call)",
+      "tokens": {
+        "calls": 2,
+        "input": 0,
+        "cache_write": 0,
+        "cache_read": 0,
+        "output": 0,
+        "web_searches": 0,
+        "cost": 0.0,
+        "by_model": {
+          "claude-haiku-5-5": {
+            "calls": 1,
+            "cost": 0.0,
+            "input_all": 0,
+            "output": 0
+          },
+          "claude-sonnet-5-5": {
+            "calls": 1,
+            "cost": 0.0,
+            "input_all": 0,
+            "output": 0
+          }
+        }
+      },
+      "exact_cost": 0.0,
+      "recorded_cost": 0.0,
+      "per_item": 0.0,
+      "unit": "item (one AI call)",
+      "items": 2,
+      "calls": [
+        {
+          "input": 0,
+          "cache_write": 0,
+          "cache_read": 0,
+          "output": 0,
+          "web_searches": 0,
+          "model": "claude-haiku-5-5",
+          "secs": 0.0,
+          "via": "agent",
+          "cost": 0.0
+        },
+        {
+          "input": 0,
+          "cache_write": 0,
+          "cache_read": 0,
+          "output": 0,
+          "web_searches": 0,
+          "model": "claude-sonnet-5-5",
+          "secs": 0.0,
+          "via": "agent",
+          "cost": 0.0
+        }
+      ],
+      "problems": [],
+      "warnings": [
+        "('booking', 'decide'): expected one of ['bk_approve', 'bk_decline', 'bk_recommend', 'bk_suggest_time'], the AI chose ['bk_note']"
+      ],
+      "lines": [
+        "   booking/check: bk_note \u2014 dry run",
+        "      \u2022 bk_note (confidence 1): dry run",
+        "        \"Dry run \u2014 no AI was called.\"",
+        "   booking/decide: bk_note \u2014 dry run",
+        "      \u2022 bk_note (confidence 1): dry run",
+        "        \"Dry run \u2014 no AI was called.\""
+      ],
+      "shown": "not shown (human mode off)",
+      "predicted": "claude-haiku-5-5 $0.0354/call \u00b7 claude-sonnet-5-5 $0.7072/call \u00b7 smart mix $0.5240/call, $300.32/month",
+      "run_id": 2,
+      "cleanup": "removed booking_holds 1, booking_requests 1, invoices 1, quotes 1, jobs 6, customers 2",
+      "outcome": "passed",
+      "month_spent": 0.7283
+    },
+    {
+      "test": "3 Jobs app agent (DRY \u2014 no AI call)",
+      "tokens": {
+        "calls": 5,
+        "input": 0,
+        "cache_write": 0,
+        "cache_read": 0,
+        "output": 0,
+        "web_searches": 0,
+        "cost": 0.0,
+        "by_model": {
+          "claude-sonnet-5-5": {
+            "calls": 4,
+            "cost": 0.0,
+            "input_all": 0,
+            "output": 0
+          },
+          "claude-haiku-5-5": {
+            "calls": 1,
+            "cost": 0.0,
+            "input_all": 0,
+            "output": 0
+          }
+        }
+      },
+      "exact_cost": 0.0,
+      "recorded_cost": 0.0,
+      "per_item": 0.0,
+      "unit": "item (one AI call)",
+      "items": 5,
+      "calls": [
+        {
+          "input": 0,
+          "cache_write": 0,
+          "cache_read": 0,
+          "output": 0,
+          "web_searches": 0,
+          "model": "claude-sonnet-5-5",
+          "secs": 0.0,
+          "via": "agent",
+          "cost": 0.0
+        },
+        {
+          "input": 0,
+          "cache_write": 0,
+          "cache_read": 0,
+          "output": 0,
+          "web_searches": 0,
+          "model": "claude-sonnet-5-5",
+          "secs": 0.0,
+          "via": "agent",
+          "cost": 0.0
+        },
+        {
+          "input": 0,
+          "cache_write": 0,
+          "cache_read": 0,
+          "output": 0,
+          "web_searches": 0,
+          "model": "claude-haiku-5-5",
+          "secs": 0.0,
+          "via": "agent",
+          "cost": 0.0
+        },
+        {
+          "input": 0,
+          "cache_write": 0,
+          "cache_read": 0,
+          "output": 0,
+          "web_searches": 0,
+          "model": "claude-sonnet-5-5",
+          "secs": 0.0,
+          "via": "agent",
+          "cost": 0.0
+        },
+        {
+          "input": 0,
+          "cache_write": 0,
+          "cache_read": 0,
+          "output": 0,
+          "web_searches": 0,
+          "model": "claude-sonnet-5-5",
+          "secs": 0.0,
+          "via": "agent",
+          "cost": 0.0
+        }
+      ],
+      "problems": [],
+      "warnings": [
+        "('job', 'quotes'): expected one of ['jb_quote_followup'], the AI chose ['jb_note']",
+        "('job', 'schedule'): expected one of ['jb_schedule'], the AI chose ['jb_note']",
+        "('job', 'closeout'): expected one of ['jb_draft_invoice'], the AI chose ['jb_note']",
+        "('job', 'collect'): expected one of ['jb_payment_reminder'], the AI chose ['jb_note']",
+        "('route', 'route'): expected one of ['rt_route_day'], the AI chose ['no_action']"
+      ],
+      "lines": [
+        "   job/quotes: jb_note \u2014 dry run",
+        "      \u2022 jb_note (confidence 1): dry run",
+        "        \"Dry run \u2014 no AI was called.\"",
+        "   job/schedule: jb_note \u2014 dry run",
+        "      \u2022 jb_note (confidence 1): dry run",
+        "        \"Dry run \u2014 no AI was called.\"",
+        "   job/closeout: jb_note \u2014 dry run",
+        "      \u2022 jb_note (confidence 1): dry run",
+        "        \"Dry run \u2014 no AI was called.\"",
+        "   job/collect: jb_note \u2014 dry run",
+        "      \u2022 jb_note (confidence 1): dry run",
+        "        \"Dry run \u2014 no AI was called.\"",
+        "   route/route: no_action \u2014 dry run",
+        "      \u2022 no_action (confidence 1): dry run",
+        "        \"Dry run \u2014 no AI was called.\""
+      ],
+      "shown": "not shown (human mode off)",
+      "predicted": "claude-sonnet-5-5 $0.7072/call \u00b7 claude-haiku-5-5 $0.0354/call \u00b7 smart mix $0.5240/call, $300.32/month",
+      "run_id": 10,
+      "cleanup": "removed invoices 1, quotes 1, jobs 5, customers 2",
+      "outcome": "passed",
+      "month_spent": 0.7283
+    }
+  ],
+  "total_exact_cost": 0.0,
+  "popup_prediction_at_start": {
+    "calls_per_day_used": 19.1,
+    "call_tokens": [
+      338920,
+      2936
+    ],
+    "complex_share_used": 0.7272727272727273,
+    "estimates": [
+      {
+        "model": "claude-haiku-5-5",
+        "per_call": 0.03536,
+        "per_day": 0.6756,
+        "per_month": 20.27
+      },
+      {
+        "model": "claude-sonnet-5-5",
+        "per_call": 0.7072,
+        "per_day": 13.5115,
+        "per_month": 405.35
+      },
+      {
+        "model": "claude-opus-5-5",
+        "per_call": 1.4144,
+        "per_day": 27.0231,
+        "per_month": 810.69
+      },
+      {
+        "model": "grok-4.3",
+        "per_call": 0.43099,
+        "per_day": 8.2344,
+        "per_month": 247.03
+      },
+      {
+        "model": "claude-sonnet-5-5+claude-haiku-5-5",
+        "per_call": 0.523971,
+        "per_day": 10.0108,
+        "per_month": 300.32
+      }
+    ]
+  }
+}

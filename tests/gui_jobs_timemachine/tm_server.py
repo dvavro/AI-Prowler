@@ -170,6 +170,24 @@ def _block_outbound():
 
     requests.Session.request = _guarded                                  # type: ignore[assignment]
 
+    # 2026-11-03 (David): urllib too — the agents' AI calls (desk_agent_providers._post) use
+    # urllib.request.urlopen, which the requests guard above never saw. Every urlopen goes through
+    # OpenerDirector.open, so guarding that covers urlopen and build_opener() alike.
+    import urllib.error
+    import urllib.request
+
+    _orig_open = urllib.request.OpenerDirector.open
+
+    def _guarded_open(self, fullurl, *a, **k):
+        url = fullurl.full_url if isinstance(fullurl, urllib.request.Request) else str(fullurl)
+        host = (urlparse(url).hostname or "").lower()
+        if not any(host == h or host.endswith("." + h) for h in ALLOWED_HOSTS):
+            _record("blocked_http", to=host, body=f"urllib {url}"[:300])
+            raise urllib.error.URLError(f"time machine: outbound request to {host} blocked")
+        return _orig_open(self, fullurl, *a, **k)
+
+    urllib.request.OpenerDirector.open = _guarded_open                   # type: ignore[assignment]
+
 
 def _patch_app(mcp):
     """Switch off what must never run in the sandbox."""

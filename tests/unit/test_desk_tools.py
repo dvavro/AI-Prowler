@@ -133,7 +133,7 @@ def test_create_job_from_ticket(db):
                                     create_job_fn=fake_create_job)
     assert out.startswith("✅ Created JOB-0107 for 2026-11-04") and "customer was told" in out
     assert calls[0]["CustomerID"] == "CUST-0187" and calls[0]["Service Date"] == "2026-11-04"
-    assert tid in calls[0]["Notes"]
+    assert tid in calls[0]["Service Details / Notes"]      # the real column: "Notes" was silently dropped
     t = desk_db.get_ticket(db, tid)
     assert t["job_id"] == "JOB-0107" and t["customer_id"] == "CUST-0187"
     msgs = desk_db.get_ticket_detail(db, tid)["messages"]

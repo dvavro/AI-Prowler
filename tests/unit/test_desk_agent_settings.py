@@ -241,12 +241,34 @@ def test_app_card_and_gui_panel_are_wired():
 
 # ── Claude CLI runner: removed everywhere (David 2026-11-01, "Remove CLI everywhere") ─────────
 
-def test_claude_cli_runner_is_removed(db):
+def test_an_old_saved_cli_value_uses_the_saved_key(db, monkeypatch):
+    """F-26: an install still holding claude_code showed "runner removed" and never ran, with its API keys saved."""
+    import sqlite3
+    import json as _json
+    import desk_agent_providers as prov
+    desk_db.set_setting(db, "agent_provider", "claude_api", edition="solo")
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE desk_settings SET value = ? WHERE key = 'agent_provider'", (_json.dumps("claude_code"),))
+    conn.commit()
+    conn.close()
+    for saved, want in (({"claude_api"}, "claude_api"), ({"grok_api"}, "grok_api"), ({"claude_api", "grok_api"}, "claude_api"), (set(), "chat_only")):
+        monkeypatch.setattr(prov, "_key", lambda p, s=saved: "k" if p in s else "")
+        assert desk_db.get_settings(db)["agent_provider"] == want
+        for ed in ("solo", "business"):
+            assert das.effective_provider({"agent_provider": "claude_code"}, ed) == want
+            assert das.effective_provider(desk_db.get_settings(db), ed) == want
+    monkeypatch.setattr(prov, "_key", lambda p: "k" if p == "claude_api" else "")
+    assert prov.ready(desk_db.get_settings(db)["agent_provider"], "solo") == (True, "")
+
+
+def test_claude_cli_runner_is_removed(db, monkeypatch):
+    import desk_agent_providers as prov
+    monkeypatch.setattr(prov, "_key", lambda p: "")
     for ed in ("solo", "business"):
         with pytest.raises(desk_db.DeskError, match="removed"):
             desk_db.set_setting(db, "agent_provider", "claude_code", edition=ed)
         assert "claude_code" not in [p for p, _ in das.providers_for(ed)]
-        # a value saved earlier counts as chat-only
+        # a value saved earlier, with no key saved, runs nothing
         assert das.effective_provider({"agent_provider": "claude_code"}, ed) == "chat_only"
     st, _, d = call(db, "GET", "/desk-api/agent", actor=OWNER, edition="business")
     assert d["settings"]["agent_provider"] == "chat_only"

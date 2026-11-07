@@ -121,21 +121,19 @@ class TestClassifyKeywordOrdinaryMessages:
 
 
 class TestClassifyKeywordTrailingPunctuation:
-    """Twilio's own STOP handling is punctuation-tolerant ("Stop." is
-    treated as an opt-out on their platform). Documents current behavior
-    of our local classifier so a gap is visible rather than silent."""
+    """Twilio's own STOP handling is punctuation-tolerant, and ours now is too (David, 2026-11-05)."""
 
-    @pytest.mark.parametrize("body", ["stop.", "STOP!", "Stop,"])
-    def test_trailing_punctuation_current_behavior(self, consent, body):
-        result = consent.classify_keyword(body)
-        if result is None:
-            pytest.xfail(
-                "classify_keyword() does not strip trailing punctuation "
-                "before matching — 'stop.' is NOT currently recognized as "
-                "an opt-out, unlike Twilio's own platform-level handling. "
-                "Flagged for a product decision, not silently fixed."
-            )
-        assert result == "opt_out"
+    @pytest.mark.parametrize("body", ["stop.", "STOP!", "Stop,", " stop!!! ", "(stop)", "Unsubscribe."])
+    def test_an_opt_out_ignores_the_punctuation_around_it(self, consent, body):
+        assert consent.classify_keyword(body) == "opt_out"
+
+    @pytest.mark.parametrize("body", ["please stop.", "stop by.", "don't stop!"])
+    def test_a_sentence_is_still_not_a_keyword(self, consent, body):
+        assert consent.classify_keyword(body) is None
+
+    @pytest.mark.parametrize("body", ["Yes.", "yes!", "Start."])
+    def test_a_casual_yes_never_signs_someone_back_up(self, consent, body):
+        assert consent.classify_keyword(body) is None
 
 
 # ─── Consent lifecycle storage (signup → STOP → START round trip) ──────────

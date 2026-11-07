@@ -21,6 +21,7 @@ question. This module only captures and reports consent state.
 """
 
 from __future__ import annotations
+import re
 import json
 import threading
 import uuid
@@ -150,9 +151,11 @@ def classify_keyword(body: str) -> Optional[str]:
 
     Uses an EXACT match on the trimmed/uppercased body, not a substring
     match — "please stop by the office" must NOT be classified as opt_out.
+    David 2026-11-05: an opt-out ignores punctuation around it ("Stop.", "STOP!"), as Twilio's own handling does.
+    An opt-in doesn't: a casual "Yes." must not sign someone back up.
     """
     normalized = (body or "").strip().upper()
-    if normalized in _OPT_OUT_KEYWORDS:
+    if re.sub(r"^\W+|\W+$", "", normalized) in _OPT_OUT_KEYWORDS:
         return "opt_out"
     if normalized in _OPT_IN_KEYWORDS:
         return "opt_in"

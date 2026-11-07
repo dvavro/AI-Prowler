@@ -65,6 +65,15 @@ def set_setting(key: str, value, *, actor=None, edition: str = "solo", db: str |
     return settings(db)
 
 
+def set_settings(values: dict, *, actor=None, edition: str = "solo", db: str | None = None) -> dict:
+    """Several at once, all or nothing (finding F-6, 2026-11-03)."""
+    bad = [k for k in values if k not in das.JB_KEYS]
+    if bad:
+        raise desk_db.DeskError(f"{bad[0]} isn't a Jobs agent setting")
+    desk_db.set_settings(init(db), dict(values), actor=actor, edition=edition)
+    return settings(db)
+
+
 # The runner and the assistant's name are set once (Service Desk → 🤖 Agent) and used by every
 # section, so they're copied here before each run. With no Service Desk the defaults apply
 # (the agent then runs in a chat only).

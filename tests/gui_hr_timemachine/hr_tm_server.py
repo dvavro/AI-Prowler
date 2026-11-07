@@ -126,6 +126,24 @@ def _block_outbound():
         requests.Session.request = _guarded                              # type: ignore[assignment]
     except Exception:
         pass
+    # 2026-11-03 (David): urllib too — the HR agent's AI calls (desk_agent_providers._post) use
+    # urllib.request.urlopen, which the requests guard above never saw. Every urlopen goes through
+    # OpenerDirector.open, so guarding that covers urlopen and build_opener() alike.
+    import urllib.error
+    import urllib.request
+    from urllib.parse import urlparse as _urlparse
+
+    _orig_open = urllib.request.OpenerDirector.open
+
+    def _guarded_open(self, fullurl, *a, **k):
+        url = fullurl.full_url if isinstance(fullurl, urllib.request.Request) else str(fullurl)
+        host = (_urlparse(url).hostname or "").lower()
+        if host not in ("127.0.0.1", "localhost"):
+            _record(source="blocked_http", to=host, subject=f"urllib {url}"[:200])
+            raise urllib.error.URLError(f"HR time machine: outbound request to {host} blocked")
+        return _orig_open(self, fullurl, *a, **k)
+
+    urllib.request.OpenerDirector.open = _guarded_open                   # type: ignore[assignment]
 
 
 def _local(date_s: str, time_s: str = "06:00") -> dt.datetime:

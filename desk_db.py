@@ -506,14 +506,48 @@ def get_settings(db_path: str) -> dict:
             out[r["key"]] = json.loads(r["value"])
         except ValueError:
             pass
+    if out.get("agent_provider") in ("claude_code", "chat_only"):      # F-26: an old value, or none: the saved key decides
+        import desk_agent_settings as _das
+        out["agent_provider"] = _das.runner_for_removed()
     return out
 
 
 def set_setting(db_path: str, key: str, value, *, actor=None,
                 edition: str = rules.BUSINESS) -> dict:
+    return set_settings(db_path, {key: value}, actor=actor, edition=edition)
+
+
+def set_settings(db_path: str, values: dict, *, actor=None, edition: str = rules.BUSINESS) -> dict:
+    """Save several settings as one: every value is checked first, and if any is refused nothing is
+    saved (2026-11-03, finding F-6 — a Save with one bad box used to keep the boxes before it)."""
     d = rules.can(actor, "manage_settings", edition=edition)
     if not d:
         raise DeskError(d.reason)
+    clean = {str(k): _checked_setting(str(k), v, edition) for k, v in values.items()}
+    if not clean:
+        return get_settings(db_path)
+    now, who = utcnow_iso(), _actor_id(actor)
+    conn = get_connection(db_path)
+    try:
+        with conn:                                       # one transaction: all or nothing
+            for k, v in clean.items():
+                conn.execute(
+                    "INSERT INTO desk_settings (key, value, last_edited_at, last_edited_by) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                    "last_edited_at = excluded.last_edited_at, last_edited_by = excluded.last_edited_by",
+                    (k, json.dumps(v), now, who))
+    finally:
+        conn.close()
+    return get_settings(db_path)
+
+
+def check_setting(key: str, value, edition: str = rules.BUSINESS):
+    """Would this value be accepted? Returns it as it would be stored, or raises DeskError — saves nothing."""
+    return _checked_setting(key, value, edition)
+
+
+def _checked_setting(key: str, value, edition: str):
+    """The value as it will be stored, or DeskError with a plain message."""
     if key not in SETTING_DEFAULTS:
         raise DeskError(f"unknown setting {key!r}; settings are: {', '.join(SETTING_DEFAULTS)}")
     if type(value) is not type(SETTING_DEFAULTS[key]):
@@ -582,16 +616,7 @@ def set_setting(db_path: str, key: str, value, *, actor=None,
             raise DeskError(str(e)) from e
         if isinstance(value, str):
             value = value.strip()
-    conn = get_connection(db_path)
-    try:
-        conn.execute(
-            "INSERT INTO desk_settings (key, value, last_edited_at, last_edited_by) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
-            "last_edited_at = excluded.last_edited_at, last_edited_by = excluded.last_edited_by",
-            (key, json.dumps(value), utcnow_iso(), _actor_id(actor)))
-    finally:
-        conn.close()
-    return get_settings(db_path)
+    return value
 
 
 def options_from_settings(settings: dict) -> dict:

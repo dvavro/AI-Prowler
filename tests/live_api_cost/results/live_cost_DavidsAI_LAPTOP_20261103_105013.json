@@ -1,0 +1,157 @@
+{
+  "host": "DavidsAI_LAPTOP",
+  "edition": "solo",
+  "started": "2026-11-03T10:50:13",
+  "prices_per_1M": {
+    "claude-haiku-5-5": [
+      0.1,
+      0.5
+    ],
+    "claude-sonnet-5-5": [
+      2.0,
+      10.0
+    ],
+    "claude-opus-5-5": [
+      4.0,
+      20.0
+    ],
+    "grok-4.3": [
+      1.25,
+      2.5
+    ]
+  },
+  "rows": [
+    {
+      "test": "1 Service Desk \u2014 tickets",
+      "tokens": {
+        "calls": 3,
+        "input": 1882,
+        "cache_write": 2196,
+        "cache_read": 1098,
+        "output": 1406,
+        "web_searches": 0,
+        "cost": 0.013876,
+        "by_model": {
+          "claude-haiku-5-5": {
+            "calls": 1,
+            "cost": 0.000503,
+            "input_all": 1731,
+            "output": 604
+          },
+          "claude-sonnet-5-5": {
+            "calls": 2,
+            "cost": 0.013373,
+            "input_all": 3445,
+            "output": 802
+          }
+        }
+      },
+      "exact_cost": 0.013876,
+      "recorded_cost": 0.01539,
+      "per_item": 0.004625,
+      "unit": "item (one AI call)",
+      "items": 3,
+      "calls": [
+        {
+          "input": 633,
+          "cache_write": 1098,
+          "cache_read": 0,
+          "output": 604,
+          "web_searches": 0,
+          "model": "claude-haiku-5-5",
+          "secs": 4.1,
+          "via": "agent",
+          "cost": 0.000503
+        },
+        {
+          "input": 625,
+          "cache_write": 1098,
+          "cache_read": 0,
+          "output": 415,
+          "web_searches": 0,
+          "model": "claude-sonnet-5-5",
+          "secs": 4.3,
+          "via": "agent",
+          "cost": 0.008145
+        },
+        {
+          "input": 624,
+          "cache_write": 0,
+          "cache_read": 1098,
+          "output": 387,
+          "web_searches": 0,
+          "model": "claude-sonnet-5-5",
+          "secs": 4.2,
+          "via": "agent",
+          "cost": 0.005228
+        }
+      ],
+      "problems": [],
+      "warnings": [
+        "AI-Prowler recorded $0.01539 but the API charged $0.01388 (cache pricing in desk_agent_providers.cost)"
+      ],
+      "lines": [
+        "   ticket/intake: set_type, note \u2014 Classified T-0004 as a complaint and noted the streak rework request for the team; no routing or customer repl",
+        "      \u2022 set_type (confidence 0.75): Customer reports streaks after Friday's cleaning and asks for a return visit, which is a quality complaint. | {\"type\": \"complaint\"}",
+        "      \u2022 note (confidence 0.8): Records the complaint details and the customer's availability for the team to act on.",
+        "        \"Customer says the back sliding doors and the two large windows facing the pool have streaks in the afternoon sun after Friday's cleaning. The front windows look fine. Customer is home most afternoons this week and asks for someone to come back and fix them. Not a duplicate of the other test tickets.\u2026\"",
+        "   ticket/first_reply: reply, note \u2014 Sent an acknowledgement reply and left a team note about the re-clean request for the back windows, including ",
+        "      \u2022 reply (confidence 0.85): First reply acknowledging the complaint, confirming details and availability, with no invented times or promises beyond the team follow-up.",
+        "        \"Hi, thanks for letting us know, and sorry about the streaks on the back sliding doors and the two big windows facing the pool. I've passed this to the team so they can arrange a return visit to fix them. I can't confirm a day or time myself yet, but I've noted that you're home most afternoons this w\u2026\"",
+        "      \u2022 note (confidence 0.9): Gives the team the details to schedule the re-clean, since no job is linked and I can't book times from this stage.",
+        "        \"Customer reports streaks on the back sliding doors and the two large pool-facing windows after Friday's clean (visible in afternoon sun). The front windows are fine. Customer is home most afternoons this week and would like a return visit to re-clean. No job or customer record is linked to this tick\u2026\"",
+        "   ticket/resolution: note, propose_job \u2014 Noted the streak complaint and the customer's afternoon availability, and proposed a return job for the back w",
+        "      \u2022 note (confidence 0.85): Records the details and the customer's availability for the team, since reply is not an allowed action at this stage.",
+        "        \"Customer reports streaks on back sliding doors and two large windows facing the pool after Friday's clean; says the front looks good. They are home most afternoons this week. Streaks are visible in afternoon sun. Suggest a free/return visit per team policy, and check the afternoon availability for t\u2026\"",
+        "      \u2022 propose_job (confidence 0.8): A re-clean of the rear glass is needed, and a proposed job lets the team schedule it. | {\"notes\": \"Return visit to re-clean streaked windows: back sliding doors and the two large windows facing the pool. Customer is home most afternoons this week. "
+      ],
+      "shown": "shown in Service Desk \u2192 \ud83e\udd16 Agent (2 highlighted)",
+      "predicted": "claude-haiku-5-5 $0.0354/call \u00b7 claude-sonnet-5-5 $0.7072/call \u00b7 smart mix $0.5240/call, $300.16/month",
+      "run_id": 1,
+      "cleanup": "removed ticket_messages 1, ticket_events 3, tickets 1, customer_contacts 1, folder 1",
+      "outcome": "passed",
+      "month_spent": 0.7437
+    }
+  ],
+  "total_exact_cost": 0.013876,
+  "popup_prediction_at_start": {
+    "calls_per_day_used": 19.1,
+    "call_tokens": [
+      338920,
+      2936
+    ],
+    "complex_share_used": 0.7272727272727273,
+    "estimates": [
+      {
+        "model": "claude-haiku-5-5",
+        "per_call": 0.03536,
+        "per_day": 0.6752,
+        "per_month": 20.26
+      },
+      {
+        "model": "claude-sonnet-5-5",
+        "per_call": 0.7072,
+        "per_day": 13.504,
+        "per_month": 405.12
+      },
+      {
+        "model": "claude-opus-5-5",
+        "per_call": 1.4144,
+        "per_day": 27.008,
+        "per_month": 810.24
+      },
+      {
+        "model": "grok-4.3",
+        "per_call": 0.43099,
+        "per_day": 8.2297,
+        "per_month": 246.89
+      },
+      {
+        "model": "claude-sonnet-5-5+claude-haiku-5-5",
+        "per_call": 0.523971,
+        "per_day": 10.0052,
+        "per_month": 300.16
+      }
+    ]
+  }
+}

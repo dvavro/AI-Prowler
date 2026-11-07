@@ -215,6 +215,8 @@ def start_request(db_path: str, *, name: str = "", phone: str = "", email: str =
         raise desk_db.DeskError("online requests aren't available right now — please call or text us")
     phone = clean_phone(phone)
     email = (email or "").strip()
+    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise desk_db.DeskError("that email address doesn't look right — like name@example.com")
     want = (send_by or "").strip().lower() or ("sms" if ch["sms"] else "email")
     if want not in ("sms", "email") or (want == "sms" and not ch["sms"]):
         want = "email"
@@ -553,6 +555,8 @@ def status_view(db_path: str, token: str, *, edition: str, now=None) -> dict:
         "booking": _booking_view(t, c, s),
         "order": _order_view(t, c),
     })
+    for m in detail.get("messages") or []:       # David 4 Nov: the page shows the agent's name, label and photo on its messages
+        m["from_agent"] = str(m.get("author") or "").startswith("agent")
     return detail
 
 

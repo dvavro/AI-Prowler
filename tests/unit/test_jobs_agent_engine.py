@@ -476,18 +476,16 @@ def test_the_runner_works_the_jobs_queue_on_its_own(e, monkeypatch):
     assert ag.spend(tickets)["spent_usd"] == ag.spend(e["a"])["spent_usd"]                 # one budget for both
 
 
-def test_chat_tools_run_both_queues_with_j_ids(e):
+def test_the_chat_review_tool_covers_both_queues_with_j_ids(e):
     import desk_tools
     tickets = str(e["tmp"] / "tickets_database" / desk_db.DEFAULT_DB_FILENAME)
     desk_db.init_db(tickets)
     job(e, "JOB-0001", job_status="Unscheduled", service_date="")
-    out = json.loads(desk_tools.desk_agent_next(tickets, OWNER, S, limit=5, jobs_db=e["j"]))
-    it = [i for i in out["items"] if i["stage"] == "schedule"][0]
-    assert str(it["item_id"]).startswith("J") and "action_fields" in it
-    res = json.loads(desk_tools.desk_agent_submit(tickets, OWNER, S, item_id=it["item_id"], jobs_db=e["j"],
-                                                  actions=json.dumps([act("jb_schedule", date=it["dates"][0]["date"])])))
-    pid = res["results"][0]["proposal_id"]
-    assert pid.startswith("J") and res["results"][0]["status"] == "pending"
+    it = items(e, "schedule", "JOB-0001")[0]
+    assert "action_fields" in it
+    res = submit(e, it, act("jb_schedule", date=it["dates"][0]["date"]))
+    pid = f"J{res[0]['proposal_id']}"
+    assert res[0]["status"] == "pending"
     assert f"#{pid} job JOB-0001" in desk_tools.desk_agent_review(tickets, OWNER, S, action="list")
     assert "Jobs agent on" in desk_tools.desk_agent_status(tickets, OWNER, S)
     assert desk_tools.desk_agent_review(tickets, OWNER, S, action="approve", proposal_id=pid,

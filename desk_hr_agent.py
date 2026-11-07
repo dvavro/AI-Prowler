@@ -6,8 +6,7 @@ inside the HR data folder (desk_agent_hr_store.py).
 Vicki's decisions (2026-10-31): 1 approving time off is configurable (off by default, with
 limits); 2 who reviews is configurable (owner + HR Admin, or managers too for their own team's
 time off); 3 whether the AI may read incident reports is configurable (type only by default);
-4 its own database in the HR data folder; 5 only AIs that run with a key you control or the
-Claude CLI — never a chat (so the HR queue is never handed to desk_agent_next); 6 settings and
+4 its own database in the HR data folder; 5 only AIs that run with a key you control — never a chat; 6 settings and
 diagram first.
 
 Deliberately narrow: it watches deadlines, prepares paperwork and drafts answers. People make
@@ -28,6 +27,7 @@ The HR data is reached through `hr` (set by ai_prowler_mcp.py; tests put fakes i
     balance(db, emp)        -> HR's PTO balance for the employee
     notify(to, subject, body) -> email an employee (HR's notification sender)
     booked_jobs(emp, dates) -> how many Jobs-app jobs the person has on those dates (optional)
+    paid_holidays(db, year) -> the observed dates of the company's paid holidays that year (optional)
 """
 from __future__ import annotations
 
@@ -82,6 +82,7 @@ ALLOWED = {
 # Change nothing in HR (shown in the 🤖 tab; a draft is only a draft) — applied even on Suggest.
 FREE = ("hr_note", "hr_flag", "hr_recommend", "hr_draft_email")
 MESSAGES = ("hr_remind_employee", "hr_reply", "hr_ack_sensitive", "hr_ack_incident")
+ANSWERS = ("hr_reply", "hr_ack_sensitive", "hr_ack_incident")
 GUARDED = ("hr_approve_timeoff",)
 ACTION_FIELDS = {
     "hr_note": "{body} — a note for HR in the 🤖 tab (changes nothing)",
@@ -506,6 +507,18 @@ def _policies(db, e) -> dict:
     return pol
 
 
+def blackout_days(entries) -> set:
+    """HR's blackout dates and ranges ("2026-12-24", "2026-12-24 to 2026-12-31") as a set of ISO days."""
+    days = set()
+    for text in entries or []:
+        parts = [_d(x.strip()) for x in str(text).split(" to ")]
+        if not all(parts):
+            continue
+        for i in range((parts[-1] - parts[0]).days + 1):
+            days.add((parts[0] + dt.timedelta(days=i)).isoformat())
+    return days
+
+
 def timeoff_checks(db, r, e, s, adb=None) -> dict:
     """Decision 1's guardrails, worked out in code for HR to see and for the policy."""
     out = {}
@@ -527,9 +540,17 @@ def timeoff_checks(db, r, e, s, adb=None) -> dict:
         bal = None
     rem = ((bal or {}).get("sick" if sick else "pto") or {}).get("remaining")
     out["balance_covers"] = rem is not None and float(rem) >= days
-    blackout = set((db.get("config") or {}).get("pto_blackout_dates") or [])
+    blackout = blackout_days((db.get("config") or {}).get("pto_blackout_dates"))
     span = [(a + dt.timedelta(days=i)).isoformat() for i in range(((b - a).days + 1) if a and b else 0)]
     out["no_blackout"] = not (blackout & set(span))
+    # 2026-11-04 (David): a paid company holiday in the request goes to a person. A failed lookup counts as a clash.
+    try:
+        holidays = set()
+        for year in sorted({d[:4] for d in span}):
+            holidays |= set(hr["paid_holidays"](db, int(year))) if hr.get("paid_holidays") else set()
+        out["no_holiday"] = not (holidays & set(span))
+    except Exception:  # noqa: BLE001
+        out["no_holiday"] = False
     dept = (e or {}).get("department") or ""
     worst = 0
     for day in span:
@@ -542,7 +563,7 @@ def timeoff_checks(db, r, e, s, adb=None) -> dict:
     try:
         jobs = hr["booked_jobs"](e, span) if hr.get("booked_jobs") and e else 0
     except Exception:  # noqa: BLE001
-        jobs = 0
+        jobs = 1                                 # couldn't tell: a person looks (the check fails safe)
     out["booked_jobs"] = jobs
     out["no_booked_jobs"] = not jobs
     flagged = False
@@ -600,7 +621,9 @@ def holds(kind, stage, act, s, ctx, conf, mode_) -> tuple:
             out.append("a former employee — HR writes to them")
         h0, h1 = (s.get("agent_hr_quiet_hours") or [8, 18])[:2]
         now = _now()
-        if not (h0 <= now.hour < h1) or now.weekday() >= 5:
+        # 2026-11-04 (David: the AI can answer 24 hours a day, so it should): an answer to what someone just asked goes
+        # out at any hour. Only what the agent starts itself (reminders) keeps to the hours.
+        if name not in ANSWERS and (not (h0 <= now.hour < h1) or now.weekday() >= 5):
             out.append(f"outside the hours employees are messaged ({h0}:00–{h1}:00, weekdays)")
         if name in ("hr_remind_employee",) and e.get("id") and ctx.get("_adb"):
             recent = [x for x in _sent(ctx.get("_adb"), employee_id=e["id"], ref=ctx.get("ref"))
@@ -628,7 +651,7 @@ def _timeoff_guard(s, ctx, conf) -> tuple:
     c = ctx.get("checks") or {}
     names = {"paid_type": "not paid time off or sick days", "within_max_days": "longer than the agent may approve",
              "enough_notice": "not enough notice", "balance_covers": "the balance doesn't cover it",
-             "no_blackout": "a blackout date", "room_that_day": "too many people off that day",
+             "no_blackout": "a blackout date", "no_holiday": "a company holiday", "room_that_day": "too many people off that day",
              "no_booked_jobs": "they have booked jobs those days", "nothing_flagged": "something is flagged on them"}
     for k, why in names.items():
         if not c.get(k):

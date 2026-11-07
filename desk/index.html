@@ -470,6 +470,12 @@ async function doLogin() {
 }
 function signOut(note) { sessionStorage.removeItem('desk_token'); S.token = ''; showLogin(note); }
 
+function applyAgentTab() {
+  const a = S.me.actor;
+  $('#tabAgent').classList.toggle('hide', !(['owner', 'manager'].includes(a.role) && S.me.settings
+    && (S.me.settings.agent_enabled || S.me.agent_pending > 0)));
+}
+
 async function start() {
   S.me = await api('GET', '/desk-api/me');
   const a = S.me.actor;
@@ -485,7 +491,8 @@ async function start() {
   $('#tabBookings').classList.toggle('hide', !S.me.can_approve_bookings);
   if (S.me.can_approve_bookings) bookingCount();
   // 🤖 Agent (desk_agent.py): what the assistant suggested, for the owner and managers.
-  $('#tabAgent').classList.toggle('hide', !(['owner', 'manager'].includes(a.role) && S.me.settings && S.me.settings.agent_enabled));
+  // 2026-11-03 (David): also while its suggestions still wait with the agent off — they show as paused, Reject only.
+  applyAgentTab();
   $('#bell').classList.toggle('hide', !('serviceWorker' in navigator && 'PushManager' in window));
   await refreshList(); startPoll(); loadDirectory();
 }
@@ -803,23 +810,27 @@ async function showAgent() {
     ${detail(p) ? `<div class="muted" style="font-size:13px">${esc(detail(p))}</div>` : ''}
     ${text(p) ? `<div style="white-space:pre-wrap;margin:6px 0;padding:6px 8px;border-left:3px solid var(--line)">${esc(text(p))}</div>` : ''}
     <div class="muted" style="font-size:13px">Why: ${esc(p.why || '—')}${p.confidence != null ? ` · ${Math.round(p.confidence * 100)}% sure` : ''}
-      ${p.hold_reason && !practice ? ` · waiting because ${esc(p.hold_reason)}` : ''}</div>
+      ${p.hold_reason && !practice && !p.paused && !p.payload.refused ? ` · waiting because ${esc(p.hold_reason)}` : ''}</div>
+    ${p.payload.refused && !practice ? `<div class="agRefused" style="margin-top:6px;padding:6px 8px;border-left:3px solid var(--bad)">⛔ <b>${esc(p.hold_reason || '')}</b></div>` : ''}
+    ${p.paused && !practice ? `<div class="muted agPaused" style="font-size:13px;margin-top:4px">⏸ Paused — ${esc(p.paused)}</div>` : ''}
     <div class="row" style="margin-top:8px">${practice
       ? `<button class="b ghost" data-do="up">👍 Good</button><button class="b ghost" data-do="down">👎 Not right</button>${p.feedback ? `<span class="muted">you said ${p.feedback === 'up' ? '👍' : '👎'}</span>` : ''}`
-      : `<button class="b" data-do="approve">✅ Approve</button>${text(p) ? '<button class="b ghost" data-do="edit">✏️ Edit</button>' : ''}<button class="b ghost" data-do="reject" style="color:var(--bad);border-color:var(--bad)">✖ Reject</button>`}</div>
+      : `${p.paused || p.payload.refused ? '' : `<button class="b" data-do="approve">✅ Approve</button>${text(p) ? '<button class="b ghost" data-do="edit">✏️ Edit</button>' : ''}`}<button class="b ghost" data-do="reject" style="color:var(--bad);border-color:var(--bad)">✖ Reject</button>`}</div>
     <p class="err" style="margin:6px 0 0"></p></div>`;
-  app.innerHTML = `<div class="card" id="agHead"><b>🤖 ${esc(st.provider === 'chat_only' ? 'Runs in a chat (Claude, Muse or Grok)' : st.provider)}</b>
+  app.innerHTML = `${st.enabled ? '' : `<div class="card" id="agOff" style="border-color:var(--bad)"><b>⏸ The agent is off.</b>
+      Its suggestions below are paused — reject them, or turn Agent on again (⚙︎ Settings → 🤖 Agent) to approve them.</div>`}
+    <div class="card" id="agHead"><button class="b" id="agRefresh" title="Refresh" style="float:right;min-width:120px;min-height:44px;padding:10px 18px;font-size:16px;font-weight:600;margin:0 0 6px 8px">↻ Refresh</button><b>🤖 ${esc(st.provider === 'chat_only' ? 'No API key saved' : st.provider)}</b>
       · ${st.waiting} waiting in its queue · ${st.pending} for your OK
-      ${st.provider !== 'chat_only' ? `<div class="muted" style="font-size:13px;margin-top:4px">${st.runs_on_its_own ? 'Runs on its own' : esc('Can\'t run on its own: ' + (st.ready_note || ''))}
+      <div class="muted" style="font-size:13px;margin-top:4px">${st.runs_on_its_own ? 'Runs on its own' : esc('Can\'t run on its own: ' + (st.ready_note || ''))}
         · $${Number(st.spent_usd || 0).toFixed(2)} of $${Number(st.budget_usd || 0).toFixed(0)} this month${st.errors ? ` · ${st.errors} item(s) failed` : ''}
-        ${S.me.actor.role === 'owner' && st.runs_on_its_own ? ' <button class="b ghost" id="agRun">▶ Run now</button>' : ''}</div>` : ''}
-      ${st.provider === 'chat_only' && st.waiting ? `<p class="muted" style="font-size:13px;margin:6px 0">Paste this in Claude, Muse or Grok to run it: <i>${esc(st.chat_prompt)}</i>
-        <button class="b ghost" id="agCopy">Copy</button></p>` : ''}
+        ${S.me.actor.role === 'owner' && st.runs_on_its_own ? ' <button class="b ghost" id="agRun">▶ Run now</button>' : ''}</div>
       ${st.jobs_enabled ? `<div class="muted" style="font-size:13px;margin-top:4px">🧰 Jobs agent: ${st.jobs_waiting} waiting in its queue · ${st.jobs_pending} for your OK (also in the Jobs app → 🤖 Agent)</div>` : ''}
       ${st.hr_enabled ? `<div class="muted" style="font-size:13px;margin-top:4px">👥 HR agent: ${st.hr_pending} for your OK (also in HR Admin → 🤖 Agent)</div>` : ''}</div>
     <h3 style="margin:14px 4px 6px">Waiting for your OK (${d.pending.length})</h3>
     ${d.pending.length ? d.pending.map(p => card(p, false)).join('') : '<div class="card muted" id="agEmpty">Nothing waiting.</div>'}
+    ${st.rated_good || st.rated_not_right ? `<div class="muted" id="agRatings" style="font-size:13px;margin:14px 4px 0"><b>Your practice ratings</b>${[['ticket', '🎫 Tickets'], ['booking', '📅 Bookings'], ['job', '🧰 Jobs'], ['route', '🚐 Routes'], ['hr', '👥 HR']].filter(k => (st.rated_by || {})[k[0]]).map(k => `<div data-rated="${k[0]}">${k[1]}: 👍 ${st.rated_by[k[0]].good} good · 👎 ${st.rated_by[k[0]].not_right} not right</div>`).join('')}Each agent has its own Practice switch: when you trust one, turn it off in ⚙︎ Settings → 🤖 Agent.</div>` : ''}
     ${d.practice.length ? `<h3 style="margin:14px 4px 6px">Practice — what it would have done</h3>${d.practice.map(p => card(p, true)).join('')}` : ''}`;
+  $('#agRefresh').addEventListener('click', showAgent);
   const rn = $('#agRun');
   if (rn) rn.addEventListener('click', async () => {
     rn.disabled = true;
@@ -827,8 +838,6 @@ async function showAgent() {
           toast(o.started ? 'Started — results appear here in a minute (tap ↻).' : o.why); }
     catch (e) { toast(e.message); } finally { rn.disabled = false; }
   });
-  const cp = $('#agCopy');
-  if (cp) cp.addEventListener('click', async () => { try { await navigator.clipboard.writeText(st.chat_prompt); toast('Copied.'); } catch (_) { toast(st.chat_prompt); } });
   app.querySelectorAll('.agp').forEach(c => c.querySelectorAll('[data-do]').forEach(btn => btn.addEventListener('click', async () => {
     const all = [...d.pending, ...d.practice], p = all.find(x => String(x.proposal_id) === c.dataset.pid), err = c.querySelector('.err');
     let what = btn.dataset.do, body = {};
@@ -850,6 +859,7 @@ function stopPoll() { if (S.poll) clearInterval(S.poll); S.poll = null; }
 async function pollOnce() {
   if (!S.token || document.hidden) return;
   try {
+    S.me = await api('GET', '/desk-api/me'); applyAgentTab();     // 2026-11-04: Agent turned on / off in AI-Prowler
     const u = await api('GET', '/desk-api/updates?since=' + encodeURIComponent(S.cursor || ''));
     S.cursor = u.cursor || S.cursor;
     if (!u.tickets.length) return;
@@ -1284,6 +1294,7 @@ async function showSettings() {
 // virtual-assistant persona. The choices come from desk_agent_settings.ui_options()
 // so this card and AI-Prowler's Business tab offer the same things. The persona
 // always carries its label ("Sam · Virtual assistant") — never shown as a person.
+const AG_SYNC_MS = 5000;
 async function renderAgentSection() {
   let d;
   try { d = await api('GET', '/desk-api/agent'); } catch (e) { toast(e.message); return; }
@@ -1294,9 +1305,10 @@ async function renderAgentSection() {
   const small = 'class="muted" style="font-size:12px;margin:2px 0 0"';
   const card = document.createElement('div');
   card.className = 'card'; card.id = 'agentCard';
+  let shown = s;                                                  // what the boxes were last known to match (agSync)
   card.innerHTML = `<h2 style="margin:0 0 6px">🤖 Agent (virtual assistant)</h2>
     <p class="muted" style="font-size:13px;margin:0 0 8px">Works new tickets for you — sorts them, drafts replies, finds past fixes.
-      Nothing reaches a customer until you allow it. <b>It works now from a chat — say "Run the AI-Prowler agent" in Claude, Muse or Grok — and its suggestions wait in the 🤖 Agent tab. With a Claude API key, your Claude subscription or the Grok bot it also runs on its own.</b></p>
+      Nothing reaches a customer until you allow it. <b>It runs on its own with a saved Claude or Grok API key (🔑 Agent API Key, on the desktop's Small Business tab), and its suggestions wait in the 🤖 Agent tab. With no key saved it doesn't run.</b></p>
     <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">
     <div style="flex:1 1 300px;min-width:0">
     <div class="tog"><input type="checkbox" data-agb="agent_enabled" ${s.agent_enabled ? 'checked' : ''}><span>Agent on</span></div>
@@ -1404,24 +1416,32 @@ async function renderAgentSection() {
   renderAgentFlow(d.jb_flow, 'jbFlow', 'job');
   renderAgentFlow(d.rt_flow, 'rtFlow', 'route');
   const setJ = vals => api('POST', '/desk-api/agent/jobs', { settings: vals });
-  const drawJ = r => { renderAgentFlow(r.jb_flow, 'jbFlow', 'job'); renderAgentFlow(r.rt_flow, 'rtFlow', 'route'); };
+  const drawJ = r => { shown = { ...shown, ...r.settings }; renderAgentFlow(r.jb_flow, 'jbFlow', 'job'); renderAgentFlow(r.rt_flow, 'rtFlow', 'route'); };
+  // A box that isn't a whole number in range is refused, never quietly turned into something else (F-1 to F-5).
+  const wholeBox = (id, lo, hi) => { const t = String($(id).value).trim(); const v = /^\d+$/.test(t) ? Number(t) : NaN;
+    return v >= lo && v <= hi ? v : null; };
   card.querySelectorAll('[data-agj]').forEach(c => c.addEventListener('change', async () => {
     const v = c.type === 'checkbox' ? c.checked : c.dataset.num ? parseInt(c.value, 10) : c.value;
     try { drawJ(await setJ({ [c.dataset.agj]: v })); toast('Saved.'); }
     catch (e) { toast(e.message); if (c.type === 'checkbox') c.checked = !c.checked; }
   }));
   $('#rtSave').addEventListener('click', async () => {
-    const h = parseInt($('#rtHour').value, 10);
-    if (!(h >= 0 && h <= 23)) { toast('Hour: 0 to 23.'); return; }
+    const h = wholeBox('#rtHour', 0, 23);
+    if (h === null) { toast('Hour: 0 to 23.'); return; }
     try { drawJ(await setJ({ agent_jb_route_send_hour: h })); toast('Saved.'); } catch (e) { toast(e.message); }
   });
   $('#jbSave').addEventListener('click', async () => {
-    const n = id => parseInt($(id).value, 10);
     const days = $('#jbRemind').value.split(/[\s,]+/).filter(Boolean).map(x => parseInt(x, 10));
     if (days.some(x => !(x >= 1 && x <= 120))) { toast('Reminder days: numbers 1 to 120, like 7, 14, 30.'); return; }
+    const max = wholeBox('#jbMax', 0, 100000), perDay = wholeBox('#jbPerDay', 1, 100), quote = wholeBox('#jbQuote', 1, 60),
+      hour = wholeBox('#jbHour', 0, 23);
+    if (max === null) { toast('Invoice limit ($) must be a whole number between 0 and 100000.'); return; }
+    if (perDay === null) { toast('Invoices a day must be a whole number between 1 and 100.'); return; }
+    if (quote === null) { toast('Quote follow-up (days) must be a whole number between 1 and 60.'); return; }
+    if (hour === null) { toast('Prep hour must be a whole number between 0 and 23.'); return; }
     try {
-      const r = await setJ({ agent_jb_invoice_max: Math.max(0, n('#jbMax') || 0), agent_jb_invoices_per_day: n('#jbPerDay') || 10,
-        agent_jb_quote_days: n('#jbQuote') || 5, agent_jb_remind_days: days, agent_jb_prep_hour: n('#jbHour') });
+      const r = await setJ({ agent_jb_invoice_max: max, agent_jb_invoices_per_day: perDay,
+        agent_jb_quote_days: quote, agent_jb_remind_days: days, agent_jb_prep_hour: hour });
       drawJ(r); toast('Saved.');
     } catch (e) { toast(e.message); }
   });
@@ -1434,6 +1454,45 @@ async function renderAgentSection() {
       box.innerHTML = `<img alt="Agent photo" style="width:100%;height:100%;object-fit:cover" src="${URL.createObjectURL(blob)}">`;
     } catch (_) { box.textContent = '🤖'; }
   }
+  // 2026-11-04 (David): a change saved in AI-Prowler on this PC shows here by itself, every AG_SYNC_MS. A box follows
+  // unless the person is in it or has changed it without saving; their edit stays and Save writes it.
+  const AG_BOXES = { agName: x => x.agent_name, agSignoff: x => x.agent_reply_signoff, agH0: x => x.agent_hours[0],
+    agH1: x => x.agent_hours[1], agBudget: x => x.agent_monthly_budget_usd, agWait: x => x.agent_wait_hours,
+    bkPerDay: x => x.agent_bk_confirm_per_day, bkCheckHour: x => x.agent_bk_check_hour, jbMax: x => x.agent_jb_invoice_max,
+    jbPerDay: x => x.agent_jb_invoices_per_day, jbQuote: x => x.agent_jb_quote_days,
+    jbRemind: x => (x.agent_jb_remind_days || []).join(', '), jbHour: x => x.agent_jb_prep_hour, rtHour: x => x.agent_jb_route_send_hour };
+  const follow = (el, was, now) => {
+    const box = v => el.type === 'checkbox' ? !!v : String(v == null ? '' : v);
+    if (box(was) === box(now)) return false;
+    if (el !== document.activeElement && (el.type === 'checkbox' ? el.checked : el.value) === box(was)) {
+      if (el.type === 'checkbox') el.checked = box(now); else el.value = box(now);
+    }
+    return true;
+  };
+  function applySaved(n) {
+    let changed = false;
+    card.querySelectorAll('[data-ag],[data-agb],[data-agj]').forEach(el => {
+      const k = el.dataset.ag || el.dataset.agb || el.dataset.agj;
+      if (follow(el, shown[k], n.settings[k])) changed = true;
+    });
+    Object.entries(AG_BOXES).forEach(([id, get]) => { if (follow(card.querySelector('#' + id), get(shown), get(n.settings))) changed = true; });
+    const photo = shown.agent_photo !== n.settings.agent_photo;
+    shown = n.settings;
+    if (!changed && !photo) return;
+    $('#agDisplay').textContent = n.persona.display; $('#agSig').textContent = n.persona.signature;
+    renderAgentFlow(n.flow);
+    renderAgentFlow(n.bk_flow, 'bkFlow', 'booking');
+    renderAgentFlow(n.jb_flow, 'jbFlow', 'job');
+    renderAgentFlow(n.rt_flow, 'rtFlow', 'route');
+    if (S.me.settings) { S.me.settings.agent_enabled = n.settings.agent_enabled; applyAgentTab(); }
+    if (photo) { $('#agPhotoDel').classList.toggle('hide', !n.settings.agent_photo); showPic(n.settings.agent_photo); }
+  }
+  clearInterval(S.agTimer);
+  S.agTimer = setInterval(async () => {
+    if (!card.isConnected) { clearInterval(S.agTimer); return; }
+    if (document.hidden) return;
+    try { applySaved(await api('GET', '/desk-api/agent')); } catch (_) {}
+  }, AG_SYNC_MS);
   async function refresh() {
     try {
       const n = await api('GET', '/desk-api/agent');
@@ -1442,6 +1501,7 @@ async function renderAgentSection() {
       renderAgentFlow(n.flow);
       renderAgentFlow(n.bk_flow, 'bkFlow', 'booking');
       await showPic(n.settings.agent_photo);
+      shown = n.settings;
     } catch (_) {}
   }
   showPic(s.agent_photo);
@@ -1463,13 +1523,19 @@ async function renderAgentSection() {
     catch (e) { toast(e.message); }
   });
   $('#agSave').addEventListener('click', async () => {
-    const n = id => parseInt($(id).value, 10);
-    const h0 = n('#agH0'), h1 = n('#agH1');
-    if (!(h0 >= 0 && h1 > h0 && h1 <= 24)) { toast('Hours: start before end, 0 to 24.'); return; }
+    // 2026-11-03 (F-1, F-2, F-6): a box that isn't a whole number in range is refused, not quietly turned
+    // into $0 or 4, and the card is saved in one request — all of it or, if anything is refused, none of it.
+    const whole = (id, lo, hi) => { const t = String($(id).value).trim(); const v = /^\d+$/.test(t) ? Number(t) : NaN;
+      return v >= lo && v <= hi ? v : null; };
+    const h0 = whole('#agH0', 0, 23), h1 = whole('#agH1', 1, 24);
+    if (h0 === null || h1 === null || !(h1 > h0)) { toast('Hours: start before end, 0 to 24.'); return; }
+    const budget = whole('#agBudget', 0, 10000);
+    if (budget === null) { toast('Monthly AI budget must be whole dollars between 0 and 10000.'); return; }
+    const wait = whole('#agWait', 1, 168);
+    if (wait === null) { toast('Nudge after must be whole hours between 1 and 168.'); return; }
     const vals = { agent_name: $('#agName').value.trim(), agent_reply_signoff: $('#agSignoff').value.trim(),
-      agent_hours: [h0, h1],
-      agent_monthly_budget_usd: Math.max(0, n('#agBudget') || 0), agent_wait_hours: n('#agWait') || 4 };
-    try { for (const [k, v] of Object.entries(vals)) await set(k, v); toast('Saved.'); refresh(); }
+      agent_hours: [h0, h1], agent_monthly_budget_usd: budget, agent_wait_hours: wait };
+    try { await api('POST', '/desk-api/settings', { values: vals }); toast('Saved.'); refresh(); }
     catch (e) { toast(e.message); }
   });
   $('#bkSaveBooking').addEventListener('click', async () => {

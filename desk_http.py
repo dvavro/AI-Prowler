@@ -250,8 +250,8 @@ def _route(method, sub, q, body, ctype, actor, edition, db, services):
                 raise desk_db.DeskError(rules.SERVER_LOCK_MSG)
             b = _parse_json(body)
             vals = b.get("settings") if isinstance(b.get("settings"), dict) else {b.get("key"): b.get("value")}
-            for k, val in vals.items():
-                desk_agent_store.set_setting(str(k), val, actor=actor, edition=edition)
+            desk_agent_store.set_settings({str(k): val for k, val in vals.items()}, actor=actor,
+                                          edition=edition)                # all or nothing (F-6)
             jb = desk_agent_store.settings()
             return _ok(settings=jb, jb_flow=das.jobs_flow(jb, edition), rt_flow=das.route_flow(jb, edition))
         if sub == "/agent/jobs/flow" and method == "POST":            # redraw for unsaved choices
@@ -283,17 +283,26 @@ def _route(method, sub, q, body, ctype, actor, edition, db, services):
             adb = _dt._jobs_agent_db()                 # the Jobs agent's suggestions, ids "J…"
             hdb = _dt._hr_agent_db()                   # the HR agent's, ids "H…" (decision 2: who may see them)
             if sub == "/agent/inbox" and method == "GET":
-                pend, prac = desk_agent.inbox(db, status="pending"), desk_agent.inbox(db, status="practice", limit=40)
+                # 2026-11-03 (David): a suggestion whose agent is off is "paused" — shown, rejectable, not approvable.
+                pend = desk_agent.mark_paused(db, desk_agent.inbox(db, status="pending"))
+                prac = desk_agent.inbox(db, status="practice", limit=40, unrated=True)
                 st = desk_agent.status(db)
                 if adb:
-                    pend += [dict(x, proposal_id=f"J{x['proposal_id']}") for x in desk_agent.inbox(adb, status="pending")]
+                    pend += [dict(x, proposal_id=f"J{x['proposal_id']}")
+                             for x in desk_agent.mark_paused(adb, desk_agent.inbox(adb, status="pending"))]
                     prac += [dict(x, proposal_id=f"J{x['proposal_id']}")
-                             for x in desk_agent.inbox(adb, status="practice", limit=40)]
+                             for x in desk_agent.inbox(adb, status="practice", limit=40, unrated=True)]
                     js = desk_agent.status(adb)
-                    st = dict(st, jobs_enabled=True, jobs_waiting=js["waiting"], jobs_pending=js["pending"])
+                    st = dict(st, jobs_enabled=True, jobs_waiting=js["waiting"], jobs_pending=js["pending"],
+                              rated_good=st["rated_good"] + js["rated_good"],
+                              rated_not_right=st["rated_not_right"] + js["rated_not_right"],
+                              rated_by={**st["rated_by"], **js["rated_by"]})
+                # David 2026-11-05: a manager sees what they may see, as in a chat (desk_tools._agent_may).
+                pend = [x for x in pend if _dt._agent_may(db, actor, edition, x["kind"], x["ref"])]
+                prac = [x for x in prac if _dt._agent_may(db, actor, edition, x["kind"], x["ref"])]
                 if hdb:
                     mine = _dt._hr_reviewable(hdb, actor, desk_agent.inbox(hdb, status="pending"))
-                    pend += [dict(x, proposal_id=f"H{x['proposal_id']}") for x in mine]
+                    pend += [dict(x, proposal_id=f"H{x['proposal_id']}") for x in desk_agent.mark_paused(hdb, mine)]
                     st = dict(st, hr_enabled=True, hr_pending=len(mine))
                 return _ok(pending=pend, practice=prac, status=st)
             m = re.fullmatch(r"/agent/proposals/([JH]?)(\d{1,9})/(approve|edit|reject|up|down)", sub)
@@ -323,6 +332,10 @@ def _route(method, sub, q, body, ctype, actor, edition, db, services):
                 if m.group(1) == "H" and not hdb:
                     raise desk_db.NotFoundError("the HR agent is off")
                 target = {"J": adb, "H": hdb}.get(m.group(1), db)
+                if m.group(1) != "H":                      # HR has its own rule (who may review, desk_agent.review)
+                    row = _dt._agent_row(target, "agent_proposals", "proposal_id", int(m.group(2)))
+                    if row and not _dt._agent_may(db, actor, edition, row["kind"], row["ref"]):
+                        raise desk_db.DeskError("that suggestion is outside what you can see")
                 out = desk_agent.review(target, int(m.group(2)), m.group(3), actor_=actor,
                                         edition=edition,
                                         edits=b.get("edits") if isinstance(b.get("edits"), dict) else None,
@@ -367,6 +380,9 @@ def _route(method, sub, q, body, ctype, actor, edition, db, services):
                    can_book_for_customers=__import__("desk_staff_booking").can_book(actor, edition, s),
                    actor={"id": a["id"], "role": a["role"], "name": a.get("name", ""),
                           "email": a.get("email", "")},
+                   # 2026-11-03: the 🤖 tab stays visible while suggestions wait, even with the agent off
+                   agent_pending=(__import__("desk_agent").pending_count(db)
+                                  if a["role"] in (rules.OWNER, rules.MANAGER) else 0),
                    edition=edition, settings=s,
                    kinds=[k for k in rules.KINDS
                           if rules.can(actor, "create", edition=edition, kind=k,
@@ -482,11 +498,12 @@ def _route(method, sub, q, body, ctype, actor, edition, db, services):
         return _ok(settings=desk_db.get_settings(db))
     if sub == "/settings" and method == "POST":
         b = _parse_json(body)
-        if b.get("key") in desk_db.LOCAL_ONLY_SETTINGS:
+        # {"key", "value"} for one setting, or {"values": {...}} for a whole card — all or nothing (F-6)
+        vals = b.get("values") if isinstance(b.get("values"), dict) else {b.get("key", ""): b.get("value")}
+        if any(k in desk_db.LOCAL_ONLY_SETTINGS for k in vals):
             raise desk_db.DeskError("the backup folder can only be changed in AI-Prowler on this PC "
                                     "(🏢 Small Business tab → Service Desk → Data & backups)")
-        return _ok(settings=desk_db.set_setting(db, b.get("key", ""), b.get("value"),
-                                                actor=actor, edition=edition))
+        return _ok(settings=desk_db.set_settings(db, vals, actor=actor, edition=edition))
 
     if sub == "/contacts" and method == "GET":
         if rules.is_external(actor):

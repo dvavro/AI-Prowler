@@ -248,9 +248,14 @@ def check_and_alert(s: dict, *, edition: str | None, db: str | None = None, now:
 
 # ── the cost analysis (2026-11-01, David: "make that cost analysis a popup menu with an on demand new analysis
 # button so the user can gage the costs") ─────────────────────────────────────────────────────────────────
-DEFAULT_CALL_TOKENS = (1800, 550)        # measured on David's own Jobs agent items, 2026-11-01
+DEFAULT_CALL_TOKENS = (2000, 400)        # measured: live cost test 2026-11-03 (10 agent items, Sonnet/Haiku mix)
 DEFAULT_COMPLEX_SHARE = 0.3
-DEFAULT_CALLS_PER_DAY = 30
+DEFAULT_CALLS_PER_DAY = 10               # a small business: David's install queued ~7 items a day (Oct 31-Nov 3)
+DEFAULT_TASK_RUN_USD = 0.30              # measured: one AI analysis task run $0.20-0.38 on Sonnet 5.5 (Nov 2-3)
+# Runs that never reached a paid API (the removed Claude CLI subscription runner, chat runs) cost nothing and are
+# not API calls — the 2026-11-01 popup counted 54 failed CLI items as ~19 API calls a day and forecast $300+/month.
+NON_API_PROVIDERS = ("claude_code", "chat", "chat_only")
+TEST_TAG = "[live cost test]"            # the live cost test's own runs: real spend, but not the business's volume
 
 
 def _agent_name(path: str) -> str:
@@ -346,38 +351,15 @@ def complex_share(paths: list, month: str):
 WINDOW_DAYS = 30
 
 
-def window_totals(paths: list, now: dt.datetime) -> dict:
-    """The last 30 days (or since the first run, if sooner): AI calls a day, tokens per call (runs that really
-    reached the AI only) and the share of complex steps among queued items."""
-    import desk_agent_providers as prov
-    now_utc = now.astimezone(dt.timezone.utc) if now.tzinfo else now
-    since = (now_utc - dt.timedelta(days=WINDOW_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
-    items = tok_items = tin = tout = n = c = 0
-    first = None
-    for p in paths:
-        try:
-            con = _ro(p)
-        except sqlite3.Error:
-            continue
-        try:
-            for started, it, ti, to in con.execute(
-                    "SELECT started_at, items, input_tokens, output_tokens FROM agent_runs WHERE started_at >= ?",
-                    (since,)):
-                it, ti, to = int(it or 0), int(ti or 0), int(to or 0)
-                items += it
-                if it and (ti + to) > 0:
-                    tok_items += it; tin += ti; tout += to
-                first = started if first is None or started < first else first
-        except sqlite3.Error:
-            pass
-        try:
-            for kind, stage in con.execute("SELECT kind, stage FROM agent_queue WHERE created_at >= ?", (since,)):
-                n += 1
-                c += 1 if prov.uses_strong_model(kind, stage) else 0
-        except sqlite3.Error:
-            pass
-        finally:
-            con.close()
+def _is_task_db(path: str) -> bool:
+    try:
+        import task_queue_automation
+        return Path(path).resolve() == Path(task_queue_automation.runs_db_path()).resolve()
+    except Exception:  # noqa: BLE001
+        return Path(path).name == "task_queue.db"
+
+
+def _days_since(first, now_utc) -> float:
     days = float(WINDOW_DAYS)
     if first:
         try:
@@ -386,9 +368,91 @@ def window_totals(paths: list, now: dt.datetime) -> dict:
             days = max(1.0, min(float(WINDOW_DAYS), (now_utc - f).total_seconds() / 86400.0))
         except ValueError:
             pass
-    return {"items": items, "days": round(days, 2), "items_per_day": (items / days) if items else None,
+    return days
+
+
+def window_totals(paths: list, now: dt.datetime) -> dict:
+    """The last 30 days (or since the first queued item, if sooner). Reworked 2026-11-03 after the live cost test
+    showed the popup forecasting ~$300-400 a month against a real ~$0.005 per agent item:
+      * volume = the items the agents QUEUED (each is one AI call), whatever runs them — not the runs' item
+        counts, which counted every retry of the removed Claude CLI runner (cost $0) as an API call;
+      * tokens per call = agent items that really reached a paid API — never a whole AI-task run (many rounds,
+        mostly cached), which made one 'call' look like 339K tokens;
+      * the Task Queue's AI-task runs are counted on their own (runs, cost per run)."""
+    import desk_agent_providers as prov
+    now_utc = now.astimezone(dt.timezone.utc) if now.tzinfo else now
+    since = (now_utc - dt.timedelta(days=WINDOW_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
+    api_items = tok_items = tin = tout = n = c = task_runs = 0
+    item_cost = task_cost = 0.0
+    first_q = first_run = None
+    for p in paths:
+        try:
+            con = _ro(p)
+        except sqlite3.Error:
+            continue
+        is_task = _is_task_db(p)
+        try:
+            for started, it, ti, to, cst, provider, model, summary in con.execute(
+                    "SELECT started_at, items, input_tokens, output_tokens, cost_usd, provider, model, summary "
+                    "FROM agent_runs WHERE started_at >= ?", (since,)):
+                it, ti, to, cst = int(it or 0), int(ti or 0), int(to or 0), float(cst or 0)
+                if (provider or "") in NON_API_PROVIDERS or (model or "") == "subscription" or (ti + to) <= 0:
+                    continue                         # never reached a paid API — not a call, cost nothing
+                if is_task:
+                    task_runs += 1
+                    task_cost += cst
+                    continue
+                if it:
+                    tok_items += it; tin += ti; tout += to; item_cost += cst
+                if not str(summary or "").startswith(TEST_TAG):
+                    api_items += it
+                    first_run = started if first_run is None or started < first_run else first_run
+        except sqlite3.Error:
+            pass
+        try:
+            try:
+                qrows = con.execute("SELECT kind, stage, created_at, ref, reason FROM agent_queue WHERE created_at >= ?",
+                                    (since,)).fetchall()
+            except sqlite3.OperationalError:          # a minimal / older queue table without ref or reason
+                qrows = con.execute("SELECT kind, stage, created_at, '', '' FROM agent_queue WHERE created_at >= ?",
+                                    (since,)).fetchall()
+            for kind, stage, created, ref, reason in qrows:
+                if "LCT" in str(ref or "") or str(reason or "").startswith(TEST_TAG):
+                    continue                         # the live cost test's own items
+                n += 1
+                c += 1 if prov.uses_strong_model(kind, stage) else 0
+                first_q = created if first_q is None or created < first_q else first_q
+        except sqlite3.Error:
+            pass
+        finally:
+            con.close()
+    days = _days_since(first_q or first_run, now_utc)
+    volume = n or api_items
+    return {"items": api_items, "queued": n, "days": round(days, 2),
+            "items_per_day": (volume / days) if volume else None,
             "call_tokens": (tin // tok_items, tout // tok_items) if tok_items else None,
-            "complex_share": (c / n) if n else None}
+            "cost_per_item": (item_cost / tok_items) if tok_items else None, "measured_items": tok_items,
+            "complex_share": (c / n) if n else None,
+            "task_runs": task_runs, "task_cost_per_run": (task_cost / task_runs) if task_runs else None}
+
+
+def scheduled_task_runs_per_month(tasks: list | None = None) -> float:
+    """How many AI-task runs a month the saved AI Analysis Tasks will make on their own (Auto-run on)."""
+    if tasks is None:
+        try:
+            import custom_tasks_manager as ctm
+            tasks = ctm.load_custom_tasks()
+        except Exception:  # noqa: BLE001
+            return 0.0
+    per = {"daily": 30.0, "weekly": 52 / 12, "biweekly": 26 / 12, "monthly": 1.0}
+    total = 0.0
+    for t in tasks or []:
+        sch = str(t.get("schedule") or "none")
+        if not t.get("auto_run") or sch not in per:
+            continue
+        times = max(1, int(t.get("daily_times_per_day") or 1)) if sch == "daily" else 1
+        total += per[sch] * times
+    return round(total, 1)
 
 
 def estimates(calls_per_day: float, call_tokens: tuple, share: float, *, cfg: dict | None = None,
@@ -438,12 +502,37 @@ def analysis(edition: str | None = None, now: dt.datetime | None = None, *, path
     share = w["complex_share"]
     used_share = share if share is not None else DEFAULT_COMPLEX_SHARE
     used_cpd = cpd if cpd else DEFAULT_CALLS_PER_DAY
+    est = estimates(used_cpd, call_tokens, used_share, measured=measured)
+    smart = next((e for e in est if e.get("smart")), None)
+    # 2026-11-03: once enough items really ran on the API, the smart mix uses what they really cost per item (the
+    # records price prompt caching correctly) instead of tokens x list price.
+    if smart and not measured and (w.get("measured_items") or 0) >= 3 and w.get("cost_per_item"):
+        pc = w["cost_per_item"]
+        smart.update(per_call=round(pc, 6), per_day=round(pc * used_cpd, 4), per_month=round(pc * used_cpd * 30, 2),
+                     measured=True)
+    # AI Analysis Tasks (the Task Queue) — runs, not calls: a run is several AI rounds over many tools.
+    runs_month = scheduled_task_runs_per_month()
+    per_run = w.get("task_cost_per_run") or DEFAULT_TASK_RUN_USD
+    tasks = {"runs_per_month": runs_month, "per_run": round(per_run, 4), "per_month": round(runs_month * per_run, 2),
+             "measured_runs": w.get("task_runs", 0)}
+    if runs_month:
+        est.append({"label": f"AI Analysis Tasks: {runs_month:g} scheduled run(s) a month at about "
+                             f"${per_run:.2f} a run" + ("" if w.get("task_runs") else " (estimated)"),
+                    "model": "tasks", "per_call": round(per_run, 4), "per_day": round(runs_month * per_run / 30, 4),
+                    "per_month": tasks["per_month"], "measured": bool(w.get("task_runs")), "tasks": True})
+    base = smart or next((e for e in est if e["model"] == prov.model_for("claude_api")), None)
+    if base:
+        total = round(base["per_month"] + tasks["per_month"], 2)
+        est.append({"label": "Expected total a month: " + ("smart mix" if smart else base["model"])
+                             + (" + AI tasks" if runs_month else ""),
+                    "model": "total", "per_call": None, "per_day": round(total / 30, 4), "per_month": total,
+                    "measured": bool(base.get("measured")), "total": True})
     return {"month": month, "forecast": f, "agents": agents, "models": per_model(paths, month),
             "items": items, "calls_per_day": cpd, "calls_per_day_used": round(used_cpd, 1),
             "call_tokens": call_tokens, "complex_share": share, "complex_share_used": used_share,
             "main_model": prov.model_for("claude_api"), "light_model": prov.light_model(),
-            "estimates": estimates(used_cpd, call_tokens, used_share, measured=measured),
-            "measured": measured or {}}
+            "estimates": est, "measured": measured or {}, "tasks": tasks,
+            "queued": w.get("queued", 0), "window_days": w.get("days")}
 
 
 def _jobs_db_path() -> str:

@@ -1,0 +1,140 @@
+{
+  "host": "DavidsAI_LAPTOP",
+  "edition": "solo",
+  "started": "2026-11-03T11:22:21",
+  "prices_per_1M": {
+    "claude-haiku-5-5": [
+      0.1,
+      0.5
+    ],
+    "claude-sonnet-5-5": [
+      2.0,
+      10.0
+    ],
+    "claude-opus-5-5": [
+      4.0,
+      20.0
+    ],
+    "grok-4.3": [
+      1.25,
+      2.5
+    ]
+  },
+  "rows": [
+    {
+      "test": "5 AI task (Task Queue)",
+      "tokens": {
+        "calls": 3,
+        "input": 8,
+        "cache_write": 68141,
+        "cache_read": 124707,
+        "output": 1584,
+        "web_searches": 0,
+        "cost": 0.198679,
+        "by_model": {
+          "claude-sonnet-5-5": {
+            "calls": 3,
+            "cost": 0.198679,
+            "input_all": 192856,
+            "output": 1584
+          }
+        }
+      },
+      "exact_cost": 0.198679,
+      "recorded_cost": 0.21115,
+      "per_item": 0.198679,
+      "unit": "task run",
+      "items": 1,
+      "calls": [
+        {
+          "input": 4,
+          "cache_write": 57640,
+          "cache_read": 0,
+          "output": 196,
+          "web_searches": 0,
+          "model": "claude-sonnet-5-5",
+          "secs": 3.6,
+          "via": "task",
+          "cost": 0.146068
+        },
+        {
+          "input": 2,
+          "cache_write": 9427,
+          "cache_read": 57640,
+          "output": 960,
+          "web_searches": 0,
+          "model": "claude-sonnet-5-5",
+          "secs": 7.1,
+          "via": "task",
+          "cost": 0.038935
+        },
+        {
+          "input": 2,
+          "cache_write": 1074,
+          "cache_read": 67067,
+          "output": 428,
+          "web_searches": 0,
+          "model": "claude-sonnet-5-5",
+          "secs": 3.6,
+          "via": "task",
+          "cost": 0.013676
+        }
+      ],
+      "rounds": 3,
+      "problems": [],
+      "warnings": [
+        "AI-Prowler recorded $0.21115 for this run, the API charged $0.19868 (task_queue_automation.run_cost cache-read price)"
+      ],
+      "lines": [
+        "   3 AI round(s); tools used: read_job_spreadsheet, get_ar_aging_report, get_weather, save_analysis_report",
+        "   summary: I saved the morning check as a Word report. I didn't send any email or message, and I only read the business data.\n\n- **Jobs in the next 7 days:** Three jobs are scheduled.\n  - Fri 11/06: Bamboo Trading Company, JOB-4098.\n  - Sat 11/07: Copperline Port Orange, JOB-5309.\n  - Mon 11/09: Crabby's Daytona, JOB-5312.\n  - The service type is blank on all three, so I noted that earlier jobs for these customers were window cleaning. I also flagged that 11/07 is a Saturday, which is worth checking against your working days.\n- **Unpaid invoices over 14 days:** None. The aging report shows no outstanding"
+      ],
+      "predicted": "claude-sonnet-5-5 $0.1251/call \u00b7 smart mix $0.0931/call, $62.36/month (the popup treats a whole task run as one 'call')",
+      "shown": "shown",
+      "cleanup": "removed task 1, report files 1",
+      "outcome": "passed",
+      "month_spent": 0.9964
+    }
+  ],
+  "total_exact_cost": 0.198679,
+  "popup_prediction_at_start": {
+    "calls_per_day_used": 22.3,
+    "call_tokens": [
+      58119,
+      882
+    ],
+    "complex_share_used": 0.7307692307692307,
+    "estimates": [
+      {
+        "model": "claude-haiku-5-5",
+        "per_call": 0.00625,
+        "per_day": 0.1396,
+        "per_month": 4.19
+      },
+      {
+        "model": "claude-sonnet-5-5",
+        "per_call": 0.12506,
+        "per_day": 2.7932,
+        "per_month": 83.8
+      },
+      {
+        "model": "claude-opus-5-5",
+        "per_call": 0.25012,
+        "per_day": 5.5864,
+        "per_month": 167.59
+      },
+      {
+        "model": "grok-4.3",
+        "per_call": 0.07485,
+        "per_day": 1.6718,
+        "per_month": 50.15
+      },
+      {
+        "model": "claude-sonnet-5-5+claude-haiku-5-5",
+        "per_call": 0.093073,
+        "per_day": 2.0788,
+        "per_month": 62.36
+      }
+    ]
+  }
+}
