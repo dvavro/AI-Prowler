@@ -3840,6 +3840,16 @@ or from the Help menu."""
         self.create_small_business_tab()   # 7  ← Small Business Service Tools
         self.create_learnings_tab()        # 8  ← Self-Learning Knowledge Base
 
+        # 9 ← 🏗 Estimator (2026-11-07, Jamie). Built in estimator/ui/gui_tab.py so this file stays small; added after
+        # the fixed tabs so it never shifts the _TAB_INDEX_* constants. A problem there never stops the GUI.
+        self._TAB_INDEX_ESTIMATOR = None
+        try:
+            from estimator.ui.gui_tab import build_estimator_tab
+            if build_estimator_tab(self) is not None:
+                self._TAB_INDEX_ESTIMATOR = self.notebook.index('end') - 1
+        except Exception as _est_e:
+            print(f"[estimator tab] skipped: {_est_e}")
+
         # 9 (conditional) ← Admin tab: ONLY in Business server mode. Appended
         # LAST so it never shifts the fixed _TAB_INDEX_* constants above.
         # NOTE: read the RUNTIME config (~/.ai-prowler/config.json) — that's

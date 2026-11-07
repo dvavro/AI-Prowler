@@ -572,7 +572,13 @@ TOOLS = (
 
 
 def register(mcp) -> list[str]:
-    """Register the Estimator tools on a FastMCP server. Returns the tool names."""
+    """Register the Estimator tools on a FastMCP server. Returns the tool names.
+
+    While the Estimator is switched off (Setup AI-Prowler → Change my choices, or the 🏗 Estimator tab) nothing is
+    registered and the background checks don't start; its data and settings are untouched."""
+    from estimator.ui.model import is_on
+    if not is_on():
+        return []
     for fn in TOOLS:
         mcp.tool()(fn)
     director_watch.start_background()      # the Director checks jobs on its own (ESTIMATOR_WATCHER=off stops it)

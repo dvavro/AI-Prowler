@@ -370,7 +370,7 @@ def set_jobs_switch(on: bool) -> tuple[bool, str]:
 
 
 # 2026-11-06 (David): the rest of the choices are switches too (tool_config_store.feature_on).
-FEATURE_SERVICES = ("analyses", "email", "phone")
+FEATURE_SERVICES = ("analyses", "email", "phone", "estimator")   # 2026-11-07 (Jamie): + the Estimator
 
 
 def feature_switched_on(sid: str) -> bool:
@@ -1157,6 +1157,15 @@ cpText(t);var o=b.textContent;b.textContent='✅ Copied';setTimeout(function(){{
 </script></body></html>"""
 
 
+def detect_estimator() -> Optional[bool]:
+    """2026-11-07 (Jamie): green once the Estimator's company basics and markups are in (estimator/ui/model.py)."""
+    try:
+        from estimator.ui.model import setup_light
+        return setup_light()
+    except Exception:
+        return None
+
+
 # ── the modules ─────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Module:
@@ -1220,6 +1229,11 @@ MODULES: list[Module] = [
            "from Open to Closed — one owner, a history, photos, alerts. You and your team work tickets "
            "in the Service Desk app on your phones, or by asking Claude, Muse or Grok.",
            tab="🏢 Small Business", requires=("remote",), detect=detect_desk),
+    Module("estimator", "Estimator (estimates and bids)", 5,
+           "Ask your AI for an estimate (\"quote a pressure wash for the Garcia house\", \"bid the Miller plans\") "
+           "and the Estimating Director asks the questions, prices it from your price book and writes the bid "
+           "for you to approve. 15 construction trades and 8 service quotes. Start with your company basics: "
+           "name, sales tax, overhead and profit.", tab="🏗 Estimator", detect=detect_estimator),
     Module("server_info", "About AI-Prowler Server (for teams)", 1,
            "One shared AI-Prowler for a whole company — shared knowledge, one job list for every "
            "crew, roles and per-person privacy. It runs on its own server box and is installed by "
@@ -1235,6 +1249,7 @@ SERVICES: list[tuple[str, str, tuple]] = [
     ("phone",    "📱 Use AI-Prowler from my phone",                ("remote", "remote_pwa")),
     ("business", "🧰 Run my service business (jobs, invoices, crew routes)",    ("jobs", "payments", "routes")),
     ("desk",     "🎫 File and track tickets (customer requests, to-dos)", ("desk",)),
+    ("estimator", "📐 Estimate and bid jobs (construction trades, service quotes)", ("estimator",)),
     ("team",     "🏢 A shared AI-Prowler for my whole team",       ("server_info",)),
 ]
 SERVICE_IDS = [s[0] for s in SERVICES]
@@ -1499,6 +1514,7 @@ SECTIONS = {
     "routes": ("🗺 Route flow", "🧰 Jobs App Agent", "📱 Jobs App"),
     "desk": ("🎫 Service Desk — Mobile URL",),
     "agent_key": ("🔑 Agent API Key",),
+    "estimator": ("🧭 Estimator setup",),
 }
 AGENT_KEY_TARGET = Module("agent_key", "Agent API Key", 0, "", tab="🏢 Small Business")   # a place, not a step
 
@@ -3567,7 +3583,9 @@ GUIDED: dict = {"index": IndexFirstFolderFlow,
                 "jobs": JobsFlow,
                 "payments": PaymentsFlow,
                 "routes": RoutesFlow,
-                "desk": DeskFlow}
+                "desk": DeskFlow,
+                "estimator": lambda panel: __import__("estimator.ui.setup_flow",
+                                                      fromlist=["make_flow"]).make_flow(panel)}
 
 
 def build_setup_center(parent, app) -> Optional[SetupCenterPanel]:
