@@ -74,7 +74,7 @@ def test_register_on_fastmcp():  # S2-T07
     server = FastMCP("estimator-test")
     names = t.register(server)
     listed = {tool.name for tool in asyncio.run(server.list_tools())}
-    assert set(names) <= listed and len(names) == len(t.TOOLS) == 64
+    assert set(names) <= listed and len(names) == len(t.TOOLS) == 75
     tool = next(x for x in asyncio.run(server.list_tools()) if x.name == "est_quick_answer")
     assert {"estimate_id", "module_id", "answers", "rev"} <= set(tool.inputSchema["properties"])
 

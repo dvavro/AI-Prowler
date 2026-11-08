@@ -43,3 +43,8 @@ class PermissionDenied(EstimatorError):
 class ConfirmationRequired(EstimatorError):
     """The action reaches a customer, changes money or creates records: ask the user, then call again with confirm."""
     code = "needs_confirmation"
+
+
+class NotAvailable(EstimatorError):
+    """A part of the Estimator that isn't installed yet (for example the plan engine) was asked to do something."""
+    code = "not_available"

@@ -441,6 +441,120 @@ CREATE INDEX ix_actuals_key ON estimate_actuals (company_id, price_key)
 ALTER TABLE director_notices ADD COLUMN for_user TEXT;
 ALTER TABLE estimates ADD COLUMN is_practice INTEGER NOT NULL DEFAULT 0
 """),
+    (11, "drawing model: plan sets, sheets, viewports, drawing objects, schedules, legends", """
+CREATE TABLE plan_sets (
+    id                     INTEGER PRIMARY KEY,
+    company_id             TEXT NOT NULL,
+    estimate_id            INTEGER NOT NULL REFERENCES estimates (id) ON DELETE CASCADE,
+    file_path              TEXT NOT NULL,
+    original_name          TEXT NOT NULL,
+    file_type              TEXT NOT NULL CHECK (file_type IN ('pdf', 'image', 'dxf', 'dwg')),
+    file_size              INTEGER NOT NULL,
+    sha256                 TEXT NOT NULL,
+    page_count             INTEGER,
+    revision               INTEGER NOT NULL DEFAULT 1,
+    supersedes_plan_set_id INTEGER REFERENCES plan_sets (id) ON DELETE SET NULL,
+    status                 TEXT NOT NULL DEFAULT 'uploaded'
+                           CHECK (status IN ('uploaded', 'processing', 'processed', 'failed')),
+    error                  TEXT,
+    engine                 TEXT,
+    validation_json        TEXT,
+    uploaded_by            TEXT NOT NULL,
+    created_at             TEXT NOT NULL,
+    processed_at           TEXT
+);
+CREATE INDEX ix_plan_sets_estimate ON plan_sets (company_id, estimate_id);
+CREATE INDEX ix_plan_sets_hash ON plan_sets (company_id, estimate_id, sha256);
+
+CREATE TABLE sheets (
+    id             INTEGER PRIMARY KEY,
+    company_id     TEXT NOT NULL,
+    plan_set_id    INTEGER NOT NULL REFERENCES plan_sets (id) ON DELETE CASCADE,
+    page_no        INTEGER NOT NULL,
+    sheet_no       TEXT,
+    title          TEXT,
+    discipline     TEXT NOT NULL DEFAULT 'other',
+    revision       TEXT,
+    revision_date  TEXT,
+    units          TEXT NOT NULL DEFAULT 'paper_in',
+    width          TEXT,
+    height         TEXT,
+    image_path     TEXT,
+    confidence     TEXT
+);
+CREATE INDEX ix_sheets_plan_set ON sheets (plan_set_id, page_no);
+
+CREATE TABLE viewports (
+    id                INTEGER PRIMARY KEY,
+    company_id        TEXT NOT NULL,
+    sheet_id          INTEGER NOT NULL REFERENCES sheets (id) ON DELETE CASCADE,
+    label             TEXT,
+    bbox_json         TEXT,
+    scale_note        TEXT,
+    scale_ratio       TEXT,
+    scale_method      TEXT,
+    scale_confidence  TEXT,
+    is_nts            INTEGER NOT NULL DEFAULT 0,
+    scale_set_by      TEXT,
+    scale_set_at      TEXT
+);
+CREATE INDEX ix_viewports_sheet ON viewports (sheet_id);
+
+CREATE TABLE drawing_objects (
+    id               INTEGER PRIMARY KEY,
+    company_id       TEXT NOT NULL,
+    sheet_id         INTEGER NOT NULL REFERENCES sheets (id) ON DELETE CASCADE,
+    viewport_id      INTEGER REFERENCES viewports (id) ON DELETE SET NULL,
+    kind             TEXT NOT NULL CHECK (kind IN ('line', 'polyline', 'polygon', 'room', 'wall', 'opening',
+                                                   'symbol', 'text', 'dimension')),
+    geometry_json    TEXT NOT NULL,
+    real_units_json  TEXT,
+    layer            TEXT,
+    block_name       TEXT,
+    label            TEXT,
+    tag              TEXT,
+    source           TEXT NOT NULL CHECK (source IN ('cad', 'vector', 'raster', 'ai', 'manual')),
+    confidence       TEXT,
+    revision_status  TEXT NOT NULL DEFAULT 'current'
+);
+CREATE INDEX ix_objects_sheet ON drawing_objects (sheet_id, kind);
+CREATE INDEX ix_objects_tag ON drawing_objects (company_id, tag);
+
+CREATE TABLE schedules (
+    id             INTEGER PRIMARY KEY,
+    company_id     TEXT NOT NULL,
+    sheet_id       INTEGER NOT NULL REFERENCES sheets (id) ON DELETE CASCADE,
+    schedule_type  TEXT NOT NULL,
+    title          TEXT,
+    bbox_json      TEXT,
+    confidence     TEXT
+);
+CREATE INDEX ix_schedules_sheet ON schedules (sheet_id);
+
+CREATE TABLE schedule_rows (
+    id                 INTEGER PRIMARY KEY,
+    company_id         TEXT NOT NULL,
+    schedule_id        INTEGER NOT NULL REFERENCES schedules (id) ON DELETE CASCADE,
+    mark               TEXT,
+    fields_json        TEXT NOT NULL DEFAULT '{}',
+    linked_object_ids  TEXT NOT NULL DEFAULT '[]',
+    confidence         TEXT,
+    reviewed_by        TEXT,
+    reviewed_at        TEXT
+);
+CREATE INDEX ix_schedule_rows ON schedule_rows (schedule_id);
+
+CREATE TABLE legends (
+    id          INTEGER PRIMARY KEY,
+    company_id  TEXT NOT NULL,
+    sheet_id    INTEGER NOT NULL REFERENCES sheets (id) ON DELETE CASCADE,
+    discipline  TEXT,
+    title       TEXT,
+    bbox_json   TEXT,
+    confidence  TEXT
+);
+CREATE INDEX ix_legends_sheet ON legends (sheet_id)
+"""),
 ]
 
 

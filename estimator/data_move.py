@@ -99,7 +99,15 @@ def export_data(conn, ctx: RequestContext, include_practice: bool = False) -> di
     for row in tables["estimates"]:
         if row["parent_estimate_id"] not in ids["estimates"]:
             row["parent_estimate_id"] = None
+    for row in tables["runs"]:
+        row["plan_set_id"] = None              # plan sets aren't packed yet (see left_out)
     counts = {t: len(v) for t, v in tables.items()}
+    plan_sets = conn.execute("SELECT COUNT(*) FROM plan_sets p JOIN estimates e ON e.id = p.estimate_id"
+                             f" WHERE p.company_id = ?{est_where.replace('is_practice', 'e.is_practice')}",
+                             (company,)).fetchone()[0]
+    left_out = ([f"{plan_sets} plan set(s) and what was read from them: upload the plan files again on the other "
+                 "AI-Prowler (moving processed plans to the server comes with the processing-PC work)"]
+                if plan_sets else [])
     manifest = {"format": FORMAT, "schema_version": current_version(conn), "company_id": company,
                 "company_name": (tables["company_profile"][0].get("name") if tables["company_profile"] else None),
                 "exported_at": _now(), "exported_by": ctx.actor, "include_practice": bool(include_practice),
@@ -120,6 +128,7 @@ def export_data(conn, ctx: RequestContext, include_practice: bool = False) -> di
                     files += 1
     service._log(conn, ctx, None, "data_exported", {"file": path.name, "counts": counts})
     return {"ok": True, "path": str(path), "file": path.name, "counts": counts, "bid_files": files,
+            "left_out": left_out,
             "note": "Copy this file to the other AI-Prowler and import it there with est_data_import (owner only)."}
 
 

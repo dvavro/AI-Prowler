@@ -36,6 +36,8 @@ from estimator.pricing import price_book
 from estimator.pricing import importer as price_import
 from estimator.learning import history
 from estimator import data_move, exports, practice, team
+from estimator.drawing_model import engine as plan_engine
+from estimator.drawing_model import store as plans
 
 # Server mode will replace this with the API key / signed-in user's context.
 _context_provider = personal_context
@@ -632,6 +634,102 @@ def est_agent_run_now() -> str:
     return _run(go)
 
 
+# ---------------------------------------------------------------- plans and the drawing model
+
+def plan_upload(estimate_id: int, file_path: str, supersedes_plan_set_id: int = 0, confirm: bool = False) -> str:
+    """Attach a plan file on this PC (full path; PDF, PNG, JPG, TIFF, DXF or DWG, up to 300 MB) to an estimate. The file
+    is checked first (real file type, not empty, not password-protected, not already on the estimate) and copied into
+    the Estimator's folder. For a revised set, give the plan set it replaces. Asks first (confirm=true)."""
+    return _run(lambda c: plans.upload(c, _ctx(), int(estimate_id), file_path, int(supersedes_plan_set_id) or None,
+                                       bool(confirm)))
+
+
+def plan_process(plan_set_id: int, confirm: bool = False) -> str:
+    """Read a plan set with the plan engine in the background: sheets, viewports and scales, drawing objects,
+    schedules and legends. Check progress with plan_status. Asks first; reading an already-read set again replaces its
+    drawing model. Until the plan engine is installed this says so."""
+    from estimator.database import open_database as _open
+    return _run(lambda c: plan_engine.start(c, _ctx(), int(plan_set_id), bool(confirm), open_conn=_open))
+
+
+def plan_status(plan_set_id: int = 0, estimate_id: int = 0) -> str:
+    """Progress of a plan set (uploaded, processing, processed or failed with the reason, counts, sheets that still
+    need a scale). With estimate_id instead: every plan set on that estimate. Also says whether the plan engine is
+    installed."""
+    def go(c):
+        if plan_set_id:
+            out = plans.status(c, _ctx(), int(plan_set_id))
+        elif estimate_id:
+            out = plans.list_plan_sets(c, _ctx(), int(estimate_id))
+        else:
+            raise InvalidInput("give a plan_set_id or an estimate_id")
+        return {**out, "plan_engine": plan_engine.engine_info()}
+    return _run(go)
+
+
+def plan_get_sheets(plan_set_id: int, discipline: str = "") -> str:
+    """Sheets in a plan set: sheet number, title, discipline (architectural, structural, plumbing, electrical...),
+    revision, units, viewports with their scales, and needs_scale when something can't be measured yet."""
+    return _run(lambda c: plans.sheets(c, _ctx(), int(plan_set_id), discipline or None))
+
+
+def plan_get_sheet_image(sheet_id: int) -> str:
+    """Where the rendered image of a sheet is, for looking at it (AI vision) or review."""
+    return _run(lambda c: plans.sheet_image(c, _ctx(), int(sheet_id)))
+
+
+def plan_get_viewports(sheet_id: int) -> str:
+    """Viewports on a sheet (main plan, enlarged plans, details) with each one's scale, how it was found, confidence,
+    and NTS. Objects are measured with the scale of the viewport they sit in."""
+    return _run(lambda c: plans.viewports(c, _ctx(), int(sheet_id)))
+
+
+def plan_set_scale(viewport_id: int, scale_note: str = "", scale_ratio: str = "", calibration: dict | str = "",
+                   confirm: bool = False) -> str:
+    """Set a viewport's scale and re-measure everything in it. Give one of: scale_note like 1/4" = 1'-0", 1" = 20',
+    1:100 or NTS; scale_ratio (real per paper, e.g. 48); or calibration {"p1": [x, y], "p2": [x, y], "distance":
+    "12'-6\""} from two points on the sheet and the real distance between them. Asks first."""
+    def go(c):
+        cal = _obj(calibration, "calibration") if calibration not in ("", None, {}) else None
+        return plans.set_scale(c, _ctx(), int(viewport_id), scale_note or None, scale_ratio or None, cal,
+                               bool(confirm))
+    return _run(go)
+
+
+def plan_get_objects(plan_set_id: int = 0, sheet_id: int = 0, kind: str = "", layer: str = "", tag: str = "",
+                     viewport_id: int = 0, area: list | str = "", include_geometry: bool = False, limit: int = 200,
+                     offset: int = 0) -> str:
+    """Query the drawing model: rooms, walls, openings, symbols, text, dimensions, lines. Filter by plan set or
+    sheet, kind (or several, comma separated), layer, tag (e.g. D3), viewport, or an area [x0, y0, x1, y1] on one
+    sheet. Each object has its real size (area_sqft, perimeter_ft or length_ft) or why it isn't measured, plus totals
+    by kind. include_geometry adds the points."""
+    def go(c):
+        box = [float(x) for x in _list(area, "area")] if area not in ("", None) else None
+        return plans.objects(c, _ctx(), int(plan_set_id) or None, int(sheet_id) or None, kind or None, layer or None,
+                             tag or None, int(viewport_id) or None, box, bool(include_geometry), int(limit), int(offset))
+    return _run(go)
+
+
+def plan_get_schedules(plan_set_id: int, schedule_type: str = "") -> str:
+    """Schedules read from the plans (door, window, finish, plumbing, lighting, panel, equipment, wall-type): every
+    row with its mark, columns, confidence, the plan objects tagged with that mark, and marks no tag points to."""
+    return _run(lambda c: plans.schedules(c, _ctx(), int(plan_set_id), schedule_type or None))
+
+
+def plan_update_schedule_row(row_id: int, fields: dict | str = "", mark: str = "", confirm: bool = False) -> str:
+    """Correct a schedule row that was read wrong: some of its columns ({"size": "3'-0\" x 6'-8\""}) and/or its
+    mark. The row is marked reviewed and re-linked to the plan tags. Asks first."""
+    def go(c):
+        f = _obj(fields, "fields") if fields not in ("", None) else None
+        return plans.update_schedule_row(c, _ctx(), int(row_id), f, mark or None, bool(confirm))
+    return _run(go)
+
+
+def plan_get_legends(plan_set_id: int) -> str:
+    """Symbol legends found on a plan set's sheets (electrical, plumbing, HVAC...)."""
+    return _run(lambda c: plans.legends(c, _ctx(), int(plan_set_id)))
+
+
 TOOLS = (
     est_director_start, est_director_next, est_director_change_lane, est_job_status, est_jobs_board,
     est_director_add_trade, est_director_book_site_visit, est_validate, est_scenarios, est_choose_scenario,
@@ -648,6 +746,8 @@ TOOLS = (
     agent_config_get, agent_config_update,
     how_to_estimate, agent_roles_get, agent_roles_update, agent_budget_update, est_agent_tasks, est_agent_next,
     est_agent_submit, est_agent_apply, est_agent_run_now,
+    plan_upload, plan_process, plan_status, plan_get_sheets, plan_get_sheet_image, plan_get_viewports,
+    plan_set_scale, plan_get_objects, plan_get_schedules, plan_update_schedule_row, plan_get_legends,
 )
 
 
