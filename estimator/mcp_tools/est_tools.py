@@ -39,6 +39,8 @@ from estimator import data_move, exports, practice, team
 from estimator.drawing_model import engine as plan_engine
 from estimator.drawing_model import store as plans
 from estimator.takeoff import measurements as takeoffs
+from estimator.takeoff import reviews
+from estimator.drawing_model import crops
 
 # Server mode will replace this with the API key / signed-in user's context.
 _context_provider = personal_context
@@ -816,6 +818,87 @@ def takeoff_suggest_change(measurement_id: int, qty: str, reason: str, confirm: 
     return _run(lambda c: takeoffs.suggest_change(c, _ctx(), int(measurement_id), qty, reason, bool(confirm)))
 
 
+# ---------------------------------------------------------------- reviews and what's sent to the AI
+
+def review_start(target_type: str, target_id: int) -> str:
+    """Open a review of a count or measurement (target_type=count or measurement, target_id = measurement id) or of a
+    schedule row and its linked plan tags (target_type=schedule). The current result is kept as version 0 the first
+    time. Returns the open version and where every item is on the plans. If one is already open, returns it."""
+    return _run(lambda c: reviews.start(c, _ctx(), target_type, int(target_id)))
+
+
+def review_save(review_id: int, add: str = "", remove: str = "", relabel: str = "", relabel_matching: bool = False,
+                qty: str = "", note: str = "") -> str:
+    """Save review changes as a new version. add / remove: drawing object ids (missed symbols, false hits). relabel:
+    JSON {object_id: "new label"} for a wrong match (it leaves this count); relabel_matching=true relabels every
+    identical symbol in the count too. qty: a hand-corrected area or length (not for counts). Not priced until a
+    person approves it with review_approve."""
+    return _run(lambda c: reviews.save(c, _ctx(), int(review_id), add=_ids(add, "add"), remove=_ids(remove, "remove"),
+                                       relabel=_opt_obj(relabel, "relabel"), relabel_matching=bool(relabel_matching),
+                                       qty=qty or None, note=note or None))
+
+
+def review_approve(review_id: int, second_check: bool = False, confirm: bool = False) -> str:
+    """A person approves a review version; it becomes the number used for pricing and the measurement is locked.
+    Agents can't approve. second_check=true: a different person signs off an approved version. Asks first."""
+    return _run(lambda c: reviews.approve(c, _ctx(), int(review_id), second_check=bool(second_check),
+                                          confirm=bool(confirm)))
+
+
+def review_history(target_type: str, target_id: int) -> str:
+    """Every version of a count or measurement: who changed what (+3 added, −2 removed, 1 relabelled), when, the
+    quantity, and which version is approved. Status: unreviewed, in_review or approved."""
+    return _run(lambda c: reviews.history(c, _ctx(), target_type, int(target_id)))
+
+
+def review_highlight(target_type: str, target_id: int, version: int | None = None) -> str:
+    """Where every item behind a count or quantity is on the plans: sheet by sheet with boxes (sheet units, origin
+    top-left like the sheet image), numbered for next/previous, plus a per-sheet breakdown. version: an earlier
+    review version instead of the current one."""
+    return _run(lambda c: reviews.highlight(c, _ctx(), target_type, int(target_id),
+                                            int(version) if version not in (None, "") else None))
+
+
+def review_require_before_send(enabled: bool | None = None, confirm: bool = False) -> str:
+    """Owner setting: quotes can only be sent once every count and measurement on the estimate is approved (no
+    proposed, flagged or open reviews). Without enabled, shows the current setting. Changing it asks first."""
+    def go(c):
+        ctx = _ctx()
+        if enabled is None:
+            return {"ok": True, "require_reviews_before_send": reviews.require_before_send(c, ctx)}
+        return reviews.set_require_before_send(c, ctx, bool(enabled), bool(confirm))
+    return _run(go)
+
+
+def est_ai_privacy(crop_sending: bool | None = None, show_log: int = 0, estimate_id: int | None = None,
+                   confirm: bool = False) -> str:
+    """What the Estimator sends to your AI provider. Shows whether symbol-crop sending is on (on by default), the
+    one-time notice, the limits, and how much has been sent. crop_sending=true/false: the owner turns it on or off
+    (asks first). show_log=N: the last N things sent (crop or whole sheet, size, why, who), optionally for one
+    estimate."""
+    def go(c):
+        ctx = _ctx()
+        out = crops.set_enabled(c, ctx, bool(crop_sending), bool(confirm)) if crop_sending is not None \
+            else crops.settings(c, ctx)
+        if show_log:
+            out["log"] = crops.send_log(c, ctx, int(estimate_id) if estimate_id else None, int(show_log))["sent"]
+        return out
+    return _run(go)
+
+
+def plan_get_crop(purpose: str, object_id: int | None = None, sheet_id: int | None = None, bbox: str = "",
+                  whole_sheet: bool = False, user_asked: bool = False, provider: str = "") -> str:
+    """Get a small image of the plans to look at, and log that it was sent to the AI. Crop around a drawing object
+    (object_id) or an area (sheet_id + bbox [x0,y0,x1,y1] in sheet units, at most 15% of the sheet). A whole sheet
+    only when the user asked you to look at it (whole_sheet=true, user_asked=true). purpose: why you need to see it.
+    The first crop ever returns a one-time notice to tell the user. Refused when crop sending is off."""
+    return _run(lambda c: crops.prepare(c, _ctx(), int(sheet_id) if sheet_id not in (None, "") else None,
+                                        bbox=_list(bbox, "bbox") if bbox else None,
+                                        object_id=int(object_id) if object_id not in (None, "") else None,
+                                        purpose=purpose, provider=provider or None, whole_sheet=bool(whole_sheet),
+                                        user_asked=bool(user_asked)))
+
+
 TOOLS = (
     est_director_start, est_director_next, est_director_change_lane, est_job_status, est_jobs_board,
     est_director_add_trade, est_director_book_site_visit, est_validate, est_scenarios, est_choose_scenario,
@@ -836,6 +919,8 @@ TOOLS = (
     plan_set_scale, plan_get_objects, plan_get_schedules, plan_update_schedule_row, plan_get_legends,
     takeoff_propose, takeoff_manual, takeoff_list, takeoff_confirm, takeoff_edit, takeoff_delete,
     takeoff_detail, takeoff_suggest_change,
+    review_start, review_save, review_approve, review_history, review_highlight, review_require_before_send,
+    est_ai_privacy, plan_get_crop,
 )
 
 

@@ -465,8 +465,15 @@ def list_measurements(conn, ctx: RequestContext, estimate_id: int, module_id: st
     queue = sorted((r for r in rows if r["status"] == "proposed"),
                    key=lambda r: (Decimal(r["confidence"]) if r["confidence"] is not None else Decimal(-1), r["id"]))
     answers = approved_answers(conn, ctx, int(estimate_id), module_id, registry)
+    from estimator.takeoff.reviews import status_for_estimate
+    rstat = status_for_estimate(conn, ctx, int(estimate_id))["by_target"]
+    out_rows = []
+    for r in rows:
+        o = _out(r)
+        o["review_status"] = rstat.get(("measurement", r["id"]), "unreviewed")
+        out_rows.append(o)
     return {"ok": True, "estimate_id": int(estimate_id), "count": len(rows), "counts": counts,
-            "measurements": [_out(r) for r in rows], "review_queue": [r["id"] for r in queue],
+            "measurements": out_rows, "review_queue": [r["id"] for r in queue],
             "approved_answers": answers,
             "needs_remeasure": [r["id"] for r in rows if r["needs_remeasure"] and r["status"] != "rejected"],
             "suggestions_waiting": [r["id"] for r in rows if r["suggested_qty"] is not None

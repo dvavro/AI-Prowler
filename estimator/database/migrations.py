@@ -593,6 +593,54 @@ CREATE TABLE measurements (
 CREATE INDEX ix_measurements_estimate ON measurements (company_id, estimate_id, module_id, status);
 CREATE INDEX ix_measurements_sheet ON measurements (sheet_id)
 """),
+    (13, "reviews with versions, AI send log, crop notice and review-before-send settings", """
+CREATE TABLE reviews (
+    id               INTEGER PRIMARY KEY,
+    company_id       TEXT NOT NULL,
+    estimate_id      INTEGER NOT NULL REFERENCES estimates (id) ON DELETE CASCADE,
+    target_type      TEXT NOT NULL CHECK (target_type IN ('count', 'measurement', 'detection_set', 'schedule')),
+    target_id        INTEGER NOT NULL,
+    version          INTEGER NOT NULL,
+    base_version     INTEGER,
+    status           TEXT NOT NULL CHECK (status IN ('original', 'in_review', 'approved', 'superseded', 'cancelled')),
+    object_ids       TEXT NOT NULL DEFAULT '[]',
+    changes_json     TEXT NOT NULL DEFAULT '{}',
+    result_qty       TEXT,
+    unit             TEXT,
+    note             TEXT,
+    reviewer_id      TEXT,
+    approver_id      TEXT,
+    second_check_by  TEXT,
+    second_check_at  TEXT,
+    created_at       TEXT NOT NULL,
+    approved_at      TEXT,
+    UNIQUE (company_id, target_type, target_id, version)
+);
+CREATE INDEX ix_reviews_estimate ON reviews (company_id, estimate_id, status);
+
+CREATE TABLE ai_send_log (
+    id           INTEGER PRIMARY KEY,
+    company_id   TEXT NOT NULL,
+    estimate_id  INTEGER,
+    sheet_id     INTEGER,
+    kind         TEXT NOT NULL CHECK (kind IN ('crop', 'full_sheet')),
+    purpose      TEXT NOT NULL,
+    bbox_json    TEXT,
+    width_px     INTEGER,
+    height_px    INTEGER,
+    bytes        INTEGER,
+    sha256       TEXT,
+    file_path    TEXT,
+    provider     TEXT,
+    user_asked   INTEGER NOT NULL DEFAULT 0,
+    actor        TEXT NOT NULL,
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX ix_ai_send_log ON ai_send_log (company_id, created_at);
+
+ALTER TABLE company_profile ADD COLUMN crop_notice_shown_at TEXT;
+ALTER TABLE company_profile ADD COLUMN require_reviews_before_send INTEGER NOT NULL DEFAULT 0
+"""),
 ]
 
 

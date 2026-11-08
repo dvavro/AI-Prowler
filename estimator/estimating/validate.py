@@ -44,6 +44,11 @@ def validate(conn, ctx: RequestContext, estimate_id: int, registry=None) -> dict
     if suggested:
         add("warning", "measurements_suggested", f"{suggested} approved measurement(s) have a suggested change waiting "
             "for a person.", count=suggested)
+    open_reviews = conn.execute("SELECT COUNT(*) FROM reviews WHERE company_id = ? AND estimate_id = ? AND"
+                                " status = 'in_review'", (ctx.company_id, int(estimate_id))).fetchone()[0]
+    if open_reviews:
+        add("warning", "reviews_open", f"{open_reviews} review(s) of counts or measurements are still open; a person "
+            "approves them with review_approve.", count=open_reviews)
 
     lines = [(sec, ln) for sec in est["sections"] for ln in sec["lines"]]
     if not lines:

@@ -41,6 +41,11 @@ general/other; kind line/polyline/polygon/room/wall/opening/symbol/text/dimensio
 polygon; source cad/vector/raster/ai/manual; schedule_type door/window/finish/plumbing/lighting/panel/equipment/
 wall-type/other; confidences 0 to 1. Objects say which viewport they sit in by its key, so each is measured with its
 own viewport's scale.
+
+Coordinates (geometry points, bboxes) are in the sheet's units with the origin at the TOP-LEFT corner, the same way up
+as the sheet image, so a box on the drawing lands on the same spot of image_path. Anything that sends part of a sheet
+image to an AI provider must go through `estimator.drawing_model.crops.prepare(...)`, which enforces the crop size,
+the company's crop-sending setting and the one-time notice, and logs what was sent.
 """
 from __future__ import annotations
 

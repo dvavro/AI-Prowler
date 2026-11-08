@@ -203,6 +203,14 @@ def send(conn, ctx: RequestContext, bid_id: int, *, to: str | None = None, confi
     to = (to or b["customer"].get("email") or "").strip()
     if not to:
         raise InvalidInput("who should get it? give the customer's email address", field="to")
+    from estimator.takeoff import reviews
+    if reviews.require_before_send(conn, ctx):
+        problems = reviews.unreviewed_for_send(conn, ctx, b["estimate_id"])
+        if problems:
+            raise NotEditable("this company requires every count and measurement to be approved before a quote is "
+                              "sent: " + "; ".join(problems[:10]) + (f" (and {len(problems) - 10} more)"
+                                                                     if len(problems) > 10 else ""),
+                              bid_id=b["id"], problems=problems)
     if not confirm:
         raise ConfirmationRequired(f"Send quote {b['number']} ({format_cents(b['total_cents'])}) to {to}? "
                                    "Call again with confirm=true once the user says yes.",
