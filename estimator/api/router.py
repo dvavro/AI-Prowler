@@ -34,6 +34,10 @@ Sprint 2 (Coder 2):
   POST /quick                       {module_id, answers, title?, address?, due_date?, customer_id?}
                                     or {estimate_id, rev, module_id, answers}: price it (est_quick_answer),
                                     creating the project first when there's no estimate_id
+Sprint 3 (Coder 2), owner and estimator only:
+  GET  /price-book?module_id=&samples_only=1     prices, yours or sample (pricebook_get)
+  POST /price-book {prices: {key: "dollars"}, effective_date?, confirm?}     (pricebook_update; asks first)
+  POST /price-book/import {csv_text, mapping?, add_new?, effective_date?, confirm?}   (pricebook_import; asks first)
 Static: /estimator and /estimator/<file> from estimator/ui/web/.
 """
 from __future__ import annotations
@@ -366,6 +370,63 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
     if sub == "/quick" and m == "POST":
         return _quick(req, ctx, conn, see)
 
+    # ---------------------------------------------------------- Sprint 3: Price Book screen (basic)
+    if sub.startswith("/price-book"):
+        return _price_book(m, sub, req, ctx, conn)
+
+    return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
+
+
+def _question(message: str) -> str:
+    """The service layer's confirm question without the 'call again with confirm=true' part meant for the AI."""
+    cut = re.split(r"\s+(?:Call again|Show the user)\b", message, maxsplit=1)[0]
+    return cut.strip()
+
+
+def _ask_first(fn) -> Response:
+    """Run a write that asks first: the page shows the question and the details, then sends confirm=true."""
+    from estimator.errors import ConfirmationRequired
+    try:
+        return _ok(**fn())
+    except ConfirmationRequired as e:
+        return _ok(needs_confirmation=True, question=_question(e.message), **e.details)
+
+
+def _price_book(m: str, sub: str, req: Request, ctx, conn) -> Response:
+    """GET  /price-book?module_id=&samples_only=1     pricebook_get
+       POST /price-book {prices, effective_date, confirm}                         pricebook_update
+       POST /price-book/import {csv_text, mapping, add_new, effective_date, confirm}   pricebook_import (pasted CSV)
+    Costs are company secrets: only the roles that open the Price Book screen may read them here."""
+    from estimator.pricing import importer, price_book
+
+    if not nav.can_open(ctx.role, "price_book"):
+        raise _Refuse(403, "permission_denied", "your role can't see the price book")
+    if sub == "/price-book" and m == "GET":
+        out = price_book.list_prices(conn, ctx.company_id, (req.query.get("module_id") or "").strip() or None,
+                                     req.query.get("samples_only", "") in ("1", "true", "yes"))
+        return _json(200, out)
+    if sub == "/price-book" and m == "POST":
+        b = _body(req)
+        prices = b.get("prices")
+        if not isinstance(prices, dict) or not prices:
+            raise _Refuse(400, "invalid_input", "change at least one price")
+        if len(prices) > 500:
+            raise _Refuse(400, "invalid_input", "change at most 500 prices at a time")
+        return _ask_first(lambda: price_book.update_prices(conn, ctx, {str(k): str(v) for k, v in prices.items()},
+                                                           confirm=b.get("confirm") is True,
+                                                           effective_date=_opt(b, "effective_date")))
+    if sub == "/price-book/import" and m == "POST":
+        b = _body(req)
+        text = b.get("csv_text")
+        if not isinstance(text, str) or not text.strip():
+            raise _Refuse(400, "invalid_input", "paste the price list (CSV with a header row)")
+        mapping = b.get("mapping") or None
+        if mapping is not None and not isinstance(mapping, dict):
+            raise _Refuse(400, "invalid_input", "mapping must be an object, e.g. {\"cost\": \"Unit Price\"}")
+        return _ask_first(lambda: importer.import_prices(conn, ctx, csv_text=text, mapping=mapping,
+                                                         effective_date=_opt(b, "effective_date"),
+                                                         add_new=b.get("add_new") is True,
+                                                         confirm=b.get("confirm") is True))
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
 
 

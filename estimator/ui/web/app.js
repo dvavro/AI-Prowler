@@ -542,6 +542,124 @@ function showQuickResult(box, r, mod) {
     el("p", { class: "muted small" }, "To turn this into a quote and send it, ask your AI (bid_generate, bid_send) — the Bids screen comes in Sprint 4.")));
 }
 
+// ------------------------------------------------------------------ Price Book (Sprint 3, basic)
+function dollars(cents) { return (Number(cents || 0) / 100).toFixed(2); }
+
+async function renderPriceBook(main, screen) {
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  const moduleId = q.get("module") || "", samples = q.get("samples") === "1";
+  const [book, mods] = await Promise.all([
+    api("GET", "/price-book?" + (moduleId ? "module_id=" + encodeURIComponent(moduleId) + "&" : "") + (samples ? "samples_only=1" : "")),
+    api("GET", "/modules")]);
+  const parts = [el("h2", {}, screen.label),
+    el("p", { class: "muted" }, "Your costs per unit. Prices marked sample are placeholders shipped with a trade — set your own before sending bids. " +
+      "Changing a price never changes a bid already made."),
+    book.samples_left ? el("p", { class: "note warn", id: "samples-left" }, book.samples_left + " price(s) here are still samples.") : null];
+
+  const pickMod = el("select", { id: "pb-module", "aria-label": "Trade or service" }, el("option", { value: "" }, "All trades and services"),
+    mods.modules.map(m => el("option", { value: m.id, selected: m.id === moduleId }, m.name)));
+  const onlySamples = el("input", { type: "checkbox", id: "pb-samples", checked: samples });
+  const refilter = () => { location.hash = "#/price_book?" + new URLSearchParams({ module: pickMod.value, samples: onlySamples.checked ? "1" : "" }); };
+  pickMod.addEventListener("change", refilter);
+  onlySamples.addEventListener("change", refilter);
+  const find = el("input", { type: "search", id: "pb-find", placeholder: "Find a price", "aria-label": "Find" });
+  parts.push(el("div", { class: "row filters" }, el("label", {}, "Show", pickMod), el("label", {}, "Find", find),
+    el("label", { class: "check" }, onlySamples, " Samples only")));
+
+  if (!book.prices.length) {
+    parts.push(el("div", { class: "card empty" }, "No prices here."));
+  } else {
+    const tbody = el("tbody", {}, book.prices.map(p => {
+      const input = el("input", { type: "text", inputmode: "decimal", class: "cost", "data-key": p.price_key,
+                                  "data-old": dollars(p.cost_cents), value: dollars(p.cost_cents), "aria-label": "Cost for " + p.description });
+      input.addEventListener("input", () => input.classList.toggle("changed", input.value.trim() !== input.dataset.old));
+      return el("tr", {},
+        el("td", {}, p.description, el("div", { class: "muted small" }, p.price_key)),
+        el("td", {}, p.kind), el("td", {}, p.unit),
+        el("td", { class: "money" }, "$", input),
+        el("td", {}, el("span", { class: "status" + (p.sample ? " sample" : "") }, p.sample ? "sample" : "yours"),
+          p.effective_date ? el("div", { class: "muted small" }, "from " + p.effective_date) : null));
+    }));
+    const table = el("table", { class: "list", id: "prices" },
+      el("thead", {}, el("tr", {}, el("th", {}, "Item"), el("th", {}, "Kind"), el("th", {}, "Unit"),
+        el("th", {}, "Cost per unit"), el("th", {}, "Source"))), tbody);
+    find.addEventListener("input", () => {
+      const t = find.value.trim().toLowerCase();
+      for (const tr of tbody.querySelectorAll("tr")) tr.hidden = !!t && !tr.textContent.toLowerCase().includes(t);
+    });
+    const eff = el("input", { type: "date", id: "pb-effective", "aria-label": "Effective date" });
+    const save = el("button", { class: "primary", type: "button", id: "pb-save" }, "Save changes…");
+    const msg = el("div", { id: "pb-message", role: "status" });
+    save.addEventListener("click", async () => {
+      const prices = {};
+      for (const i of tbody.querySelectorAll("input.cost")) {
+        if (i.value.trim() !== i.dataset.old) prices[i.dataset.key] = i.value.trim().replace(/^\$/, "");
+      }
+      msg.replaceChildren();
+      if (!Object.keys(prices).length) { msg.append(el("p", { class: "muted" }, "Nothing changed.")); return; }
+      await askThenSave(msg, save, "/price-book", { prices, effective_date: eff.value || null }, r => r.changed.length + " price(s) saved.");
+    });
+    parts.push(table, el("div", { class: "card section row" }, el("label", {}, "Takes effect (optional)", eff), save), msg);
+  }
+  parts.push(importBox());
+  main.replaceChildren(...parts);
+}
+
+async function askThenSave(msg, btn, path, body, doneText) {
+  // Every money change asks first (spec: money writes need a person): show old -> new, then confirm.
+  btn.disabled = true;
+  state.busy = true;
+  try {
+    const r = await api("POST", path, body);
+    if (!r.needs_confirmation) { msg.replaceChildren(el("p", {}, r.message || "Nothing to change.")); return; }
+    const yes = el("button", { class: "primary", type: "button", id: "pb-confirm" }, "Yes, save");
+    const no = el("button", { class: "button", type: "button", id: "pb-cancel" }, "Cancel");
+    const lines = (r.changes || []).map(c => typeof c === "string" ? el("li", {}, c) : el("li", {}, (c.description || c.price_key) + ": " +
+      (c.old_cents === null || c.old_cents === undefined ? "new" : money(c.old_cents)) + " → " + money(c.new_cents) + " per " + c.unit +
+      (c.was_sample ? " (was a sample)" : "")));
+    const skipped = (r.skipped_rows || []).map(s => el("li", {}, "Row " + s.row + (s.item ? " (" + s.item + ")" : "") + ": " + s.reason));
+    msg.replaceChildren(el("div", { class: "confirm", id: "pb-confirm-box" },
+      el("p", {}, el("strong", {}, r.question)),
+      lines.length ? el("ul", {}, lines) : null,
+      r.more_not_shown ? el("p", { class: "muted" }, "…and " + r.more_not_shown + " more.") : null,
+      skipped.length ? el("details", {}, el("summary", {}, skipped.length + " row(s) skipped"), el("ul", {}, skipped)) : null,
+      el("div", { class: "row" }, yes, no)));
+    yes.focus();
+    await new Promise(resolve => {
+      no.addEventListener("click", () => { msg.replaceChildren(el("p", { class: "muted" }, "Cancelled — nothing changed.")); resolve(); });
+      yes.addEventListener("click", async () => {
+        yes.disabled = no.disabled = true;
+        try {
+          const done = await api("POST", path, { ...body, confirm: true });
+          state.busy = false;
+          toast(doneText(done));
+          route();
+        } catch (e) { if (e.status !== 401) msg.replaceChildren(errorBox(e)); }
+        resolve();
+      });
+    });
+  } catch (e) {
+    if (e.status !== 401) msg.replaceChildren(errorBox(e));
+  } finally { btn.disabled = false; state.busy = false; }
+}
+
+function importBox() {
+  const text = el("textarea", { id: "pb-csv", rows: 6, placeholder: "Item,Unit,Unit Price\nDriveway cleaning,sqft,0.18" });
+  const addNew = el("input", { type: "checkbox", id: "pb-addnew" });
+  const go = el("button", { class: "primary", type: "button", id: "pb-import" }, "Check the list…");
+  const msg = el("div", { id: "pb-import-message", role: "status" });
+  go.addEventListener("click", async () => {
+    msg.replaceChildren();
+    if (!text.value.trim()) { msg.append(el("p", { class: "error" }, "Paste the price list first.")); return; }
+    await askThenSave(msg, go, "/price-book/import", { csv_text: text.value, add_new: addNew.checked },
+      r => "Imported " + (r.saved !== undefined ? r.saved : "") + " price(s).");
+  });
+  return el("details", { class: "card section", id: "pb-import-box" }, el("summary", {}, "Import a supplier price list (paste CSV)"),
+    el("p", { class: "muted" }, "Copy the rows from your supplier's spreadsheet, header row first. Columns are found by name " +
+      "(item code, description, unit, unit price / cost). Rows with a different unit are skipped, never converted."),
+    text, el("label", { class: "check" }, addNew, " Add rows that don't match a price as new prices"), go, msg);
+}
+
 function renderComing(main, screen) {
   main.replaceChildren(el("div", { class: "coming-page" },
     el("h2", {}, screen.icon + " " + screen.label),
@@ -550,7 +668,7 @@ function renderComing(main, screen) {
     el("ul", {}, screen.tools.map(t => el("li", {}, el("code", {}, t))))));
 }
 
-const SCREENS = { dashboard: renderDashboard, projects: renderProjects };
+const SCREENS = { dashboard: renderDashboard, projects: renderProjects, price_book: renderPriceBook };
 const PAGES = { project: renderProject, quick: renderQuick };
 
 // ------------------------------------------------------------------ live updates

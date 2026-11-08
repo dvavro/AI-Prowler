@@ -39,7 +39,7 @@ SCREENS = (
                "est_calculate", "est_validate", "est_scenarios", "est_compare_history", "est_create_revision"]},
     {"id": "bids", "label": "Bids", "icon": "📨", "roles": ("owner", "estimator", "office"), "status": "coming",
      "sprint": 4, "tools": ["bid_generate", "bid_preview", "bid_send", "bid_set_status", "bid_convert_to_job"]},
-    {"id": "price_book", "label": "Price Book", "icon": "💲", "roles": ("owner", "estimator"), "status": "coming",
+    {"id": "price_book", "label": "Price Book", "icon": "💲", "roles": ("owner", "estimator"), "status": "ready",
      "sprint": 3, "tools": ["pricebook_get", "pricebook_update", "pricebook_import"]},
     {"id": "symbol_library", "label": "Symbol Library", "icon": "🔣", "roles": ("owner", "estimator", "reviewer"),
      "status": "coming", "sprint": 11, "tools": ["symbol_library_list", "symbol_define"]},

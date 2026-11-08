@@ -90,6 +90,12 @@ label.check input { width: auto; margin: 0; }
 .big-money { font-size: 32px; font-weight: 700; }
 .result table { margin: 12px 0; }
 h3 { margin: 22px 0 10px; font-size: 17px; }
+/* Sprint 3: price book */
+input.cost { width: 100px; text-align: right; display: inline-block; margin-left: 4px; }
+input.cost.changed { border-color: var(--brand); background: #eef4ff; }
+.status.sample { background: #fff8e6; border-color: #f0d48a; }
+textarea { font: 13px/1.4 Consolas, monospace; width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
+details > summary { cursor: pointer; font-weight: 600; }
 
 .toast { position: fixed; right: 16px; bottom: 16px; background: var(--ink); color: #fff; padding: 10px 14px;
          border-radius: 6px; max-width: 360px; box-shadow: 0 4px 14px rgba(0, 0, 0, .2); }
