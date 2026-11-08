@@ -9,6 +9,8 @@
  * - All text goes in as text nodes (never parsed as HTML), so names from users or plans can't inject script.
  *
  * Routes:  #/dashboard  #/projects  #/projects/<id> (project page)  #/quick  #/quick/<estimate id>
+ *          Sprint 4: #/jobs (Jobs board)  #/jobs/<id> (one job's next step)  #/bids  #/bids/<id>  #/help  #/help/<guide>
+ * Sending a quote and making a job ask a yes/no question first (the server returns needs_confirmation).
  */
 "use strict";
 
@@ -160,6 +162,10 @@ function parseHash() {
   const parts = location.hash.replace(/^#\/?/, "").split("?")[0].split("/").filter(Boolean);
   if (parts[0] === "projects" && /^\d+$/.test(parts[1] || "")) return { screen: "projects", page: "project", arg: +parts[1] };
   if (parts[0] === "quick") return { screen: "dashboard", page: "quick", arg: /^\d+$/.test(parts[1] || "") ? +parts[1] : null };
+  // Sprint 4: Jobs board and job pages hang off the Dashboard; a bid page off Bids; a guide off Help.
+  if (parts[0] === "jobs") return { screen: "dashboard", page: /^\d+$/.test(parts[1] || "") ? "job" : "jobs", arg: +parts[1] || null };
+  if (parts[0] === "bids" && /^\d+$/.test(parts[1] || "")) return { screen: "bids", page: "bid", arg: +parts[1] };
+  if (parts[0] === "help" && /^[a-z0-9_]+$/.test(parts[1] || "")) return { screen: "help", page: "guide", arg: parts[1] };
   return { screen: parts[0] || "dashboard", page: null, arg: null };
 }
 
@@ -187,7 +193,9 @@ function route() {
 async function renderDashboard(main, screen) {
   const d = await api("GET", "/dashboard");
   const head = el("div", { class: "page-head" }, el("h2", {}, screen.label),
-    d.can_quick ? el("a", { class: "primary button", href: "#/quick", id: "dash-quick" }, "⚡ Quick estimate") : null);
+    el("div", { class: "row" },
+      el("a", { class: "button", href: "#/jobs", id: "dash-jobs" }, "📋 Jobs board"),
+      d.can_quick ? el("a", { class: "primary button", href: "#/quick", id: "dash-quick" }, "⚡ Quick estimate") : null));
   const tiles = el("div", { class: "tiles" },
     el("div", { class: "card tile" }, el("div", { class: "num" }, d.total), el("div", { class: "lbl" }, "estimates")),
     ...Object.entries(d.counts).map(([k, v]) =>
@@ -461,7 +469,8 @@ async function renderQuick(main, estimateId) {
   if (estimateId) est = (await api("GET", "/estimates/" + estimateId + "/project")).estimate;
   const parts = [el("p", {}, est ? el("a", { href: "#/projects/" + est.id }, "← " + (est.title || "Estimate " + est.id))
                                 : el("a", { href: "#/dashboard" }, "← Dashboard")),
-                 el("h2", {}, "⚡ Quick estimate" + (est ? " for " + (est.title || "estimate " + est.id) : ""))];
+                 el("div", { class: "page-head" },
+                   el("h2", {}, "⚡ Quick estimate" + (est ? " for " + (est.title || "estimate " + est.id) : "")), helpLink("quick"))];
   if (!can("quick_estimate")) {
     main.replaceChildren(...parts, el("p", { class: "error" }, "Your role can't give quick quotes."));
     return;
@@ -557,10 +566,12 @@ function showQuickResult(box, r, mod) {
       el("thead", {}, el("tr", {}, el("th", {}, "Item"), el("th", {}, "Qty"), el("th", {}, "Line total"))),
       el("tbody", {}, lines.map(l => el("tr", {}, el("td", {}, l.description), el("td", {}, l.quantity + " " + l.unit),
         el("td", { class: "money" }, money(l.total_cents)))))) : null,
+    r.next_step && r.next_step.say ? el("p", { class: "note" }, r.next_step.say) : null,
     el("div", { class: "row" },
-      el("a", { class: "primary button", href: "#/projects/" + r.id, id: "quick-open" }, "Open the project"),
-      el("a", { class: "button", href: "#/quick" }, "Another quick estimate")),
-    el("p", { class: "muted small" }, "To turn this into a quote and send it, ask your AI (bid_generate, bid_send) — the Bids screen comes in Sprint 4.")));
+      // Sprint 4: a new quick quote is a Director job - its page carries on to approve, send and convert.
+      r.job ? el("a", { class: "primary button", href: "#/jobs/" + r.job.id, id: "quick-next" }, "Next: approve and send →") : null,
+      el("a", { class: r.job ? "button" : "primary button", href: "#/projects/" + r.id, id: "quick-open" }, "Open the project"),
+      el("a", { class: "button", href: "#/quick" }, "Another quick estimate"))));
 }
 
 // ------------------------------------------------------------------ Price Book (Sprint 3, basic)
@@ -572,7 +583,7 @@ async function renderPriceBook(main, screen) {
   const [book, mods] = await Promise.all([
     api("GET", "/price-book?" + (moduleId ? "module_id=" + encodeURIComponent(moduleId) + "&" : "") + (samples ? "samples_only=1" : "")),
     api("GET", "/modules")]);
-  const parts = [el("h2", {}, screen.label),
+  const parts = [el("div", { class: "page-head" }, el("h2", {}, screen.label), helpLink("price_book")),
     el("p", { class: "muted" }, "Your costs per unit. Prices marked sample are placeholders shipped with a trade — set your own before sending bids. " +
       "Changing a price never changes a bid already made."),
     book.samples_left ? el("p", { class: "note warn", id: "samples-left" }, book.samples_left + " price(s) here are still samples.") : null];
@@ -681,6 +692,387 @@ function importBox() {
     text, el("label", { class: "check" }, addNew, " Add rows that don't match a price as new prices"), go, msg);
 }
 
+// ------------------------------------------------------------------ Help link ("?" on each screen, Sprint 4)
+function helpLink(screenId) {
+  return el("a", { class: "button help-link", href: "#/help?screen=" + screenId, title: "How-to guides for this screen",
+                   "aria-label": "Help for this screen" }, "?");
+}
+
+// ------------------------------------------------------------------ Jobs board (Sprint 4, quick lane)
+const LANES = [["needs_triage", "Needs a decision"], ["quick_quote", "Quick quotes"], ["standard_estimate", "Standard estimates"],
+               ["full_takeoff", "Plan takeoffs"]];
+const WAITING = { user: "you", approver: "an approver", staff: "office staff", customer: "the customer", feature: "a later feature" };
+
+async function renderJobs(main) {
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  const mine = q.get("mine") === "1", done = q.get("done") === "1";
+  const b = await api("GET", "/jobs?" + new URLSearchParams({ mine: mine ? "1" : "", done: done ? "1" : "" }));
+  const parts = [el("p", {}, el("a", { href: "#/dashboard" }, "← Dashboard")),
+    el("div", { class: "page-head" }, el("h2", {}, "📋 Jobs board"),
+      el("div", { class: "row" }, b.can_start ? el("a", { class: "primary button", href: "#/quick", id: "jobs-quick" }, "⚡ New quick quote") : null,
+        helpLink("jobs"))),
+    el("p", { class: "muted" }, "Every job the Director is running, by lane: what it's on and who it's waiting for. " +
+      "Chat jobs (est_director_start) show here too.")];
+  const mineBox = el("input", { type: "checkbox", id: "jobs-mine", checked: mine });
+  const doneBox = el("input", { type: "checkbox", id: "jobs-done", checked: done });
+  const refilter = () => { location.hash = "#/jobs?" + new URLSearchParams({ mine: mineBox.checked ? "1" : "", done: doneBox.checked ? "1" : "" }); };
+  mineBox.addEventListener("change", refilter);
+  doneBox.addEventListener("change", refilter);
+  parts.push(el("div", { class: "row filters" }, el("label", { class: "check" }, mineBox, " Mine only"),
+    el("label", { class: "check" }, doneBox, " Show finished")));
+  if (!b.count) {
+    parts.push(el("div", { class: "card empty", id: "jobs-empty" }, "No jobs yet — start one with ⚡ New quick quote, or ask your AI to quote a job."));
+  }
+  for (const [lane, label] of LANES) {
+    const rows = (b.by_lane || {})[lane];
+    if (!rows || !rows.length) continue;
+    parts.push(el("h3", {}, label + " (" + rows.length + ")"), el("table", { class: "list clickable", "data-lane": lane },
+      el("thead", {}, el("tr", {}, el("th", {}, "#"), el("th", {}, "Job"), el("th", {}, "Step"), el("th", {}, "Waiting on"),
+        el("th", {}, "Updated"))),
+      el("tbody", {}, rows.map(r => el("tr", { "data-id": r.id, onclick: () => go("#/jobs/" + r.id) },
+        el("td", {}, r.id),
+        el("td", {}, el("a", { href: "#/jobs/" + r.id }, r.request_text || words(r.module_id) || "Job " + r.id)),
+        el("td", {}, el("span", { class: "status" }, words(r.stage)), r.state === "done" ? " ✓" : ""),
+        el("td", {}, r.state === "done" ? "—" : (WAITING[r.waiting_on] || words(r.waiting_on) || "—")),
+        el("td", {}, when(r.updated_at)))))));
+  }
+  main.replaceChildren(...parts);
+}
+
+// One job: what the Director needs next, with the controls to give it.
+async function renderJob(main, id) {
+  const j = await api("GET", "/jobs/" + id);
+  state.jobEstimate = j.job.estimate_id;
+  const ns = j.next_step || {};
+  const est = j.estimate_detail;
+  const parts = [el("p", {}, el("a", { href: "#/jobs" }, "← Jobs board")),
+    el("div", { class: "page-head" }, el("h2", {}, j.job.request_text || ("Job " + j.job.id)), helpLink("jobs")),
+    el("p", { class: "muted" }, words(j.job.lane || "needs triage") + " · step: " + words(j.job.stage) +
+      (est ? " · estimate #" + est.id + " (" + words(est.status) + ")" : ""))];
+  if (est && est.totals) parts.push(el("div", { class: "big-money", id: "job-total" }, money(est.totals.total_cents)));
+  const box = el("div", { class: "card section", id: "job-next" });
+  parts.push(box);
+  nextStepBox(box, j, ns);
+  if (j.bid) {
+    parts.push(el("div", { class: "card section", id: "job-bid" }, el("strong", {}, "Quote " + j.bid.number),
+      " · " + words(j.bid.status) + " · " + money(j.bid.total_cents) + (j.bid.sent_to ? " · sent to " + j.bid.sent_to : ""),
+      j.can_open_bids ? el("p", {}, el("a", { href: "#/bids/" + j.bid.id, id: "job-open-bid" }, "Open the quote")) : null));
+  }
+  const links = el("p", {}, est ? el("a", { href: "#/projects/" + est.id }, "Open the project") : null);
+  parts.push(links);
+  if (j.steps && j.steps.length) {
+    parts.push(el("details", { class: "card section", id: "job-steps" }, el("summary", {}, "What's been done (" + j.steps.length + ")"),
+      el("ul", { class: "checklist" }, j.steps.map(s => el("li", {}, words(s.stage) + " — " + words(s.state) +
+        (s.input_summary ? ": " + s.input_summary : "") + " (" + (s.actor || "") + ", " + when(s.started_at) + ")")))));
+  }
+  main.replaceChildren(...parts);
+}
+
+function nextStepBox(box, j, ns, notes) {
+  const done = j.job.state === "done" || j.job.state === "cancelled";
+  const kids = [el("strong", {}, done ? "Finished" : "Next step")];
+  for (const n of notes || []) kids.push(el("p", { class: "note warn" }, n));
+  if (ns.say) kids.push(el("p", { id: "job-say" }, ns.say));
+  if (ns.error) kids.push(el("p", { class: "error" }, "The last step didn't work (" + words(ns.error) + ")."));
+  const msg = el("div", { id: "job-message", role: "status" });
+  if (!done) kids.push(...nextControls(j, ns, msg));
+  kids.push(msg);
+  box.replaceChildren(...kids);
+}
+
+// The Director's next step decides which controls show: questions, a module choice, approve, send, won/lost, convert.
+function nextControls(j, ns, msg) {
+  const out = [];
+  const asks = Array.isArray(ns.ask) ? ns.ask : [];
+  const questions = asks.filter(a => a && typeof a === "object" && a.type);
+  const choices = asks.filter(a => typeof a === "string" || (a && typeof a === "object" && !a.type && a.id));
+  if (questions.length) {
+    const form = el("form", { id: "job-answers" }, el("div", { class: "qgrid" }, questions.concat(ns.optional || []).map(questionInput)),
+      el("button", { class: "primary", type: "submit", id: "job-answer" }, "Send answers"));
+    form.addEventListener("submit", ev => {
+      ev.preventDefault();
+      const answers = {};
+      for (const i of form.querySelectorAll("[data-q]")) {
+        if (i.type === "checkbox") answers[i.dataset.q] = i.checked;
+        else if (i.value !== "") answers[i.dataset.q] = i.tagName === "SELECT" ? i.value : Number(i.value);
+      }
+      step(j, { answers }, msg);
+    });
+    out.push(form);
+  }
+  if (choices.length) {
+    out.push(el("div", { class: "row", id: "job-choices" }, choices.map(c => {
+      const mid = typeof c === "string" ? c : c.id;
+      return el("button", { class: "button", type: "button", "data-module": mid,
+                            onclick: () => step(j, { module_id: mid }, msg) }, typeof c === "string" ? words(c) : (c.name || words(mid)));
+    })));
+  }
+  if (ns.stage === "approve" || ns.approval) {
+    const checks = [];
+    let checklist = null, samples = null;
+    if (ns.checklist && ns.checklist.length) {
+      checklist = el("input", { type: "checkbox", id: "job-checklist" });
+      checks.push(el("label", { class: "check" }, checklist, " Checked: " + ns.checklist.join("; ")));
+    }
+    if (ns.sample_prices && ns.sample_prices.length) {
+      samples = el("input", { type: "checkbox", id: "job-samples" });
+      checks.push(el("label", { class: "check" }, samples, " Use the sample prices anyway (" + ns.sample_prices.join(", ") + ")"));
+    }
+    const roles = ns.approver_roles || [];
+    const mayApprove = !roles.length || roles.includes(state.me.role);
+    const approve = el("button", { class: "primary", type: "button", id: "job-approve", disabled: !mayApprove,
+                                   title: mayApprove ? null : "Only " + roles.join(" or ") + " can approve this" }, "✓ Approve");
+    approve.addEventListener("click", () => step(j, { approve: true, checklist_done: checklist ? checklist.checked : false,
+                                                      confirm_sample_prices: samples ? samples.checked : false }, msg));
+    out.push(...checks, el("div", { class: "row" }, approve,
+      mayApprove ? null : el("span", { class: "muted" }, "Waiting for " + roles.join(" or ") + " to approve.")));
+  }
+  if (ns.stage === "review" || ns.reviewer_roles) {
+    const ok = (ns.reviewer_roles || []).includes(state.me.role);
+    const sign = el("button", { class: "primary", type: "button", id: "job-review", disabled: !ok }, "Sign off the review");
+    sign.addEventListener("click", () => step(j, { reviewed: true }, msg));
+    out.push(el("div", { class: "row" }, sign, ok ? null : el("span", { class: "muted" }, "An owner or reviewer signs this off.")));
+  }
+  if (ns.bid_id && ns.stage !== "follow_up" && !ns.follow_up_on && j.bid && j.bid.status === "draft") {
+    const to = el("input", { type: "email", id: "job-send-to", value: ns.send_to || "", placeholder: "customer@example.com",
+                             "aria-label": "Customer email" });
+    const send = el("button", { class: "primary", type: "button", id: "job-send" }, "📨 Send the quote…");
+    send.addEventListener("click", () => {
+      if (!to.value.trim()) { msg.replaceChildren(el("p", { class: "error" }, "Enter the customer's email address.")); to.focus(); return; }
+      step(j, { send: true, send_to: to.value.trim() }, msg);
+    });
+    out.push(el("div", { class: "row" }, el("label", {}, "Send to", to), send));
+  }
+  const followUp = ns.follow_up_on !== undefined || ns.stage === "follow_up";
+  if (followUp && j.bid && j.bid.status !== "won") {
+    out.push(el("div", { class: "row", id: "job-outcome" },
+      el("button", { class: "primary", type: "button", id: "job-won", onclick: () => step(j, { outcome: "won" }, msg) }, "👍 Customer said yes"),
+      el("button", { class: "button", type: "button", id: "job-lost", onclick: () => step(j, { outcome: "lost" }, msg) }, "Customer said no")));
+  }
+  if (j.bid && j.bid.status === "won" && !j.bid.job_id) {
+    const date = el("input", { type: "date", id: "job-service-date", "aria-label": "Service date" });
+    const name = el("input", { id: "job-customer-name", maxlength: 200, value: (j.bid.customer && j.bid.customer.name) || "",
+                               placeholder: "Customer name", "aria-label": "Customer name" });
+    const conv = el("button", { class: "primary", type: "button", id: "job-convert" }, "Make it a job in AI-Prowler…");
+    conv.addEventListener("click", () => step(j, { convert: true, service_date: date.value || null,
+                                                   ...(name.value.trim() ? { customer: { name: name.value.trim() } } : {}) }, msg));
+    out.push(el("div", { class: "row" }, el("label", {}, "Customer", name), el("label", {}, "Service date (optional)", date), conv));
+  }
+  return out;
+}
+
+// Send one est_director_next step. Emailing a customer or creating a job asks a yes/no question first.
+async function step(j, body, msg, confirmed) {
+  state.busy = true;
+  msg.replaceChildren(el("p", { class: "muted" }, "Working…"));
+  try {
+    const r = await api("POST", "/jobs/" + j.job.id + "/next", { ...body, rev: j.job.rev, ...(confirmed ? { confirm: true } : {}) });
+    if (r.needs_confirmation) {
+      const yes = el("button", { class: "primary", type: "button", id: "job-confirm" }, "Yes");
+      const no = el("button", { class: "button", type: "button", id: "job-cancel" }, "Cancel");
+      msg.replaceChildren(el("div", { class: "confirm", id: "job-confirm-box" }, el("p", {}, el("strong", {}, r.question)),
+        el("div", { class: "row" }, yes, no)));
+      no.addEventListener("click", () => { state.busy = false; msg.replaceChildren(el("p", { class: "muted" }, "Cancelled — nothing was sent.")); });
+      yes.addEventListener("click", () => { yes.disabled = no.disabled = true; step(j, body, msg, true); });
+      yes.focus();
+      return;
+    }
+    state.busy = false;
+    await renderJobKeepNotes(j.job.id, r.notes || []);
+  } catch (e) {
+    state.busy = false;
+    if (e.status === 401) return;
+    msg.replaceChildren(errorBox(e));
+  }
+}
+
+// Redraw the job and keep the Director's notes (e.g. "not approved: it still uses sample prices") on top.
+async function renderJobKeepNotes(id, notes) {
+  await renderJob($("main"), id);
+  const box = $("job-next");
+  if (box && notes.length) box.insertBefore(el("div", { id: "job-notes" }, notes.map(n => el("p", { class: "note warn" }, n))), box.children[1] || null);
+}
+
+// ------------------------------------------------------------------ Bids (Sprint 4)
+const BID_STATUSES = ["draft", "sent", "viewed", "won", "lost", "expired", "void"];
+
+async function renderBids(main, screen) {
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  const status = BID_STATUSES.includes(q.get("status")) ? q.get("status") : "";
+  const list = await api("GET", "/bids" + (status ? "?status=" + status : ""));
+  const pick = el("select", { id: "bids-status", "aria-label": "Status" }, el("option", { value: "" }, "All quotes"),
+    BID_STATUSES.map(s => el("option", { value: s, selected: s === status }, words(s))));
+  pick.addEventListener("change", () => { location.hash = "#/bids" + (pick.value ? "?status=" + pick.value : ""); });
+  const parts = [el("div", { class: "page-head" }, el("h2", {}, screen.label), helpLink("bids")),
+    el("p", { class: "muted" }, "Quotes made from estimates. Open one to see it as the customer will, send it, mark the answer, or make it a job."),
+    el("div", { class: "row filters" }, el("label", {}, "Status", pick))];
+  if (!list.bids.length) {
+    parts.push(el("div", { class: "card empty", id: "bids-empty" }, "No quotes yet — price a job (⚡ Quick estimate), approve it, and the quote is made for you."));
+  } else {
+    parts.push(el("table", { class: "list clickable", id: "bids" },
+      el("thead", {}, el("tr", {}, el("th", {}, "Quote"), el("th", {}, "Customer"), el("th", {}, "Status"), el("th", {}, "Total"),
+        el("th", {}, "Valid until"))),
+      el("tbody", {}, list.bids.map(b => el("tr", { "data-id": b.id, onclick: () => go("#/bids/" + b.id) },
+        el("td", {}, el("a", { href: "#/bids/" + b.id }, b.number), b.version > 1 ? " (v" + b.version + ")" : ""),
+        el("td", {}, (b.customer && (b.customer.name || b.customer.email)) || "—"),
+        el("td", {}, el("span", { class: "status" }, words(b.status)), b.job_id ? " → " + b.job_id : ""),
+        el("td", { class: "money" }, money(b.total_cents)),
+        el("td", {}, b.valid_until || ""))))));
+  }
+  main.replaceChildren(...parts);
+}
+
+async function renderBid(main, id) {
+  const b = await api("GET", "/bids/" + id);
+  const msg = el("div", { id: "bid-message", role: "status" });
+  const parts = [el("p", {}, el("a", { href: "#/bids" }, "← Bids")),
+    el("div", { class: "page-head" }, el("h2", {}, "Quote " + b.number), helpLink("bids")),
+    el("p", { class: "muted" }, words(b.status) + " · " + money(b.total_cents) + " · valid until " + (b.valid_until || "—") +
+      (b.sent_to ? " · sent to " + b.sent_to + " " + when(b.sent_at) : "") + (b.job_id ? " · job " + b.job_id : ""))];
+  const fileUrl = API + "/bids/" + b.id + "/file?kind=";
+  if (!APP_TOKEN) {
+    // The quote as the customer sees it: its own HTML, in a sandboxed frame (no scripts, nothing from outside).
+    parts.push(el("iframe", { class: "bid-frame", id: "bid-frame", title: "Quote " + b.number, sandbox: "", src: fileUrl + "html" }),
+      el("p", {}, el("a", { href: fileUrl + "html", target: "_blank", rel: "noopener" }, "Open in a new tab"),
+        b.has_pdf ? " · " : null, b.has_pdf ? el("a", { href: fileUrl + "pdf", id: "bid-pdf" }, "Download the PDF") : null));
+  } else {
+    // Inside the Jobs app the sign-in is a Bearer token, which a frame or a plain link can't send: show the text
+    // copy, and fetch the PDF with the token.
+    parts.push(el("pre", { class: "bid-text card section", id: "bid-text-main" }, b.text || ""));
+    if (b.has_pdf) {
+      const dl = el("button", { class: "button", type: "button", id: "bid-pdf" }, "Download the PDF");
+      dl.addEventListener("click", async () => {
+        try {
+          const r = await fetch(fileUrl + "pdf", { headers: { Authorization: "Bearer " + APP_TOKEN } });
+          if (!r.ok) throw new Error("the PDF couldn't be downloaded (" + r.status + ")");
+          const url = URL.createObjectURL(await r.blob());
+          const a = el("a", { href: url, download: b.number + ".pdf" });
+          document.body.append(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 10000);
+        } catch (e) { msg.replaceChildren(errorBox(e)); }
+      });
+      parts.push(el("p", {}, dl));
+    }
+  }
+  const acts = [];
+  if (["draft", "sent", "viewed"].includes(b.status)) {
+    const to = el("input", { type: "email", id: "bid-to", value: (b.customer && b.customer.email) || b.sent_to || "",
+                             placeholder: "customer@example.com", "aria-label": "Customer email" });
+    const note = el("input", { id: "bid-note", maxlength: 500, placeholder: "Short message (optional)", "aria-label": "Message" });
+    const send = el("button", { class: "primary", type: "button", id: "bid-send" }, b.status === "draft" ? "📨 Send…" : "📨 Send again…");
+    send.addEventListener("click", () => askThen(msg, send, "/bids/" + b.id + "/send", { to: to.value.trim() || null, message: note.value.trim() || null },
+      r => "Sent " + b.number + " to " + r.sent_to + ((r.warnings || []).length ? " — " + r.warnings[0] : "")));
+    acts.push(el("div", { class: "row" }, el("label", {}, "Send to", to), el("label", {}, "Message", note), send));
+  }
+  if (["sent", "viewed"].includes(b.status)) {
+    acts.push(el("div", { class: "row", id: "bid-outcome" },
+      statusButton(b, "won", "👍 Won", msg), statusButton(b, "lost", "Lost", msg), statusButton(b, "viewed", "Customer viewed it", msg)));
+  }
+  if (["draft", "sent", "viewed"].includes(b.status)) acts.push(el("div", { class: "row" }, statusButton(b, "void", "Void this quote", msg)));
+  if (["sent", "viewed", "won"].includes(b.status) && !b.job_id) {
+    const date = el("input", { type: "date", id: "bid-service-date", "aria-label": "Service date" });
+    const name = el("input", { id: "bid-customer-name", maxlength: 200, value: (b.customer && b.customer.name) || "",
+                               placeholder: "Customer name", "aria-label": "Customer name" });
+    const conv = el("button", { class: "primary", type: "button", id: "bid-convert" }, "Make it a job in AI-Prowler…");
+    conv.addEventListener("click", () => askThen(msg, conv, "/bids/" + b.id + "/convert",
+      { service_date: date.value || null, customer: name.value.trim() ? { name: name.value.trim() } : null },
+      r => r.already_converted ? "Already a job: " + r.job_id : "Created " + Object.entries(r.created || {}).filter(([, v]) => v).map(([k, v]) => k.replace(/_/g, " ") + " " + v).join(", ")));
+    acts.push(el("div", { class: "row" }, el("label", {}, "Customer", name), el("label", {}, "Service date (optional)", date), conv));
+  }
+  parts.push(el("div", { class: "card section", id: "bid-actions" }, acts.length ? acts : el("p", { class: "muted" }, "Nothing more to do on this quote.")), msg);
+  parts.push(el("details", { class: "card section" }, el("summary", {}, "Plain-text copy"), el("pre", { class: "bid-text" }, b.text || "")));
+  main.replaceChildren(...parts);
+}
+
+function statusButton(b, status, label, msg) {
+  const btn = el("button", { class: status === "won" ? "primary" : "button", type: "button", id: "bid-" + status }, label);
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      await api("POST", "/bids/" + b.id + "/status", { status });
+      toast(b.number + " marked " + words(status));
+      route();
+    } catch (e) { if (e.status !== 401) msg.replaceChildren(errorBox(e)); }
+    finally { btn.disabled = false; }
+  });
+  return btn;
+}
+
+// Ask the server's yes/no question (needs_confirmation), then repeat the call with confirm=true.
+async function askThen(msg, btn, path, body, doneText) {
+  btn.disabled = true;
+  state.busy = true;
+  msg.replaceChildren();
+  try {
+    const r = await api("POST", path, body);
+    if (!r.needs_confirmation) { state.busy = false; toast(doneText(r)); route(); return; }
+    const yes = el("button", { class: "primary", type: "button", id: "bid-confirm" }, "Yes");
+    const no = el("button", { class: "button", type: "button", id: "bid-cancel" }, "Cancel");
+    msg.replaceChildren(el("div", { class: "confirm", id: "bid-confirm-box" }, el("p", {}, el("strong", {}, r.question)), el("div", { class: "row" }, yes, no)));
+    yes.focus();
+    no.addEventListener("click", () => { state.busy = false; msg.replaceChildren(el("p", { class: "muted" }, "Cancelled — nothing changed.")); });
+    yes.addEventListener("click", async () => {
+      yes.disabled = no.disabled = true;
+      try {
+        const done = await api("POST", path, { ...body, confirm: true });
+        state.busy = false;
+        toast(doneText(done));
+        route();
+      } catch (e) { state.busy = false; if (e.status !== 401) msg.replaceChildren(errorBox(e)); }
+    });
+  } catch (e) {
+    state.busy = false;
+    if (e.status !== 401) msg.replaceChildren(errorBox(e));
+  } finally { btn.disabled = false; }
+}
+
+// ------------------------------------------------------------------ Help: how-to guides (Sprint 4, first guides)
+async function renderHelp(main, screen) {
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  const text = (q.get("q") || "").slice(0, 200), forScreen = q.get("screen") || "";
+  const r = await api("GET", "/help/guides?" + new URLSearchParams({ q: text, screen: forScreen }));
+  const find = el("input", { type: "search", id: "help-find", value: text, placeholder: "e.g. how do I send a quote?", "aria-label": "Search the guides" });
+  const form = el("form", { class: "row filters" }, el("label", {}, "Search", find), el("button", { class: "button", type: "submit" }, "Search"));
+  form.addEventListener("submit", ev => { ev.preventDefault(); location.hash = "#/help?" + new URLSearchParams({ q: find.value.trim() }); });
+  const parts = [el("h2", {}, screen.label), el("p", { class: "muted" }, "Step-by-step guides. You can also ask your AI — e.g. \"how do I send a quote?\""), form];
+  if (forScreen) parts.push(el("p", {}, "Guides for the " + words(forScreen) + " screen · ", el("a", { href: "#/help" }, "all guides")));
+  parts.push(r.guides.length
+    ? el("ul", { class: "guides", id: "help-list" }, r.guides.map(g => el("li", {}, el("a", { href: "#/help/" + g.id }, g.title),
+        g.steps ? el("span", { class: "muted small" }, " · " + g.steps + " steps") : null)))
+    : el("div", { class: "card empty" }, "No guide matches that yet. Try fewer words, or ask your AI."));
+  main.replaceChildren(...parts);
+}
+
+async function renderGuide(main, id) {
+  const g = (await api("GET", "/help/guides/" + encodeURIComponent(id))).guide;
+  main.replaceChildren(el("p", {}, el("a", { href: "#/help" }, "← All guides")), el("h2", {}, g.title),
+    el("div", { class: "card section guide", id: "guide" }, markdown(g.text)));
+}
+
+// A tiny Markdown reader for the guides: headings, numbered steps, bullets, paragraphs, **bold** and `code`.
+// Everything goes in as text nodes, so a guide can never inject HTML.
+function markdown(text) {
+  const out = [];
+  let list = null, kind = "";
+  const inline = s => s.split(/(\*\*[^*]+\*\*|`[^`]+`)/).filter(Boolean).map(p =>
+    p.startsWith("**") ? el("strong", {}, p.slice(2, -2)) : p.startsWith("`") ? el("code", {}, p.slice(1, -1)) : p);
+  for (const raw of String(text || "").split(/\r?\n/)) {
+    const line = raw.trim();
+    const num = line.match(/^\d+\.\s+(.*)$/), bullet = line.match(/^[-*]\s+(.*)$/), head = line.match(/^(#{2,4})\s+(.*)$/);
+    if (num || bullet) {
+      const want = num ? "ol" : "ul";
+      if (!list || kind !== want) { list = el(want, {}); kind = want; out.push(list); }
+      list.append(el("li", {}, inline((num || bullet)[1])));
+      continue;
+    }
+    list = null;
+    if (!line) continue;
+    if (head) out.push(el(head[1].length === 2 ? "h3" : "h4", {}, head[2]));
+    else out.push(el("p", {}, inline(line)));
+  }
+  return out;
+}
+
 function renderComing(main, screen) {
   main.replaceChildren(el("div", { class: "coming-page" },
     el("h2", {}, screen.icon + " " + screen.label),
@@ -689,8 +1081,9 @@ function renderComing(main, screen) {
     el("ul", {}, screen.tools.map(t => el("li", {}, el("code", {}, t))))));
 }
 
-const SCREENS = { dashboard: renderDashboard, projects: renderProjects, price_book: renderPriceBook };
-const PAGES = { project: renderProject, quick: renderQuick };
+const SCREENS = { dashboard: renderDashboard, projects: renderProjects, price_book: renderPriceBook, bids: renderBids,
+                  help: renderHelp };
+const PAGES = { project: renderProject, quick: renderQuick, jobs: renderJobs, job: renderJob, bid: renderBid, guide: renderGuide };
 
 // ------------------------------------------------------------------ live updates
 function setLive(cls, title) { const l = $("live"); l.className = "live " + cls; l.title = title; }
@@ -701,9 +1094,10 @@ function onChange(ev) {
   if (ev.actor && state.me && ev.actor !== state.me.user_id) {
     toast("Updated by " + ev.actor + (ev.estimate_id ? " (estimate " + ev.estimate_id + ")" : ""));
   }
-  const listScreen = !state.page && (state.screen === "dashboard" || state.screen === "projects");
+  const listScreen = (!state.page && ["dashboard", "projects", "bids"].includes(state.screen)) || state.page === "jobs";
   const thisProject = state.page === "project" && ev.estimate_id === state.pageArg;
-  if (!listScreen && !thisProject) return;              // never redraw the quick-estimate form under the user
+  const thisJob = state.page === "job" && ev.estimate_id === state.jobEstimate;   // e.g. approved in chat
+  if (!listScreen && !thisProject && !thisJob) return;             // never redraw the quick-estimate form under the user
   // One redraw for a burst of changes (e.g. an agent pricing many lines).
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(() => {

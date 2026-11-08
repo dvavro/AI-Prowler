@@ -38,6 +38,18 @@ Sprint 3 (Coder 2), owner and estimator only:
   GET  /price-book?module_id=&samples_only=1     prices, yours or sample (pricebook_get)
   POST /price-book {prices: {key: "dollars"}, effective_date?, confirm?}     (pricebook_update; asks first)
   POST /price-book/import {csv_text, mapping?, add_new?, effective_date?, confirm?}   (pricebook_import; asks first)
+Sprint 4 (Coder 2):
+  GET  /jobs?mine=1&done=1          Jobs board (est_jobs_board)
+  POST /jobs {request?, module_id?, answers?, address?, customer?}   start a job (est_director_start)
+  GET  /jobs/<id>                   one job: next step, steps, estimate, latest bid (est_job_status)
+  POST /jobs/<id>/next {answers?, approve?, confirm_sample_prices?, checklist_done?, reviewed?, customer?,
+                        send?, send_to?, outcome?, convert?, service_date?, rev?, confirm?}   (est_director_next;
+                        send and convert ask first: they need confirm=true)
+  POST /quick (no estimate_id) now starts a quick-quote Director job, so the quote shows on the Jobs board
+  Bids (owner, estimator, office): GET /bids?status=&estimate_id=, GET /bids/<id> (bid_preview),
+       GET /bids/<id>/file?kind=html|pdf, POST /bids/<id>/send {to?, message?, confirm?} (asks first),
+       POST /bids/<id>/status {status}, POST /bids/<id>/convert {customer?, service_date?, confirm?} (asks first)
+  GET  /help/guides?q=&screen=      how-to guides; GET /help/guides/<id> one guide
 Static: /estimator and /estimator/<file> from estimator/ui/web/.
 """
 from __future__ import annotations
@@ -376,6 +388,14 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
     if sub.startswith("/price-book"):
         return _price_book(m, sub, req, ctx, conn)
 
+    # ---------------------------------------------------------- Sprint 4: Jobs board, Bids screen, Help
+    if sub == "/jobs" or sub.startswith("/jobs/"):
+        return _jobs(m, sub, req, ctx, conn, see)
+    if sub == "/bids" or sub.startswith("/bids/"):
+        return _bids(m, sub, req, ctx, conn, see)
+    if sub == "/help/guides" or sub.startswith("/help/guides/"):
+        return _help(m, sub, req)
+
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
 
 
@@ -429,6 +449,228 @@ def _price_book(m: str, sub: str, req: Request, ctx, conn) -> Response:
                                                          effective_date=_opt(b, "effective_date"),
                                                          add_new=b.get("add_new") is True,
                                                          confirm=b.get("confirm") is True))
+    return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
+
+
+# ------------------------------------------------------------------ Sprint 4: Jobs board (Director)
+
+_JOB = re.compile(r"^/jobs/(\d+)$")
+_JOB_NEXT = re.compile(r"^/jobs/(\d+)/next$")
+_BID = re.compile(r"^/bids/(\d+)$")
+_BID_ACT = re.compile(r"^/bids/(\d+)/(send|status|convert|file)$")
+_GUIDE = re.compile(r"^/help/guides/([a-z0-9_]{1,64})$")
+# What the page may hand est_director_next. Flags must be literal true/false (never "yes" or 1).
+NEXT_FLAGS = ("approve", "confirm_sample_prices", "checklist_done", "reviewed", "send", "convert")
+NEXT_TEXT = ("module_id", "send_to", "outcome", "service_date")
+NEXT_KEYS = set(NEXT_FLAGS) | set(NEXT_TEXT) | {"answers", "customer", "rev", "confirm"}
+# Where the bid files live on the PC or server: the browser gets them through /bids/<id>/file, never the path.
+LOCAL_PATHS = ("html_path", "pdf_path")
+
+
+def _flag(value) -> bool:
+    return str(value or "").strip().lower() in ("1", "true", "yes")
+
+
+def _no_paths(value):
+    """Drop local file paths (C:\\Users\\...) from what goes to the browser; say whether a PDF exists instead."""
+    if isinstance(value, dict):
+        out = {k: _no_paths(v) for k, v in value.items() if k not in LOCAL_PATHS}
+        if "pdf_path" in value:
+            out["has_pdf"] = bool(value["pdf_path"])
+        return out
+    if isinstance(value, list):
+        return [_no_paths(v) for v in value]
+    return value
+
+
+def _answers(b: dict) -> dict:
+    a = b.get("answers")
+    if a is None:
+        return {}
+    if not isinstance(a, dict):
+        raise _Refuse(400, "invalid_input", "answers must be an object of question id -> answer")
+    return a
+
+
+def _customer(value) -> dict | None:
+    if value in (None, {}):
+        return None
+    if not isinstance(value, dict):
+        raise _Refuse(400, "invalid_input", "customer must be an object with name, email, phone, address")
+    return {str(k): ("" if v is None else str(v).strip())[:200] for k, v in value.items()}
+
+
+def _jobs(m: str, sub: str, req: Request, ctx, conn, see: bool) -> Response:
+    """GET  /jobs?mine=1&done=1            est_jobs_board
+       POST /jobs {request?, module_id?, answers?, address?, due_date?, customer?}   est_director_start
+       GET  /jobs/<id>                     est_job_status, plus the estimate and its latest bid
+       POST /jobs/<id>/next {...}          est_director_next (send and convert ask first: confirm=true)"""
+    from estimator.bids import service as bids
+    from estimator.director import engine as director
+    from estimator.estimating import service
+
+    if sub == "/jobs" and m == "GET":
+        out = director.board(conn, ctx, mine=_flag(req.query.get("mine")), include_done=_flag(req.query.get("done")))
+        return _json(200, {**redact(out, see), "can_start": ctx.role in service.QUICK_ROLES})
+
+    if sub == "/jobs" and m == "POST":
+        if ctx.role not in service.QUICK_ROLES:
+            raise _Refuse(403, "permission_denied", f"only {', '.join(service.QUICK_ROLES)} can start a job")
+        b = _body(req)
+        request, module_id = _opt(b, "request"), _opt(b, "module_id")
+        if not request and not module_id:
+            raise _Refuse(400, "invalid_input", "say what the job is (e.g. \"wash a 1,000 sq ft driveway\"), or pick "
+                                                "a service")
+        out = director.start(conn, ctx, request or "", module_id=module_id, answers=_answers(b),
+                             address=_opt(b, "address"), due_date=_opt(b, "due_date"),
+                             customer=_customer(b.get("customer")), customer_id=_opt(b, "customer_id"))
+        return _json(201, _no_paths(redact(out, see)))
+
+    mm = _JOB.match(sub)
+    if mm and m == "GET":
+        out = director.status(conn, ctx, int(mm.group(1)))
+        eid = out["job"]["estimate_id"]
+        est = service.get_estimate(conn, ctx, eid) if eid else None
+        bid = bids.latest_for_estimate(conn, ctx, eid) if eid else None
+        return _json(200, _no_paths(redact({**out, "estimate_detail": est, "bid": bids._public(bid) if bid else None,
+                                            "can_open_bids": nav.can_open(ctx.role, "bids")}, see)))
+
+    mm = _JOB_NEXT.match(sub)
+    if mm and m == "POST":
+        jid, b = int(mm.group(1)), _body(req)
+        unknown = sorted(set(b) - NEXT_KEYS)
+        if unknown:
+            raise _Refuse(400, "invalid_input", "the Director doesn't take: " + ", ".join(unknown))
+        kw: dict = {}
+        for f in NEXT_FLAGS:
+            if f in b:
+                if not isinstance(b[f], bool):
+                    raise _Refuse(400, "invalid_input", f"{f} must be true or false")
+                kw[f] = b[f]
+        for f in NEXT_TEXT:
+            if f in b:
+                kw[f] = _opt(b, f)
+        if "answers" in b:
+            kw["answers"] = _answers(b)
+        if "customer" in b:
+            kw["customer"] = _customer(b["customer"])
+        if b.get("rev") is not None:
+            try:
+                kw["rev"] = int(b["rev"])
+            except (TypeError, ValueError):
+                raise _Refuse(400, "invalid_input", "rev must be a whole number") from None
+        if (kw.get("send") or kw.get("convert")) and b.get("confirm") is not True:
+            return _ok(needs_confirmation=True, question=_next_question(conn, ctx, jid, kw))
+        return _json(200, _no_paths(redact(director.next_step(conn, ctx, jid, **kw), see)))
+
+    return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
+
+
+def _next_question(conn, ctx, jid: int, kw: dict) -> str:
+    """The yes/no question the page shows before the Director emails a customer or creates a job in AI-Prowler."""
+    from estimator.bids import service as bids
+    from estimator.core.units.money import format_cents
+    from estimator.director import engine as director
+
+    st = director.status(conn, ctx, jid)
+    eid = st["job"]["estimate_id"]
+    bid = bids.latest_for_estimate(conn, ctx, eid) if eid else None
+    total = bid["total_cents"] if bid else (st.get("estimate") or {}).get("total_cents", 0)
+    money = format_cents(total)
+    if kw.get("convert"):
+        when = f" for {kw['service_date']}" if kw.get("service_date") else ""
+        return (f"Turn this {money} quote into a job{when}? This creates the customer (if new), an approved quote "
+                "and a job in AI-Prowler.")
+    to = kw.get("send_to") or ((kw.get("customer") or {}).get("email")) or (bid["customer"].get("email") if bid else "")
+    return f"Email the {money} quote to {to}?" if to else f"Email the {money} quote to the customer?"
+
+
+# ------------------------------------------------------------------ Sprint 4: Bids screen
+
+def _bids(m: str, sub: str, req: Request, ctx, conn, see: bool) -> Response:
+    """GET  /bids?status=&estimate_id=     bid_list
+       GET  /bids/<id>                     bid_preview
+       GET  /bids/<id>/file?kind=html|pdf  the bid as the customer sees it (HTML shown sandboxed; PDF downloads)
+       POST /bids/<id>/send {to?, message?, confirm?}               bid_send (asks first)
+       POST /bids/<id>/status {status}                              bid_set_status
+       POST /bids/<id>/convert {customer?, service_date?, confirm?} bid_convert_to_job (asks first)"""
+    from estimator.bids import service as bids
+
+    if not nav.can_open(ctx.role, "bids"):
+        raise _Refuse(403, "permission_denied", "your role can't open the Bids screen")
+    if sub == "/bids" and m == "GET":
+        out = bids.list_bids(conn, ctx, status=(req.query.get("status") or "").strip() or None,
+                             estimate_id=_int_opt(req.query.get("estimate_id")))
+        return _json(200, _no_paths(redact(out, see)))
+    mm = _BID.match(sub)
+    if mm and m == "GET":
+        return _json(200, _no_paths(redact(bids.preview(conn, ctx, int(mm.group(1))), see)))
+    mm = _BID_ACT.match(sub)
+    if not mm:
+        return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
+    bid_id, act = int(mm.group(1)), mm.group(2)
+    if act == "file" and m == "GET":
+        return _bid_file(conn, ctx, bid_id, (req.query.get("kind") or "html").strip().lower())
+    if m != "POST":
+        return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
+    b = _body(req)
+    if act == "send":
+        return _ask_first(lambda: _no_paths(bids.send(conn, ctx, bid_id, to=_opt(b, "to"), message=_opt(b, "message"),
+                                                      confirm=b.get("confirm") is True)))
+    if act == "status":
+        status = _opt(b, "status")
+        if not status:
+            raise _Refuse(400, "invalid_input", "status is missing (viewed, won, lost, expired or void)")
+        return _json(200, _no_paths(bids.set_status(conn, ctx, bid_id, status)))
+    return _ask_first(lambda: _no_paths(bids.convert_to_job(conn, ctx, bid_id, confirm=b.get("confirm") is True,
+                                                            customer=_customer(b.get("customer")),
+                                                            service_date=_opt(b, "service_date"))))
+
+
+def _bid_file(conn, ctx, bid_id: int, kind: str) -> Response:
+    from estimator import config
+    from estimator.bids import service as bids
+
+    if kind not in ("html", "pdf"):
+        raise _Refuse(400, "invalid_input", "kind is html or pdf")
+    b = bids._load(conn, ctx, bid_id)                      # not found / another company's bid
+    stored = b["html_path"] if kind == "html" else b["pdf_path"]
+    if not stored:
+        raise _Refuse(404, "not_found", f"quote {b['number']} has no PDF (the PDF printer wasn't available); "
+                                        "use the HTML copy")
+    path, root = Path(stored).resolve(), config.data_dir().resolve()
+    if root not in path.parents or not path.is_file():      # only files the Estimator wrote, in its own folder
+        raise _Refuse(404, "not_found", f"the {kind.upper()} file for quote {b['number']} is missing")
+    headers = {"Cache-Control": "no-store", **SECURITY_HEADERS}
+    if kind == "html":
+        # Shown in a frame on the Bids screen: no scripts, no network, nothing from outside the file itself.
+        headers["Content-Security-Policy"] = ("default-src 'none'; img-src data:; style-src 'unsafe-inline'; "
+                                              "frame-ancestors 'self'; sandbox")
+        return Response(200, "text/html; charset=utf-8", path.read_bytes(), headers)
+    headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'; sandbox"
+    headers["Content-Disposition"] = f'attachment; filename="{re.sub(r"[^A-Za-z0-9_.-]", "_", b["number"])}.pdf"'
+    return Response(200, "application/pdf", path.read_bytes(), headers)
+
+
+# ------------------------------------------------------------------ Sprint 4: Help (how-to guides)
+
+def _help(m: str, sub: str, req: Request) -> Response:
+    """GET /help/guides?q=&screen=   the how-to guides (searchable)
+       GET /help/guides/<id>         one guide's steps (Markdown text)"""
+    from estimator.ui import help as guides
+
+    if m != "GET":
+        return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
+    if sub == "/help/guides":
+        q = (req.query.get("q") or "").strip()[:200]
+        found = guides.search(q) if q else guides.list_guides()
+        screen = (req.query.get("screen") or "").strip()
+        if screen:
+            found = [g for g in found if g["screen"] == screen]
+        return _ok(guides=found, count=len(found))
+    mm = _GUIDE.match(sub)
+    if mm:
+        return _ok(guide=guides.get_guide(mm.group(1)))
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
 
 
@@ -507,22 +749,26 @@ def _quick(req: Request, ctx, conn, see: bool) -> Response:
         raise _Refuse(400, "invalid_input", "answers must be an object of question id -> answer")
     quick.resolve_answers(mod, answers)                     # bad answers never leave an empty project behind
     eid = _int_opt(b.get("estimate_id"))
-    created = eid is None
-    if created:
+    if eid is None:
+        # Sprint 4: a new quick quote is a Director job (quick quote lane), so it shows on the Jobs board and the
+        # page can carry on to approve, send and convert it - the same steps est_director_start gives in chat.
+        from estimator.director import engine as director
         address = _opt(b, "address")
         title = _opt(b, "title") or (f"{mod.name} – {address}" if address else mod.name)
         if len(title) > 200:
             raise _Refuse(400, "invalid_input", "the project name is too long (200 characters at most)")
-        est = service.create_estimate(conn, ctx, title, customer_id=_opt(b, "customer_id"), address=address,
-                                      due_date=_opt(b, "due_date"))
-        eid, rev = est["id"], est["rev"]
-    else:
-        try:
-            rev = int(b.get("rev"))
-        except (TypeError, ValueError):
-            raise _Refuse(400, "invalid_input", "rev is needed to change an existing estimate") from None
+        out = director.start(conn, ctx, title, module_id=module_id, answers=answers, address=address,
+                             due_date=_opt(b, "due_date"), customer_id=_opt(b, "customer_id"),
+                             customer=_customer(b.get("customer")))
+        est = service.get_estimate(conn, ctx, out["job"]["estimate_id"])
+        return _json(201, _no_paths(redact({**est, "warnings": out.get("notes") or [], "job": out["job"],
+                                            "next_step": out["next_step"], "created": True}, see)))
+    try:
+        rev = int(b.get("rev"))
+    except (TypeError, ValueError):
+        raise _Refuse(400, "invalid_input", "rev is needed to change an existing estimate") from None
     result = quick.answer(conn, ctx, eid, module_id, answers, rev)
-    return _json(201 if created else 200, {**redact(result, see), "created": created})
+    return _json(200, {**redact(result, see), "created": False})
 
 
 def _opt(b: dict, key: str) -> str | None:

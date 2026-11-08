@@ -100,6 +100,17 @@ details > summary { cursor: pointer; font-weight: 600; }
 body.embedded .brand, body.embedded .search, body.embedded .user, body.embedded #logout { display: none; }
 body.embedded { --top-h: 44px; }
 
+/* Sprint 4: Jobs board, job page, Bids, Help */
+.help-link { min-width: 34px; text-align: center; font-weight: 700; border-radius: 50%; }
+.page-head .row { margin: 0; }
+#job-next .row, #bid-actions .row { margin-top: 10px; align-items: flex-end; }
+#job-choices button { text-transform: capitalize; }
+.bid-frame { width: 100%; height: 70vh; min-height: 420px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+pre.bid-text { white-space: pre-wrap; font-family: inherit; }
+ul.guides { list-style: none; padding: 0; }
+ul.guides li { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.guide ol li, .guide ul li { margin: 6px 0; }
+
 .toast { position: fixed; right: 16px; bottom: 16px; background: var(--ink); color: #fff; padding: 10px 14px;
          border-radius: 6px; max-width: 360px; box-shadow: 0 4px 14px rgba(0, 0, 0, .2); }
 

@@ -37,8 +37,9 @@ SCREENS = (
     {"id": "estimates", "label": "Estimates", "icon": "🧮", "roles": ALL, "status": "coming", "sprint": 8,
      "tools": ["est_get_estimate", "est_apply_assembly", "est_add_line_item", "est_update_line_item",
                "est_calculate", "est_validate", "est_scenarios", "est_compare_history", "est_create_revision"]},
-    {"id": "bids", "label": "Bids", "icon": "📨", "roles": ("owner", "estimator", "office"), "status": "coming",
-     "sprint": 4, "tools": ["bid_generate", "bid_preview", "bid_send", "bid_set_status", "bid_convert_to_job"]},
+    {"id": "bids", "label": "Bids", "icon": "📨", "roles": ("owner", "estimator", "office"), "status": "ready",
+     "sprint": 4, "tools": ["bid_generate", "bid_preview", "bid_send", "bid_set_status", "bid_convert_to_job",
+                            "bid_list"]},
     {"id": "price_book", "label": "Price Book", "icon": "💲", "roles": ("owner", "estimator"), "status": "ready",
      "sprint": 3, "tools": ["pricebook_get", "pricebook_update", "pricebook_import"]},
     {"id": "symbol_library", "label": "Symbol Library", "icon": "🔣", "roles": ("owner", "estimator", "reviewer"),
@@ -50,7 +51,7 @@ SCREENS = (
      "status": "coming", "sprint": 17, "tools": ["est_export", "est_compare_history"]},
     {"id": "settings", "label": "Settings", "icon": "⚙️", "roles": ("owner",), "status": "coming", "sprint": 17,
      "tools": ["est_setup_step"]},
-    {"id": "help", "label": "Help", "icon": "❓", "roles": ALL, "status": "coming", "sprint": 4,
+    {"id": "help", "label": "Help", "icon": "❓", "roles": ALL, "status": "ready", "sprint": 4,
      "tools": ["how_to_estimate", "est_sample_project"]},
 )
 
@@ -59,7 +60,15 @@ PAGES = (
     {"id": "project", "label": "Project", "from": "projects", "sprint": 2,
      "tools": ["est_project_status", "est_get_estimate", "plan_upload", "plan_status"]},
     {"id": "quick", "label": "Quick estimate", "from": "dashboard", "sprint": 2,
-     "tools": ["est_list_modules", "est_quick_questions", "est_quick_answer", "est_create_estimate"]},
+     "tools": ["est_list_modules", "est_quick_questions", "est_quick_answer", "est_create_estimate",
+               "est_director_start"]},
+    # Sprint 4: the Director's Jobs board (quick lane first) and one job's next step.
+    {"id": "jobs", "label": "Jobs board", "from": "dashboard", "sprint": 4, "tools": ["est_jobs_board"]},
+    {"id": "job", "label": "Job", "from": "jobs", "sprint": 4,
+     "tools": ["est_job_status", "est_director_start", "est_director_next"]},
+    {"id": "bid", "label": "Quote", "from": "bids", "sprint": 4,
+     "tools": ["bid_preview", "bid_send", "bid_set_status", "bid_convert_to_job"]},
+    {"id": "guide", "label": "How-to guide", "from": "help", "sprint": 4, "tools": ["how_to_estimate"]},
 )
 
 # What each role may do, sent to the browser so it can hide buttons. The server
