@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI-Prowler Estimator</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <!-- Sign-in (shown when the server answers 401: office network, Remote Access, Server mode) -->
+  <section id="login" class="login" hidden>
+    <form id="login-form" class="card login-card" autocomplete="on">
+      <h1>🏗 AI-Prowler Estimator</h1>
+      <p class="muted" id="login-hint">Sign in to continue.</p>
+      <label>User name <input id="login-user" name="username" autocomplete="username" required></label>
+      <label>Password <input id="login-pass" name="password" type="password" autocomplete="current-password" required></label>
+      <p class="error" id="login-error" role="alert" hidden></p>
+      <button type="submit" id="login-btn" class="primary">Sign in</button>
+    </form>
+  </section>
+
+  <!-- The app -->
+  <div id="app" class="app" hidden>
+    <header class="topbar">
+      <button id="menu-toggle" class="icon-btn" aria-label="Menu">☰</button>
+      <span class="brand">🏗 Estimator</span>
+      <input id="search" class="search" type="search" placeholder="Search projects, customers, sheets…" aria-label="Search" disabled>
+      <span id="live" class="live off" title="Live updates">● Live</span>
+      <span id="notices" class="badge" title="Notifications" hidden>0</span>
+      <span id="user" class="user"></span>
+      <button id="logout" class="link-btn" hidden>Sign out</button>
+    </header>
+    <nav id="nav" class="nav" aria-label="Estimator menu"></nav>
+    <main id="main" class="main" tabindex="-1"></main>
+    <div id="toast" class="toast" role="status" hidden></div>
+  </div>
+
+  <noscript>The Estimator needs JavaScript turned on.</noscript>
+</body>
+</html>

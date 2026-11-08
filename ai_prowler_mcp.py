@@ -7149,6 +7149,21 @@ try:
 except Exception as _exc:  # the Estimator must never stop AI-Prowler starting
     _log.warning("Estimator tools not loaded: %s", _exc)
 
+# Estimator web app (Coder 2, Sprint 1): http://localhost:8770/estimator/ in its
+# own thread. Only in AI-Prowler's own HTTP server process (_IS_HTTP_SERVER),
+# never in a stdio copy or under pytest. Server mode signs people in with
+# AI-Prowler's accounts; the lookups run at sign-in time, after this file loads.
+try:
+    from estimator.api.prowler_link import start_from_ai_prowler as _start_estimator_web
+    _est_web_url = _start_estimator_web(
+        is_http_server=_IS_HTTP_SERVER, server_mode=_IS_SERVER_MODE,
+        load_users=lambda: _load_users(),
+        resolve_user=lambda _d, _t: _resolve_user(_d, _t))
+    if _est_web_url:
+        _log.info("Estimator web app: %s", _est_web_url)
+except Exception as _exc:  # the Estimator must never stop AI-Prowler starting
+    _log.warning("Estimator web app not started: %s", _exc)
+
 # Module-level event set by the background prewarm thread when ChromaDB and
 # the embedding model are fully loaded.  Tool handlers that need ChromaDB
 # wait on this event (max 60s) before proceeding.
