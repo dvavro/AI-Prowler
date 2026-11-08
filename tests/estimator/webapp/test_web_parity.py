@@ -43,7 +43,11 @@ def test_pages_are_the_ones_the_page_can_draw():
     from estimator.api import router
     js = (router.WEB_DIR / "app.js").read_text(encoding="utf-8")
     table = re.search(r"const PAGES = \{([^}]*)\}", js).group(1)
-    assert set(re.findall(r"(\w+)\s*:", table)) == {p["id"] for p in nav.PAGES}
+    drawn = set(re.findall(r"(\w+)\s*:", table))
+    # Sprint 7: bigger screens live in their own script (review.js) and add themselves: PAGES.takeoff = renderReview;
+    for extra in router.WEB_DIR.glob("*.js"):
+        drawn |= set(re.findall(r"^PAGES\.(\w+)\s*=", extra.read_text(encoding="utf-8"), re.M))
+    assert drawn == {p["id"] for p in nav.PAGES}
 
 
 def test_pending_list_is_still_pending():
@@ -65,5 +69,7 @@ def test_ready_screens_are_the_ones_the_page_can_draw():
     js = (router.WEB_DIR / "app.js").read_text(encoding="utf-8")
     table = re.search(r"const SCREENS = \{([^}]*)\}", js).group(1)
     drawn = set(re.findall(r"(\w+)\s*:", table))
+    for extra in router.WEB_DIR.glob("*.js"):                       # Sprint 7: SCREENS.takeoffs = ... in review.js
+        drawn |= set(re.findall(r"^SCREENS\.(\w+)\s*=", extra.read_text(encoding="utf-8"), re.M))
     ready = {s["id"] for s in nav.SCREENS if s["status"] == "ready"}
     assert ready == drawn

@@ -8,8 +8,13 @@ so a box found here lands on the same spot of the rendered image.
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# pdfium isn't safe to call from two threads at once. Plans are read in a background thread while the viewer renders
+# tiles (tiles.py), so every pdfium call holds this lock - per page here, so tiles still come while a set is read.
+PDFIUM_LOCK = threading.RLock()
 
 PT = 72.0                         # PDF points per inch
 MAX_RENDER_PX = 4000              # longest side of a rendered sheet image
@@ -142,32 +147,36 @@ def read(path: Path, work_dir: Path | None, max_pages: int, render: bool = True)
 
     logging.getLogger("pdfminer").setLevel(logging.ERROR)     # "Could not get FontBBox..." on many real PDFs
 
-    try:
-        doc = pdfium.PdfDocument(str(path))
-    except Exception as exc:  # noqa: BLE001 - pdfium's own errors are cryptic
-        raise ValueError(f"this PDF can't be opened ({exc})") from None
-    count = len(doc)
+    with PDFIUM_LOCK:
+        try:
+            doc = pdfium.PdfDocument(str(path))
+        except Exception as exc:  # noqa: BLE001 - pdfium's own errors are cryptic
+            raise ValueError(f"this PDF can't be opened ({exc})") from None
+        count = len(doc)
+        if count == 0 or count > max_pages:
+            doc.close()
     if count == 0:
-        doc.close()
         raise ValueError("this PDF has no pages")
     if count > max_pages:
-        doc.close()
         raise ValueError(f"this PDF has {count} pages; a plan set can have at most {max_pages}. Split it into smaller "
                          "sets (for example by discipline) and upload each one")
     pages: list[Page] = []
     try:
         with pdfplumber.open(str(path)) as plumb:
             for i in range(count):
-                pdf_page = doc[i]
-                w_pt, h_pt = pdf_page.get_size()          # already turned by the page's /Rotate, like the render
-                page = Page(page_no=i + 1, width=round(w_pt / PT, 3), height=round(h_pt / PT, 3))
-                if render and work_dir is not None:
-                    dpi = render_dpi(page.width, page.height)
-                    img = pdf_page.render(scale=dpi / PT).to_pil()
+                with PDFIUM_LOCK:
+                    pdf_page = doc[i]
+                    w_pt, h_pt = pdf_page.get_size()      # already turned by the page's /Rotate, like the render
+                    page = Page(page_no=i + 1, width=round(w_pt / PT, 3), height=round(h_pt / PT, 3))
+                    img = None
+                    if render and work_dir is not None:
+                        dpi = render_dpi(page.width, page.height)
+                        img = pdf_page.render(scale=dpi / PT).to_pil().convert("RGB")   # a copy; pdfium's freed here
+                    pdf_page.close()
+                if img is not None:
                     out = Path(work_dir) / f"sheet_{i + 1:03d}.png"
                     img.convert("RGB").save(out, "PNG", optimize=True)
                     page.image_path = str(out)
-                pdf_page.close()
                 pp = plumb.pages[i]
                 for w in pp.extract_words(keep_blank_chars=False, use_text_flow=False, extra_attrs=["size"]):
                     text = (w.get("text") or "").strip()
@@ -181,5 +190,6 @@ def read(path: Path, work_dir: Path | None, max_pages: int, render: bool = True)
                 pages.append(page)
                 pp.flush_cache() if hasattr(pp, "flush_cache") else None
     finally:
-        doc.close()
+        with PDFIUM_LOCK:
+            doc.close()
     return count, pages

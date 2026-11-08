@@ -27,7 +27,7 @@ SCREENS = (
                "plan_set_scale", "plan_get_legends", "plan_get_schedules", "plan_update_schedule_row",
                "plan_compare_revisions"]},
     {"id": "takeoffs", "label": "Takeoffs", "icon": "📏", "roles": ("owner", "estimator", "reviewer"),
-     "status": "coming", "sprint": 7,
+     "status": "ready", "sprint": 7,
      "tools": ["takeoff_propose", "takeoff_list", "takeoff_detail", "takeoff_confirm", "takeoff_edit",
                "takeoff_delete", "takeoff_manual", "takeoff_suggest_change", "plan_get_objects"]},
     {"id": "reviews", "label": "Reviews", "icon": "✅", "roles": ("owner", "estimator", "reviewer", "field"),
@@ -76,6 +76,12 @@ PAGES = (
      "tools": ["plan_status", "plan_get_sheets", "plan_process"]},
     {"id": "sheet", "label": "Sheet", "from": "plans", "sprint": 5,
      "tools": ["plan_get_viewports", "plan_get_sheet_image", "plan_set_scale"]},
+    # Sprint 7: Blueprint Review for one project - tiled sheet viewer, overlays, tools, layers, measurement list,
+    # detail panel, approve/correct.
+    {"id": "takeoff", "label": "Blueprint Review", "from": "takeoffs", "sprint": 7,
+     "tools": ["takeoff_list", "takeoff_detail", "takeoff_manual", "takeoff_propose", "takeoff_confirm",
+               "takeoff_edit", "takeoff_delete", "takeoff_suggest_change", "plan_get_objects",
+               "plan_get_sheet_image", "plan_set_scale"]},
 )
 
 # What each role may do, sent to the browser so it can hide buttons. The server

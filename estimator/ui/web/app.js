@@ -170,6 +170,8 @@ function parseHash() {
   // Sprint 5: a plan set's sheets, and one sheet (viewports, scales, calibration).
   if (parts[0] === "plan-sets" && /^\d+$/.test(parts[1] || "")) return { screen: "plans", page: "plan_set", arg: +parts[1] };
   if (parts[0] === "sheets" && /^\d+$/.test(parts[1] || "")) return { screen: "plans", page: "sheet", arg: +parts[1] };
+  // Sprint 7: Blueprint Review for one project (review.js); ?sheet=<id>&m=<measurement> open a sheet or measurement.
+  if (parts[0] === "takeoffs" && /^\d+$/.test(parts[1] || "")) return { screen: "takeoffs", page: "takeoff", arg: +parts[1] };
   return { screen: parts[0] || "dashboard", page: null, arg: null };
 }
 
@@ -314,6 +316,9 @@ async function renderProject(main, id) {
     tile(p.plan_sets.length, "plan sets"),
     tile(est.due_date || "—", "due"),
     est.address ? tile(est.address, "address", "wide") : null));
+  if (canOpen("takeoffs") && p.plan_sets.length) {
+    parts.push(el("p", {}, el("a", { class: "button", id: "project-review", href: "#/takeoffs/" + est.id }, "📏 Blueprint Review — measure and approve")));
+  }
 
   // Trades: per-trade subtotal and headline quantities (est_project_status)
   const trades = st.trades.length
@@ -805,6 +810,10 @@ async function renderSheet(main, id) {
       el("span", {}, (v.label || "View") + " · " + (v.is_nts ? "NTS" : v.scale_note || (v.measurable ? "1:" + v.scale_ratio : "no scale")))), v.bbox, s));
   }
   const parts = [...head];
+  if (canOpen("takeoffs")) {
+    parts.push(el("p", {}, el("a", { class: "button", id: "sheet-review", href: "#/takeoffs/" + r.plan_set.estimate_id + "?sheet=" + s.id },
+      "📏 Measure and approve in Blueprint Review")));
+  }
   if (r.found && r.found.length) parts.push(foundSummary(r.found));
   if (s.has_image) {
     parts.push(stage);
@@ -828,8 +837,7 @@ function foundSummary(found) {
     return el("li", { "data-kind": f.kind }, parts.join(" · "));
   });
   return el("div", { class: "card section", id: "sheet-found" }, el("strong", {}, "Found on this sheet"),
-    el("ul", { class: "checklist" }, items),
-    el("p", { class: "muted small" }, "Checking and approving them comes with Blueprint Review."));
+    el("ul", { class: "checklist" }, items));
 }
 
 function viewportTable(r, s, stage, img, msg) {

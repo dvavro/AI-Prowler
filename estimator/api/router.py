@@ -57,6 +57,13 @@ Sprint 5 (Coder 2), Plans screen (owner, estimator, reviewer, field; changes by 
   GET  /sheets/<id>                 the sheet with its paper size, and its viewports (plan_get_viewports)
   GET  /sheets/<id>/image           the rendered sheet (plan_get_sheet_image)
   POST /viewports/<id>/scale {scale_note | scale_ratio | calibration: {p1, p2, distance}, confirm?}   (plan_set_scale)
+Sprint 6-7 (Coder 2):
+  GET  /sheets/<id> also returns found (what the plan engine found, by kind) and tiles (zoom levels for the viewer)
+  GET  /sheets/<id>/objects?kind=   drawing objects with their shapes and layer group (plan_get_objects), up to 5,000
+  GET  /sheets/<id>/tiles/<level>/<x>/<y>.png   one 512 px viewer tile (plan_engine/tiles.py)
+  Blueprint Review (Takeoffs screen: owner, estimator, reviewer): see estimator/api/takeoff_api.py -
+  GET /takeoffs, GET /estimates/<id>/takeoff, POST /estimates/<id>/measurements[/propose], GET /measurements/<id>,
+  POST /measurements/approve, POST /measurements/<id>/edit|reject|suggest (takeoff_* tools; writes ask first)
 Static: /estimator and /estimator/<file> from estimator/ui/web/.
 """
 from __future__ import annotations
@@ -407,6 +414,11 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
     if sub == "/plans" or sub.startswith(("/plan-sets/", "/sheets/", "/viewports/")):
         return _plans(m, sub, req, ctx, conn)
 
+    # ---------------------------------------------------------- Sprint 7: Blueprint Review (Takeoffs screen)
+    from estimator.api import takeoff_api
+    if takeoff_api.handles(sub):
+        return takeoff_api.route(m, sub, req, ctx, conn)
+
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
 
 
@@ -652,8 +664,31 @@ _PLAN_SET_PROCESS = re.compile(r"^/plan-sets/(\d+)/process$")
 _SHEET = re.compile(r"^/sheets/(\d+)$")
 _SHEET_IMAGE = re.compile(r"^/sheets/(\d+)/image$")
 _VP_SCALE = re.compile(r"^/viewports/(\d+)/scale$")
+_SHEET_OBJECTS = re.compile(r"^/sheets/(\d+)/objects$")
+_SHEET_TILE = re.compile(r"^/sheets/(\d+)/tiles/(\d{1,2})/(\d{1,5})/(\d{1,5})\.png$")
 SHEET_FIELDS = ("id", "plan_set_id", "page_no", "sheet_no", "title", "discipline", "revision", "revision_date",
                 "units", "width", "height", "confidence")
+MAX_VIEW_OBJECTS = 5000           # the plan engine keeps at most 5,000 objects a sheet (pdf_objects.MAX_OBJECTS_PER_SHEET)
+
+
+def _in_data_dir(path) -> bool:
+    from estimator import config
+    if not path:
+        return False
+    p, root = Path(path).resolve(), config.data_dir().resolve()
+    return root in p.parents
+
+
+def _tile_rows(conn, ctx, sheet_id: int) -> tuple[dict, dict]:
+    """The sheet and plan set rows for tiles, with any file outside the Estimator's data folder left out."""
+    from estimator.drawing_model import store
+    s = store._load_sheet(conn, ctx, sheet_id)
+    ps = store.load_plan_set(conn, ctx, s["plan_set_id"])
+    if not _in_data_dir(s["image_path"]):
+        s = {**s, "image_path": None}
+    if not _in_data_dir(ps["file_path"]):
+        ps = {**ps, "file_path": None}
+    return s, ps
 
 
 def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
@@ -702,9 +737,42 @@ def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
         sheet = {k: s[k] for k in SHEET_FIELDS}
         sheet["has_image"] = bool(s["image_path"])
         ps = store.load_plan_set(conn, ctx, s["plan_set_id"])
+        from estimator.plan_engine import tiles
         return _ok(sheet=sheet, viewports=store.viewports(conn, ctx, s["id"])["viewports"],
                    plan_set={"id": ps["id"], "file": ps["original_name"], "estimate_id": ps["estimate_id"]},
-                   found=_found_on_sheet(conn, s["id"]), can_edit=can_edit)
+                   found=_found_on_sheet(conn, s["id"]), tiles=tiles.info(*_tile_rows(conn, ctx, s["id"])),
+                   can_edit=can_edit)
+
+    mm = _SHEET_OBJECTS.match(sub)
+    if mm and m == "GET":
+        # Sprint 7: what the plan engine found, with shapes, for the Blueprint Review overlays and layers panel.
+        from estimator.plan_engine import layers
+        sid, kind = int(mm.group(1)), (req.query.get("kind") or "").strip() or None
+        got, offset, page = [], 0, None
+        while len(got) < MAX_VIEW_OBJECTS:
+            page = store.objects(conn, ctx, sheet_id=sid, kind=kind, include_geometry=True,
+                                 limit=store.OBJECT_LIMIT, offset=offset)
+            got += page["objects"]
+            offset += page["returned"]
+            if not page["returned"] or offset >= page["count"]:
+                break
+        got = got[:MAX_VIEW_OBJECTS]
+        for o in got:
+            o["group"] = layers.group_for(o["kind"], o.get("layer"), o.get("block_name"))
+        return _ok(sheet_id=sid, objects=got, count=page["count"], returned=len(got), totals=page["totals"],
+                   layers=layers.panel(got))
+
+    mm = _SHEET_TILE.match(sub)
+    if mm and m == "GET":
+        from estimator import config
+        from estimator.plan_engine import tiles
+        s, ps = _tile_rows(conn, ctx, int(mm.group(1)))
+        try:
+            path = tiles.render(s, ps, int(mm.group(2)), int(mm.group(3)), int(mm.group(4)), config.data_dir())
+        except ValueError as e:
+            raise _Refuse(404, "not_found", str(e)) from None
+        return Response(200, "image/png", path.read_bytes(), {"Cache-Control": "private, max-age=3600",
+                                                               **SECURITY_HEADERS})
 
     mm = _SHEET_IMAGE.match(sub)
     if mm and m == "GET":

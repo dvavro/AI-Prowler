@@ -227,5 +227,7 @@ def test_web_app_is_self_contained():
     """Spec: no CDN, no web fonts - it must work with no internet."""
     for f in router.WEB_DIR.iterdir():
         text = f.read_text(encoding="utf-8").lower()
+        # Sprint 7: the SVG namespace (document.createElementNS) is a name, not something downloaded.
+        text = text.replace('"http://www.w3.org/2000/svg"', "")
         for bad in ("http://", "https://", "//cdn", "fonts.googleapis", "innerhtml"):
             assert bad not in text, (f.name, bad)

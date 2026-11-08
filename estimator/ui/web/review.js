@@ -1,0 +1,987 @@
+/* Blueprint Review (Coder 2 Sprint 7) - the Takeoffs screen and one project's review page.
+ *
+ * Loaded after app.js (same globals: el, api, toast, go, words, helpLink, errorBox, APP_TOKEN, SCREENS, PAGES...).
+ * Spec "Blueprint Review screen": the blueprint on the left (tiled viewer: zoom, pan, sheet navigation, colour overlays
+ * per layer, rooms filled and labelled with their area), a tool palette, a layers panel, the measurements grouped by
+ * trade and room with running totals, a measurement detail panel, approve / correct / reject, locked approvals with
+ * suggested changes, and a review queue (lowest confidence first).
+ *
+ * Coordinates are sheet units from the top-left (paper inches, or the drawing's own units for DXF), the same frame
+ * as the drawing model, the tiles and the server's measuring - the page never measures for real, it only previews.
+ * Routes: #/takeoffs   #/takeoffs/<estimate id>?sheet=<sheet id>&m=<measurement id>
+ */
+"use strict";
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const REVIEW_STORE = "est_review_layers";         // which layer groups are hidden or locked (this browser only)
+const HIDDEN_BY_DEFAULT = ["text", "dimensions", "floor_plan"];
+const REAL_FT = { in: 1 / 12, ft: 1, mm: 1 / 304.8, cm: 1 / 30.48, m: 3.28084 };
+const TOOLS = [
+  ["select", "↖", "Select", "Click a room, wall or symbol to select it (Shift-click for more). Drag to move around."],
+  ["pan", "✋", "Pan", "Drag to move around the sheet."],
+  ["length", "📏", "Length", "Click along the line; double-click (or Enter) to finish."],
+  ["area", "⬠", "Area", "Click the corners; click the first point, double-click or press Enter to finish."],
+  ["rect", "▭", "Rectangle", "Click two opposite corners."],
+  ["count", "✚", "Count", "Click each item; press Enter or Finish when done."],
+  ["calibrate", "📐", "Calibrate", "Click both ends of a distance you know, then type its real length."],
+];
+const RV = { estimateId: null, data: null, sheetId: null, sheet: null, viewports: [], tiles: null, objects: [],
+             groups: [], byId: new Map(), selected: new Set(), measurementId: null, tool: "select", draft: [],
+             view: {}, viewer: null };
+
+function svg(tag, attrs) {
+  const n = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v !== null && v !== undefined) n.setAttribute(k, String(v));
+  return n;
+}
+
+function layerPrefs() {
+  try {
+    const p = JSON.parse(localStorage.getItem(REVIEW_STORE) || "null");
+    if (p && Array.isArray(p.hidden) && Array.isArray(p.locked)) return p;
+  } catch (e) { /* storage can be off or empty */ }
+  return { hidden: HIDDEN_BY_DEFAULT.slice(), locked: [] };
+}
+function saveLayerPrefs(p) { try { localStorage.setItem(REVIEW_STORE, JSON.stringify(p)); } catch (e) { /* fine */ } }
+
+function num(v, digits) {
+  const n = parseFloat(v);
+  return isNaN(n) ? "—" : n.toLocaleString(undefined, { maximumFractionDigits: digits === undefined ? 2 : digits });
+}
+function pct(c) { return c === null || c === undefined || c === "" ? "—" : Math.round(parseFloat(c) * 100) + "%"; }
+
+// ------------------------------------------------------------------ Takeoffs screen (the list)
+async function renderTakeoffs(main, screen) {
+  const r = await api("GET", "/takeoffs");
+  const parts = [el("div", { class: "page-head" }, el("h2", {}, screen.label), helpLink("takeoffs")),
+    el("p", { class: "muted" }, "Measurements by project. Open one to check the plans, measure, and approve what gets priced.")];
+  if (!r.projects.length) {
+    parts.push(el("div", { class: "card empty", id: "takeoffs-empty" }, "No plans or measurements yet — upload plans on a project and read them first."));
+  } else {
+    parts.push(el("table", { class: "list clickable", id: "takeoff-projects" },
+      el("thead", {}, el("tr", {}, el("th", {}, "Project"), el("th", {}, "Plans read"), el("th", {}, "To review"),
+        el("th", {}, "Approved"), el("th", {}, "Status"))),
+      el("tbody", {}, r.projects.map(p => el("tr", { "data-id": p.estimate_id, onclick: () => go("#/takeoffs/" + p.estimate_id) },
+        el("td", {}, el("a", { href: "#/takeoffs/" + p.estimate_id }, p.title)),
+        el("td", {}, p.read + " of " + p.plan_sets),
+        el("td", {}, p.to_review ? el("span", { class: "status sample" }, p.to_review) : "0"),
+        el("td", {}, p.measurements.approved),
+        el("td", {}, el("span", { class: "status" }, words(p.status))))))));
+  }
+  main.replaceChildren(...parts);
+}
+
+// ------------------------------------------------------------------ the review page
+async function renderReview(main, estimateId) {
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  if (RV.estimateId !== estimateId) { RV.view = {}; RV.selected = new Set(); RV.measurementId = null; }
+  RV.estimateId = estimateId;
+  RV.data = await api("GET", "/estimates/" + estimateId + "/takeoff");
+  const d = RV.data;
+  RV.draft = [];
+  if (!d.can_measure && !["select", "pan"].includes(RV.tool)) RV.tool = "select";    // a reviewer only looks and approves
+  if (q.get("m")) RV.measurementId = +q.get("m") || null;
+  const wanted = +(q.get("sheet") || 0);
+  const firstSheet = d.sheets.find(s => s.id === wanted) || d.sheets.find(s => s.id === RV.sheetId) ||
+    d.sheets.find(s => s.objects) || d.sheets[0];
+  const head = [el("p", {}, el("a", { href: "#/projects/" + estimateId }, "← " + d.estimate.title)),
+    el("div", { class: "page-head" }, el("h2", {}, "📏 Blueprint Review"), helpLink("takeoffs"))];
+  const msg = el("div", { id: "review-message", role: "status" });
+  if (!d.sheets.length) {
+    main.replaceChildren(...head, el("div", { class: "card empty", id: "review-no-sheets" },
+      d.plan_sets.length ? "The plans on this project haven't been read yet — open them on the Plans screen and read them."
+        : "This project has no plans yet. Upload them on the project page, read them, then come back to measure."),
+      d.plan_sets.length ? el("p", {}, el("a", { href: "#/plan-sets/" + d.plan_sets[0].id }, "Open the plans")) : null,
+      el("h3", {}, "Measurements"), measurementPanel(msg), msg);
+    return;
+  }
+  const sheetPick = el("select", { id: "review-sheet", "aria-label": "Sheet" },
+    d.sheets.map(s => el("option", { value: s.id, selected: s.id === firstSheet.id },
+      (s.sheet_no || "Page " + s.page_no) + (s.title ? " — " + s.title : "") + (s.needs_scale ? " (needs a scale)" : ""))));
+  sheetPick.addEventListener("change", () => openSheet(+sheetPick.value, msg));
+  const prev = el("button", { class: "button", type: "button", id: "review-prev", title: "Previous sheet" }, "◀");
+  const next = el("button", { class: "button", type: "button", id: "review-next", title: "Next sheet" }, "▶");
+  const step = dir => {
+    const i = d.sheets.findIndex(s => s.id === RV.sheetId) + dir;
+    if (i >= 0 && i < d.sheets.length) { sheetPick.value = d.sheets[i].id; openSheet(d.sheets[i].id, msg); }
+  };
+  prev.addEventListener("click", () => step(-1));
+  next.addEventListener("click", () => step(1));
+  const viewerBox = el("div", { class: "bp-viewer", id: "bp-viewer", tabindex: "0", "aria-label": "Blueprint" });
+  const side = el("div", { class: "bp-side" },
+    el("div", { class: "bp-tabs", role: "tablist" },
+      tabButton("list", "Measurements"), tabButton("layers", "Layers"), tabButton("detail", "Detail")),
+    el("div", { class: "bp-pane", id: "bp-pane-list" }), el("div", { class: "bp-pane", id: "bp-pane-layers", hidden: true }),
+    el("div", { class: "bp-pane", id: "bp-pane-detail", hidden: true }));
+  main.replaceChildren(...head,
+    el("div", { class: "row bp-bar" }, prev, sheetPick, next, toolPalette(msg), viewButtons()),
+    el("p", { class: "muted small", id: "bp-tool-help" }, TOOLS.find(t => t[0] === RV.tool)[3]),
+    el("div", { id: "bp-readout-slot" }), el("div", { id: "bp-notes" }),
+    msg, el("div", { class: "bp-split" }, viewerBox, side));
+  RV.viewer = new Viewer(viewerBox, msg);
+  $("bp-pane-list").replaceChildren(measurementPanel(msg));
+  await openSheet(firstSheet.id, msg);
+  if (RV.measurementId) showDetail(RV.measurementId, msg, false);
+}
+
+function tabButton(id, label) {
+  const b = el("button", { class: "bp-tab" + (id === "list" ? " active" : ""), type: "button", role: "tab", "data-tab": id, id: "bp-tab-" + id }, label);
+  b.addEventListener("click", () => showTab(id));
+  return b;
+}
+function showTab(id) {
+  for (const t of document.querySelectorAll(".bp-tab")) t.classList.toggle("active", t.dataset.tab === id);
+  for (const p of ["list", "layers", "detail"]) { const n = $("bp-pane-" + p); if (n) n.hidden = p !== id; }
+}
+
+function toolPalette(msg) {
+  const box = el("div", { class: "bp-tools", role: "toolbar", "aria-label": "Tools", id: "bp-tools" });
+  for (const [id, icon, label, help] of TOOLS) {
+    if (["length", "area", "rect", "count"].includes(id) && !RV.data.can_measure) continue;
+    if (id === "calibrate" && !RV.data.can_measure) continue;
+    const b = el("button", { class: "bp-tool" + (id === RV.tool ? " active" : ""), type: "button", "data-tool": id, title: label + " — " + help }, icon + " " + label);
+    b.addEventListener("click", () => setTool(id, msg));
+    box.append(b);
+  }
+  return box;
+}
+function setTool(id, msg) {
+  RV.tool = id;
+  RV.draft = [];
+  if (RV.viewer) RV.viewer.drawDraft();
+  for (const b of document.querySelectorAll(".bp-tool")) b.classList.toggle("active", b.dataset.tool === id);
+  const t = TOOLS.find(x => x[0] === id);
+  if ($("bp-tool-help")) $("bp-tool-help").textContent = t ? t[3] : "";
+  if (RV.viewer) RV.viewer.box.classList.toggle("drawing", !["select", "pan"].includes(id));
+  if (msg && ["length", "area", "rect", "count", "calibrate"].includes(id)) msg.replaceChildren();
+}
+function viewButtons() {
+  const mk = (id, text, title, fn) => { const b = el("button", { class: "button", type: "button", id, title }, text); b.addEventListener("click", fn); return b; };
+  return el("div", { class: "row bp-view" },
+    mk("bp-zoom-in", "＋", "Zoom in", () => RV.viewer.zoomBy(1.5)),
+    mk("bp-zoom-out", "－", "Zoom out", () => RV.viewer.zoomBy(1 / 1.5)),
+    mk("bp-fit", "Fit", "Fit the sheet", () => RV.viewer.fit()),
+    mk("bp-zoom-sel", "Zoom to selection", "Zoom to what's selected", () => RV.viewer.zoomToSelection()),
+    mk("bp-full", "⛶", "Full screen", () => { const v = $("bp-viewer"); if (document.fullscreenElement) document.exitFullscreen(); else if (v.requestFullscreen) v.requestFullscreen(); }));
+}
+
+async function openSheet(sheetId, msg) {
+  RV.sheetId = sheetId;
+  RV.selected = new Set();
+  const [s, o] = await Promise.all([api("GET", "/sheets/" + sheetId), api("GET", "/sheets/" + sheetId + "/objects")]);
+  RV.sheet = s.sheet; RV.viewports = s.viewports; RV.tiles = s.tiles;
+  RV.objects = o.objects; RV.groups = o.layers;
+  RV.byId = new Map(o.objects.map(x => [x.id, x]));
+  const sel = $("bp-selection");
+  if (sel) sel.remove();
+  const warn = [];
+  if (o.count > o.returned) warn.push("Showing the first " + o.returned + " of " + o.count + " things found on this sheet.");
+  if (s.viewports.some(v => !v.measurable && !v.is_nts)) warn.push("Part of this sheet has no scale yet — set it with 📐 Calibrate or on the Plans screen before measuring there.");
+  $("bp-notes").replaceChildren(...(warn.length ? [el("p", { class: "note warn", id: "bp-sheet-note" }, warn.join(" "))] : []));
+  RV.viewer.load();
+  drawLayersPanel();
+  refreshList(msg);
+}
+
+// ------------------------------------------------------------------ the viewer: tiles + SVG overlay
+class Viewer {
+  constructor(box, msg) {
+    this.box = box; this.msg = msg;
+    this.stage = el("div", { class: "bp-stage" });
+    this.tilesLayer = el("div", { class: "bp-tiles" });
+    this.overlay = svg("svg", { class: "bp-overlay", "aria-hidden": "true" });
+    this.stage.append(this.tilesLayer, this.overlay);
+    box.replaceChildren(this.stage);
+    this.z = 1; this.tx = 0; this.ty = 0; this.level = -1; this.tileEls = new Map(); this.pointers = new Map();
+    box.addEventListener("wheel", ev => { ev.preventDefault(); this.zoomAt(ev.deltaY < 0 ? 1.2 : 1 / 1.2, ev.clientX, ev.clientY); }, { passive: false });
+    box.addEventListener("pointerdown", ev => this.down(ev));
+    box.addEventListener("pointermove", ev => this.move(ev));
+    box.addEventListener("pointerup", ev => this.up(ev));
+    box.addEventListener("pointercancel", ev => this.pointers.delete(ev.pointerId));
+    box.addEventListener("dblclick", ev => { ev.preventDefault(); finishDraft(this.msg); });
+    box.addEventListener("keydown", ev => this.key(ev));
+  }
+  get W() { return parseFloat(RV.sheet.width) || 1; }
+  get H() { return parseFloat(RV.sheet.height) || 1; }
+
+  load() {
+    this.tileEls.forEach(t => t.remove()); this.tileEls.clear(); this.level = -1;
+    this.backdrop = null;
+    for (const n of this.box.querySelectorAll(".bp-empty")) n.remove();
+    this.overlay.setAttribute("viewBox", "0 0 " + this.W + " " + this.H);
+    drawOverlay(this.overlay);
+    const saved = RV.view[RV.sheetId];
+    if (saved) { this.z = saved.z; this.tx = saved.tx; this.ty = saved.ty; this.render(); } else this.fit();
+    if (!RV.tiles) this.box.append(el("p", { class: "bp-empty" }, "This sheet has no image yet."));
+  }
+  fit() {
+    const r = this.box.getBoundingClientRect();
+    this.z = Math.max(1e-4, Math.min((r.width - 20) / this.W, (r.height - 20) / this.H));
+    this.tx = (r.width - this.W * this.z) / 2; this.ty = (r.height - this.H * this.z) / 2;
+    this.render();
+  }
+  zoomBy(f) { const r = this.box.getBoundingClientRect(); this.zoomAt(f, r.left + r.width / 2, r.top + r.height / 2); }
+  zoomAt(f, cx, cy) {
+    const r = this.box.getBoundingClientRect();
+    const [ux, uy] = this.toSheet(cx, cy);
+    const fitZ = Math.min(r.width / this.W, r.height / this.H);
+    this.z = Math.min(Math.max(this.z * f, fitZ / 4), fitZ * 40);      // past ~40x the tiles only get bigger
+    this.tx = cx - r.left - ux * this.z; this.ty = cy - r.top - uy * this.z;
+    this.render();
+  }
+  zoomToBox(b) {
+    const r = this.box.getBoundingClientRect();
+    const w = Math.max(b[2] - b[0], this.W / 200), h = Math.max(b[3] - b[1], this.H / 200);
+    this.z = Math.min((r.width * 0.8) / w, (r.height * 0.8) / h);
+    this.tx = r.width / 2 - (b[0] + w / 2) * this.z; this.ty = r.height / 2 - (b[1] + h / 2) * this.z;
+    this.render();
+  }
+  zoomToSelection() {
+    const pts = [];
+    for (const id of RV.selected) { const o = RV.byId.get(id); if (o && o.geometry) pts.push(...o.geometry.points); }
+    const m = currentMeasurement();
+    if (m && m.geometry) pts.push(...m.geometry.points);
+    if (m) for (const id of m.source_object_ids) { const o = RV.byId.get(id); if (o && o.geometry) pts.push(...o.geometry.points); }
+    if (!pts.length) { toast("Select something first."); return; }
+    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    this.zoomToBox([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+  }
+  toSheet(cx, cy) {
+    const r = this.box.getBoundingClientRect();
+    return [(cx - r.left - this.tx) / this.z, (cy - r.top - this.ty) / this.z];
+  }
+  render() {
+    if (!RV.sheet) return;
+    RV.view[RV.sheetId] = { z: this.z, tx: this.tx, ty: this.ty };
+    const w = this.W * this.z, h = this.H * this.z;
+    this.stage.style.transform = "translate(" + this.tx + "px," + this.ty + "px)";
+    this.stage.style.width = w + "px"; this.stage.style.height = h + "px";
+    this.overlay.setAttribute("width", w); this.overlay.setAttribute("height", h);
+    // Room labels keep the same size on screen at any zoom (lines and dots use non-scaling strokes in the CSS).
+    for (const t of this.overlay.querySelectorAll("text")) t.setAttribute("font-size", 12 / this.z);
+    this.tilesFor();
+  }
+  tilesFor() {
+    const t = RV.tiles;
+    if (!t) return;
+    const long = Math.max(this.W, this.H);
+    if (!this.backdrop) {                          // level 0: the whole sheet in one tile, under everything
+      this.backdrop = this.tile(0, 0, 0, true);
+    }
+    const dpr = window.devicePixelRatio || 1;
+    const want = Math.max(0, Math.min(t.max_level, Math.ceil(Math.log2(Math.max(1, this.z * dpr * long / t.tile)))));
+    if (want !== this.level) {
+      this.tileEls.forEach((n, k) => { if (k !== "0/0/0") { n.remove(); this.tileEls.delete(k); } });
+      this.level = want;
+    }
+    // Every tile already loaded moves with the zoom, even ones now out of view, so none is left in a stale spot.
+    this.tileEls.forEach((n, k) => { const [l, x, y] = k.split("/").map(Number); this.layTile(n, l, x, y); });
+    if (want === 0) return;
+    const size = long / Math.pow(2, want);
+    const r = this.box.getBoundingClientRect();
+    const [x0, y0] = this.toSheet(r.left, r.top), [x1, y1] = this.toSheet(r.right, r.bottom);
+    const cols = Math.ceil(this.W / size - 1e-9), rows = Math.ceil(this.H / size - 1e-9);
+    const cx0 = Math.max(0, Math.floor(x0 / size)), cx1 = Math.min(cols - 1, Math.floor(x1 / size));
+    const cy0 = Math.max(0, Math.floor(y0 / size)), cy1 = Math.min(rows - 1, Math.floor(y1 / size));
+    for (let x = cx0; x <= cx1; x++) for (let y = cy0; y <= cy1; y++) {
+      const k = want + "/" + x + "/" + y;
+      const n = this.tileEls.get(k) || this.tile(want, x, y, false);
+      this.layTile(n, want, x, y);
+    }
+  }
+  tile(level, x, y, backdrop) {
+    const k = level + "/" + x + "/" + y;
+    const img = el("img", { class: "bp-tile" + (backdrop ? " backdrop" : ""), alt: "", draggable: "false", "data-tile": k });
+    this.tileEls.set(k, img);
+    this.tilesLayer.append(img);
+    tileUrl(RV.sheetId, level, x, y).then(u => { img.src = u; }).catch(() => img.classList.add("missing"));
+    return img;
+  }
+  layTile(n, level, x, y) {
+    const size = Math.max(this.W, this.H) / Math.pow(2, level);
+    const w = Math.min(size, this.W - x * size), h = Math.min(size, this.H - y * size);
+    n.style.left = x * size * this.z + "px"; n.style.top = y * size * this.z + "px";
+    n.style.width = w * this.z + "px"; n.style.height = h * this.z + "px";
+  }
+
+  down(ev) {
+    this.box.focus({ preventScroll: true });
+    this.pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    this.box.setPointerCapture(ev.pointerId);
+    this.start = { x: ev.clientX, y: ev.clientY, tx: this.tx, ty: this.ty, moved: false, target: ev.target, shift: ev.shiftKey };
+    if (this.pointers.size === 2) this.pinch = this.pinchState();
+  }
+  pinchState() {
+    const [a, b] = [...this.pointers.values()];
+    return { d: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, z: this.z };
+  }
+  move(ev) {
+    if (!this.pointers.has(ev.pointerId)) { this.hover(ev); return; }
+    this.pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (this.pointers.size === 2 && this.pinch) {
+      const p = this.pinchState();
+      this.zoomAt((this.pinch.z * p.d / this.pinch.d) / this.z, p.cx, p.cy);
+      return;
+    }
+    const s = this.start;
+    if (!s) return;
+    const dx = ev.clientX - s.x, dy = ev.clientY - s.y;
+    if (!s.moved && Math.hypot(dx, dy) < 4) return;
+    s.moved = true;
+    if (["select", "pan"].includes(RV.tool) || ev.buttons === 4) {
+      this.tx = s.tx + dx; this.ty = s.ty + dy; this.render();
+    }
+  }
+  up(ev) {
+    this.pointers.delete(ev.pointerId);
+    if (this.pointers.size < 2) this.pinch = null;
+    const s = this.start;
+    this.start = null;
+    if (!s || s.moved) return;
+    const [ux, uy] = this.toSheet(ev.clientX, ev.clientY);
+    if (RV.tool === "select") { pickAt(s.target, s.shift, this.msg); return; }
+    if (RV.tool === "pan") return;
+    addDraftPoint([round3(ux), round3(uy)], this.msg);
+  }
+  hover(ev) {
+    if (!RV.draft.length || ["select", "pan"].includes(RV.tool)) return;
+    const [ux, uy] = this.toSheet(ev.clientX, ev.clientY);
+    this.drawDraft([ux, uy]);
+  }
+  key(ev) {
+    if (ev.key === "Escape") { RV.draft = []; this.drawDraft(); }
+    else if (ev.key === "Enter") finishDraft(this.msg);
+    else if (ev.key === "+" || ev.key === "=") this.zoomBy(1.5);
+    else if (ev.key === "-") this.zoomBy(1 / 1.5);
+    else if (ev.key === "0") this.fit();
+    else return;
+    ev.preventDefault();
+  }
+  drawDraft(cursor) {
+    let g = this.overlay.querySelector("#bp-draft");
+    if (g) g.remove();
+    if (!RV.draft.length) { draftReadout(""); return; }
+    g = svg("g", { id: "bp-draft" });
+    const pts = cursor && RV.tool !== "count" ? RV.draft.concat([cursor]) : RV.draft.slice();
+    const shape = draftShape(pts);
+    if (shape.type === "point") {
+      for (const p of shape.points) g.append(svg("polyline", { points: p + " " + p, class: "bp-dot draft" }));
+    } else {
+      g.append(svg(shape.type === "polygon" ? "polygon" : "polyline", { points: shape.points.map(p => p.join(",")).join(" "), class: "bp-draft-shape" }));
+      for (const p of RV.draft) g.append(svg("polyline", { points: p + " " + p, class: "bp-dot draft" }));
+    }
+    this.overlay.append(g);
+    draftReadout(previewText(shape));
+  }
+}
+
+function round3(v) { return Math.round(v * 1000) / 1000; }
+
+// The tile comes through the API with the same sign-in (cookie, or the Jobs app's token - then fetched as a blob).
+async function tileUrl(sheetId, level, x, y) {
+  const path = API + "/sheets/" + sheetId + "/tiles/" + level + "/" + x + "/" + y + ".png";
+  if (!APP_TOKEN) return path;
+  const r = await fetch(path, { credentials: "same-origin", headers: { Authorization: "Bearer " + APP_TOKEN } });
+  if (!r.ok) throw new Error("tile " + r.status);
+  return URL.createObjectURL(await r.blob());
+}
+
+// ------------------------------------------------------------------ overlays
+function groupInfo(id) { return RV.groups.find(g => g.id === id) || { id, label: words(id), color: "#868e96" }; }
+
+function drawOverlay(root) {
+  root.replaceChildren();
+  const prefs = layerPrefs();
+  const byGroup = new Map();
+  for (const g of RV.groups) {
+    const node = svg("g", { "data-group": g.id, class: "bp-group" });
+    node.style.setProperty("--c", g.color);
+    node.classList.toggle("hidden", prefs.hidden.includes(g.id));
+    node.classList.toggle("locked", prefs.locked.includes(g.id));
+    byGroup.set(g.id, node);
+  }
+  const order = ["floor_plan", "rooms", "walls", "doors_windows", "furniture", "plumbing", "electrical", "mechanical",
+                 "symbols", "dimensions", "text"];
+  for (const o of RV.objects) {
+    const g = byGroup.get(o.group);
+    if (!g || !o.geometry) continue;
+    const n = objectShape(o);
+    if (n) g.append(n);
+  }
+  for (const id of order) if (byGroup.has(id)) root.append(byGroup.get(id));
+  const meas = byGroup.get("measurements") || svg("g", { "data-group": "measurements", class: "bp-group" });
+  meas.id = "bp-measurements";
+  root.append(meas);
+  drawMeasurements();
+}
+
+function objectShape(o) {
+  const g = o.geometry, pts = g.points.map(p => p.join(",")).join(" ");
+  let n;
+  if (g.type === "point" || o.kind === "symbol" && g.points.length === 1) {
+    n = svg("polyline", { points: g.points[0] + " " + g.points[0], class: "bp-dot" });
+  } else if (g.type === "polygon") {
+    n = svg("polygon", { points: pts, class: "bp-shape " + (o.kind === "room" ? "room" : "") });
+  } else {
+    n = svg("polyline", { points: pts, class: "bp-shape line " + (o.kind === "wall" ? "wall" : "") });
+  }
+  n.setAttribute("data-oid", o.id);
+  const t = svg("title", {});
+  t.textContent = objectLabel(o);
+  n.append(t);
+  if (o.kind === "room" && g.type === "polygon") {
+    const wrap = svg("g", { "data-room": o.id });
+    const [cx, cy] = centroid(g.points);
+    const lbl = svg("text", { x: cx, y: cy, class: "bp-room-label", "text-anchor": "middle" });
+    lbl.textContent = (o.label || "Room") + (o.real_units && o.real_units.area_sqft ? " · " + num(o.real_units.area_sqft, 0) + " sq ft" : "");
+    wrap.append(n, lbl);
+    return wrap;
+  }
+  return n;
+}
+
+function objectLabel(o) {
+  const real = o.real_units || {};
+  const size = real.area_sqft ? num(real.area_sqft) + " sq ft" : real.length_ft ? num(real.length_ft) + " ft" : o.not_measured ? "not measured: " + o.not_measured : "";
+  return [words(o.kind), o.label, o.tag, o.block_name, size, o.layer ? "layer " + o.layer : ""].filter(Boolean).join(" · ");
+}
+
+function centroid(pts) {
+  let a = 0, cx = 0, cy = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x0, y0] = pts[i], [x1, y1] = pts[(i + 1) % pts.length];
+    const f = x0 * y1 - x1 * y0;
+    a += f; cx += (x0 + x1) * f; cy += (y0 + y1) * f;
+  }
+  if (Math.abs(a) < 1e-9) return [pts[0][0], pts[0][1]];
+  return [cx / (3 * a), cy / (3 * a)];
+}
+
+function sheetMeasurements() {
+  return RV.data.takeoff.measurements.filter(m => m.sheet_id === RV.sheetId && m.status !== "rejected");
+}
+
+function drawMeasurements() {
+  const g = $("bp-measurements");
+  if (!g) return;
+  g.replaceChildren();
+  for (const o of g.ownerSVGElement.querySelectorAll("[data-oid].in-m, [data-oid].sel")) o.classList.remove("in-m", "sel");
+  const cur = currentMeasurement();
+  for (const m of sheetMeasurements()) {
+    const cls = "bp-m " + m.status + (cur && cur.id === m.id ? " sel" : "");
+    if (m.geometry) {
+      const gm = m.geometry, pts = gm.points.map(p => p.join(",")).join(" ");
+      let n;
+      if (gm.type === "point") {
+        n = svg("g", { class: cls, "data-mid": m.id });
+        for (const p of gm.points) n.append(svg("polyline", { points: p + " " + p, class: "bp-dot" }));
+      } else {
+        n = svg(gm.type === "polygon" ? "polygon" : "polyline", { points: pts, class: cls, "data-mid": m.id });
+      }
+      const t = svg("title", {}); t.textContent = measurementName(m) + " · " + num(m.qty) + " " + m.unit + " · " + words(m.status);
+      n.append(t);
+      g.append(n);
+    }
+    for (const id of m.source_object_ids) {
+      const n = g.ownerSVGElement.querySelector('[data-oid="' + id + '"]');
+      if (n) { n.classList.add("in-m"); if (cur && cur.id === m.id) n.classList.add("sel"); }
+    }
+  }
+  for (const id of RV.selected) {
+    const n = g.ownerSVGElement.querySelector('[data-oid="' + id + '"]');
+    if (n) n.classList.add("sel");
+  }
+}
+
+// ------------------------------------------------------------------ selecting on the plan
+function pickAt(target, shift, msg) {
+  const mNode = target.closest ? target.closest("[data-mid]") : null;
+  if (mNode) { showDetail(+mNode.getAttribute("data-mid"), msg, false); return; }
+  const node = target.closest ? target.closest("[data-oid]") : null;
+  if (!node) { if (!shift) { RV.selected.clear(); drawMeasurements(); selectionBox(msg); } return; }
+  const id = +node.getAttribute("data-oid");
+  if (!shift) {
+    // Clicking something a measurement already uses opens that measurement.
+    const m = sheetMeasurements().find(x => x.source_object_ids.includes(id));
+    if (m && !RV.selected.size) { showDetail(m.id, msg, false); return; }
+    RV.selected.clear();
+  }
+  if (RV.selected.has(id)) RV.selected.delete(id); else RV.selected.add(id);
+  drawMeasurements();
+  selectionBox(msg);
+}
+
+function selectionBox(msg) {
+  const box = $("bp-selection");
+  if (box) box.remove();
+  if (!RV.selected.size) return;
+  const objs = [...RV.selected].map(id => RV.byId.get(id)).filter(Boolean);
+  const area = objs.reduce((a, o) => a + parseFloat((o.real_units || {}).area_sqft || 0), 0);
+  const len = objs.reduce((a, o) => a + parseFloat((o.real_units || {}).length_ft || 0), 0);
+  const unmeasured = objs.filter(o => !o.real_units).length;
+  const lines = [objs.length + " selected: " + objs.slice(0, 4).map(objectLabel).join("; ") + (objs.length > 4 ? "; …" : "")];
+  if (area) lines.push("Area " + num(area) + " sq ft");
+  if (len) lines.push("Length " + num(len) + " ft");
+  if (unmeasured) lines.push(unmeasured + " not measured (no scale)");
+  const card = el("div", { class: "card section", id: "bp-selection" }, el("p", {}, lines.join(" · ")));
+  if (RV.data.can_measure && !unmeasured) {
+    const b = el("button", { class: "primary", type: "button", id: "bp-measure-selected" }, "Make a measurement from these…");
+    b.addEventListener("click", () => saveForm(msg, { objectIds: objs.map(o => o.id), kind: area ? "area" : len ? "length" : "count",
+      label: objs.length === 1 ? objs[0].label : "", room: roomFor(objs[0]) }));
+    card.append(el("div", { class: "row" }, b));
+  }
+  $("bp-pane-list").prepend(card);
+  showTab("list");
+}
+
+function roomFor(o) {
+  if (!o || !o.geometry) return "";
+  if (o.kind === "room") return o.label || "";
+  const p = o.geometry.points[0];
+  const room = RV.objects.find(r => r.kind === "room" && r.geometry && r.geometry.type === "polygon" && inside(p, r.geometry.points));
+  return room ? room.label || "" : "";
+}
+function inside(p, poly) {
+  let ins = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) ins = !ins;
+  }
+  return ins;
+}
+
+// ------------------------------------------------------------------ drawing a measurement or calibrating
+function addDraftPoint(p, msg) {
+  const tool = RV.tool;
+  const last = RV.draft[RV.draft.length - 1];
+  if (last && tool !== "count" && Math.hypot(p[0] - last[0], p[1] - last[1]) < 3 / RV.viewer.z) return;   // a double-click's 2nd click
+  if (tool === "area" && RV.draft.length >= 3) {
+    const f = RV.draft[0], tol = 8 / RV.viewer.z;
+    if (Math.hypot(p[0] - f[0], p[1] - f[1]) < tol) { finishDraft(msg); return; }
+  }
+  RV.draft.push(p);
+  RV.viewer.drawDraft();
+  if ((tool === "rect" || tool === "calibrate") && RV.draft.length === 2) finishDraft(msg);
+}
+
+function draftShape(pts) {
+  if (RV.tool === "rect" && pts.length >= 2) {
+    const [a, b] = pts;
+    return { type: "polygon", points: [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]] };
+  }
+  if (RV.tool === "area" && pts.length >= 3) return { type: "polygon", points: pts };
+  if (RV.tool === "count") return { type: "point", points: pts };
+  return { type: pts.length === 2 ? "line" : "polyline", points: pts };
+}
+
+function viewportAt(p) {
+  const vps = RV.viewports;
+  const hit = vps.filter(v => v.bbox && p[0] >= v.bbox[0] && p[0] <= v.bbox[2] && p[1] >= v.bbox[1] && p[1] <= v.bbox[3]);
+  hit.sort((a, b) => (a.bbox[2] - a.bbox[0]) * (a.bbox[3] - a.bbox[1]) - (b.bbox[2] - b.bbox[0]) * (b.bbox[3] - b.bbox[1]));
+  return hit[0] || vps.find(v => !v.bbox) || (vps.length === 1 ? vps[0] : null);
+}
+
+function feetPerUnit(v) {
+  if (!v) return null;
+  if (REAL_FT[RV.sheet.units]) return REAL_FT[RV.sheet.units];
+  if (v.is_nts || !v.measurable || !parseFloat(v.scale_ratio)) return null;
+  return parseFloat(v.scale_ratio) / 12;
+}
+
+function previewText(shape) {
+  if (RV.tool === "calibrate") {
+    if (shape.points.length < 2) return "";
+    const [a, b] = shape.points;
+    return num(Math.hypot(b[0] - a[0], b[1] - a[1]), 3) + (RV.sheet.units === "paper_in" ? "″ on the paper" : " " + RV.sheet.units);
+  }
+  if (shape.type === "point") return shape.points.length + " counted";
+  const f = feetPerUnit(viewportAt(shape.points[0]));
+  if (!f) return "this part of the sheet has no scale yet";
+  if (shape.type === "polygon") {
+    let a2 = 0;
+    const p = shape.points;
+    for (let i = 0; i < p.length; i++) { const [x0, y0] = p[i], [x1, y1] = p[(i + 1) % p.length]; a2 += x0 * y1 - x1 * y0; }
+    return "≈ " + num(Math.abs(a2) / 2 * f * f) + " sq ft";
+  }
+  let len = 0;
+  for (let i = 1; i < shape.points.length; i++) len += Math.hypot(shape.points[i][0] - shape.points[i - 1][0], shape.points[i][1] - shape.points[i - 1][1]);
+  return "≈ " + num(len * f) + " ft";
+}
+
+function draftReadout(text) {
+  let r = $("bp-readout");
+  if (!text) { if (r) r.remove(); return; }
+  if (!r) {
+    r = el("div", { class: "bp-readout", id: "bp-readout" });
+    const fin = el("button", { class: "button", type: "button", id: "bp-finish" }, "Finish");
+    fin.addEventListener("click", () => finishDraft($("review-message")));
+    const undo = el("button", { class: "button", type: "button", id: "bp-undo" }, "Undo point");
+    undo.addEventListener("click", () => { RV.draft.pop(); RV.viewer.drawDraft(); });
+    r.append(el("span", { id: "bp-readout-text" }), fin, undo);
+    $("bp-readout-slot").replaceChildren(r);
+  }
+  $("bp-readout-text").textContent = text;
+}
+
+function finishDraft(msg) {
+  const tool = RV.tool;
+  const need = { length: 2, area: 3, rect: 2, count: 1, calibrate: 2 }[tool];
+  if (!need || RV.draft.length < need) return;
+  const shape = draftShape(RV.draft);
+  RV.draft = [];
+  RV.viewer.drawDraft();
+  if (tool === "calibrate") { calibrateForm(msg, shape.points); return; }
+  const vp = viewportAt(shape.points[0]);
+  if (!vp) { msg.replaceChildren(el("p", { class: "error" }, "That isn't inside a view on this sheet.")); return; }
+  if (!feetPerUnit(vp)) {
+    msg.replaceChildren(el("p", { class: "error", id: "bp-no-scale" }, (vp.is_nts ? "That view is marked not to scale (NTS)" : "That view has no scale yet") +
+      " — set it with 📐 Calibrate (or on the Plans screen) first, then measure again."));
+    return;
+  }
+  saveForm(msg, { geometry: shape, viewportId: vp.id, kind: { length: "length", area: "area", rect: "area", count: "count" }[tool],
+    room: roomFor({ kind: "point", geometry: { points: [shape.points[0]] } }) });
+}
+
+function calibrateForm(msg, points) {
+  const vp = viewportAt(points[0]);
+  if (RV.sheet.units !== "paper_in") { msg.replaceChildren(el("p", { class: "error" }, "This drawing is a CAD file at real size; it doesn't need a scale.")); return; }
+  if (!vp) { msg.replaceChildren(el("p", { class: "error" }, "Calibrate inside a view on the sheet.")); return; }
+  const dist = el("input", { id: "bp-cal-distance", maxlength: 30, placeholder: "12'-6\"", "aria-label": "Real distance" });
+  const ok = el("button", { class: "primary", type: "button", id: "bp-cal-set" }, "Set the scale…");
+  const paperIn = Math.hypot(points[1][0] - points[0][0], points[1][1] - points[0][1]);
+  const out = el("div", { id: "bp-cal-confirm" });
+  msg.replaceChildren(el("div", { class: "card section", id: "bp-cal-box" },
+    el("p", {}, "The two points are " + paperIn.toFixed(2) + "″ apart on the paper, in " + (vp.label || "the view") + ". How long is that in real life?"),
+    el("div", { class: "row" }, el("label", {}, "Real distance", dist), ok), out));
+  dist.focus();
+  ok.addEventListener("click", () => {
+    if (!dist.value.trim()) { dist.focus(); return; }
+    reviewAsk(out, ok, "/viewports/" + vp.id + "/scale", { calibration: { p1: points[0], p2: points[1], distance: dist.value.trim() } },
+      x => "Calibrated: 1″ = " + x.viewport.scale_ratio + "″; " + x.measured + " object(s) re-measured.", "bp-cal", true);
+  });
+}
+
+// The form for a new measurement: which trade and question it feeds, label, room, and approve now.
+function saveForm(msg, what) {
+  const d = RV.data;
+  const trades = d.trades.concat(d.other_trades);
+  if (!trades.length) { msg.replaceChildren(el("p", { class: "error" }, "No trade can take a measurement yet.")); return; }
+  const trade = el("select", { id: "bp-trade", "aria-label": "Trade" },
+    d.trades.length ? el("optgroup", { label: "On this project" }, d.trades.map(t => el("option", { value: t.module_id }, t.name))) : null,
+    d.other_trades.length ? el("optgroup", { label: "Other trades" }, d.other_trades.map(t => el("option", { value: t.module_id }, t.name))) : null);
+  const feeds = el("select", { id: "bp-feeds", "aria-label": "Question it answers" });
+  const fillFeeds = () => {
+    const t = trades.find(x => x.module_id === trade.value);
+    feeds.replaceChildren(el("option", { value: "" }, "— not linked to a question —"),
+      ...(t ? t.questions : []).map(q => el("option", { value: q.id }, q.label + (q.unit ? " (" + q.unit + ")" : ""))));
+    const guess = (t ? t.questions : []).find(q => (what.kind === "area" && /sq|sf/.test(q.unit || "")) ||
+      (what.kind === "length" && /lf|ft|feet/.test(q.unit || "")) || (what.kind === "count" && /ea|count/.test(q.unit || "") ));
+    if (guess) feeds.value = guess.id;
+  };
+  trade.addEventListener("change", fillFeeds);
+  fillFeeds();
+  const label = el("input", { id: "bp-label", maxlength: 200, value: what.label || "", placeholder: "e.g. Kitchen floor" });
+  const room = el("input", { id: "bp-room", maxlength: 200, value: what.room || "", placeholder: "Room" });
+  const kinds = what.objectIds ? ["area", "perimeter", "length", "count"] : null;
+  const kind = kinds ? el("select", { id: "bp-kind", "aria-label": "Measure" }, kinds.map(k => el("option", { value: k, selected: k === what.kind }, words(k)))) : null;
+  const each = what.objectIds && what.objectIds.length > 1 ? el("input", { type: "checkbox", id: "bp-each" }) : null;
+  const approve = d.can_approve ? el("input", { type: "checkbox", id: "bp-approve" }) : null;
+  const save = el("button", { class: "primary", type: "button", id: "bp-save" }, "Save…");
+  const cancel = el("button", { class: "button", type: "button", id: "bp-save-cancel" }, "Cancel");
+  const out = el("div", { id: "bp-save-confirm" });
+  const card = el("div", { class: "card section", id: "bp-save-box" },
+    el("p", {}, el("strong", {}, what.objectIds ? "Measure " + what.objectIds.length + " selected item(s)" : "New " + words(what.kind) + " measurement"),
+      " — " + (what.geometry ? previewText(what.geometry) : "the size comes from the drawing")),
+    el("div", { class: "form-grid" }, el("label", {}, "Trade", trade), el("label", {}, "Answers", feeds),
+      kind ? el("label", {}, "Measure", kind) : null, el("label", {}, "Label", label), el("label", {}, "Room", room),
+      each ? el("label", { class: "check" }, each, " One measurement per item") : null,
+      approve ? el("label", { class: "check" }, approve, " Approve it now (locks it)") : null),
+    el("div", { class: "row" }, save, cancel), out);
+  msg.replaceChildren(card);
+  cancel.addEventListener("click", () => msg.replaceChildren(el("p", { class: "muted" }, "Cancelled — nothing saved.")));
+  save.addEventListener("click", () => {
+    const body = { module_id: trade.value, feeds: feeds.value || null, label: label.value.trim() || null, room: room.value.trim() || null,
+                   approve: !!(approve && approve.checked) };
+    if (what.objectIds) {
+      Object.assign(body, { object_ids: what.objectIds, kind: kind.value, one_per_object: !!(each && each.checked) });
+      reviewAsk(out, save, "/estimates/" + RV.estimateId + "/measurements/propose", body,
+        x => x.count + " measurement(s) saved" + (x.approved ? " and approved" : " — waiting for approval"), "bp-save");
+    } else {
+      Object.assign(body, { geometry: what.geometry, viewport_id: what.viewportId, kind: what.kind });
+      reviewAsk(out, save, "/estimates/" + RV.estimateId + "/measurements", body,
+        x => "Saved " + num(x.measurement.qty) + " " + x.measurement.unit + (x.measurement.status === "approved" ? " (approved)" : " — waiting for approval"), "bp-save");
+    }
+  });
+  label.focus();
+}
+
+// Ask the server's question, then repeat with confirm=true. Unlike askThen, it keeps the viewer where it is and
+// only reloads the measurements (or the sheet, after a new scale).
+async function reviewAsk(msg, btn, path, body, doneText, prefix, reloadSheet) {
+  btn.disabled = true;
+  msg.replaceChildren();
+  const done = async r => {
+    toast(doneText(r));
+    $("review-message").replaceChildren();
+    RV.selected.clear();
+    await refreshData();
+    if (reloadSheet) await openSheet(RV.sheetId, $("review-message"));
+    // A new or changed measurement opens in the detail panel; after an approve (which returns only ids) the one
+    // being looked at is shown again with its new state.
+    const mid = r.measurement ? r.measurement.id : RV.measurementId;
+    if (mid && RV.data.takeoff.measurements.some(m => m.id === mid)) showDetail(mid, $("review-message"), false);
+  };
+  try {
+    const r = await api("POST", path, body);
+    if (!r.needs_confirmation) { await done(r); return; }
+    const yes = el("button", { class: "primary", type: "button", id: prefix + "-yes" }, "Yes");
+    const no = el("button", { class: "button", type: "button", id: prefix + "-no" }, "Cancel");
+    msg.replaceChildren(el("div", { class: "confirm", id: prefix + "-question" }, el("p", {}, el("strong", {}, r.question)), el("div", { class: "row" }, yes, no)));
+    yes.focus();
+    no.addEventListener("click", () => msg.replaceChildren(el("p", { class: "muted" }, "Cancelled — nothing changed.")));
+    yes.addEventListener("click", async () => {
+      yes.disabled = no.disabled = true;
+      try { await done(await api("POST", path, { ...body, confirm: true })); }
+      catch (e) { if (e.status !== 401) msg.replaceChildren(errorBox(e)); }
+    });
+  } catch (e) {
+    if (e.status !== 401) msg.replaceChildren(errorBox(e));
+  } finally { btn.disabled = false; }
+}
+
+async function refreshData() {
+  RV.data = await api("GET", "/estimates/" + RV.estimateId + "/takeoff");
+  drawMeasurements();
+  refreshList($("review-message"));
+}
+
+// ------------------------------------------------------------------ the measurement list (by trade and room)
+const LIST_FILTER = { status: "open", sheetOnly: false, queue: false };
+
+function measurementPanel(msg) {
+  const wrap = el("div", { id: "bp-list" });
+  RV.listBox = wrap;
+  refreshList(msg);
+  return wrap;
+}
+
+function measurementName(m) { return m.label || words(m.feeds) || words(m.kind); }
+function currentMeasurement() { return RV.data && RV.measurementId ? RV.data.takeoff.measurements.find(m => m.id === RV.measurementId) : null; }
+function tradeName(id) { const t = RV.data.trades.concat(RV.data.other_trades).find(x => x.module_id === id); return t ? t.name : words(id); }
+
+function refreshList(msg) {
+  const box = RV.listBox;
+  if (!box || !RV.data) return;
+  const t = RV.data.takeoff;
+  const status = el("select", { id: "bp-filter", "aria-label": "Show" },
+    [["open", "To review and approved"], ["proposed", "To review"], ["approved", "Approved"], ["rejected", "Rejected"], ["all", "All"]]
+      .map(([v, l]) => el("option", { value: v, selected: v === LIST_FILTER.status }, l)));
+  status.addEventListener("change", () => { LIST_FILTER.status = status.value; refreshList(msg); });
+  const only = el("input", { type: "checkbox", id: "bp-sheet-only", checked: LIST_FILTER.sheetOnly });
+  only.addEventListener("change", () => { LIST_FILTER.sheetOnly = only.checked; refreshList(msg); });
+  const queue = el("input", { type: "checkbox", id: "bp-queue", checked: LIST_FILTER.queue });
+  queue.addEventListener("change", () => { LIST_FILTER.queue = queue.checked; refreshList(msg); });
+  let rows = t.measurements.filter(m => LIST_FILTER.status === "all" || (LIST_FILTER.status === "open" ? m.status !== "rejected" : m.status === LIST_FILTER.status));
+  if (LIST_FILTER.sheetOnly) rows = rows.filter(m => m.sheet_id === RV.sheetId);
+  if (LIST_FILTER.queue) {
+    const order = new Map(t.review_queue.map((id, i) => [id, i]));
+    rows = rows.filter(m => order.has(m.id)).sort((a, b) => order.get(a.id) - order.get(b.id));
+  }
+  const parts = [el("p", { class: "muted small", id: "bp-counts" }, t.counts.proposed + " to review · " + t.counts.approved + " approved · " + t.counts.rejected + " rejected"),
+    el("div", { class: "row filters" }, el("label", {}, "Show", status), el("label", { class: "check" }, only, " This sheet only"),
+      el("label", { class: "check" }, queue, " Review queue (lowest confidence first)"))];
+  if (t.suggestions_waiting.length) parts.push(el("p", { class: "note warn", id: "bp-suggestions" }, t.suggestions_waiting.length + " approved measurement(s) have a suggested change waiting for a person."));
+  if (t.needs_remeasure.length) parts.push(el("p", { class: "note warn", id: "bp-remeasure" }, t.needs_remeasure.length + " measurement(s) need measuring again (the plans or a scale changed)."));
+  if (RV.data.can_approve && t.counts.proposed) parts.push(bulkApprove(msg));
+  if (!rows.length) {
+    parts.push(el("div", { class: "card empty", id: "bp-list-empty" }, t.measurements.length ? "Nothing matches." :
+      RV.data.can_measure ? "No measurements yet. Pick a tool (📏 Length, ⬠ Area…) and draw on the plan, or click rooms and walls and make a measurement from them." :
+        "No measurements yet."));
+  } else if (LIST_FILTER.queue) {
+    parts.push(el("ul", { class: "bp-rows", id: "bp-rows" }, rows.map(m => measurementRow(m, msg))));
+  } else {
+    const byTrade = new Map();
+    for (const m of rows) {
+      if (!byTrade.has(m.module_id)) byTrade.set(m.module_id, new Map());
+      const rooms = byTrade.get(m.module_id), r = m.room || "";
+      if (!rooms.has(r)) rooms.set(r, []);
+      rooms.get(r).push(m);
+    }
+    const list = el("div", { id: "bp-rows" });
+    for (const [mod, rooms] of byTrade) {
+      const all = [...rooms.values()].flat();
+      const approved = (t.approved_answers || {})[mod] || {};
+      const sec = el("details", { open: true, class: "bp-trade", "data-module": mod },
+        el("summary", {}, tradeName(mod) + " — " + totalsText(all)));
+      const priced = Object.entries(approved);
+      if (priced.length) sec.append(el("p", { class: "muted small" }, "Priced from approved: " + priced.map(([q, v]) => words(q) + " " + num(v)).join(" · ")));
+      for (const [room, ms] of rooms) {
+        sec.append(el("h4", {}, (room || "No room") + " · " + totalsText(ms)), el("ul", { class: "bp-rows" }, ms.map(m => measurementRow(m, msg))));
+      }
+      list.append(sec);
+    }
+    parts.push(list);
+  }
+  box.replaceChildren(...parts);
+}
+
+function totalsText(ms) {
+  const by = {};
+  for (const m of ms) if (m.status !== "rejected") by[m.unit] = (by[m.unit] || 0) + parseFloat(m.qty || 0);
+  const s = Object.entries(by).map(([u, v]) => num(v) + " " + u).join(" + ");
+  return s || "nothing yet";
+}
+
+function measurementRow(m, msg) {
+  const flags = [m.locked ? "🔒" : "", m.suggested_qty !== null && m.suggested_qty !== undefined ? "✎ suggestion" : "", m.needs_remeasure ? "⚠ re-measure" : ""].filter(Boolean).join(" ");
+  const li = el("li", { class: "bp-row " + m.status + (RV.measurementId === m.id ? " active" : ""), "data-mid": m.id, tabindex: "0" },
+    el("span", { class: "bp-row-name" }, measurementName(m)),
+    el("span", { class: "bp-row-qty" }, num(m.qty) + " " + m.unit),
+    el("span", { class: "status " + (m.status === "approved" ? "" : "sample") }, m.status === "proposed" ? "to review" : words(m.status)),
+    el("span", { class: "muted small" }, pct(m.confidence) + " · " + words(m.method) + (flags ? " · " + flags : "")));
+  const open = () => showDetail(m.id, msg, true);
+  li.addEventListener("click", open);
+  li.addEventListener("keydown", ev => { if (ev.key === "Enter") open(); });
+  return li;
+}
+
+function bulkApprove(msg) {
+  const level = el("select", { id: "bp-bulk-level", "aria-label": "Confidence" },
+    ["0.95", "0.9", "0.8", "0.7"].map(v => el("option", { value: v, selected: v === "0.9" }, Math.round(v * 100) + "% or higher")));
+  const b = el("button", { class: "button", type: "button", id: "bp-bulk" }, "Approve all…");
+  const out = el("div", { id: "bp-bulk-confirm" });
+  b.addEventListener("click", () => reviewAsk(out, b, "/measurements/approve", { estimate_id: RV.estimateId, above_confidence: level.value },
+    x => x.done.length + " measurement(s) approved and locked", "bp-bulk"));
+  return el("div", { class: "card section" }, el("div", { class: "row" }, el("span", {}, "Bulk approve proposals at"), level, b), out);
+}
+
+// ------------------------------------------------------------------ the detail panel
+async function showDetail(id, msg, zoom) {
+  RV.measurementId = id;
+  const m = RV.data.takeoff.measurements.find(x => x.id === id);
+  if (m && m.sheet_id && m.sheet_id !== RV.sheetId && $("review-sheet") && RV.data.sheets.some(s => s.id === m.sheet_id)) {
+    $("review-sheet").value = m.sheet_id;
+    await openSheet(m.sheet_id, msg);
+  }
+  drawMeasurements();
+  refreshList(msg);
+  if (zoom && m && m.sheet_id === RV.sheetId) RV.viewer.zoomToSelection();
+  const pane = $("bp-pane-detail");
+  if (!pane) return;
+  pane.replaceChildren(el("p", { class: "muted" }, "Loading…"));
+  showTab("detail");
+  let d;
+  try { d = await api("GET", "/measurements/" + id); } catch (e) { pane.replaceChildren(errorBox(e)); return; }
+  const x = d.measurement, c = d.calc || {};
+  const rows = [
+    ["Quantity", num(x.qty) + " " + x.unit + (x.suggested_qty !== null && x.suggested_qty !== undefined ? " (suggested: " + num(x.suggested_qty) + " " + x.unit + " — " + (x.suggested_reason || "") + ")" : "")],
+    ["Trade", tradeName(x.module_id) + (x.feeds ? " → " + words(x.feeds) : " (not linked to a question)")],
+    ["Status", words(x.status) + (x.locked ? " 🔒 locked" : "") + (x.reject_reason ? " — " + x.reject_reason : "")],
+    ["How", (c.how || "") + (c.edited ? " · changed by " + c.edited.by + " from " + c.edited.from + " to " + c.edited.to : "")],
+    ["Sheet", d.sheet ? (d.sheet.sheet_no || "page " + d.sheet.page_no) + (d.sheet.title ? " — " + d.sheet.title : "") : "—"],
+    ["View and scale", d.viewport ? (d.viewport.label || "view") + " · " + (d.viewport.is_nts ? "NTS" : d.viewport.scale_note || (d.viewport.scale_ratio ? "1:" + d.viewport.scale_ratio : "no scale")) + (d.viewport.scale_method ? " (" + words(d.viewport.scale_method) + ")" : "") : c.scale_ratio ? "1:" + c.scale_ratio : "—"],
+    ["Method", words(x.method)], ["Confidence", pct(x.confidence)],
+    ["Proposed by", x.proposed_by || "—"], ["Approved", x.approved_by ? x.approved_by + " · " + when(x.approved_at) : "not yet"],
+  ];
+  const parts = [el("h3", {}, measurementName(x)), el("table", { class: "kv", id: "bp-detail" }, rows.map(([k, v]) => el("tr", {}, el("th", {}, k), el("td", {}, v))))];
+  if (d.source_objects.length) {
+    parts.push(el("h4", {}, "From the drawing (" + d.source_objects.length + ")"),
+      el("ul", { class: "small", id: "bp-sources" }, d.source_objects.slice(0, 50).map(o => el("li", {}, objectLabel({ ...o, layer: null }) + " · " + words(o.source) + " " + pct(o.confidence)))));
+  }
+  if (d.missing_objects.length) parts.push(el("p", { class: "note warn" }, d.missing_objects.length + " drawing object(s) it came from are gone (the plans were read again)."));
+  parts.push(detailActions(x, msg));
+  if (d.history.length) {
+    parts.push(el("details", { id: "bp-history" }, el("summary", {}, "History (" + d.history.length + ")"),
+      el("ul", { class: "small" }, d.history.map(h => el("li", {}, when(h.at) + " · " + h.by + " · " + words(h.action.replace(/^measurement_/, "")))))));
+  }
+  pane.replaceChildren(...parts);
+}
+
+function detailActions(x, msg) {
+  const d = RV.data, out = el("div", { id: "bp-act-confirm" }), row = el("div", { class: "row", id: "bp-actions" });
+  const btn = (id, text, fn) => { const b = el("button", { class: id === "bp-approve-one" ? "primary" : "button", type: "button", id }, text); b.addEventListener("click", () => fn(b)); row.append(b); };
+  if (x.status === "proposed" && d.can_approve) {
+    btn("bp-approve-one", "✓ Approve…", b => reviewAsk(out, b, "/measurements/approve", { measurement_ids: [x.id] }, () => "Approved and locked", "bp-approve"));
+  }
+  if (x.status === "approved" && x.suggested_qty !== null && x.suggested_qty !== undefined && d.can_approve) {
+    btn("bp-accept", "Accept the suggestion…", b => reviewAsk(out, b, "/measurements/approve", { measurement_ids: [x.id], accept_suggestion: true }, () => "Suggestion accepted", "bp-accept"));
+  }
+  if (x.status !== "rejected" && d.can_correct) {
+    btn("bp-edit", "Correct…", () => correctForm(x, out));
+    btn("bp-reject", "Reject…", () => rejectForm(x, out));
+    if (x.status === "approved") btn("bp-suggest", "Suggest a change…", () => suggestForm(x, out));
+  }
+  return el("div", {}, row, out);
+}
+
+function correctForm(x, out) {
+  const qty = el("input", { id: "bp-edit-qty", value: x.qty, inputmode: "decimal", maxlength: 20, "aria-label": "Quantity" });
+  const label = el("input", { id: "bp-edit-label", value: x.label || "", maxlength: 200, "aria-label": "Label" });
+  const room = el("input", { id: "bp-edit-room", value: x.room || "", maxlength: 200, "aria-label": "Room" });
+  const save = el("button", { class: "primary", type: "button", id: "bp-edit-save" }, "Save…");
+  const ask = el("div", {});
+  out.replaceChildren(el("div", { class: "card section" }, x.locked ? el("p", { class: "muted small" }, "It's approved: your correction is a person's change and is logged.") : null,
+    el("div", { class: "form-grid" }, el("label", {}, "Quantity (" + x.unit + ")", qty), el("label", {}, "Label", label), el("label", {}, "Room", room)),
+    el("div", { class: "row" }, save), ask));
+  save.addEventListener("click", () => {
+    const body = {};
+    if (qty.value.trim() !== String(x.qty)) body.qty = qty.value.trim();
+    if (label.value.trim() !== (x.label || "")) body.label = label.value.trim();
+    if (room.value.trim() !== (x.room || "")) body.room = room.value.trim();
+    if (!Object.keys(body).length) { ask.replaceChildren(el("p", { class: "muted" }, "Nothing changed.")); return; }
+    reviewAsk(ask, save, "/measurements/" + x.id + "/edit", body, () => "Measurement corrected", "bp-edit");
+  });
+  qty.focus();
+}
+
+function rejectForm(x, out) {
+  const reason = el("input", { id: "bp-reject-reason", maxlength: 200, placeholder: "Why? e.g. counted twice", "aria-label": "Reason" });
+  const go2 = el("button", { class: "button danger", type: "button", id: "bp-reject-go" }, "Reject…");
+  const ask = el("div", {});
+  out.replaceChildren(el("div", { class: "card section" }, el("div", { class: "row" }, el("label", {}, "Reason", reason), go2), ask));
+  go2.addEventListener("click", () => reviewAsk(ask, go2, "/measurements/" + x.id + "/reject", { reason: reason.value.trim() }, () => "Rejected — kept in the history, never priced", "bp-reject"));
+  reason.focus();
+}
+
+function suggestForm(x, out) {
+  const qty = el("input", { id: "bp-suggest-qty", inputmode: "decimal", maxlength: 20, "aria-label": "Suggested quantity" });
+  const reason = el("input", { id: "bp-suggest-reason", maxlength: 200, "aria-label": "Reason" });
+  const go2 = el("button", { class: "button", type: "button", id: "bp-suggest-go" }, "Suggest…");
+  const ask = el("div", {});
+  out.replaceChildren(el("div", { class: "card section" }, el("p", { class: "muted small" }, "The approved value stays; a person accepts the suggestion or not."),
+    el("div", { class: "form-grid" }, el("label", {}, "New quantity (" + x.unit + ")", qty), el("label", {}, "Why", reason)), el("div", { class: "row" }, go2), ask));
+  go2.addEventListener("click", () => reviewAsk(ask, go2, "/measurements/" + x.id + "/suggest", { qty: qty.value.trim(), reason: reason.value.trim() }, () => "Suggestion saved", "bp-suggest"));
+  qty.focus();
+}
+
+// ------------------------------------------------------------------ layers panel
+function drawLayersPanel() {
+  const pane = $("bp-pane-layers");
+  if (!pane) return;
+  const prefs = layerPrefs();
+  const rows = RV.groups.map(g => {
+    const show = el("input", { type: "checkbox", checked: !prefs.hidden.includes(g.id), "data-layer": g.id, "aria-label": "Show " + g.label });
+    const lock = el("input", { type: "checkbox", checked: prefs.locked.includes(g.id), "data-lock": g.id, "aria-label": "Lock " + g.label });
+    const swatch = el("span", { class: "swatch" });
+    swatch.style.background = g.color;
+    const change = () => {
+      const p = layerPrefs();
+      p.hidden = p.hidden.filter(x => x !== g.id); if (!show.checked) p.hidden.push(g.id);
+      p.locked = p.locked.filter(x => x !== g.id); if (lock.checked) p.locked.push(g.id);
+      saveLayerPrefs(p);
+      const node = RV.viewer.overlay.querySelector('[data-group="' + g.id + '"]');
+      if (node) { node.classList.toggle("hidden", !show.checked); node.classList.toggle("locked", lock.checked); }
+    };
+    show.addEventListener("change", change);
+    lock.addEventListener("change", change);
+    return el("tr", { "data-group": g.id }, el("td", {}, swatch, " " + g.label), el("td", {}, g.id === "measurements" ? "" : g.count), el("td", {}, show), el("td", {}, lock));
+  });
+  pane.replaceChildren(el("table", { class: "list", id: "bp-layers" },
+    el("thead", {}, el("tr", {}, el("th", {}, "Layer"), el("th", {}, "Items"), el("th", {}, "Show"), el("th", {}, "Lock"))), el("tbody", {}, rows)),
+    el("p", { class: "muted small" }, "CAD layers are sorted into these groups by their names (A-WALL → Walls, E-LITE → Electrical…). A locked layer can't be selected. What's shown is remembered on this browser."));
+}
+
+window.addEventListener("resize", () => { if (RV.viewer && RV.viewer.box.isConnected) RV.viewer.render(); });
+
+SCREENS.takeoffs = renderTakeoffs;
+PAGES.takeoff = renderReview;
