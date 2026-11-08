@@ -196,13 +196,15 @@ def est_director_next(job_id: int, answers: dict | str | None = None, module_id:
                       revise: bool = False, change_summary: str = "", reprice: bool = False,
                       reviewed: bool = False, scenarios: bool = False, choose_scenario: str = "",
                       scenario_module: str = "", checklist_done: bool = False,
-                      trades: list | str | None = None) -> str:
+                      trades: list | str | None = None, confirm: bool = False) -> str:
     """Continue a Director job with what it asked for:
     answers / module_id; approve=true at the approval checkpoint (only when the user clearly said yes;
     confirm_sample_prices=true only if they knowingly accept sample prices); customer={name, email, ...};
-    send=true (optionally send_to) to email the quote — only after the user says send;
-    outcome='won' or 'lost' when the customer answers; convert=true (optional service_date YYYY-MM-DD) to make
-    a won quote an AI-Prowler job. approve=true and send=true can go together for a one-tap quote.
+    send=true (optionally send_to) to email the quote; outcome='won' or 'lost' when the customer answers;
+    convert=true (optional service_date YYYY-MM-DD) to make a won quote an AI-Prowler job. send and convert ask
+    first: without confirm=true nothing happens and you get needs_confirmation with the question — ask the user,
+    and call again with confirm=true only once they say yes. approve=true, send=true and confirm=true can go
+    together for a one-tap quote after the user said yes to sending it.
     revise=true (with change_summary) when the customer wants changes to an approved or sent quote: makes a new
     version and goes back to the questions. reprice=true re-prices a not-yet-approved quote after price changes.
     reviewed=true when an owner or reviewer has checked a standard estimate over the review limit (can go with
@@ -221,7 +223,8 @@ def est_director_next(job_id: int, answers: dict | str | None = None, module_id:
                                   change_summary=change_summary or None, reprice=bool(reprice),
                                   reviewed=bool(reviewed), scenarios=bool(scenarios),
                                   choose_scenario=choose_scenario or None, scenario_module=scenario_module or None,
-                                  checklist_done=bool(checklist_done), trades=_list(trades, "trades"))
+                                  checklist_done=bool(checklist_done), trades=_list(trades, "trades"),
+                                  confirm=bool(confirm))
     return _run(go)
 
 
@@ -570,16 +573,33 @@ def agent_config_update(module_id: str, changes: dict | str, confirm: bool = Fal
 
 # ---------------------------------------------------------------- AI agents (API keys) and role prompts
 
-def how_to_estimate(role: str = "") -> str:
-    """How to run the Estimator well: with no role, the overview (start with est_director_start); with a role
-    (director, intake, quick_pricer, plan_reader, takeoff, estimate_runner, pricer, reviewer, bid_writer,
-    follow_up), that agent's instructions and the rules every agent follows."""
+def how_to_estimate(role: str = "", topic: str = "") -> str:
+    """How to run the Estimator well: with no role, the overview (start with est_director_start) and the list of
+    how-to guides; with a role (director, intake, quick_pricer, plan_reader, takeoff, estimate_runner, pricer,
+    reviewer, bid_writer, follow_up), that agent's instructions and the rules every agent follows. topic= a guide
+    id or the user's question in their words ("how do I send a quote?") returns the step-by-step guide that fits,
+    the same steps the web app's Help screen shows - walk the user through them."""
+    from estimator.ui import help as guides
+
     def go(c):
+        if topic:
+            ids = {g["id"] for g in guides.list_guides()}
+            key = topic.strip().lower().replace(" ", "_").replace("-", "_")
+            if key in ids:
+                return {"ok": True, "guide": guides.get_guide(key)}
+            found = guides.search(topic)
+            if not found:
+                return {"ok": True, "guide": None, "guides": guides.list_guides(),
+                        "say": "No guide matches that yet; here are the guides there are."}
+            return {"ok": True, "guide": guides.get_guide(found[0]["id"]),
+                    "also": [g for g in found[1:4]]}
         if role:
             return {"ok": True, "role": role, "instructions": agent_queue.prompt(role)}
         roles_list = sorted(p.stem for p in agent_queue.PROMPTS.glob("*.md") if p.stem != "rules")
         return {"ok": True, "instructions": agent_queue.prompt("director"), "roles": roles_list,
-                "more": "how_to_estimate(role=...) for one agent's instructions"}
+                "guides": guides.list_guides(),
+                "more": "how_to_estimate(role=...) for one agent's instructions; how_to_estimate(topic=...) for a "
+                        "step-by-step guide (a guide id or the user's question)"}
     return _run(go)
 
 

@@ -280,13 +280,13 @@ def test_quick_lane_end_to_end_one_tap_send_win_convert(db, fake_host):  # S4-D0
     r = _start(db, "handyman to fix a door", OFFICE, answers={"hours": "1.5"},
                customer={"name": "Bo Diaz", "email": "bo@example.com"})
     assert r["next_step"]["approval"] == "one_tap"
-    r = engine.next_step(db, OFFICE, r["job"]["id"], approve=True, send=True, registry=REG)   # one tap
+    r = engine.next_step(db, OFFICE, r["job"]["id"], approve=True, send=True, confirm=True, registry=REG)   # one tap
     assert fake_host.named("send_email")[0]["to"] == "bo@example.com"
     assert r["job"]["stage"] == "follow_up" and r["job"]["state"] == "waiting_on_customer"
     assert r["next_step"]["follow_up_on"]
     r = engine.next_step(db, OFFICE, r["job"]["id"], outcome="won", registry=REG)
     assert r["job"]["state"] == "waiting_on_user" and "Make it a job" in r["next_step"]["say"]
-    r = engine.next_step(db, OFFICE, r["job"]["id"], convert=True, service_date="2026-11-21", registry=REG)
+    r = engine.next_step(db, OFFICE, r["job"]["id"], convert=True, confirm=True, service_date="2026-11-21", registry=REG)
     assert r["job"]["state"] == "done" and r["estimate"]["status"] == "won"
     assert fake_host.named("create_job")[0]["updates"]["Service Date"] == "2026-11-21"
     assert any("JOB-0001" in n for n in r["notes"])
@@ -296,17 +296,17 @@ def test_send_waits_for_email_then_sends(db, fake_host):  # S4-D02
     r = _start(db, "pressure wash", answers={"driveway_sqft": 1000})
     r = engine.next_step(db, CTX, r["job"]["id"], approve=True, confirm_sample_prices=True, registry=REG)
     assert r["job"]["stage"] == "write_bid" and "email" in r["next_step"]["say"]
-    r = engine.next_step(db, CTX, r["job"]["id"], send=True, registry=REG)
+    r = engine.next_step(db, CTX, r["job"]["id"], send=True, confirm=True, registry=REG)
     assert any("email address" in n for n in r["notes"]) and fake_host.named("send_email") == []
     r = engine.next_step(db, CTX, r["job"]["id"], customer={"email": "pat@example.com"}, registry=REG)
     assert "pat@example.com" in r["next_step"]["say"]
-    r = engine.next_step(db, CTX, r["job"]["id"], send=True, registry=REG)
+    r = engine.next_step(db, CTX, r["job"]["id"], send=True, confirm=True, registry=REG)
     assert r["job"]["stage"] == "follow_up" and fake_host.named("send_email")[0]["to"] == "pat@example.com"
 
 
 def test_lost_quote_closes_job(db, fake_host):  # S4-D03
     r = _start(db, "pressure wash", answers={"driveway_sqft": 1000}, customer={"name": "Al", "email": "al@x.com"})
-    r = engine.next_step(db, CTX, r["job"]["id"], approve=True, confirm_sample_prices=True, send=True, registry=REG)
+    r = engine.next_step(db, CTX, r["job"]["id"], approve=True, confirm_sample_prices=True, send=True, confirm=True, registry=REG)
     r = engine.next_step(db, CTX, r["job"]["id"], outcome="lost", registry=REG)
     assert r["job"]["state"] == "done" and r["estimate"]["status"] == "lost"
     with pytest.raises(InvalidInput):
@@ -318,7 +318,7 @@ def test_reviewer_approves_then_staff_sends(db, fake_host):  # S4-D04
                customer={"email": "kim@example.com"})
     r = engine.next_step(db, REVIEWER, r["job"]["id"], approve=True, confirm_sample_prices=True, registry=REG)
     assert r["job"]["waiting_on"] == "staff"
-    r = engine.next_step(db, OFFICE, r["job"]["id"], send=True, registry=REG)
+    r = engine.next_step(db, OFFICE, r["job"]["id"], send=True, confirm=True, registry=REG)
     assert r["job"]["stage"] == "follow_up"
 
 
@@ -328,11 +328,11 @@ def test_failed_step_is_recorded_not_stale(db, fake_host):  # S5-D01
     host.set_host(fake_host.funcs())
     r = _start(db, "pressure wash", answers={"driveway_sqft": 1000}, customer={"email": "al@x.com"})
     with pytest.raises(host.HostError):
-        engine.next_step(db, CTX, r["job"]["id"], approve=True, confirm_sample_prices=True, send=True, registry=REG)
+        engine.next_step(db, CTX, r["job"]["id"], approve=True, confirm_sample_prices=True, send=True, confirm=True, registry=REG)
     st = engine.status(db, CTX, r["job"]["id"])
     assert st["job"]["stage"] == "write_bid" and st["job"]["state"] == "waiting_on_user"
     assert st["next_step"]["error"] == "host_error" and "didn't work" in st["next_step"]["say"]
     assert st["steps"][-1]["state"] == "failed"
     fake_host.fail.clear()
-    r = engine.next_step(db, CTX, r["job"]["id"], send=True, registry=REG)       # retry once email works
+    r = engine.next_step(db, CTX, r["job"]["id"], send=True, confirm=True, registry=REG)       # retry once email works
     assert r["job"]["stage"] == "follow_up"

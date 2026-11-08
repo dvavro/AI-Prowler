@@ -95,7 +95,7 @@ def test_revision_rules(db):  # S6-R02
 def test_director_revise_after_send(db, fake_host):  # S6-R03
     r = engine.start(db, CTX, "clean a house", answers={"bedrooms": 2, "bathrooms": 1, "sqft": 1000},
                      customer={"email": "kim@example.com"}, registry=REG)
-    r = engine.next_step(db, CTX, r["job"]["id"], approve=True, confirm_sample_prices=True, send=True, registry=REG)
+    r = engine.next_step(db, CTX, r["job"]["id"], approve=True, confirm_sample_prices=True, send=True, confirm=True, registry=REG)
     assert r["job"]["stage"] == "follow_up"
     with pytest.raises(NotEditable, match="revise=true"):
         engine.next_step(db, CTX, r["job"]["id"], answers={"bathrooms": 2}, registry=REG)

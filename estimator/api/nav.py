@@ -37,7 +37,9 @@ SCREENS = (
     {"id": "estimates", "label": "Estimates", "icon": "🧮", "roles": ALL, "status": "coming", "sprint": 8,
      "tools": ["est_get_estimate", "est_apply_assembly", "est_add_line_item", "est_update_line_item",
                "est_calculate", "est_validate", "est_scenarios", "est_compare_history", "est_create_revision"]},
-    {"id": "bids", "label": "Bids", "icon": "📨", "roles": ("owner", "estimator", "office"), "status": "ready",
+    # Field staff send quotes too (David, 2026-11-08: the same roles as bid_send, service.QUICK_ROLES); they see
+    # prices, never costs or margins.
+    {"id": "bids", "label": "Bids", "icon": "📨", "roles": ("owner", "estimator", "office", "field"), "status": "ready",
      "sprint": 4, "tools": ["bid_generate", "bid_preview", "bid_send", "bid_set_status", "bid_convert_to_job",
                             "bid_list"]},
     {"id": "price_book", "label": "Price Book", "icon": "💲", "roles": ("owner", "estimator"), "status": "ready",
@@ -83,7 +85,7 @@ PERMISSIONS = {
     "office":    {"create_estimate": True, "edit_estimate": False, "see_margins": True, "edit_margins": False,
                   "approve": False, "send_bids": True, "settings": False},
     "field":     {"create_estimate": True, "edit_estimate": False, "see_margins": False, "edit_margins": False,
-                  "approve": False, "send_bids": False, "settings": False},
+                  "approve": False, "send_bids": True, "settings": False},
 }
 # Sprint 2: the same role lists the service layer enforces (store.UPLOAD_ROLES, service.QUICK_ROLES), so the
 # page never shows a button the server will refuse. Tests check they stay equal.

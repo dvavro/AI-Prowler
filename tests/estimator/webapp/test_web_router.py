@@ -126,9 +126,9 @@ def test_owner_sees_the_whole_menu_in_spec_order(call):
 def test_field_menu_hides_money_and_admin_screens(call, session_for):
     me = call("GET", "/estimator-api/me", headers=session_for("field")).json()["me"]
     ids = [s["id"] for s in me["menu"]]
-    for hidden in ("price_book", "agents", "settings", "takeoffs", "bids"):
+    for hidden in ("price_book", "agents", "settings", "takeoffs"):
         assert hidden not in ids
-    for shown in ("dashboard", "projects", "reviews", "help"):
+    for shown in ("dashboard", "projects", "reviews", "help", "bids"):     # field sends quotes (2026-11-08)
         assert shown in ids
     assert me["permissions"]["see_margins"] is False and me["permissions"]["approve"] is False
 

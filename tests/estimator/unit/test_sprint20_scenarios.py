@@ -56,11 +56,11 @@ def test_quick_quote_from_call_to_job_costs(db, fake_host):  # S20-C02
                                 customer={"name": "Rosa Garcia", "email": "rosa@example.com"}))
     job = r["job"]["id"]
     assert r["job"]["lane"] == "quick_quote" and r["next_step"]["say"]
-    r = ok(t.est_director_next(job, approve=True, confirm_sample_prices=True, send=True))
+    r = ok(t.est_director_next(job, approve=True, confirm_sample_prices=True, send=True, confirm=True))
     assert fake_host.named("send_email")[0]["to"] == "rosa@example.com"
     assert r["job"]["stage"] == "follow_up"
     r = ok(t.est_director_next(job, outcome="won"))
-    r = ok(t.est_director_next(job, convert=True, service_date="2026-11-20"))
+    r = ok(t.est_director_next(job, convert=True, confirm=True, service_date="2026-11-20"))
     assert r["job"]["state"] == "done" and r["estimate"]["status"] == "won"
     est_id = r["estimate"]["id"]
     rec = ok(t.est_record_actuals(est_id, [{"total": "180"}], note="two hours, one tech"))
@@ -84,7 +84,7 @@ def test_standard_roof_with_review_and_revision(db, fake_host):  # S20-C03
     est = ok(t.est_get_estimate(est_id))
     assert est["status"] in ("approved", "sent")
     if r["job"]["stage"] == "write_bid":
-        r = ok(t.est_director_next(job, send=True))
+        r = ok(t.est_director_next(job, send=True, confirm=True))
     assert fake_host.named("send_email") and fake_host.named("send_email")[-1]["to"] == "dan@example.com"
     rev = ok(t.est_create_revision(est_id, "customer added gutters"))
     assert rev["parent_estimate_id"] == est_id and rev["revision"] == 2 and rev["status"] == "draft"

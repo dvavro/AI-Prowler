@@ -192,7 +192,7 @@ def test_bids_list_and_preview(call, fake_host):
 
 
 @pytest.mark.parametrize("role, status", [("owner", 200), ("estimator", 200), ("office", 200),
-                                          ("reviewer", 403), ("field", 403)])
+                                          ("reviewer", 403), ("field", 200)])
 def test_bids_screen_roles(call, session_for, role, status):
     assert call("GET", f"{API}/bids", headers=session_for(role)).status == status
 
@@ -257,14 +257,104 @@ def test_bid_status_and_convert_from_the_bids_screen(call, fake_host):
     assert again["already_converted"] is True and len(fake_host.named("create_job")) == 1
 
 
-def test_office_can_send_but_field_cannot_open_bids(call, session_for, fake_host):
+def test_office_and_field_send_quotes_but_reviewer_cannot(call, session_for, fake_host):
+    """David 2026-11-08: field staff send quotes too (the same roles as bid_send); they never see costs."""
     jid, r = _approved(call)
     bid_id = r["next_step"]["bid_id"]
-    office = call("POST", f"{API}/bids/{bid_id}/send", {"to": "jane@example.com"}, headers=session_for("office"))
-    assert office.status == 200 and office.json()["needs_confirmation"] is True     # office sends quotes (asks first)
-    assert call("POST", f"{API}/bids/{bid_id}/send", {}, headers=session_for("field")).status == 403
+    for role in ("office", "field"):
+        ask = call("POST", f"{API}/bids/{bid_id}/send", {"to": "jane@example.com"}, headers=session_for(role))
+        assert ask.status == 200 and ask.json()["needs_confirmation"] is True, role
+    field = session_for("field")
+    p = call("GET", f"{API}/bids/{bid_id}", headers=field)
+    assert p.status == 200 and p.json()["total_cents"] > 0 and "cost" not in p.body.decode().lower()
+    done = call("POST", f"{API}/bids/{bid_id}/send", {"to": "jane@example.com", "confirm": True}, headers=field)
+    assert done.status == 200 and done.json()["status"] == "sent" and len(fake_host.named("send_email")) == 1
+    assert call("POST", f"{API}/bids/{bid_id}/send", {}, headers=session_for("reviewer")).status == 403
     other = call("GET", f"{API}/bids/{bid_id}", headers=session_for("owner", company="acme"))
     assert other.status == 404                                         # another company never sees it
+
+
+def test_bids_screen_roles_are_the_ones_that_can_send():
+    from estimator.estimating import service
+    bids_screen = next(s for s in nav.SCREENS if s["id"] == "bids")
+    assert set(bids_screen["roles"]) == set(service.QUICK_ROLES)
+    assert {r for r, p in nav.PERMISSIONS.items() if p["send_bids"]} == set(service.QUICK_ROLES)
+
+
+# ---------------------------------------------------------------- the Director asks first in chat too (2026-11-08)
+
+def _t():
+    from estimator.mcp_tools import est_tools
+    return est_tools
+
+
+def test_director_send_asks_first_and_changes_nothing(db, fake_host):
+    from estimator.director import engine
+    from estimator.errors import ConfirmationRequired
+    from estimator.context import personal_context
+    ctx = personal_context()
+    r = engine.start(db, ctx, "pressure wash", module_id="pressure_washing", answers={"driveway_sqft": 1000},
+                     customer=JANE)
+    before = engine.status(db, ctx, r["job"]["id"])
+    with pytest.raises(ConfirmationRequired) as e:
+        engine.next_step(db, ctx, r["job"]["id"], approve=True, confirm_sample_prices=True, send=True)
+    assert "jane@example.com" in e.value.message and "$" in e.value.message and "confirm=true" in e.value.message
+    after = engine.status(db, ctx, r["job"]["id"])
+    assert after["job"]["rev"] == before["job"]["rev"] and after["estimate"]["status"] == "draft"   # not even approved
+    assert fake_host.named("send_email") == []
+    done = engine.next_step(db, ctx, r["job"]["id"], approve=True, confirm_sample_prices=True, send=True, confirm=True)
+    assert done["job"]["stage"] == "follow_up" and len(fake_host.named("send_email")) == 1
+    # Once sent, asking to send again is a no-op, so there's nothing to ask.
+    engine.next_step(db, ctx, r["job"]["id"], send=True)
+
+
+def test_director_send_with_no_email_just_says_it_needs_one(db, fake_host):
+    from estimator.director import engine
+    from estimator.context import personal_context
+    ctx = personal_context()
+    r = engine.start(db, ctx, "pressure wash", module_id="pressure_washing", answers={"driveway_sqft": 1000})
+    r = engine.next_step(db, ctx, r["job"]["id"], approve=True, confirm_sample_prices=True, send=True)
+    assert any("email address" in n for n in r["notes"]) and fake_host.named("send_email") == []
+
+
+def test_director_convert_asks_first_in_chat(db, fake_host):
+    t = _t()
+    r = json.loads(t.est_director_start("pressure wash", module_id="pressure_washing",
+                                        answers={"driveway_sqft": 1000}, customer=JANE))
+    job = r["job"]["id"]
+    ask = json.loads(t.est_director_next(job, approve=True, confirm_sample_prices=True, send=True))
+    assert ask["error"] == "needs_confirmation" and "jane@example.com" in ask["message"]
+    json.loads(t.est_director_next(job, approve=True, confirm_sample_prices=True, send=True, confirm=True))
+    json.loads(t.est_director_next(job, outcome="won"))
+    ask = json.loads(t.est_director_next(job, convert=True, service_date="2026-12-01"))
+    assert ask["error"] == "needs_confirmation" and "2026-12-01" in ask["message"] and "Jane Smith" in ask["message"]
+    assert fake_host.named("create_job") == []
+    done = json.loads(t.est_director_next(job, convert=True, service_date="2026-12-01", confirm=True))
+    assert done["job"]["state"] == "done" and len(fake_host.named("create_job")) == 1
+
+
+def test_director_says_confirm_true_in_its_instructions(db):
+    from estimator.agents import queue as agent_queue
+    from estimator.director import engine
+    src = Path(engine.__file__).read_text(encoding="utf-8")
+    assert "send=true)" not in src.replace("send=true, confirm=true", "")        # every send hint names confirm
+    assert "confirm=true" in agent_queue.prompt("director")
+
+
+# ---------------------------------------------------------------- how_to_estimate returns the guides (2026-11-08)
+
+def test_how_to_estimate_lists_and_finds_the_guides(db):
+    t = _t()
+    overview = json.loads(t.how_to_estimate())
+    assert {g["id"] for g in overview["guides"]} >= {"quote_a_service_job", "send_and_follow_up_a_quote"}
+    assert "est_director_start" in overview["instructions"]                     # the overview is still there
+    g = json.loads(t.how_to_estimate(topic="how do I send a quote to a customer?"))
+    assert g["guide"]["id"] == "send_and_follow_up_a_quote" and "📨 Send the quote…" in g["guide"]["text"]
+    assert json.loads(t.how_to_estimate(topic="set_up_your_price_book"))["guide"]["id"] == "set_up_your_price_book"
+    assert json.loads(t.how_to_estimate(topic="Set up your price book"))["guide"]["id"] == "set_up_your_price_book"
+    none = json.loads(t.how_to_estimate(topic="zzzz qqqq"))
+    assert none["guide"] is None and none["guides"]
+    assert "Takeoff" in json.loads(t.how_to_estimate("takeoff"))["instructions"]   # roles still work
 
 
 # ---------------------------------------------------------------- Help: how-to guides

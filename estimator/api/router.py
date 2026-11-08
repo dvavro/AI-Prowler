@@ -46,7 +46,7 @@ Sprint 4 (Coder 2):
                         send?, send_to?, outcome?, convert?, service_date?, rev?, confirm?}   (est_director_next;
                         send and convert ask first: they need confirm=true)
   POST /quick (no estimate_id) now starts a quick-quote Director job, so the quote shows on the Jobs board
-  Bids (owner, estimator, office): GET /bids?status=&estimate_id=, GET /bids/<id> (bid_preview),
+  Bids (owner, estimator, office, field - the bid_send roles): GET /bids?status=&estimate_id=, GET /bids/<id> (bid_preview),
        GET /bids/<id>/file?kind=html|pdf, POST /bids/<id>/send {to?, message?, confirm?} (asks first),
        POST /bids/<id>/status {status}, POST /bids/<id>/convert {customer?, service_date?, confirm?} (asks first)
   GET  /help/guides?q=&screen=      how-to guides; GET /help/guides/<id> one guide
@@ -559,30 +559,12 @@ def _jobs(m: str, sub: str, req: Request, ctx, conn, see: bool) -> Response:
                 kw["rev"] = int(b["rev"])
             except (TypeError, ValueError):
                 raise _Refuse(400, "invalid_input", "rev must be a whole number") from None
-        if (kw.get("send") or kw.get("convert")) and b.get("confirm") is not True:
-            return _ok(needs_confirmation=True, question=_next_question(conn, ctx, jid, kw))
-        return _json(200, _no_paths(redact(director.next_step(conn, ctx, jid, **kw), see)))
+        # The Director asks before emailing a customer or creating a job (ConfirmationRequired): the page shows
+        # its question and sends confirm=true only after Yes.
+        kw["confirm"] = b.get("confirm") is True
+        return _ask_first(lambda: _no_paths(redact(director.next_step(conn, ctx, jid, **kw), see)))
 
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
-
-
-def _next_question(conn, ctx, jid: int, kw: dict) -> str:
-    """The yes/no question the page shows before the Director emails a customer or creates a job in AI-Prowler."""
-    from estimator.bids import service as bids
-    from estimator.core.units.money import format_cents
-    from estimator.director import engine as director
-
-    st = director.status(conn, ctx, jid)
-    eid = st["job"]["estimate_id"]
-    bid = bids.latest_for_estimate(conn, ctx, eid) if eid else None
-    total = bid["total_cents"] if bid else (st.get("estimate") or {}).get("total_cents", 0)
-    money = format_cents(total)
-    if kw.get("convert"):
-        when = f" for {kw['service_date']}" if kw.get("service_date") else ""
-        return (f"Turn this {money} quote into a job{when}? This creates the customer (if new), an approved quote "
-                "and a job in AI-Prowler.")
-    to = kw.get("send_to") or ((kw.get("customer") or {}).get("email")) or (bid["customer"].get("email") if bid else "")
-    return f"Email the {money} quote to {to}?" if to else f"Email the {money} quote to the customer?"
 
 
 # ------------------------------------------------------------------ Sprint 4: Bids screen

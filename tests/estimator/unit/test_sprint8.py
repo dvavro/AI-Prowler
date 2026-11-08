@@ -252,7 +252,7 @@ def test_customer_picks_option_after_quote_sent(db, fake_host):  # S8-O08
     update_settings(db, CTX, {"review_required_over_cents": 10_000_000})
     r = _start(db, "replace the roof", answers=ROOF, customer={"email": "pat@example.com"})
     r = _next(db, r, scenarios=True)
-    r = _next(db, r, approve=True, confirm_sample_prices=True, send=True)
+    r = _next(db, r, approve=True, confirm_sample_prices=True, send=True, confirm=True)
     assert r["job"]["stage"] == "follow_up"
     r = _next(db, r, revise=True, change_summary="customer chose metal", choose_scenario="best")
     assert r["job"]["answers"]["material"] == "metal" and r["estimate"]["status"] == "draft"

@@ -103,13 +103,32 @@ Open the web app: Dashboard → **📋 Jobs board**, **📨 Bids** and **❓ Hel
 | M7 | 📨 Bids → open the quote | quote looks right in the frame; PDF downloads (if Edge/Chrome made one); plain-text copy | |
 | M8 | Jobs app (port 8000) → Estimates tab → a quote | text copy shown instead of the frame; PDF downloads | |
 | M9 | ❓ Help → search "send quote"; "?" on the Jobs board | right guide first; "?" shows the Jobs board guides | |
-| M10 | Sign in as field (test session) | no Bids in the menu; job pages show prices, never costs | |
+| M10 | Sign in as field (test session) | Bids in the menu; quotes and job pages show prices, never costs; field can send a quote (asks first) | |
+| M11 | In chat: "send the quote for job N" | your AI asks you first (email and total); it sends only after you say yes | |
+| M12 | In chat: "how do I turn a won quote into a job?" | your AI walks you through the "Turn a won quote into a job" steps | |
+
+## Decisions after the sprint (David, 2026-11-08) — changes to Coder 1 code
+
+David decided the open questions; they're built and in the spec Change log.
+
+1. **The Director asks first in chat too.** `est_director_next(send=true)` and `(convert=true)` return needs_confirmation with the question and change nothing until called again with the new `confirm=true`. That includes an `approve=true` sent in the same call. If no email address is known, a send asks nothing; the Director says it needs one. A send or convert that would do nothing asks nothing either. Changed: `estimator/director/engine.py` (`next_step(confirm=)`, `_ask_before_sending`, and the say/tools texts), `est_tools.est_director_next(confirm=)`, `agents/prompts/director.md`. The web job page now shows the Director's own question. Your tests that send or convert now pass `confirm=True` (test_director, test_sprint6/8/9/20_scenarios).
+2. **Field staff send quotes.** The Bids screen and the `send_bids` permission now include field: the same roles as `bid_send` (`service.QUICK_ROLES`), checked by a test. Field still never sees costs or margins.
+3. **`how_to_estimate` returns the guides.** The overview lists them. The new `topic=` argument takes a guide id or the user's question ("how do I send a quote?") and returns the best guide's steps. These are the same steps the Help screen shows. Changed: `est_tools.how_to_estimate`.
+4. **Director title** cut to 80 characters: OK as is.
+
+| ID | Test | Checks |
+|---|---|---|
+| C2S4-D01 | Send asks first | approve+send without confirm: the question has the email, the total and confirm=true; job rev unchanged, estimate still draft, no email; with confirm it's sent; asking again after sending asks nothing |
+| C2S4-D02 | No email | send with no address: no question, the Director says it needs one |
+| C2S4-D03 | Chat | `est_director_next` send and convert return needs_confirmation (convert names the customer and date); confirm=true does it once |
+| C2S4-D04 | Instructions | every Director send hint names confirm=true; the role prompt says so |
+| C2S4-B08 | Field sends | office and field: asked first; field preview has prices but no costs; field sends; reviewer 403 |
+| C2S4-B09 | Same roles | Bids screen roles and `send_bids` = `QUICK_ROLES` |
+| C2S4-H05 | how_to_estimate | overview lists the guides; a question finds the send guide; id and title work; no match lists the guides; roles still work |
+
+Result: full Estimator suite 900 passed (2026-11-08).
 
 ## Notes for Jamie
 
 - **Sample service quote in the setup wizard** (this row) is in your desktop wizard (Estimator tab, Sprint 16). The web app's Quick estimate and the "Quote a service job" guide cover the same thing, so the wizard's "Try it" step could open `#/quick?module=pressure_washing`.
-- **`how_to_estimate` and the guides.** The spec says the tool also returns the how-to guides "by topic or question". The guides and a search are now in `estimator/ui/help` (`list_guides()`, `get_guide(id)`, `search(question)`). Could `how_to_estimate(topic=...)` use them, so chat and the Help screen give the same steps? I didn't change your tool.
-- **Field and sending.** `bids.send` lets field send quotes (`QUICK_ROLES`), but my nav permission `send_bids` says no and the Bids screen is owner/estimator/office. On the job page, field can still send through the Director (your rule). Is that what you want?
-- **Director send/convert don't ask.** `est_director_next(send=true)` emails straight away, and `convert=true` creates records straight away. The web page asks first; in chat it's up to the AI. Maybe the tool should ask too?
-- **Director title.** `director.start` cuts the project title to 80 characters (from the request's first line). Quick quotes with long addresses get a shortened name.
-- No changes to your files this sprint.
+- See "Decisions after the sprint" above for the changes to your files.

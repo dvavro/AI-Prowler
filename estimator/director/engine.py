@@ -86,9 +86,11 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
               revise: bool = False, change_summary: str | None = None, reprice: bool = False,
               reviewed: bool = False, scenarios: bool = False, choose_scenario: str | None = None,
               scenario_module: str | None = None, checklist_done: bool = False, trades=None,
-              registry=None) -> dict:
+              confirm: bool = False, registry=None) -> dict:
     """Give the Director what it asked for (answers, a module choice, the trades in a plan takeoff, an approval, a
-    send, the customer's answer) and get the next step."""
+    send, the customer's answer) and get the next step. send=true and convert=true reach outside the Estimator
+    (an email to the customer; a customer, quote and job in AI-Prowler), so they ask first: without confirm=true
+    nothing changes and ConfirmationRequired carries the question to put to the user."""
     reg = _registry(registry)
     if outcome is not None and outcome not in ("won", "lost"):
         raise InvalidInput("outcome must be won or lost", field="outcome")
@@ -97,6 +99,9 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
         jobstore.save_job(conn, ctx, job, expected_rev=rev)   # raises StaleRevision
     if job["state"] in ("done", "cancelled"):
         return _result(conn, ctx, job, reg)
+    if (send or convert) and not confirm:
+        _ask_before_sending(conn, ctx, job, send=send, send_to=send_to, customer=customer, convert=convert,
+                            outcome=outcome, service_date=service_date)
 
     if customer:
         cust = bids.clean_customer(customer)
@@ -207,6 +212,38 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
             f"{priced['trade']} options: {priced['summary']}. Pick one with choose_scenario=<id>, or keep the quote as it "
             "is; the options are shown on the bid.")
     return out
+
+
+def _ask_before_sending(conn, ctx, job, *, send, send_to, customer, convert, outcome, service_date) -> None:
+    """Raise ConfirmationRequired before an email to the customer or new records in AI-Prowler (decision 2026-11-08,
+    David: the Director asks first in chat too, the same as bid_send and bid_convert_to_job). Nothing has changed
+    yet when this raises. A send with no email address anywhere asks nothing: nothing can be sent, and the Director
+    then says it needs the address."""
+    bid = bids.latest_for_estimate(conn, ctx, job["estimate_id"]) if job["estimate_id"] else None
+    est = service.get_estimate(conn, ctx, job["estimate_id"]) if job["estimate_id"] else None
+    money = format_cents(bid["total_cents"] if bid else ((est or {}).get("totals") or {}).get("total_cents", 0))
+    cust = dict(job.get("customer") or {})
+    if isinstance(customer, dict):
+        cust.update({k: v for k, v in customer.items() if v})
+    if convert:
+        if bid is not None and (bid["job_id"] or (bid["status"] != "won" and outcome != "won")):
+            convert = False          # already a job, or not won: the step does nothing, so there's nothing to ask
+    if convert:
+        name = cust.get("name") or (bid["customer"].get("name") if bid else "")
+        when = f" with service on {service_date}" if service_date else ""
+        raise ConfirmationRequired(
+            f"Turn the {money} quote into a job{' for ' + name if name else ''}{when}? This creates the customer "
+            "(if new), an approved quote and a job in AI-Prowler. Call again with confirm=true once the user says yes.",
+            job_id=job["id"], action="convert", total_cents=bid["total_cents"] if bid else None,
+            service_date=service_date)
+    if send:
+        to = (send_to or cust.get("email") or (bid["customer"].get("email") if bid else "") or "").strip()
+        if bid is not None and bid["status"] != "draft":
+            return                   # already sent: the step does nothing
+        if to:
+            raise ConfirmationRequired(
+                f"Email the {money} quote to {to}? Call again with confirm=true once the user says yes.",
+                job_id=job["id"], action="send", to=to)
 
 
 def status(conn, ctx: RequestContext, job_id: int, registry=None) -> dict:
@@ -610,7 +647,7 @@ def _approve(conn, ctx, job, reg, stage, notes, inputs, **_):
             return True
 
     if one_tap:
-        say = (f"The quote is {money}. Send this {money} quote? (one tap: approve=true, send=true)"
+        say = (f"The quote is {money}. Send this {money} quote? (one tap, once they say yes: approve=true, send=true, confirm=true)"
                if _voice(ctx) == "estimator" else
                f"Tell the customer the price is {money}. If they're happy, approve it (approve=true).")
     elif job["lane"] == "quick_quote":
@@ -800,7 +837,7 @@ def _write_bid(conn, ctx, job, reg, stage, notes, inputs, **_):
         _wait(conn, ctx, job, "waiting_on_user", "staff", {
             "stage": stage.id, "agent": stage.agent,
             "say": "Approved. An owner, estimator or office person can now make and send the quote.",
-            "tools": ["est_director_next(job_id, send=true)"]})
+            "tools": ["est_director_next(job_id, send=true, confirm=true)"]})
         return False
     if bid is None:
         from estimator.agents import queue as agent_queue
@@ -831,14 +868,14 @@ def _write_bid(conn, ctx, job, reg, stage, notes, inputs, **_):
     money = format_cents(bid["total_cents"])
     files = "PDF and HTML" if bid["pdf_path"] else "HTML"
     if to:
-        say = f"Quote {bid['number']} ({money}) is ready as {files}. Send it to {to}? (send=true)"
+        say = f"Quote {bid['number']} ({money}) is ready as {files}. Send it to {to}? (send=true, confirm=true once they say yes)"
     else:
         say = (f"Quote {bid['number']} ({money}) is ready as {files}. What's the customer's email so I can send "
-               "it? (customer={email: ...}, then send=true)")
+               "it? (customer={email: ...}, then send=true, confirm=true)")
     _wait(conn, ctx, job, "waiting_on_user", "user", {
         "stage": stage.id, "agent": stage.agent, "say": say, "bid_id": bid["id"], "bid_number": bid["number"],
         "pdf_path": bid["pdf_path"], "html_path": bid["html_path"], "send_to": to or None,
-        "tools": ["est_director_next(job_id, send=true)", "bid_preview(bid_id)"],
+        "tools": ["est_director_next(job_id, send=true, confirm=true)", "bid_preview(bid_id)"],
         "why": "sending reaches the customer, so a person says when"})
     return False
 
@@ -869,8 +906,8 @@ def _follow_up(conn, ctx, job, reg, stage, notes, inputs, **_):
         _wait(conn, ctx, job, "waiting_on_user", "user", {
             "stage": stage.id, "agent": stage.agent,
             "say": f"The customer accepted {bid['number']} ({format_cents(bid['total_cents'])}). Make it a job in "
-                   "AI-Prowler? (convert=true, optionally service_date=YYYY-MM-DD)",
-            "tools": ["est_director_next(job_id, convert=true, service_date=...)"],
+                   "AI-Prowler? (convert=true, confirm=true once they say yes, optionally service_date=YYYY-MM-DD)",
+            "tools": ["est_director_next(job_id, convert=true, confirm=true, service_date=...)"],
             "why": "creating customers, quotes and jobs needs a person's OK"})
         return False
     settings = get_settings(conn, ctx.company_id)
@@ -883,9 +920,9 @@ def _follow_up(conn, ctx, job, reg, stage, notes, inputs, **_):
         "stage": stage.id, "agent": stage.agent,
         "say": f"Quote {bid['number']} was sent to {bid['sent_to']} on {sent_on}. "
                + (f"Follow up on {follow} if there's no answer. " if follow else "")
-               + "When the customer answers, tell me: outcome=won (convert=true to make it a job) or outcome=lost.",
+               + "When the customer answers, tell me: outcome=won (convert=true, confirm=true to make it a job) or outcome=lost.",
         "follow_up_on": follow or None, "bid_id": bid["id"],
-        "tools": ["est_director_next(job_id, outcome='won', convert=true)", "est_director_next(job_id, outcome='lost')"]})
+        "tools": ["est_director_next(job_id, outcome='won', convert=true, confirm=true)", "est_director_next(job_id, outcome='lost')"]})
     return False
 
 

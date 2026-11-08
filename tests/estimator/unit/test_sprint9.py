@@ -125,7 +125,7 @@ def test_finished_and_sent_jobs_left_alone(db, fake_host):  # S9-W09
     due = (date.today() + timedelta(days=1)).isoformat()
     r = engine.start(db, CTX, "clean a house", answers={"bedrooms": 2, "bathrooms": 1, "sqft": 1000},
                      customer={"email": "kim@example.com"}, due_date=due, registry=REG)
-    engine.next_step(db, CTX, r["job"]["id"], approve=True, confirm_sample_prices=True, send=True, registry=REG)
+    engine.next_step(db, CTX, r["job"]["id"], approve=True, confirm_sample_prices=True, send=True, confirm=True, registry=REG)
     out = watch.tick(db, CTX, at(3))
     assert not {"overdue", "due_soon", "stuck", "review_reminder"} & set(kinds(out))
 
