@@ -30,6 +30,21 @@ def validate(conn, ctx: RequestContext, estimate_id: int, registry=None) -> dict
     def add(level, code, message, **extra):
         findings.append({"level": level, "code": code, "message": message, **extra})
 
+    m_rows = conn.execute("SELECT status, needs_remeasure, suggested_qty FROM measurements WHERE company_id = ?"
+                          " AND estimate_id = ? AND status != 'rejected'", (ctx.company_id, est["id"])).fetchall()
+    waiting = sum(1 for r in m_rows if r["status"] == "proposed")
+    remeasure = sum(1 for r in m_rows if r["needs_remeasure"])
+    suggested = sum(1 for r in m_rows if r["status"] == "approved" and r["suggested_qty"] is not None)
+    if waiting:
+        add("warning", "measurements_waiting", f"{waiting} measurement(s) wait for a person's approval and aren't "
+            "priced yet (takeoff_list, then takeoff_confirm).", count=waiting)
+    if remeasure:
+        add("warning", "measurements_remeasure", f"{remeasure} measurement(s) need re-measuring: the plans or a scale "
+            "changed under them.", count=remeasure)
+    if suggested:
+        add("warning", "measurements_suggested", f"{suggested} approved measurement(s) have a suggested change waiting "
+            "for a person.", count=suggested)
+
     lines = [(sec, ln) for sec in est["sections"] for ln in sec["lines"]]
     if not lines:
         add("error", "no_lines", "The estimate has no line items yet.")

@@ -555,6 +555,44 @@ CREATE TABLE legends (
 );
 CREATE INDEX ix_legends_sheet ON legends (sheet_id)
 """),
+    (12, "measurements: proposed, approved (locked), rejected; suggested changes", """
+CREATE TABLE measurements (
+    id                 INTEGER PRIMARY KEY,
+    company_id         TEXT NOT NULL,
+    estimate_id        INTEGER NOT NULL REFERENCES estimates (id) ON DELETE CASCADE,
+    module_id          TEXT,
+    trade_section_id   INTEGER,
+    feeds              TEXT,
+    sheet_id           INTEGER REFERENCES sheets (id) ON DELETE SET NULL,
+    viewport_id        INTEGER REFERENCES viewports (id) ON DELETE SET NULL,
+    layer              TEXT,
+    kind               TEXT NOT NULL CHECK (kind IN ('area', 'length', 'perimeter', 'count', 'volume', 'other')),
+    label              TEXT,
+    room               TEXT,
+    qty                TEXT NOT NULL,
+    unit               TEXT NOT NULL,
+    source_object_ids  TEXT NOT NULL DEFAULT '[]',
+    calc_json          TEXT,
+    geometry_json      TEXT,
+    method             TEXT NOT NULL CHECK (method IN ('cad', 'vector', 'raster', 'ai', 'manual', 'typed')),
+    confidence         TEXT,
+    status             TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'approved', 'rejected')),
+    locked             INTEGER NOT NULL DEFAULT 0,
+    suggested_qty      TEXT,
+    suggested_by       TEXT,
+    suggested_reason   TEXT,
+    suggested_at       TEXT,
+    needs_remeasure    INTEGER NOT NULL DEFAULT 0,
+    reject_reason      TEXT,
+    proposed_by        TEXT NOT NULL,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL,
+    approved_by        TEXT,
+    approved_at        TEXT
+);
+CREATE INDEX ix_measurements_estimate ON measurements (company_id, estimate_id, module_id, status);
+CREATE INDEX ix_measurements_sheet ON measurements (sheet_id)
+"""),
 ]
 
 

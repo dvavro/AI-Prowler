@@ -38,6 +38,7 @@ from estimator.learning import history
 from estimator import data_move, exports, practice, team
 from estimator.drawing_model import engine as plan_engine
 from estimator.drawing_model import store as plans
+from estimator.takeoff import measurements as takeoffs
 
 # Server mode will replace this with the API key / signed-in user's context.
 _context_provider = personal_context
@@ -517,14 +518,16 @@ def runner_status(run_id: int = 0, estimate_id: int = 0) -> str:
 
 
 def runner_submit_takeoff(task_id: int, answers: dict | str | None = None, confidence: int | None = None,
-                          note: str = "", cannot_measure: str = "") -> str:
+                          note: str = "", cannot_measure: str = "", from_measurements: bool = False) -> str:
     """Hand in one trade's quantities, measured from the plans: answers are that trade's questions (see
     est_quick_questions(module_id)). Every number must come from the plans or the user, never a guess.
+    from_measurements=true fills them from the trade's approved measurements (takeoff_list); answers given too win.
     confidence 0-100 is how sure you are. If the trade can't be measured, give cannot_measure="why" instead.
     The quantities wait for a person's approval unless the owner turned on auto-advance for the trade."""
     return _run(lambda c: runner.submit_takeoff(c, _ctx(), int(task_id), _opt_obj(answers, "answers"),
                                                 confidence=confidence, note=note or None,
-                                                cannot_measure=cannot_measure or None))
+                                                cannot_measure=cannot_measure or None,
+                                                from_measurements=bool(from_measurements)))
 
 
 def runner_review_task(task_id: int, approve: bool = False, answers: dict | str | None = None, note: str = "") -> str:
@@ -730,6 +733,89 @@ def plan_get_legends(plan_set_id: int) -> str:
     return _run(lambda c: plans.legends(c, _ctx(), int(plan_set_id)))
 
 
+# ---------------------------------------------------------------- takeoff measurements
+
+def _ids(value, name: str) -> list[int]:
+    items = _list(value, name) or []
+    try:
+        return [int(x) for x in items]
+    except (TypeError, ValueError):
+        raise InvalidInput(f"{name} must be a list of numbers", field=name) from None
+
+
+def takeoff_propose(estimate_id: int, module_id: str, object_ids: list | str, feeds: str = "", kind: str = "",
+                    label: str = "", room: str = "", confidence: str = "", one_per_object: bool = False,
+                    confirm: bool = False) -> str:
+    """Propose measurements for a trade from drawing objects (ids from plan_get_objects). The quantity comes from the
+    drawing model's real sizes, never typed: kind area, perimeter, length or count (guessed from the shapes if left
+    out). feeds is the trade question it fills (e.g. roof_area_sqft). Unscaled or NTS objects are refused. Proposed
+    measurements wait for a person (takeoff_confirm). Asks first."""
+    return _run(lambda c: takeoffs.propose(c, _ctx(), int(estimate_id), module_id, _ids(object_ids, "object_ids"),
+                                           feeds=feeds or None, kind=kind or None, label=label or None,
+                                           room=room or None, confidence=confidence or None,
+                                           one_per_object=bool(one_per_object), confirm=bool(confirm)))
+
+
+def takeoff_manual(estimate_id: int, module_id: str, feeds: str = "", qty: str = "", unit: str = "", kind: str = "",
+                   label: str = "", room: str = "", viewport_id: int = 0, geometry: dict | str = "",
+                   approve: bool = False, confirm: bool = False) -> str:
+    """Add a measurement by hand: typed (qty and unit, e.g. 1450 sqft) or drawn (geometry {"type": "polygon",
+    "points": [[x, y], ...]} in sheet inches, inside viewport_id, measured with its scale). A person can approve it in
+    the same step (approve=true). Asks first."""
+    def go(c):
+        g = _obj(geometry, "geometry") if geometry not in ("", None) else None
+        return takeoffs.manual(c, _ctx(), int(estimate_id), module_id, feeds=feeds or None, qty=qty or None,
+                               unit=unit or None, kind=kind or None, label=label or None, room=room or None,
+                               viewport_id=int(viewport_id) or None, geometry=g, approve=bool(approve),
+                               confirm=bool(confirm))
+    return _run(go)
+
+
+def takeoff_list(estimate_id: int, module_id: str = "", status: str = "", sheet_id: int = 0) -> str:
+    """Measurements with status (proposed, approved = locked, rejected) and confidence; the review queue, lowest
+    confidence first; approved totals per trade question in that question's unit (what
+    runner_submit_takeoff(from_measurements=true) uses); ones that need re-measuring; suggested changes waiting."""
+    return _run(lambda c: takeoffs.list_measurements(c, _ctx(), int(estimate_id), module_id or None, status or None,
+                                                     int(sheet_id) or None))
+
+
+def takeoff_confirm(measurement_ids: list | str = "", estimate_id: int = 0, module_id: str = "",
+                    above_confidence: str = "", accept_suggestion: bool = False, confirm: bool = False) -> str:
+    """A person approves measurements, which locks them: by id, or a bulk approve of a trade's proposals at or above
+    a confidence (estimate_id + above_confidence, e.g. 0.9). accept_suggestion=true instead accepts the suggested
+    change on approved ones. Agents can't approve. Asks first."""
+    return _run(lambda c: takeoffs.confirm_measurements(
+        c, _ctx(), _ids(measurement_ids, "measurement_ids") if measurement_ids not in ("", None) else None,
+        estimate_id=int(estimate_id) or None, module_id=module_id or None,
+        above_confidence=above_confidence or None, accept_suggestion=bool(accept_suggestion), confirm=bool(confirm)))
+
+
+def takeoff_edit(measurement_id: int, qty: str = "", label: str = "", room: str = "", feeds: str = "",
+                 confirm: bool = False) -> str:
+    """Change a measurement's quantity, label, room or the question it feeds. Approved (locked) ones can only be
+    changed by a person; an agent gets told to use takeoff_suggest_change. Asks first."""
+    return _run(lambda c: takeoffs.edit(c, _ctx(), int(measurement_id), qty=qty or None, label=label or None,
+                                        room=room or None, feeds=feeds or None, confirm=bool(confirm)))
+
+
+def takeoff_delete(measurement_id: int, reason: str = "", confirm: bool = False) -> str:
+    """Reject a measurement. It's kept in the history with the reason and never priced. Approved ones can only be
+    rejected by a person. Asks first."""
+    return _run(lambda c: takeoffs.reject(c, _ctx(), int(measurement_id), reason, bool(confirm)))
+
+
+def takeoff_detail(measurement_id: int) -> str:
+    """Everything behind one measurement: the calculation, sheet and viewport with its scale, the source drawing
+    objects, method, confidence, who proposed and approved it, and every change."""
+    return _run(lambda c: takeoffs.detail(c, _ctx(), int(measurement_id)))
+
+
+def takeoff_suggest_change(measurement_id: int, qty: str, reason: str, confirm: bool = False) -> str:
+    """Propose a new value for an approved (locked) measurement. It's shown beside the approved value and never
+    replaces it; a person accepts it with takeoff_confirm(accept_suggestion=true). Asks first."""
+    return _run(lambda c: takeoffs.suggest_change(c, _ctx(), int(measurement_id), qty, reason, bool(confirm)))
+
+
 TOOLS = (
     est_director_start, est_director_next, est_director_change_lane, est_job_status, est_jobs_board,
     est_director_add_trade, est_director_book_site_visit, est_validate, est_scenarios, est_choose_scenario,
@@ -748,6 +834,8 @@ TOOLS = (
     est_agent_submit, est_agent_apply, est_agent_run_now,
     plan_upload, plan_process, plan_status, plan_get_sheets, plan_get_sheet_image, plan_get_viewports,
     plan_set_scale, plan_get_objects, plan_get_schedules, plan_update_schedule_row, plan_get_legends,
+    takeoff_propose, takeoff_manual, takeoff_list, takeoff_confirm, takeoff_edit, takeoff_delete,
+    takeoff_detail, takeoff_suggest_change,
 )
 
 

@@ -351,6 +351,8 @@ def save_results(conn, ctx: RequestContext, plan_set_id: int, results: dict, eng
               "linked_rows": 0, "legends": 0}
     company = ctx.company_id
     with service.transaction(conn):
+        from estimator.takeoff import measurements
+        reread = measurements.plan_set_reread(conn, ctx, ps["id"])            # approved ones are flagged, never lost
         conn.execute("DELETE FROM sheets WHERE plan_set_id = ?", (ps["id"],))     # cascades to everything below
         for s in checked:
             sheet_id = conn.execute(
@@ -403,7 +405,8 @@ def save_results(conn, ctx: RequestContext, plan_set_id: int, results: dict, eng
                      " page_count = COALESCE(?, page_count, ?) WHERE id = ?",
                      (_now(), engine_name or None, page_count, counts["sheets"], ps["id"]))
         service._log(conn, ctx, ps["estimate_id"], "plan_processed", {"plan_set_id": ps["id"], **counts})
-    return {"ok": True, "plan_set_id": ps["id"], "status": "processed", **counts}
+    return {"ok": True, "plan_set_id": ps["id"], "status": "processed", **counts,
+            "measurements": reread}
 
 
 def _link_rows(conn, plan_set_id: int, only_row_id: int | None = None) -> int:
@@ -654,16 +657,21 @@ def set_scale(conn, ctx: RequestContext, viewport_id: int, scale_note: str | Non
                      (new_ratio, int(is_nts), method, scale_note if scale_note else None, ctx.actor, _now(), vp["id"]))
         vp_now = {"scale_ratio": new_ratio, "is_nts": is_nts}
         measured = 0
+        changed = []
         for o in conn.execute("SELECT id, geometry_json FROM drawing_objects WHERE viewport_id = ?",
                               (vp["id"],)).fetchall():
+            changed.append(o["id"])
             g = geo.check_geometry(json.loads(o["geometry_json"]))
             real = _real_units(sheet["units"], vp_now, g)
             conn.execute("UPDATE drawing_objects SET real_units_json = ? WHERE id = ?", (real, o["id"]))
             measured += real is not None and real != "{}"
+        from estimator.takeoff import measurements
+        affected = measurements.objects_changed(conn, ctx, changed)
         ps = load_plan_set(conn, ctx, sheet["plan_set_id"])
         service._log(conn, ctx, ps["estimate_id"], "plan_scale_set",
                      {"viewport_id": vp["id"], "scale_ratio": new_ratio, "is_nts": is_nts, "method": method})
-    return {"ok": True, "viewport": _vp_out(_load_viewport(conn, ctx, vp["id"])), "objects": n, "measured": measured}
+    return {"ok": True, "viewport": _vp_out(_load_viewport(conn, ctx, vp["id"])), "objects": n, "measured": measured,
+            "measurements": affected}
 
 
 def update_schedule_row(conn, ctx: RequestContext, row_id: int, fields: dict | None = None, mark: str | None = None,

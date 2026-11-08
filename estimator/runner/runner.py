@@ -245,12 +245,23 @@ def _nonzero(value) -> bool:
 
 def submit_takeoff(conn, ctx: RequestContext, task_id: int, answers: dict | None = None, *,
                    confidence: int | None = None, note: str | None = None, cannot_measure: str | None = None,
-                   registry=None) -> dict:
-    """A takeoff agent (or a person) hands in the quantities for one trade, or says why it can't."""
+                   from_measurements: bool = False, registry=None) -> dict:
+    """A takeoff agent (or a person) hands in the quantities for one trade, or says why it can't.
+
+    from_measurements=true fills the answers from the trade's approved measurements (takeoff_list shows them);
+    answers given here are added on top and win for the same question."""
     if ctx.role not in SUBMIT_ROLES:
         raise PermissionDenied(f"role '{ctx.role}' can't submit takeoffs", role=ctx.role)
     reg = _registry(registry)
     task = _load_task(conn, ctx, task_id)
+    if from_measurements and not cannot_measure:
+        from estimator.takeoff import measurements
+        approved = measurements.approved_answers(conn, ctx, task["estimate_id"], task["module_id"], reg)
+        found = approved.get(task["module_id"], {})
+        if not found and not answers:
+            raise InvalidInput(f"there are no approved measurements for {task['module_id']} yet; approve some with "
+                               "takeoff_confirm, or give the answers", task_id=task["id"])
+        answers = {**found, **(answers or {})}
     if task["state"] not in ("running", "needs_review"):
         hint = {"queued": "it's waiting for " + ", ".join(task["depends_on"]),
                 "completed": "it's already approved; start a new run or revise the estimate to change it",
