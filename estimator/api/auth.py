@@ -60,6 +60,9 @@ class _Settings:
     mode: str = "personal"                # "personal" | "server"
     company_id: str = PERSONAL_COMPANY_ID
     verifier: Verifier | None = None
+    # Sprint 3: AI-Prowler's own app token (the Jobs app's Bearer) -> who, same shape as a verifier's answer.
+    # Plugged in by AI-Prowler's port-8000 server so the Jobs app's Estimates tab needs no second sign-in.
+    app_token_resolver: Callable[[str], "dict | None"] | None = None
 
 
 _settings = _Settings()
@@ -85,6 +88,11 @@ def configure(*, mode: str | None = None, company_id: str | None = None,
 
 def set_verifier(verifier: Verifier | None) -> None:
     _settings.verifier = verifier
+
+
+def set_app_token_resolver(fn: "Callable[[str], dict | None] | None") -> None:
+    """fn(bearer) -> {"user_id", "role", "name"?, "company_id"?} for a valid AI-Prowler app token, else None."""
+    _settings.app_token_resolver = fn
 
 
 def mode() -> str:
@@ -210,9 +218,33 @@ def resolve(headers: dict, client_ip: str) -> Caller | None:
         c = s["ctx"]
         return Caller(RequestContext(company_id=c["company_id"], user_id=c["user_id"], role=c["role"],
                                      mode=c["mode"]), s["name"], "session", tok)
+    app = _from_app_token(_h(headers, "authorization"))
+    if app is not None:
+        return app
     if mode() == "personal" and is_same_pc(headers, client_ip):
         return Caller(personal_context(), "Owner", "same_pc")
     return None
+
+
+def _from_app_token(authorization: str) -> Caller | None:
+    """An AI-Prowler app token (Authorization: Bearer only - never a cookie, so no CSRF exposure)."""
+    fn = _settings.app_token_resolver
+    if fn is None or not authorization.lower().startswith("bearer "):
+        return None
+    tok = authorization[7:].strip()
+    if not tok:
+        return None
+    try:
+        who = fn(tok)
+    except Exception:  # noqa: BLE001 - a broken resolver must never let anyone in
+        return None
+    if not who or str(who.get("role") or "") not in ROLES:
+        return None
+    ctx = RequestContext(company_id=str(who.get("company_id") or _settings.company_id),
+                         user_id=str(who.get("user_id") or ""), role=str(who["role"]), mode=mode())
+    if not ctx.user_id:
+        return None
+    return Caller(ctx, str(who.get("name") or ctx.user_id), "app_token")
 
 
 # ------------------------------------------------------------------ login

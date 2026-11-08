@@ -23,6 +23,8 @@ TESTIDS = {
     "job-card": 1,
     "nav-jobs": 1, "nav-board": 1, "nav-route": 1, "nav-calendar": 1, "nav-clock": 1,
     "nav-photos": 1, "nav-messages": 1, "nav-sheet": 1, "nav-reports": 1, "nav-profile": 1,
+    # 2026-11-08: the Estimator's Estimates tab (Estimator Coder 2 Sprint 3)
+    "nav-estimates": 1, "estimates-frame": 1,
 }
 
 # Existing stable ids the E2E suite also relies on (spec §5.2 priority 1)
@@ -30,6 +32,7 @@ IDS = [
     "authScreen", "authCode", "authError", "app",
     "screen-jobs", "screen-board", "screen-route", "screen-calendar", "screen-clock",
     "screen-photos", "screen-messages", "screen-reports", "screen-profile",
+    "screen-estimates", "navEstimates", "estimatesFrame",
     "routeDatePicker", "routeMap", "routePrescreen", "routeWarnings", "routeStopsList",
     # 2026-10-22: routeAiSuggestBtn (🧠 Run AI Route, Claude CLI) was removed;
     # routeCopyAiBtn (📋 Copy AI Route for Any AI) took its place.

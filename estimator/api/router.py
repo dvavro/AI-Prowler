@@ -70,11 +70,13 @@ MARGIN_WORDS = ("cost", "margin", "overhead", "profit", "burden", "markup")
 
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
+    # Sprint 3: the Jobs app (same site, port 8000) shows the Estimator in its Estimates tab, so it may be
+    # framed by pages from its own origin only - never by another site.
+    "X-Frame-Options": "SAMEORIGIN",
     "Referrer-Policy": "no-referrer",
     # Self-contained app (spec: no CDN, no web fonts): only our own files may load.
     "Content-Security-Policy": "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; "
-                               "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+                               "script-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'",
 }
 
 

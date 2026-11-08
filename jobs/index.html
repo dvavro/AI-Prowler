@@ -1082,6 +1082,14 @@ textarea::placeholder{color:#c0c6d8}
       </div>
     </div>
 
+    <!-- 🧮 Estimates (2026-11-08, Estimator Coder 2 Sprint 3): the Estimator web app from this same
+         server (/estimator/), framed so the bottom bar stays. It signs in with this app's own token
+         (localStorage ap_auth), so no second login. Loaded the first time the tab is opened. -->
+    <div id="screen-estimates" class="screen">
+      <iframe id="estimatesFrame" title="Estimates" data-testid="estimates-frame"
+              style="width:100%;height:calc(100vh - 150px);border:0;border-radius:12px;background:#fff"></iframe>
+    </div>
+
     <div id="screen-profile" class="screen">
       <h1 class="section-head">My Account</h1>
       <p class="section-sub">Device &amp; session info</p>
@@ -1493,6 +1501,12 @@ textarea::placeholder{color:#c0c6d8}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="8" width="14" height="11" rx="2"/><circle cx="9.5" cy="13" r="1.2"/><circle cx="14.5" cy="13" r="1.2"/><line x1="12" y1="4" x2="12" y2="8"/><circle cx="12" cy="3.5" r="1"/></svg>
       <span class="nav-label">Agent<span id="agNavBadge" style="display:none;margin-left:3px;background:#d97706;color:#fff;border-radius:8px;padding:0 5px;font-size:10px"></span></span>
     </button>
+    <!-- 🧮 Estimates (2026-11-08): quick estimates on the phone. Hidden until the server says the
+         Estimator is there (estimatesInit). -->
+    <button class="nav-btn" id="navEstimates" data-testid="nav-estimates" onclick="showScreen('estimates',this);estimatesOpen()" style="display:none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="11" x2="10" y2="11"/><line x1="14" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="10" y2="15"/><line x1="14" y1="15" x2="16" y2="18"/><line x1="16" y1="15" x2="14" y2="18"/></svg>
+      <span class="nav-label">Estimates</span>
+    </button>
     <button class="nav-btn" data-testid="nav-profile" onclick="showScreen('profile',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
       <span class="nav-label">Profile</span>
@@ -1710,6 +1724,24 @@ function _withAuth(headers) {
   const t = state.serverMode ? ACCESS_TOKEN : BEARER_TOKEN;
   if (t) headers['Authorization'] = 'Bearer ' + t;
   return headers;
+}
+
+// ── 🧮 ESTIMATES TAB (2026-11-08, Estimator Coder 2 Sprint 3) ────────────────
+// The tab appears only when this server answers /estimator-api/health (the Estimator is installed and
+// switched on). The frame opens the Estimator's quick estimate page; the Estimator reads this app's
+// sign-in from localStorage 'ap_auth' (same site), so the same person is signed in there.
+async function estimatesInit() {
+  const btn = document.getElementById('navEstimates');
+  if (!btn) return;
+  try {
+    const r = await fetch('/estimator-api/health', { cache: 'no-store' });
+    const d = r.ok ? await r.json() : null;
+    btn.style.display = (d && d.ok) ? '' : 'none';
+  } catch (e) { btn.style.display = 'none'; }
+}
+function estimatesOpen() {
+  const f = document.getElementById('estimatesFrame');
+  if (f && !f.getAttribute('src')) f.setAttribute('src', '/estimator/?embed=1#/quick');
 }
 
 // ── STATE ─────────────────────────────────────────────────────────────────
@@ -2011,6 +2043,7 @@ function bootApp() {
     if (navAgent.style.display === '') agentBadge();
   }
   mileageInit();   // Mileage tab / Clock vehicle picker / Profile switch (2026-10-24)
+  estimatesInit(); // 🧮 Estimates tab when this AI-Prowler has the Estimator (2026-11-08)
   loadJobs(); setConn(true);
   _restoreOpenClock();   // R-025: still clocked in after the app was closed
   checkSmsConfiguredStatus();

@@ -72,6 +72,51 @@ def make_server_verifier(load_users: Callable[[], "dict | None"],
     return verify
 
 
+def personal_app_token_resolver(is_valid: Callable[[str], bool], owner_name: Callable[[], str] | None = None):
+    """Personal mode: a valid AI-Prowler app token (the Jobs app's Bearer) is the owner."""
+    def resolve(token: str) -> "dict | None":
+        if not token or not is_valid(token):
+            return None
+        name = ""
+        if owner_name is not None:
+            try:
+                name = owner_name() or ""
+            except Exception:  # noqa: BLE001 - the name is only for display
+                name = ""
+        return {"user_id": "owner", "role": "owner", "name": name or "Owner", "company_id": PERSONAL_COMPANY_ID}
+    return resolve
+
+
+def server_app_token_resolver(raw_token_for: Callable[[str], "str | None"],
+                              load_users: Callable[[], "dict | None"],
+                              resolve_user: Callable[["dict | None", str], "dict | None"]):
+    """Server mode: the Jobs app's access token -> its users.json user (active only) -> Estimator role.
+    raw_token_for(access_token) is AI-Prowler's own lookup (it also applies the Jobs app's idle timeout)."""
+    def resolve(token: str) -> "dict | None":
+        raw = raw_token_for(token) if token else None
+        if not raw:
+            return None
+        data = load_users()
+        user = resolve_user(data, raw) if data else None
+        if not user:
+            return None
+        role = estimator_role(user)
+        if not role:
+            return None
+        return {"user_id": str(user.get("id") or ""), "role": role, "name": str(user.get("name") or ""),
+                "company_id": str((data or {}).get("company_id") or PERSONAL_COMPANY_ID)}
+    return resolve
+
+
+def connect_app_tokens(resolver) -> None:
+    """Called from AI-Prowler's port-8000 router once its token store exists. Never raises."""
+    try:
+        from estimator.api import auth
+        auth.set_app_token_resolver(resolver)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Estimator: app sign-in not connected: %s", e)
+
+
 def should_start(is_http_server: bool) -> tuple[bool, str]:
     """Whether this process should run the web app, and why not."""
     if not is_http_server:
@@ -90,9 +135,11 @@ def start_from_ai_prowler(*, is_http_server: bool, server_mode: bool,
     Returns the local URL, or "" when it didn't start."""
     try:
         ok, why = should_start(is_http_server)
-        if not ok:
+        if not ok and "ESTIMATOR_WEB" not in why:
             log.info("Estimator web app not started: %s", why)
             return ""
+        # Sign-in is set up even with ESTIMATOR_WEB=off: AI-Prowler's own port-8000 server also serves the
+        # Estimator (/estimator, /estimator-api) for the Jobs app and Remote Access.
         from estimator.api import auth, server
         if server_mode:
             if load_users is None or resolve_user is None:
@@ -103,6 +150,9 @@ def start_from_ai_prowler(*, is_http_server: bool, server_mode: bool,
             auth.configure(mode="server", verifier=make_server_verifier(load_users, resolve_user))
         else:
             auth.configure(mode="personal")
+        if not ok:
+            log.info("Estimator web app on its own port not started (%s); still served by AI-Prowler", why)
+            return ""
         return server.start_with_ai_prowler()
     except Exception as e:  # noqa: BLE001 - the Estimator must never stop AI-Prowler starting
         log.warning("Estimator web app not started: %s", e)

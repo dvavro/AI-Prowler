@@ -65,8 +65,22 @@ class ApiError extends Error {
   constructor(status, body) { super((body && body.message) || ("HTTP " + status)); this.status = status; this.body = body; }
 }
 
+// Sprint 3: inside AI-Prowler's own site (port 8000 / Remote Access) the Jobs app keeps its sign-in in
+// localStorage "ap_auth" (same site, so this page can read it). Sending it as a Bearer token lets the
+// Estimates tab open without a second sign-in. On the Estimator's own port there is no ap_auth.
+const EMBEDDED = window.self !== window.top || new URLSearchParams(location.search).has("embed");
+function appToken() {
+  try {
+    const s = JSON.parse(localStorage.getItem("ap_auth") || "null");
+    if (!s) return "";
+    return (s.mode === "server" ? s.access_token : s.token) || "";
+  } catch (e) { return ""; }
+}
+let APP_TOKEN = appToken();
+
 async function api(method, path, body) {
   const opts = { method, credentials: "same-origin", headers: {} };
+  if (APP_TOKEN) opts.headers["Authorization"] = "Bearer " + APP_TOKEN;
   if (method !== "GET") {
     opts.headers["X-Estimator-Request"] = "1";
     opts.headers["Content-Type"] = "application/json";
@@ -75,7 +89,13 @@ async function api(method, path, body) {
   const r = await fetch(API + path, opts);
   let data = null;
   try { data = await r.json(); } catch (e) { data = null; }
-  if (r.status === 401) { showLogin(data && data.message); throw new ApiError(401, data); }
+  if (r.status === 401) {
+    // A Jobs app token that no longer works (signed out, idle timeout) must not hide the Estimator's own
+    // sign-in cookie, so it's dropped and the sign-in form shows.
+    APP_TOKEN = "";
+    showLogin(data && data.message);
+    throw new ApiError(401, data);
+  }
   if (!r.ok || (data && data.ok === false)) throw new ApiError(r.status, data);
   return data;
 }
@@ -387,6 +407,7 @@ function uploadRaw(estimateId, f, replaces, onProgress) {
     const qs = "?name=" + encodeURIComponent(f.name) + (replaces ? "&supersedes=" + encodeURIComponent(replaces) : "");
     x.open("POST", API + "/estimates/" + estimateId + "/plans/stage" + qs);
     x.withCredentials = true;
+    if (APP_TOKEN) x.setRequestHeader("Authorization", "Bearer " + APP_TOKEN);
     x.setRequestHeader("X-Estimator-Request", "1");
     x.setRequestHeader("Content-Type", "application/octet-stream");
     x.upload.onprogress = ev => { if (ev.lengthComputable) onProgress(Math.round(ev.loaded * 100 / ev.total)); };
@@ -695,7 +716,8 @@ function onChange(ev) {
 
 function startLive() {
   stopLive();
-  if (window.EventSource) {
+  // EventSource can't send an Authorization header, so with the Jobs app's token the page polls instead.
+  if (window.EventSource && !APP_TOKEN) {
     const es = new EventSource(API + "/events");
     state.es = es;
     es.addEventListener("open", () => setLive("on", "Live updates on"));
@@ -730,6 +752,7 @@ function stopLive() {
 
 // ------------------------------------------------------------------ boot
 async function boot() {
+  if (EMBEDDED) document.body.classList.add("embedded");   // inside the Jobs app's Estimates tab
   $("login-form").addEventListener("submit", doLogin);
   $("logout").addEventListener("click", doLogout);
   $("menu-toggle").addEventListener("click", () => $("nav").classList.toggle("open"));

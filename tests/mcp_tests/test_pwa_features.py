@@ -349,7 +349,11 @@ class TestFeature1_AppShell:
         # (jobs-agent-spec.md J3: its suggestions, approve / edit / reject, its settings
         # and diagrams). Shown to the owner and managers only; the markup is always
         # present = 12.
-        assert 4 <= count <= 12, f"Expected 4-12 nav tabs, got {count}"
+        # 2026-11-08: widened from 4-12 to 4-13 -- the Estimator's "Estimates" tab
+        # (Estimator Coder 2 Sprint 3: quick estimates on the phone, the Estimator web
+        # app framed from /estimator/). Hidden until /estimator-api/health answers;
+        # the markup is always present = 13.
+        assert 4 <= count <= 13, f"Expected 4-13 nav tabs, got {count}"
         for label in ["Jobs", "Calendar", "Clock", "Photos", "Profile"]:
             assert label in nav_section, f"Nav tab '{label}' missing"
 

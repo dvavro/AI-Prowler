@@ -7164,6 +7164,36 @@ try:
 except Exception as _exc:  # the Estimator must never stop AI-Prowler starting
     _log.warning("Estimator web app not started: %s", _exc)
 
+
+# Estimator on THIS server too (Coder 2 Sprint 3, 2026-11-08, David): /estimator and /estimator-api are
+# answered by AI-Prowler's own port-8000 server (both routers below), so Remote Access and the Jobs app's
+# Estimates tab reach it. Same rules as port 8770; the Jobs app's token signs people in.
+def _est_bridge_path(path: str) -> bool:
+    return path == "/estimator" or path.startswith(("/estimator/", "/estimator-api"))
+
+
+async def _est_bridge(scope, receive, send) -> None:
+    try:
+        from estimator.api import asgi_bridge as _eab
+    except Exception as _e:  # the Estimator isn't installed / failed to import
+        _log.warning("Estimator not available on this server: %s", _e)
+        _b = b"The Estimator isn't available on this AI-Prowler."
+        await send({"type": "http.response.start", "status": 404,
+                    "headers": [[b"content-type", b"text/plain; charset=utf-8"],
+                                [b"content-length", str(len(_b)).encode()]]})
+        await send({"type": "http.response.body", "body": _b, "more_body": False})
+        return
+    await _eab.handle(scope, receive, send)
+
+
+def _est_connect_app_tokens(resolver_factory) -> None:
+    """Let the Jobs app's token sign people in to the Estimator. Never raises."""
+    try:
+        from estimator.api import prowler_link as _epl
+        _epl.connect_app_tokens(resolver_factory(_epl))
+    except Exception as _e:
+        _log.warning("Estimator: Jobs app sign-in not connected: %s", _e)
+
 # Module-level event set by the background prewarm thread when ChromaDB and
 # the embedding model are fully loaded.  Tool handlers that need ChromaDB
 # wait on this event (max 60s) before proceeding.
@@ -33457,6 +33487,11 @@ def _run_server_mode(port: int, token: str,
     # from the user's display name — the token never becomes the id.
     for _ut in (users_data.get("users") or {}).keys():
         _srv_access_tokens[_ut] = _ut
+    # Estimator (Coder 2 Sprint 3): the Jobs app's access token signs its user in to the Estimator too
+    # (same lookup and idle timeout as /desk-api; users.json re-read each time, roles via prowler_link).
+    _est_connect_app_tokens(lambda _epl: _epl.server_app_token_resolver(
+        lambda _t: _srv_raw_token_for(_t) if _t in _srv_access_tokens else None,
+        lambda: _hot_reload_users(users_data), _resolve_user))
 
     # 2026-10-28: OAuth sign-ins (claude.ai connector) are saved in
     # ~/.ai-prowler/oauth_tokens_server.json — token hashes + expiry, plus a
@@ -34014,6 +34049,13 @@ def _run_server_mode(port: int, token: str,
                                         [b"content-length", str(len(_srv_body)).encode()],
                                         [b"cache-control", b"no-cache"]]})
                 await send({"type": "http.response.body", "body": _srv_body})
+                return
+
+            # ── Estimator web app + API, server mode (Coder 2 Sprint 3, 2026-11-08) ──
+            # Everyone signs in (Estimator login with the AI-Prowler name + token, or the
+            # Jobs app's access token); roles come from users.json (prowler_link).
+            if _est_bridge_path(path):
+                await _est_bridge(scope, receive, send)
                 return
 
             # ── Service Desk app + API, server mode (2026-10-27, David) ────────
@@ -35581,6 +35623,9 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     _access_tokens = _AccessTokenSet()
     # Pre-add the user's own bearer token so existing curl/manual clients still work
     _access_tokens.add(token)
+    # Estimator (Coder 2 Sprint 3): the same Bearer Token the Jobs/Remote/Desk apps use is the owner there too.
+    _est_connect_app_tokens(lambda _epl: _epl.personal_app_token_resolver(
+        lambda _t: _t in _access_tokens, _get_personal_owner_name))
 
     PUBLIC_BASE = public_base.rstrip("/")   # passed in from CLI / config.json
 
@@ -36723,6 +36768,13 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                 return
             # ── end PWA static server ─────────────────────────────────────
 
+
+            # ── Estimator web app + API, personal mode (Coder 2 Sprint 3, 2026-11-08) ──
+            # Same PC: no login. Through Remote Access: the Jobs app's Bearer Token or
+            # the Estimator's own sign-in (owner + Remote Access token).
+            if _est_bridge_path(path):
+                await _est_bridge(scope, receive, send)
+                return
 
             # ── Service Desk app + API, personal mode (Solo edition, 2026-10-27) ──
             # Same Bearer Token as the Jobs and Remote apps (/pwa-verify signs

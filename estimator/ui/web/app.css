@@ -96,6 +96,9 @@ input.cost.changed { border-color: var(--brand); background: #eef4ff; }
 .status.sample { background: #fff8e6; border-color: #f0d48a; }
 textarea { font: 13px/1.4 Consolas, monospace; width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
 details > summary { cursor: pointer; font-weight: 600; }
+/* Sprint 3: inside the Jobs app's Estimates tab - its own bar already shows who is signed in */
+body.embedded .brand, body.embedded .search, body.embedded .user, body.embedded #logout { display: none; }
+body.embedded { --top-h: 44px; }
 
 .toast { position: fixed; right: 16px; bottom: 16px; background: var(--ink); color: #fff; padding: 10px 14px;
          border-radius: 6px; max-width: 360px; box-shadow: 0 4px 14px rgba(0, 0, 0, .2); }

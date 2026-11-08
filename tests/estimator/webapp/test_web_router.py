@@ -209,7 +209,9 @@ def test_app_page_and_files(call):
     assert page.status == 200 and page.content_type.startswith("text/html")
     assert b'src="app.js"' in page.body and b"<script>" not in page.body     # no inline script (CSP)
     assert "default-src 'self'" in page.headers["Content-Security-Policy"]
-    assert page.headers["X-Frame-Options"] == "DENY"
+    # Sprint 3: framed only by its own site (the Jobs app's Estimates tab), never by another site.
+    assert page.headers["X-Frame-Options"] == "SAMEORIGIN"
+    assert "frame-ancestors 'self'" in page.headers["Content-Security-Policy"]
     assert call("GET", "/estimator/app.js").content_type.startswith("text/javascript")
     assert call("GET", "/estimator/app.css").content_type.startswith("text/css")
     assert call("GET", "/estimator/plans").body == page.body                # deep link falls back to the app
