@@ -704,7 +704,7 @@ def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
         ps = store.load_plan_set(conn, ctx, s["plan_set_id"])
         return _ok(sheet=sheet, viewports=store.viewports(conn, ctx, s["id"])["viewports"],
                    plan_set={"id": ps["id"], "file": ps["original_name"], "estimate_id": ps["estimate_id"]},
-                   can_edit=can_edit)
+                   found=_found_on_sheet(conn, s["id"]), can_edit=can_edit)
 
     mm = _SHEET_IMAGE.match(sub)
     if mm and m == "GET":
@@ -730,6 +730,36 @@ def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
                                                   calibration=cal or None, confirm=b.get("confirm") is True))
 
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
+
+
+def _found_on_sheet(conn, sheet_id: int) -> list[dict]:
+    """What the plan engine found on a sheet, by kind: how many, and the measured total (feet or square feet) for the
+    ones that could be measured. The sheet was already checked to belong to the caller's company."""
+    from decimal import Decimal, InvalidOperation
+
+    totals: dict[str, dict] = {}
+    for kind, real in conn.execute("SELECT kind, real_units_json FROM drawing_objects WHERE sheet_id = ?", (sheet_id,)):
+        t = totals.setdefault(kind, {"kind": kind, "count": 0, "measured": 0, "length_ft": Decimal(0),
+                                     "area_sqft": Decimal(0)})
+        t["count"] += 1
+        if not real:
+            continue
+        try:
+            r = json.loads(real)
+            if r.get("length_ft") is not None:
+                t["length_ft"] += Decimal(str(r["length_ft"]))
+            if r.get("area_sqft") is not None:
+                t["area_sqft"] += Decimal(str(r["area_sqft"]))
+            t["measured"] += 1
+        except (ValueError, InvalidOperation, AttributeError):
+            continue
+    order = ("room", "wall", "symbol", "dimension", "text", "polygon", "polyline", "line", "opening")
+    out = []
+    for kind in sorted(totals, key=lambda k: order.index(k) if k in order else 99):
+        t = totals[kind]
+        out.append({**t, "length_ft": str(t["length_ft"].quantize(Decimal("0.01"))),
+                    "area_sqft": str(t["area_sqft"].quantize(Decimal("0.01")))})
+    return out
 
 
 # ------------------------------------------------------------------ Sprint 4: Help (how-to guides)

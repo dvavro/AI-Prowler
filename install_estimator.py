@@ -84,6 +84,13 @@ def main() -> int:
     except ImportError:
         print("Python is missing PyYAML. Run:  pip install pyyaml   then run this again.")
         return 1
+    # The plan engine works without these, with less: no DXF drawings without ezdxf, no rooms without shapely.
+    for module, package, what in (("ezdxf", "ezdxf", "reading DXF drawings"), ("shapely", "shapely", "finding rooms")):
+        try:
+            __import__(module)
+        except ImportError:
+            print(f"Note: {package} isn't installed, so the plan engine can't do {what}. "
+                  f"Run:  pip install {package}")
 
     # 1. copy the estimator package
     target = DST / "estimator"

@@ -207,9 +207,10 @@ def test_broken_pdf(tmp_path):
         pe.process(bad, "pdf", {"work_dir": str(tmp_path / "w")})
 
 
-def test_dxf_waits_for_the_next_release(tmp_path):
-    with pytest.raises(ValueError, match="next plan-engine release"):
-        pe.process(tmp_path / "a.dxf", "dxf", {"work_dir": str(tmp_path / "w")})
+def test_dwg_says_how_to_get_it_read(tmp_path):
+    # Sprint 6 reads DXF (test_plan_engine_sprint6.py); DWG still needs a converter.
+    with pytest.raises(ValueError, match="save the drawing as DXF"):
+        pe.process(tmp_path / "a.dwg", "dwg", {"work_dir": str(tmp_path / "w")})
 
 
 def test_scan_with_dpi(tmp_path):

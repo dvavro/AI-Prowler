@@ -19,6 +19,8 @@ def make_pdf(path: Path, pages: list[dict]) -> Path:
         ops = []
         for (x0, top, x1, bottom) in p.get("rects", []):
             ops.append(f"{x0 * 72:.2f} {(h - bottom) * 72:.2f} {(x1 - x0) * 72:.2f} {(bottom - top) * 72:.2f} re S")
+        for (xa, ya, xb, yb) in p.get("lines", []):           # straight lines, inches from the top-left
+            ops.append(f"{xa * 72:.3f} {(h - ya) * 72:.3f} m {xb * 72:.3f} {(h - yb) * 72:.3f} l S")
         for (x, top, size, text) in p.get("texts", []):
             base = (h - top) * 72 - size * 0.8
             ops.append(f"BT /F1 {size} Tf {x * 72:.2f} {base:.2f} Td ({_esc(text)}) Tj ET")

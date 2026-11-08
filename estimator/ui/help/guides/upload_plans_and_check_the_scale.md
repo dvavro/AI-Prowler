@@ -12,5 +12,6 @@ The plan engine reads a PDF plan set: it splits it into sheets, reads each title
 ## Good to know
 - Changing a scale re-measures everything in that view.
 - Scans and photos have no text the engine can read yet, so calibrate them.
-- DXF and DWG drawings are read from a later plan-engine release; print them to PDF for now.
+- **Found on this sheet** lists the walls and rooms the engine found (and, for DXF drawings, symbols, notes and dimensions), with their measured totals once the view has a scale.
+- DXF drawings are read at real size, so they never need a scale. DWG files need converting: save as DXF from your CAD program, or print to PDF.
 - Owners and estimators can read plans and set scales; reviewers and field staff can look at them.

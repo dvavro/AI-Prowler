@@ -805,6 +805,7 @@ async function renderSheet(main, id) {
       el("span", {}, (v.label || "View") + " · " + (v.is_nts ? "NTS" : v.scale_note || (v.measurable ? "1:" + v.scale_ratio : "no scale")))), v.bbox, s));
   }
   const parts = [...head];
+  if (r.found && r.found.length) parts.push(foundSummary(r.found));
   if (s.has_image) {
     parts.push(stage);
     sheetImageUrl(id).then(u => { img.src = u; }).catch(e => stage.replaceChildren(errorBox(e)));
@@ -813,6 +814,22 @@ async function renderSheet(main, id) {
   }
   parts.push(el("h3", {}, "Views and scales"), viewportTable(r, s, stage, img, msg), msg);
   main.replaceChildren(...parts);
+}
+
+// Sprint 6: what the plan engine found on the sheet (walls, rooms, symbols...), with measured totals.
+const KIND_WORDS = { room: "rooms", wall: "walls", symbol: "symbols", dimension: "dimensions", text: "notes",
+                     polygon: "shapes", polyline: "paths", line: "lines", opening: "openings" };
+function foundSummary(found) {
+  const items = found.map(f => {
+    const parts = [f.count + " " + (KIND_WORDS[f.kind] || words(f.kind))];
+    if (f.measured && parseFloat(f.area_sqft) > 0) parts.push(Math.round(parseFloat(f.area_sqft)).toLocaleString() + " sq ft");
+    else if (f.measured && parseFloat(f.length_ft) > 0) parts.push(Math.round(parseFloat(f.length_ft)).toLocaleString() + " ft");
+    if (f.measured < f.count && ["room", "wall"].includes(f.kind)) parts.push((f.count - f.measured) + " not measured yet — set the scale");
+    return el("li", { "data-kind": f.kind }, parts.join(" · "));
+  });
+  return el("div", { class: "card section", id: "sheet-found" }, el("strong", {}, "Found on this sheet"),
+    el("ul", { class: "checklist" }, items),
+    el("p", { class: "muted small" }, "Checking and approving them comes with Blueprint Review."));
 }
 
 function viewportTable(r, s, stage, img, msg) {

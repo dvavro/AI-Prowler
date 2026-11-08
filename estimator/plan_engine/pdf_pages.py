@@ -76,7 +76,35 @@ class Page:
     words: list[Word] = field(default_factory=list)
     lines: list[Line] = field(default_factory=list)
     rects: list[list[float]] = field(default_factory=list)     # [x0, top, x1, bottom] in inches
+    segments: list = field(default_factory=list)                # ((x0, y0), (x1, y1)) line work, inches
     image_path: str | None = None
+
+
+MAX_SEGMENTS = 120000             # line work kept per page (hatching-heavy sheets stop here)
+
+
+def _segments(pp) -> list:
+    """Every straight piece of line work on a pdfplumber page, in inches from the top-left: lines, the edges of
+    rectangles and the pieces of curves and polylines."""
+    out = []
+
+    def add(a, b):
+        if len(out) < MAX_SEGMENTS:
+            out.append(((a[0] / PT, a[1] / PT), (b[0] / PT, b[1] / PT)))
+
+    for ln in pp.lines:
+        pts = ln.get("pts") or [(ln["x0"], ln["top"]), (ln["x1"], ln["bottom"])]
+        for a, b in zip(pts, pts[1:]):
+            add(a, b)
+    for r in pp.rects:
+        x0, t, x1, b = r["x0"], r["top"], r["x1"], r["bottom"]
+        for a, c in (((x0, t), (x1, t)), ((x1, t), (x1, b)), ((x1, b), (x0, b)), ((x0, b), (x0, t))):
+            add(a, c)
+    for cv in pp.curves:
+        pts = cv.get("pts") or []
+        for a, b in zip(pts, pts[1:]):
+            add(a, b)
+    return out
 
 
 def render_dpi(width_in: float, height_in: float) -> int:
@@ -148,6 +176,7 @@ def read(path: Path, work_dir: Path | None, max_pages: int, render: bool = True)
                                                float(w.get("size") or 0)))
                 for r in pp.rects:
                     page.rects.append([r["x0"] / PT, r["top"] / PT, r["x1"] / PT, r["bottom"] / PT])
+                page.segments = _segments(pp)
                 page.lines = group_lines(page.words)
                 pages.append(page)
                 pp.flush_cache() if hasattr(pp, "flush_cache") else None
