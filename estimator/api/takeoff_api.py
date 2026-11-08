@@ -152,7 +152,9 @@ def route(m: str, sub: str, req, ctx, conn):
             " AND geometry_json IS NOT NULL", (ctx.company_id, eid))}
         for x in listing["measurements"]:
             x["geometry"] = shapes.get(x["id"])
+        from estimator.api import links
         return _ok(estimate={"id": est["id"], "title": est["title"], "status": est["status"]},
+                   links=links.estimate_links(conn, ctx, eid, est, reg),
                    plan_sets=[{"id": p["id"], "file": p.get("original_name"), "status": p["status"]} for p in sets],
                    sheets=sheets, trades=trades, other_trades=others, takeoff=listing,
                    can_measure=can_measure, can_approve=can_approve, can_correct=can_correct)

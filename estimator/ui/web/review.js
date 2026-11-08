@@ -81,7 +81,10 @@ async function renderReview(main, estimateId) {
   RV.draft = [];
   if (!d.can_measure && !["select", "pan"].includes(RV.tool)) RV.tool = "select";    // a reviewer only looks and approves
   if (q.get("m")) RV.measurementId = +q.get("m") || null;
-  const wanted = +(q.get("sheet") || 0);
+  // Sprint 8: ?line=<id> (from the Estimates screen) highlights every measurement behind that priced line.
+  RV.lineId = +(q.get("line") || 0) || null;
+  const lineSheet = RV.lineId ? (lineMeasurements(RV.lineId).find(m => m.sheet_id) || {}).sheet_id : null;
+  const wanted = +(q.get("sheet") || 0) || lineSheet;
   const firstSheet = d.sheets.find(s => s.id === wanted) || d.sheets.find(s => s.id === RV.sheetId) ||
     d.sheets.find(s => s.objects) || d.sheets[0];
   const head = [el("p", {}, el("a", { href: "#/projects/" + estimateId }, "← " + d.estimate.title)),
@@ -110,9 +113,9 @@ async function renderReview(main, estimateId) {
   const viewerBox = el("div", { class: "bp-viewer", id: "bp-viewer", tabindex: "0", "aria-label": "Blueprint" });
   const side = el("div", { class: "bp-side" },
     el("div", { class: "bp-tabs", role: "tablist" },
-      tabButton("list", "Measurements"), tabButton("layers", "Layers"), tabButton("detail", "Detail")),
-    el("div", { class: "bp-pane", id: "bp-pane-list" }), el("div", { class: "bp-pane", id: "bp-pane-layers", hidden: true }),
-    el("div", { class: "bp-pane", id: "bp-pane-detail", hidden: true }));
+      tabButton("list", "Measurements"), tabButton("lines", "Lines"), tabButton("layers", "Layers"), tabButton("detail", "Detail")),
+    el("div", { class: "bp-pane", id: "bp-pane-list" }), el("div", { class: "bp-pane", id: "bp-pane-lines", hidden: true }),
+    el("div", { class: "bp-pane", id: "bp-pane-layers", hidden: true }), el("div", { class: "bp-pane", id: "bp-pane-detail", hidden: true }));
   main.replaceChildren(...head,
     el("div", { class: "row bp-bar" }, prev, sheetPick, next, toolPalette(msg), viewButtons()),
     el("p", { class: "muted small", id: "bp-tool-help" }, TOOLS.find(t => t[0] === RV.tool)[3]),
@@ -121,7 +124,59 @@ async function renderReview(main, estimateId) {
   RV.viewer = new Viewer(viewerBox, msg);
   $("bp-pane-list").replaceChildren(measurementPanel(msg));
   await openSheet(firstSheet.id, msg);
-  if (RV.measurementId) showDetail(RV.measurementId, msg, false);
+  if (RV.lineId) { showTab("lines"); RV.viewer.zoomToSelection(true); }
+  else if (RV.measurementId) showDetail(RV.measurementId, msg, true);
+}
+
+// ------------------------------------------------------------------ Sprint 8: priced lines <-> measurements
+function linkData() { return (RV.data && RV.data.links) || { lines: [], measurements: [], trades: [] }; }
+function lineMeasurements(lineId) {
+  const ln = linkData().lines.find(l => l.line_id === lineId);
+  if (!ln) return [];
+  const ids = new Set(ln.measurement_ids.concat(ln.proposed_ids));
+  return RV.data.takeoff.measurements.filter(m => ids.has(m.id));
+}
+function linesFor(measurementId) {
+  const m = linkData().measurements.find(x => x.id === measurementId);
+  return m ? linkData().lines.filter(l => m.line_ids.includes(l.line_id)) : [];
+}
+
+function drawLinesPanel() {
+  const pane = $("bp-pane-lines");
+  if (!pane) return;
+  const lines = linkData().lines;
+  if (!lines.length) {
+    pane.replaceChildren(el("p", { class: "muted", id: "bp-lines-empty" }, "No lines are priced on this estimate yet. Approve measurements, then price the trade on the Estimates screen."));
+    return;
+  }
+  const byTrade = new Map();
+  for (const l of lines) { if (!byTrade.has(l.module_id)) byTrade.set(l.module_id, []); byTrade.get(l.module_id).push(l); }
+  const parts = [el("p", { class: "muted small" }, "Click a line to see every measurement behind it on the plan.")];
+  for (const [mod, ls] of byTrade) {
+    parts.push(el("h4", {}, tradeName(mod)), el("ul", { class: "bp-rows", id: "bp-lines-" + mod }, ls.map(l => {
+      const ms = lineMeasurements(l.line_id), here = ms.filter(m => m.sheet_id === RV.sheetId).length;
+      const li = el("li", { class: "bp-row" + (RV.lineId === l.line_id ? " active" : ""), "data-line": l.line_id, tabindex: "0" },
+        el("span", { class: "bp-row-name" }, l.description),
+        el("span", { class: "bp-row-qty" }, num(l.quantity) + " " + l.unit),
+        el("span", { class: "muted small" }, ms.length ? "📏 " + ms.length + " measurement(s)" + (ms.length > here ? " · " + here + " on this sheet" : "") :
+          l.questions.length ? "not measured yet" : "entered by hand"),
+        el("a", { href: "#/estimates/" + RV.estimateId + "?line=" + l.line_id, class: "small", onclick: ev => ev.stopPropagation() }, "on the estimate"));
+      const pick = () => {
+        RV.lineId = RV.lineId === l.line_id ? null : l.line_id;
+        RV.measurementId = null;
+        drawMeasurements(); drawLinesPanel();
+        if (RV.lineId) {
+          const other = ms.find(m => m.sheet_id && m.sheet_id !== RV.sheetId);
+          if (!here && other && $("review-sheet")) { $("review-sheet").value = other.sheet_id; openSheet(other.sheet_id, $("review-message")).then(() => RV.viewer.zoomToSelection(true)); }
+          else RV.viewer.zoomToSelection(true);
+        }
+      };
+      li.addEventListener("click", pick);
+      li.addEventListener("keydown", ev => { if (ev.key === "Enter") pick(); });
+      return li;
+    })));
+  }
+  pane.replaceChildren(...parts);
 }
 
 function tabButton(id, label) {
@@ -131,7 +186,7 @@ function tabButton(id, label) {
 }
 function showTab(id) {
   for (const t of document.querySelectorAll(".bp-tab")) t.classList.toggle("active", t.dataset.tab === id);
-  for (const p of ["list", "layers", "detail"]) { const n = $("bp-pane-" + p); if (n) n.hidden = p !== id; }
+  for (const p of ["list", "lines", "layers", "detail"]) { const n = $("bp-pane-" + p); if (n) n.hidden = p !== id; }
 }
 
 function toolPalette(msg) {
@@ -180,6 +235,7 @@ async function openSheet(sheetId, msg) {
   $("bp-notes").replaceChildren(...(warn.length ? [el("p", { class: "note warn", id: "bp-sheet-note" }, warn.join(" "))] : []));
   RV.viewer.load();
   drawLayersPanel();
+  drawLinesPanel();
   refreshList(msg);
 }
 
@@ -236,13 +292,16 @@ class Viewer {
     this.tx = r.width / 2 - (b[0] + w / 2) * this.z; this.ty = r.height / 2 - (b[1] + h / 2) * this.z;
     this.render();
   }
-  zoomToSelection() {
+  zoomToSelection(quiet) {
     const pts = [];
     for (const id of RV.selected) { const o = RV.byId.get(id); if (o && o.geometry) pts.push(...o.geometry.points); }
-    const m = currentMeasurement();
-    if (m && m.geometry) pts.push(...m.geometry.points);
-    if (m) for (const id of m.source_object_ids) { const o = RV.byId.get(id); if (o && o.geometry) pts.push(...o.geometry.points); }
-    if (!pts.length) { toast("Select something first."); return; }
+    const cur = currentMeasurement();
+    const ms = (cur ? [cur] : []).concat(RV.lineId ? lineMeasurements(RV.lineId) : []).filter(m => m.sheet_id === RV.sheetId);
+    for (const m of ms) {
+      if (m.geometry) pts.push(...m.geometry.points);
+      for (const id of m.source_object_ids) { const o = RV.byId.get(id); if (o && o.geometry) pts.push(...o.geometry.points); }
+    }
+    if (!pts.length) { if (!quiet) toast("Select something first."); return; }
     const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
     this.zoomToBox([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
   }
@@ -338,18 +397,33 @@ class Viewer {
     const s = this.start;
     this.start = null;
     if (!s || s.moved) return;
-    const [ux, uy] = this.toSheet(ev.clientX, ev.clientY);
     if (RV.tool === "select") { pickAt(s.target, s.shift, this.msg); return; }
     if (RV.tool === "pan") return;
-    addDraftPoint([round3(ux), round3(uy)], this.msg);
+    const p = this.place(ev);
+    addDraftPoint([round3(p[0]), round3(p[1])], this.msg);
+  }
+  // Sprint 8 polish: snap to the drawing's corners (within 10 px; hold Alt to place freely), and Shift keeps the new
+  // segment straight across or straight down.
+  place(ev) {
+    let [ux, uy] = this.toSheet(ev.clientX, ev.clientY);
+    this.snapped = null;
+    const last = RV.draft[RV.draft.length - 1];
+    if (ev.shiftKey && last && RV.tool !== "count") {
+      if (Math.abs(ux - last[0]) >= Math.abs(uy - last[1])) uy = last[1]; else ux = last[0];
+    }
+    if (!ev.altKey) {
+      const hit = snapPoint([ux, uy], 10 / this.z, ev.shiftKey && last ? last : null);
+      if (hit) { [ux, uy] = hit; this.snapped = hit; }
+    }
+    return [ux, uy];
   }
   hover(ev) {
-    if (!RV.draft.length || ["select", "pan"].includes(RV.tool)) return;
-    const [ux, uy] = this.toSheet(ev.clientX, ev.clientY);
-    this.drawDraft([ux, uy]);
+    if (["select", "pan"].includes(RV.tool)) return;
+    this.drawDraft(this.place(ev));
   }
   key(ev) {
     if (ev.key === "Escape") { RV.draft = []; this.drawDraft(); }
+    else if ((ev.key === "Backspace" || ev.key === "Delete") && RV.draft.length) { RV.draft.pop(); this.drawDraft(); }
     else if (ev.key === "Enter") finishDraft(this.msg);
     else if (ev.key === "+" || ev.key === "=") this.zoomBy(1.5);
     else if (ev.key === "-") this.zoomBy(1 / 1.5);
@@ -360,8 +434,14 @@ class Viewer {
   drawDraft(cursor) {
     let g = this.overlay.querySelector("#bp-draft");
     if (g) g.remove();
-    if (!RV.draft.length) { draftReadout(""); return; }
+    const ring = this.snapped && cursor ? svg("polyline", { points: this.snapped + " " + this.snapped, class: "bp-snap" }) : null;
+    if (!RV.draft.length) {
+      draftReadout("");
+      if (ring) { g = svg("g", { id: "bp-draft" }); g.append(ring); this.overlay.append(g); }
+      return;
+    }
     g = svg("g", { id: "bp-draft" });
+    if (ring) g.append(ring);
     const pts = cursor && RV.tool !== "count" ? RV.draft.concat([cursor]) : RV.draft.slice();
     const shape = draftShape(pts);
     if (shape.type === "point") {
@@ -376,6 +456,29 @@ class Viewer {
 }
 
 function round3(v) { return Math.round(v * 1000) / 1000; }
+
+// The nearest corner of something drawn on the sheet (shown layers only) or of the shape being drawn, within tol.
+// With `along` (Shift held), only corners in line with that point count, so the segment stays straight.
+function snapPoint(p, tol, along) {
+  const hidden = new Set(layerPrefs().hidden);
+  let best = null, bestD = tol;
+  const consider = q => {
+    if (along && Math.abs(q[0] - along[0]) > 1e-9 && Math.abs(q[1] - along[1]) > 1e-9) return;
+    const dd = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    if (dd < bestD) { bestD = dd; best = [q[0], q[1]]; }
+  };
+  for (const o of RV.objects) {
+    if (!o.geometry || hidden.has(o.group)) continue;
+    const pts = o.geometry.points;
+    const b = o._box || (o._box = [Math.min(...pts.map(v => v[0])), Math.min(...pts.map(v => v[1])),
+                                    Math.max(...pts.map(v => v[0])), Math.max(...pts.map(v => v[1]))]);
+    if (p[0] < b[0] - tol || p[0] > b[2] + tol || p[1] < b[1] - tol || p[1] > b[3] + tol) continue;
+    for (const q of pts) consider(q);
+  }
+  for (const q of RV.draft.slice(0, -1)) consider(q);
+  if (RV.draft.length > 2 && RV.tool === "area") consider(RV.draft[0]);
+  return best;
+}
 
 // The tile comes through the API with the same sign-in (cookie, or the Jobs app's token - then fetched as a blob).
 async function tileUrl(sheetId, level, x, y) {
@@ -467,8 +570,10 @@ function drawMeasurements() {
   g.replaceChildren();
   for (const o of g.ownerSVGElement.querySelectorAll("[data-oid].in-m, [data-oid].sel")) o.classList.remove("in-m", "sel");
   const cur = currentMeasurement();
+  const lineIds = new Set(RV.lineId ? lineMeasurements(RV.lineId).map(m => m.id) : []);
   for (const m of sheetMeasurements()) {
-    const cls = "bp-m " + m.status + (cur && cur.id === m.id ? " sel" : "");
+    const on = (cur && cur.id === m.id) || lineIds.has(m.id);
+    const cls = "bp-m " + m.status + (on ? " sel" : "");
     if (m.geometry) {
       const gm = m.geometry, pts = gm.points.map(p => p.join(",")).join(" ");
       let n;
@@ -484,7 +589,7 @@ function drawMeasurements() {
     }
     for (const id of m.source_object_ids) {
       const n = g.ownerSVGElement.querySelector('[data-oid="' + id + '"]');
-      if (n) { n.classList.add("in-m"); if (cur && cur.id === m.id) n.classList.add("sel"); }
+      if (n) { n.classList.add("in-m"); if (on) n.classList.add("sel"); }
     }
   }
   for (const id of RV.selected) {
@@ -682,7 +787,12 @@ function saveForm(msg, what) {
   fillFeeds();
   const label = el("input", { id: "bp-label", maxlength: 200, value: what.label || "", placeholder: "e.g. Kitchen floor" });
   const room = el("input", { id: "bp-room", maxlength: 200, value: what.room || "", placeholder: "Room" });
-  const kinds = what.objectIds ? ["area", "perimeter", "length", "count"] : null;
+  // From the drawing: any kind. A drawn closed shape: its area or its perimeter (e.g. baseboard round a room).
+  const kinds = what.objectIds ? ["area", "perimeter", "length", "count"]
+    : what.geometry && what.geometry.type === "polygon" ? ["area", "perimeter"] : null;
+  const qtyIn = what.typed ? el("input", { id: "bp-typed-qty", inputmode: "decimal", maxlength: 20, "aria-label": "Quantity" }) : null;
+  const unitIn = what.typed ? el("select", { id: "bp-typed-unit", "aria-label": "Unit" },
+    [["sqft", "sq ft"], ["lf", "linear ft"], ["ea", "each"], ["sy", "sq yd"], ["cy", "cu yd"]].map(([v, l]) => el("option", { value: v }, l))) : null;
   const kind = kinds ? el("select", { id: "bp-kind", "aria-label": "Measure" }, kinds.map(k => el("option", { value: k, selected: k === what.kind }, words(k)))) : null;
   const each = what.objectIds && what.objectIds.length > 1 ? el("input", { type: "checkbox", id: "bp-each" }) : null;
   const approve = d.can_approve ? el("input", { type: "checkbox", id: "bp-approve" }) : null;
@@ -690,9 +800,11 @@ function saveForm(msg, what) {
   const cancel = el("button", { class: "button", type: "button", id: "bp-save-cancel" }, "Cancel");
   const out = el("div", { id: "bp-save-confirm" });
   const card = el("div", { class: "card section", id: "bp-save-box" },
-    el("p", {}, el("strong", {}, what.objectIds ? "Measure " + what.objectIds.length + " selected item(s)" : "New " + words(what.kind) + " measurement"),
-      " — " + (what.geometry ? previewText(what.geometry) : "the size comes from the drawing")),
-    el("div", { class: "form-grid" }, el("label", {}, "Trade", trade), el("label", {}, "Answers", feeds),
+    el("p", {}, el("strong", {}, what.objectIds ? "Measure " + what.objectIds.length + " selected item(s)"
+        : what.typed ? "Type a number in" : "New " + words(what.kind) + " measurement"),
+      " — " + (what.geometry ? previewText(what.geometry) : what.typed ? "from a site visit, a schedule or the plans' own numbers" : "the size comes from the drawing")),
+    el("div", { class: "form-grid" }, qtyIn ? el("label", {}, "Quantity", qtyIn) : null, unitIn ? el("label", {}, "Unit", unitIn) : null,
+      el("label", {}, "Trade", trade), el("label", {}, "Answers", feeds),
       kind ? el("label", {}, "Measure", kind) : null, el("label", {}, "Label", label), el("label", {}, "Room", room),
       each ? el("label", { class: "check" }, each, " One measurement per item") : null,
       approve ? el("label", { class: "check" }, approve, " Approve it now (locks it)") : null),
@@ -706,13 +818,27 @@ function saveForm(msg, what) {
       Object.assign(body, { object_ids: what.objectIds, kind: kind.value, one_per_object: !!(each && each.checked) });
       reviewAsk(out, save, "/estimates/" + RV.estimateId + "/measurements/propose", body,
         x => x.count + " measurement(s) saved" + (x.approved ? " and approved" : " — waiting for approval"), "bp-save");
+    } else if (what.typed) {
+      if (!qtyIn.value.trim()) { qtyIn.focus(); return; }
+      Object.assign(body, { qty: qtyIn.value.trim().replace(/,/g, ""), unit: unitIn.value });
+      reviewAsk(out, save, "/estimates/" + RV.estimateId + "/measurements", body,
+        x => "Saved " + num(x.measurement.qty) + " " + x.measurement.unit + (x.measurement.status === "approved" ? " (approved)" : " — waiting for approval"), "bp-save");
     } else {
-      Object.assign(body, { geometry: what.geometry, viewport_id: what.viewportId, kind: what.kind });
+      Object.assign(body, { geometry: what.geometry, viewport_id: what.viewportId, kind: kind ? kind.value : what.kind });
       reviewAsk(out, save, "/estimates/" + RV.estimateId + "/measurements", body,
         x => "Saved " + num(x.measurement.qty) + " " + x.measurement.unit + (x.measurement.status === "approved" ? " (approved)" : " — waiting for approval"), "bp-save");
     }
   });
-  label.focus();
+  if (unitIn) {                                  // the question picked decides the unit unless the user changes it
+    const syncUnit = () => {
+      const t = trades.find(x => x.module_id === trade.value), qn = t && t.questions.find(x => x.id === feeds.value);
+      if (qn && qn.unit && [...unitIn.options].some(o => o.value === qn.unit)) unitIn.value = qn.unit;
+    };
+    feeds.addEventListener("change", syncUnit);
+    trade.addEventListener("change", syncUnit);
+    syncUnit();
+    qtyIn.focus();
+  } else label.focus();
 }
 
 // Ask the server's question, then repeat with confirm=true. Unlike askThen, it keeps the viewer where it is and
@@ -753,6 +879,7 @@ async function refreshData() {
   RV.data = await api("GET", "/estimates/" + RV.estimateId + "/takeoff");
   drawMeasurements();
   refreshList($("review-message"));
+  drawLinesPanel();
 }
 
 // ------------------------------------------------------------------ the measurement list (by trade and room)
@@ -792,6 +919,11 @@ function refreshList(msg) {
       el("label", { class: "check" }, queue, " Review queue (lowest confidence first)"))];
   if (t.suggestions_waiting.length) parts.push(el("p", { class: "note warn", id: "bp-suggestions" }, t.suggestions_waiting.length + " approved measurement(s) have a suggested change waiting for a person."));
   if (t.needs_remeasure.length) parts.push(el("p", { class: "note warn", id: "bp-remeasure" }, t.needs_remeasure.length + " measurement(s) need measuring again (the plans or a scale changed)."));
+  if (RV.data.can_measure) {
+    const typed = el("button", { class: "button", type: "button", id: "bp-type-number" }, "＋ Type a number in…");
+    typed.addEventListener("click", () => saveForm($("review-message") || msg, { typed: true }));
+    parts.push(el("div", { class: "row" }, typed));
+  }
   if (RV.data.can_approve && t.counts.proposed) parts.push(bulkApprove(msg));
   if (!rows.length) {
     parts.push(el("div", { class: "card empty", id: "bp-list-empty" }, t.measurements.length ? "Nothing matches." :
@@ -889,6 +1021,14 @@ async function showDetail(id, msg, zoom) {
       el("ul", { class: "small", id: "bp-sources" }, d.source_objects.slice(0, 50).map(o => el("li", {}, objectLabel({ ...o, layer: null }) + " · " + words(o.source) + " " + pct(o.confidence)))));
   }
   if (d.missing_objects.length) parts.push(el("p", { class: "note warn" }, d.missing_objects.length + " drawing object(s) it came from are gone (the plans were read again)."));
+  // Sprint 8: the priced lines this measurement drives (through the question it answers).
+  const feeds = linesFor(x.id);
+  parts.push(el("h4", {}, x.status === "approved" ? "Priced lines it feeds" : "Lines it will feed once approved"), feeds.length
+    ? el("ul", { class: "small", id: "bp-feeds-lines" }, feeds.map(l => el("li", {},
+        el("a", { href: "#/estimates/" + RV.estimateId + "?line=" + l.line_id }, l.description), " · " + num(l.quantity) + " " + l.unit)))
+    : el("p", { class: "muted small", id: "bp-feeds-lines" }, x.feeds
+        ? (x.status === "approved" ? "None yet — price " + tradeName(x.module_id) + " on the Estimates screen to use it." : "None until it's approved.")
+        : "It isn't linked to a question, so it isn't priced."));
   parts.push(detailActions(x, msg));
   if (d.history.length) {
     parts.push(el("details", { id: "bp-history" }, el("summary", {}, "History (" + d.history.length + ")"),

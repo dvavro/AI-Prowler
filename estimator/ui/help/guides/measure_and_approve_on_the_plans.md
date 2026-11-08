@@ -12,6 +12,9 @@ Blueprint Review is where you check what gets priced. Only approved measurements
 8. Tick **Approve it now** when you save to approve in one step, or use **Approve all…** to approve every proposal at or above a confidence.
 
 ## Good to know
+- While drawing, points snap to the corners of what's on the plan (a red ring shows the snap); hold **Alt** to place a point freely, hold **Shift** to keep a line straight across or down, and press **Backspace** to take back the last point. A drawn area can be saved as its **perimeter** instead (for example baseboard round a room).
+- **＋ Type a number in…** adds a measurement without drawing (from a site visit or a schedule).
+- The **Lines** tab lists the estimate's priced lines: click one to highlight every measurement behind it. A measurement's **Detail** shows the lines it feeds, with a link to the estimate.
 - On an approved measurement, **Suggest a change…** records a different number beside the approved one. A person clicks **Accept the suggestion…** to use it. Re-reading the plans or changing a scale also shows up as a suggestion, or as "re-measure".
 - The **Layers** tab shows and hides groups (Rooms, Walls, Doors & windows, Electrical, Plumbing…) and locks them so they can't be clicked. CAD layers are sorted into these groups by name. What's shown is remembered on this browser.
 - Owners and estimators measure. Owners, estimators and reviewers approve, correct and reject. Office and field staff don't see Takeoffs.

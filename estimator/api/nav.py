@@ -34,7 +34,7 @@ SCREENS = (
      "status": "coming", "sprint": 11,
      "tools": ["review_highlight", "symbol_detections_list", "symbol_detection_review", "symbol_find_similar",
                "review_start", "review_save", "review_approve", "review_history"]},
-    {"id": "estimates", "label": "Estimates", "icon": "🧮", "roles": ALL, "status": "coming", "sprint": 8,
+    {"id": "estimates", "label": "Estimates", "icon": "🧮", "roles": ALL, "status": "ready", "sprint": 8,
      "tools": ["est_get_estimate", "est_apply_assembly", "est_add_line_item", "est_update_line_item",
                "est_calculate", "est_validate", "est_scenarios", "est_compare_history", "est_create_revision"]},
     # Field staff send quotes too (David, 2026-11-08: the same roles as bid_send, service.QUICK_ROLES); they see
@@ -82,6 +82,10 @@ PAGES = (
      "tools": ["takeoff_list", "takeoff_detail", "takeoff_manual", "takeoff_propose", "takeoff_confirm",
                "takeoff_edit", "takeoff_delete", "takeoff_suggest_change", "plan_get_objects",
                "plan_get_sheet_image", "plan_set_scale"]},
+    # Sprint 8: one estimate - trades and lines linked both ways to their measurements, options, checks, revisions.
+    {"id": "estimate", "label": "Estimate", "from": "estimates", "sprint": 8,
+     "tools": ["est_get_estimate", "est_add_line_item", "est_calculate", "est_validate", "est_scenarios",
+               "est_choose_scenario", "est_compare_history", "est_create_revision", "est_quick_answer", "takeoff_list"]},
 )
 
 # What each role may do, sent to the browser so it can hide buttons. The server

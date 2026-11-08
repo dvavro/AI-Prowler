@@ -172,6 +172,8 @@ function parseHash() {
   if (parts[0] === "sheets" && /^\d+$/.test(parts[1] || "")) return { screen: "plans", page: "sheet", arg: +parts[1] };
   // Sprint 7: Blueprint Review for one project (review.js); ?sheet=<id>&m=<measurement> open a sheet or measurement.
   if (parts[0] === "takeoffs" && /^\d+$/.test(parts[1] || "")) return { screen: "takeoffs", page: "takeoff", arg: +parts[1] };
+  // Sprint 8: one estimate (estimates.js), linked to its measurements; ?line=<id> opens that line.
+  if (parts[0] === "estimates" && /^\d+$/.test(parts[1] || "")) return { screen: "estimates", page: "estimate", arg: +parts[1] };
   return { screen: parts[0] || "dashboard", page: null, arg: null };
 }
 
@@ -316,9 +318,12 @@ async function renderProject(main, id) {
     tile(p.plan_sets.length, "plan sets"),
     tile(est.due_date || "—", "due"),
     est.address ? tile(est.address, "address", "wide") : null));
+  const go2 = el("p", { class: "row" });
+  if (canOpen("estimates")) go2.append(el("a", { class: "button", id: "project-estimate", href: "#/estimates/" + est.id }, "🧮 Open the estimate"));
   if (canOpen("takeoffs") && p.plan_sets.length) {
-    parts.push(el("p", {}, el("a", { class: "button", id: "project-review", href: "#/takeoffs/" + est.id }, "📏 Blueprint Review — measure and approve")));
+    go2.append(el("a", { class: "button", id: "project-review", href: "#/takeoffs/" + est.id }, "📏 Blueprint Review — measure and approve"));
   }
+  if (go2.childNodes.length) parts.push(go2);
 
   // Trades: per-trade subtotal and headline quantities (est_project_status)
   const trades = st.trades.length

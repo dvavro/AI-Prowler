@@ -64,6 +64,8 @@ Sprint 6-7 (Coder 2):
   Blueprint Review (Takeoffs screen: owner, estimator, reviewer): see estimator/api/takeoff_api.py -
   GET /takeoffs, GET /estimates/<id>/takeoff, POST /estimates/<id>/measurements[/propose], GET /measurements/<id>,
   POST /measurements/approve, POST /measurements/<id>/edit|reject|suggest (takeoff_* tools; writes ask first)
+Sprint 8 (Coder 2): Estimates screen - see estimator/api/estimate_api.py: GET /estimates/<id>/detail|validate|history,
+  POST /estimates/<id>/options[/choose], /lines, /calculate, /revision, /use-measurements; links in estimator/api/links.py
 Static: /estimator and /estimator/<file> from estimator/ui/web/.
 """
 from __future__ import annotations
@@ -413,6 +415,11 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
     # ---------------------------------------------------------- Sprint 5: Plans (plan engine, sheets, scales)
     if sub == "/plans" or sub.startswith(("/plan-sets/", "/sheets/", "/viewports/")):
         return _plans(m, sub, req, ctx, conn)
+
+    # ---------------------------------------------------------- Sprint 8: Estimates screen (linked to measurements)
+    from estimator.api import estimate_api
+    if estimate_api.handles(sub):
+        return estimate_api.route(m, sub, req, ctx, conn, see)
 
     # ---------------------------------------------------------- Sprint 7: Blueprint Review (Takeoffs screen)
     from estimator.api import takeoff_api
