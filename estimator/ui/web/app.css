@@ -111,6 +111,19 @@ ul.guides { list-style: none; padding: 0; }
 ul.guides li { padding: 8px 0; border-bottom: 1px solid var(--line); }
 .guide ol li, .guide ul li { margin: 6px 0; }
 
+/* Sprint 5: Plans - the sheet with its viewport boxes, and two-point calibration */
+.sheet-stage { position: relative; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff;
+               max-width: 100%; margin: 12px 0; }
+.sheet-stage img { display: block; width: 100%; height: auto; }
+.sheet-stage.calibrating { cursor: crosshair; outline: 3px solid #f0b400; }
+.vp-box { position: absolute; border: 2px solid #2f6fdf; background: rgba(47, 111, 223, .06); pointer-events: none; }
+.vp-box.unscaled { border-color: #d48a00; border-style: dashed; background: rgba(240, 180, 0, .08); }
+.vp-box.nts { border-color: #888; border-style: dotted; }
+.vp-box span { position: absolute; left: 0; top: 0; background: rgba(255, 255, 255, .9); font-size: 11px; padding: 1px 4px; }
+.cal-dot { position: absolute; width: 12px !important; height: 12px !important; margin: -6px 0 0 -6px; border-radius: 50%;
+           background: #e0262b; border: 2px solid #fff; box-shadow: 0 0 0 1px #e0262b; pointer-events: none; }
+input.scale-note { width: 13em; }
+
 .toast { position: fixed; right: 16px; bottom: 16px; background: var(--ink); color: #fff; padding: 10px 14px;
          border-radius: 6px; max-width: 360px; box-shadow: 0 4px 14px rgba(0, 0, 0, .2); }
 

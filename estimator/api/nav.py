@@ -22,7 +22,7 @@ SCREENS = (
      "tools": ["est_create_estimate", "est_list_estimates", "est_add_trade", "est_remove_trade",
                "est_project_status"]},
     {"id": "plans", "label": "Plans", "icon": "📐", "roles": ("owner", "estimator", "reviewer", "field"),
-     "status": "coming", "sprint": 5,
+     "status": "ready", "sprint": 5,
      "tools": ["plan_upload", "plan_process", "plan_status", "plan_get_sheets", "plan_get_viewports",
                "plan_set_scale", "plan_get_legends", "plan_get_schedules", "plan_update_schedule_row",
                "plan_compare_revisions"]},
@@ -71,6 +71,11 @@ PAGES = (
     {"id": "bid", "label": "Quote", "from": "bids", "sprint": 4,
      "tools": ["bid_preview", "bid_send", "bid_set_status", "bid_convert_to_job"]},
     {"id": "guide", "label": "How-to guide", "from": "help", "sprint": 4, "tools": ["how_to_estimate"]},
+    # Sprint 5: a plan set's sheets (read by the plan engine) and one sheet with its viewports, scales and calibration.
+    {"id": "plan_set", "label": "Plan set", "from": "plans", "sprint": 5,
+     "tools": ["plan_status", "plan_get_sheets", "plan_process"]},
+    {"id": "sheet", "label": "Sheet", "from": "plans", "sprint": 5,
+     "tools": ["plan_get_viewports", "plan_get_sheet_image", "plan_set_scale"]},
 )
 
 # What each role may do, sent to the browser so it can hide buttons. The server

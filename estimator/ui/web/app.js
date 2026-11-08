@@ -103,6 +103,7 @@ async function api(method, path, body) {
 }
 
 function can(perm) { return !!(state.me && state.me.permissions && state.me.permissions[perm]); }
+function canOpen(screenId) { return !!(state.me && state.me.menu.some(s => s.id === screenId && s.status === "ready")); }
 
 function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
 
@@ -166,6 +167,9 @@ function parseHash() {
   if (parts[0] === "jobs") return { screen: "dashboard", page: /^\d+$/.test(parts[1] || "") ? "job" : "jobs", arg: +parts[1] || null };
   if (parts[0] === "bids" && /^\d+$/.test(parts[1] || "")) return { screen: "bids", page: "bid", arg: +parts[1] };
   if (parts[0] === "help" && /^[a-z0-9_]+$/.test(parts[1] || "")) return { screen: "help", page: "guide", arg: parts[1] };
+  // Sprint 5: a plan set's sheets, and one sheet (viewports, scales, calibration).
+  if (parts[0] === "plan-sets" && /^\d+$/.test(parts[1] || "")) return { screen: "plans", page: "plan_set", arg: +parts[1] };
+  if (parts[0] === "sheets" && /^\d+$/.test(parts[1] || "")) return { screen: "plans", page: "sheet", arg: +parts[1] };
   return { screen: parts[0] || "dashboard", page: null, arg: null };
 }
 
@@ -364,7 +368,8 @@ function planTable(rows) {
       el("th", {}, "Status"), el("th", {}, "Sheets"), el("th", {}, "Uploaded"))),
     el("tbody", {}, rows.map(r => el("tr", {},
       el("td", {}, r.id),
-      el("td", {}, r.file, r.warnings && r.warnings.length ? el("div", { class: "muted small" }, "⚠ " + r.warnings.join(" · ")) : null),
+      el("td", {}, canOpen("plans") ? el("a", { href: "#/plan-sets/" + r.id }, r.file) : r.file,
+        r.warnings && r.warnings.length ? el("div", { class: "muted small" }, "⚠ " + r.warnings.join(" · ")) : null),
       el("td", {}, String(r.file_type || "").toUpperCase()),
       el("td", {}, r.revision),
       el("td", {}, el("span", { class: "status" }, words(r.status)), r.error ? el("div", { class: "error small" }, r.error) : null),
@@ -692,6 +697,190 @@ function importBox() {
     text, el("label", { class: "check" }, addNew, " Add rows that don't match a price as new prices"), go, msg);
 }
 
+// ------------------------------------------------------------------ Plans (Sprint 5: plan engine, sheets, scales)
+const DISCIPLINE_ICON = { architectural: "🏠", structural: "🧱", plumbing: "🚰", electrical: "⚡", mechanical: "🌀",
+  landscape: "🌳", roof: "🏚", site: "🗺", civil: "🛣", fire: "🔥", general: "📄", other: "📄" };
+
+async function renderPlans(main, screen) {
+  const r = await api("GET", "/plans");
+  const parts = [el("div", { class: "page-head" }, el("h2", {}, screen.label), helpLink("plans")),
+    el("p", { class: "muted" }, "Plan sets on your projects. Upload plans from a project's page; open a set to read it and check its sheets and scales.")];
+  if (!r.engine.installed) parts.push(el("p", { class: "note warn" }, "The plan engine isn't installed on this PC, so plans can be uploaded but not read yet."));
+  if (!r.plan_sets.length) {
+    parts.push(el("div", { class: "card empty", id: "plans-empty" }, "No plans yet — open a project and upload a PDF, DXF or photo."));
+  } else {
+    parts.push(el("table", { class: "list clickable", id: "plan-sets" },
+      el("thead", {}, el("tr", {}, el("th", {}, "Project"), el("th", {}, "File"), el("th", {}, "Rev"), el("th", {}, "Status"),
+        el("th", {}, "Sheets"), el("th", {}, "Uploaded"))),
+      el("tbody", {}, r.plan_sets.map(p => el("tr", { "data-id": p.id, onclick: () => go("#/plan-sets/" + p.id) },
+        el("td", {}, el("a", { href: "#/projects/" + p.estimate_id, onclick: ev => ev.stopPropagation() }, p.estimate_title)),
+        el("td", {}, el("a", { href: "#/plan-sets/" + p.id }, p.file)),
+        el("td", {}, p.revision),
+        el("td", {}, el("span", { class: "status" }, words(p.status))),
+        el("td", {}, p.sheets || "—"),
+        el("td", {}, when(p.created_at)))))));
+  }
+  main.replaceChildren(...parts);
+}
+
+let planPoll = null;
+async function renderPlanSet(main, id) {
+  clearTimeout(planPoll);
+  const r = await api("GET", "/plan-sets/" + id);
+  const ps = r.plan_set;
+  const msg = el("div", { id: "plan-message", role: "status" });
+  const parts = [el("p", {}, el("a", { href: "#/projects/" + r.estimate.id }, "← " + r.estimate.title)),
+    el("div", { class: "page-head" }, el("h2", {}, "📐 " + ps.file + (ps.revision > 1 ? " (revision " + ps.revision + ")" : "")), helpLink("plans")),
+    el("p", { class: "muted", id: "plan-say" }, ps.say)];
+  if (ps.status === "failed") parts.push(el("p", { class: "error" }, ps.error || "Reading failed."));
+  if (r.can_edit && ps.status !== "processing") {
+    if (!r.engine.installed) {
+      parts.push(el("p", { class: "note warn" }, "The plan engine isn't installed on this PC."));
+    } else {
+      const read = el("button", { class: "primary", type: "button", id: "plan-read" },
+        ps.status === "processed" ? "Read the plans again…" : "📖 Read the plans…");
+      read.addEventListener("click", () => askThen(msg, read, "/plan-sets/" + id + "/process", {},
+        () => "Reading the plans in the background…", "plan"));
+      parts.push(el("div", { class: "row" }, read));
+    }
+  }
+  parts.push(msg);
+  if (ps.status === "processing") {
+    parts.push(el("p", { class: "note", id: "plan-processing" }, "⏳ The plan engine is reading the sheets. This page updates by itself."));
+    planPoll = setTimeout(() => { if (state.page === "plan_set" && state.pageArg === id && !state.busy) route(); }, 3000);
+  }
+  if (r.sheets.length) {
+    const need = r.sheets.filter(s => s.needs_scale).length;
+    if (need) parts.push(el("p", { class: "note warn", id: "plan-need-scale" }, need + " sheet(s) need a scale before anything on them can be measured — open the sheet to set or calibrate it."));
+    parts.push(el("table", { class: "list clickable", id: "sheets" },
+      el("thead", {}, el("tr", {}, el("th", {}, "Page"), el("th", {}, "Sheet"), el("th", {}, "Title"), el("th", {}, "Discipline"),
+        el("th", {}, "Scales"), el("th", {}, "Rev"))),
+      el("tbody", {}, r.sheets.map(s => el("tr", { "data-id": s.id, onclick: () => go("#/sheets/" + s.id) },
+        el("td", {}, s.page_no),
+        el("td", {}, el("a", { href: "#/sheets/" + s.id }, s.sheet_no || "page " + s.page_no)),
+        el("td", {}, s.title || "—"),
+        el("td", {}, (DISCIPLINE_ICON[s.discipline] || "") + " " + words(s.discipline)),
+        el("td", {}, s.viewports.map(v => v.is_nts ? "NTS" : (v.scale_note || (v.measurable ? "1:" + v.scale_ratio : "—"))).join(" · "),
+          s.needs_scale ? el("span", { class: "status sample" }, " needs a scale") : null),
+        el("td", {}, s.revision || ""))))));
+  } else if (ps.status === "processed") {
+    parts.push(el("div", { class: "card empty" }, "No sheets were found in this file."));
+  }
+  main.replaceChildren(...parts);
+}
+
+// The sheet image comes through the API with the same sign-in as everything else (cookie or the Jobs app's token).
+async function sheetImageUrl(sheetId) {
+  const headers = APP_TOKEN ? { Authorization: "Bearer " + APP_TOKEN } : {};
+  const r = await fetch(API + "/sheets/" + sheetId + "/image", { credentials: "same-origin", headers });
+  if (!r.ok) throw new Error("the sheet image couldn't be loaded (" + r.status + ")");
+  return URL.createObjectURL(await r.blob());
+}
+
+function placeBox(node, box, sheet) {
+  // Inline style attributes are blocked by the page's CSP; setting styles from script is allowed.
+  const w = parseFloat(sheet.width), h = parseFloat(sheet.height);
+  node.style.left = (box[0] / w * 100) + "%";
+  node.style.top = (box[1] / h * 100) + "%";
+  node.style.width = ((box[2] - box[0]) / w * 100) + "%";
+  node.style.height = ((box[3] - box[1]) / h * 100) + "%";
+  return node;
+}
+
+async function renderSheet(main, id) {
+  const r = await api("GET", "/sheets/" + id);
+  const s = r.sheet;
+  const msg = el("div", { id: "sheet-message", role: "status" });
+  const head = [el("p", {}, el("a", { href: "#/plan-sets/" + r.plan_set.id }, "← " + r.plan_set.file)),
+    el("div", { class: "page-head" }, el("h2", {}, (s.sheet_no || "Page " + s.page_no) + (s.title ? " — " + s.title : "")), helpLink("plans")),
+    el("p", { class: "muted" }, (DISCIPLINE_ICON[s.discipline] || "") + " " + words(s.discipline) +
+      (s.revision ? " · rev " + s.revision : "") + (s.revision_date ? " · " + s.revision_date : "") +
+      (s.units === "paper_in" && s.width ? " · " + parseFloat(s.width) + "″ × " + parseFloat(s.height) + "″ sheet" : " · drawn in " + s.units))];
+  const stage = el("div", { class: "sheet-stage", id: "sheet-stage" });
+  const img = el("img", { id: "sheet-image", alt: "Sheet " + (s.sheet_no || s.page_no) });
+  stage.append(img);
+  for (const v of r.viewports) {
+    if (!v.bbox) continue;
+    stage.append(placeBox(el("div", { class: "vp-box" + (v.measurable ? "" : v.is_nts ? " nts" : " unscaled"), "data-vp": v.id },
+      el("span", {}, (v.label || "View") + " · " + (v.is_nts ? "NTS" : v.scale_note || (v.measurable ? "1:" + v.scale_ratio : "no scale")))), v.bbox, s));
+  }
+  const parts = [...head];
+  if (s.has_image) {
+    parts.push(stage);
+    sheetImageUrl(id).then(u => { img.src = u; }).catch(e => stage.replaceChildren(errorBox(e)));
+  } else {
+    parts.push(el("p", { class: "muted" }, "This sheet has no image yet."));
+  }
+  parts.push(el("h3", {}, "Views and scales"), viewportTable(r, s, stage, img, msg), msg);
+  main.replaceChildren(...parts);
+}
+
+function viewportTable(r, s, stage, img, msg) {
+  if (!r.viewports.length) return el("div", { class: "card empty" }, "No views were found on this sheet.");
+  const paper = s.units === "paper_in";
+  return el("table", { class: "list", id: "viewports" },
+    el("thead", {}, el("tr", {}, el("th", {}, "View"), el("th", {}, "Scale"), el("th", {}, "How it was found"),
+      r.can_edit && paper ? el("th", {}, "Change it") : null)),
+    el("tbody", {}, r.viewports.map(v => el("tr", { "data-vp": v.id },
+      el("td", {}, v.label || "View " + v.id),
+      el("td", {}, v.is_nts ? "Not to scale (NTS)" : v.measurable ? (v.scale_note || "1 : " + v.scale_ratio) + " — 1″ = " + v.scale_ratio + "″" :
+        el("span", { class: "status sample" }, "no scale yet")),
+      el("td", {}, words(v.scale_method) + (v.scale_confidence && v.scale_method !== "none" ? " (" + Math.round(parseFloat(v.scale_confidence) * 100) + "%)" : "") +
+        (v.scale_set_by ? " · set by " + v.scale_set_by : "")),
+      r.can_edit && paper ? el("td", {}, scaleControls(v, s, stage, img, msg)) : null))));
+}
+
+function scaleControls(v, s, stage, img, msg) {
+  const note = el("input", { class: "scale-note", "data-vp": v.id, maxlength: 60, placeholder: "1/4\" = 1'-0\"  ·  1:100  ·  NTS",
+                             "aria-label": "Scale note for " + (v.label || "this view") });
+  const set = el("button", { class: "button", type: "button", "data-set": v.id }, "Set…");
+  set.addEventListener("click", () => {
+    if (!note.value.trim()) { msg.replaceChildren(el("p", { class: "error" }, "Type the scale as written on the drawing, e.g. 1/4\" = 1'-0\".")); note.focus(); return; }
+    askThen(msg, set, "/viewports/" + v.id + "/scale", { scale_note: note.value.trim() }, x => "Scale set; " + x.measured + " object(s) re-measured.", "scale");
+  });
+  const cal = el("button", { class: "button", type: "button", "data-calibrate": v.id }, "📏 Calibrate…");
+  cal.addEventListener("click", () => startCalibration(v, s, stage, img, msg));
+  return el("div", { class: "row" }, note, set, cal);
+}
+
+// Two-point calibration: click both ends of something whose real length you know, then type that length.
+function startCalibration(v, s, stage, img, msg) {
+  if (!img.src) { msg.replaceChildren(el("p", { class: "error" }, "Wait for the sheet image to load.")); return; }
+  for (const m of stage.querySelectorAll(".cal-dot")) m.remove();
+  const points = [];
+  stage.classList.add("calibrating");
+  msg.replaceChildren(el("p", { class: "note", id: "cal-help" }, "Click one end of a known distance on the drawing (a dimension line or a door), then the other end."));
+  stage.scrollIntoView({ block: "nearest" });
+  const onClick = ev => {
+    const box = img.getBoundingClientRect();
+    if (ev.clientX < box.left || ev.clientX > box.right || ev.clientY < box.top || ev.clientY > box.bottom) return;
+    const x = (ev.clientX - box.left) / box.width * parseFloat(s.width);
+    const y = (ev.clientY - box.top) / box.height * parseFloat(s.height);
+    points.push([Math.round(x * 1000) / 1000, Math.round(y * 1000) / 1000]);
+    stage.append(placeBox(el("div", { class: "cal-dot" }), [x, y, x, y], s));
+    if (points.length < 2) return;
+    stage.removeEventListener("click", onClick);
+    stage.classList.remove("calibrating");
+    const dist = el("input", { id: "cal-distance", maxlength: 30, placeholder: "12'-6\"", "aria-label": "Real distance" });
+    const ok = el("button", { class: "primary", type: "button", id: "cal-set" }, "Set the scale…");
+    const again = el("button", { class: "button", type: "button", id: "cal-again" }, "Start over");
+    const paperIn = Math.hypot(points[1][0] - points[0][0], points[1][1] - points[0][1]);
+    msg.replaceChildren(el("div", { class: "card section", id: "cal-box" },
+      el("p", {}, "The two points are " + paperIn.toFixed(2) + "″ apart on the paper. How long is that in real life?"),
+      el("div", { class: "row" }, el("label", {}, "Real distance", dist), ok, again)));
+    dist.focus();
+    again.addEventListener("click", () => startCalibration(v, s, stage, img, msg));
+    ok.addEventListener("click", () => {
+      if (!dist.value.trim()) { dist.focus(); return; }
+      const box2 = el("div", { id: "cal-confirm" });
+      msg.append(box2);
+      askThen(box2, ok, "/viewports/" + v.id + "/scale", { calibration: { p1: points[0], p2: points[1], distance: dist.value.trim() } },
+        x => "Calibrated: 1″ = " + x.viewport.scale_ratio + "″; " + x.measured + " object(s) re-measured.", "cal");
+    });
+  };
+  stage.addEventListener("click", onClick);
+}
+
 // ------------------------------------------------------------------ Help link ("?" on each screen, Sprint 4)
 function helpLink(screenId) {
   return el("a", { class: "button help-link", href: "#/help?screen=" + screenId, title: "How-to guides for this screen",
@@ -999,16 +1188,17 @@ function statusButton(b, status, label, msg) {
 }
 
 // Ask the server's yes/no question (needs_confirmation), then repeat the call with confirm=true.
-async function askThen(msg, btn, path, body, doneText) {
+async function askThen(msg, btn, path, body, doneText, prefix) {
+  const p = prefix || "bid";                             // ids for the page's tests: bid-confirm, plan-confirm, ...
   btn.disabled = true;
   state.busy = true;
   msg.replaceChildren();
   try {
     const r = await api("POST", path, body);
     if (!r.needs_confirmation) { state.busy = false; toast(doneText(r)); route(); return; }
-    const yes = el("button", { class: "primary", type: "button", id: "bid-confirm" }, "Yes");
-    const no = el("button", { class: "button", type: "button", id: "bid-cancel" }, "Cancel");
-    msg.replaceChildren(el("div", { class: "confirm", id: "bid-confirm-box" }, el("p", {}, el("strong", {}, r.question)), el("div", { class: "row" }, yes, no)));
+    const yes = el("button", { class: "primary", type: "button", id: p + "-confirm" }, "Yes");
+    const no = el("button", { class: "button", type: "button", id: p + "-cancel" }, "Cancel");
+    msg.replaceChildren(el("div", { class: "confirm", id: p + "-confirm-box" }, el("p", {}, el("strong", {}, r.question)), el("div", { class: "row" }, yes, no)));
     yes.focus();
     no.addEventListener("click", () => { state.busy = false; msg.replaceChildren(el("p", { class: "muted" }, "Cancelled — nothing changed.")); });
     yes.addEventListener("click", async () => {
@@ -1081,9 +1271,10 @@ function renderComing(main, screen) {
     el("ul", {}, screen.tools.map(t => el("li", {}, el("code", {}, t))))));
 }
 
-const SCREENS = { dashboard: renderDashboard, projects: renderProjects, price_book: renderPriceBook, bids: renderBids,
-                  help: renderHelp };
-const PAGES = { project: renderProject, quick: renderQuick, jobs: renderJobs, job: renderJob, bid: renderBid, guide: renderGuide };
+const SCREENS = { dashboard: renderDashboard, projects: renderProjects, plans: renderPlans, price_book: renderPriceBook,
+                  bids: renderBids, help: renderHelp };
+const PAGES = { project: renderProject, quick: renderQuick, jobs: renderJobs, job: renderJob, bid: renderBid, guide: renderGuide,
+                plan_set: renderPlanSet, sheet: renderSheet };
 
 // ------------------------------------------------------------------ live updates
 function setLive(cls, title) { const l = $("live"); l.className = "live " + cls; l.title = title; }

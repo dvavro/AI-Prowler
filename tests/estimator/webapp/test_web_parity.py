@@ -9,7 +9,9 @@ from estimator.api import nav
 from estimator.mcp_tools import est_tools
 
 # Spec'd for the Projects screen, not built yet as standalone tools (the Director has est_director_add_trade).
-PENDING = {"est_add_trade", "est_remove_trade"}
+PENDING = {"est_add_trade", "est_remove_trade",
+           # Plans screen (Sprint 5): comparing revisions comes with the revision overlay (Coder 2 Sprint 17).
+           "plan_compare_revisions"}
 
 
 def _registered() -> set[str]:

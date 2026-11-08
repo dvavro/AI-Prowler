@@ -50,6 +50,13 @@ Sprint 4 (Coder 2):
        GET /bids/<id>/file?kind=html|pdf, POST /bids/<id>/send {to?, message?, confirm?} (asks first),
        POST /bids/<id>/status {status}, POST /bids/<id>/convert {customer?, service_date?, confirm?} (asks first)
   GET  /help/guides?q=&screen=      how-to guides; GET /help/guides/<id> one guide
+Sprint 5 (Coder 2), Plans screen (owner, estimator, reviewer, field; changes by owner and estimator):
+  GET  /plans                       every plan set on the company's projects
+  GET  /plan-sets/<id>              status and sheets (plan_status, plan_get_sheets)
+  POST /plan-sets/<id>/process {confirm?}   read it with the plan engine (plan_process; asks first)
+  GET  /sheets/<id>                 the sheet with its paper size, and its viewports (plan_get_viewports)
+  GET  /sheets/<id>/image           the rendered sheet (plan_get_sheet_image)
+  POST /viewports/<id>/scale {scale_note | scale_ratio | calibration: {p1, p2, distance}, confirm?}   (plan_set_scale)
 Static: /estimator and /estimator/<file> from estimator/ui/web/.
 """
 from __future__ import annotations
@@ -396,6 +403,10 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
     if sub == "/help/guides" or sub.startswith("/help/guides/"):
         return _help(m, sub, req)
 
+    # ---------------------------------------------------------- Sprint 5: Plans (plan engine, sheets, scales)
+    if sub == "/plans" or sub.startswith(("/plan-sets/", "/sheets/", "/viewports/")):
+        return _plans(m, sub, req, ctx, conn)
+
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
 
 
@@ -632,6 +643,93 @@ def _bid_file(conn, ctx, bid_id: int, kind: str) -> Response:
     headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'; sandbox"
     headers["Content-Disposition"] = f'attachment; filename="{re.sub(r"[^A-Za-z0-9_.-]", "_", b["number"])}.pdf"'
     return Response(200, "application/pdf", path.read_bytes(), headers)
+
+
+# ------------------------------------------------------------------ Sprint 5: Plans
+
+_PLAN_SET = re.compile(r"^/plan-sets/(\d+)$")
+_PLAN_SET_PROCESS = re.compile(r"^/plan-sets/(\d+)/process$")
+_SHEET = re.compile(r"^/sheets/(\d+)$")
+_SHEET_IMAGE = re.compile(r"^/sheets/(\d+)/image$")
+_VP_SCALE = re.compile(r"^/viewports/(\d+)/scale$")
+SHEET_FIELDS = ("id", "plan_set_id", "page_no", "sheet_no", "title", "discipline", "revision", "revision_date",
+                "units", "width", "height", "confidence")
+
+
+def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
+    """GET  /plans                        every plan set on the company's projects (Plans screen)
+       GET  /plan-sets/<id>               plan_status + plan_get_sheets
+       POST /plan-sets/<id>/process {confirm}     plan_process (asks first; reads in the background)
+       GET  /sheets/<id>                  the sheet (with its size, for calibration clicks) + plan_get_viewports
+       GET  /sheets/<id>/image            the rendered sheet (plan_get_sheet_image), served only from the data folder
+       POST /viewports/<id>/scale {scale_note | scale_ratio | calibration: {p1, p2, distance}, confirm}
+                                          plan_set_scale (asks first)"""
+    from estimator.drawing_model import engine as plan_engine
+    from estimator.drawing_model import store
+    from estimator.estimating import service
+
+    if not nav.can_open(ctx.role, "plans"):
+        raise _Refuse(403, "permission_denied", "your role can't open plans")
+    can_edit = ctx.role in store.EDIT_ROLES
+
+    if sub == "/plans" and m == "GET":
+        out = []
+        for e in service.list_estimates(conn, ctx, limit=200)["estimates"]:
+            for ps in store.list_plan_sets(conn, ctx, e["id"])["plan_sets"]:
+                out.append({**ps, "estimate_title": e["title"]})
+        out.sort(key=lambda p: p["created_at"] or "", reverse=True)
+        return _ok(plan_sets=out, count=len(out), engine=plan_engine.engine_info(), can_edit=can_edit)
+
+    mm = _PLAN_SET.match(sub)
+    if mm and m == "GET":
+        pid = int(mm.group(1))
+        st = store.status(conn, ctx, pid)
+        est = service.get_estimate(conn, ctx, st["estimate_id"])
+        return _ok(plan_set=st, sheets=store.sheets(conn, ctx, pid)["sheets"], engine=plan_engine.engine_info(),
+                   estimate={"id": est["id"], "title": est["title"]}, can_edit=can_edit)
+
+    mm = _PLAN_SET_PROCESS.match(sub)
+    if mm and m == "POST":
+        b = _body(req)
+        pid = int(mm.group(1))
+        inline = plan_engine.RUN_INLINE
+        return _ask_first(lambda: plan_engine.start(conn, ctx, pid, confirm=b.get("confirm") is True,
+                                                    open_conn=None if inline else _open_db))
+
+    mm = _SHEET.match(sub)
+    if mm and m == "GET":
+        s = store._load_sheet(conn, ctx, int(mm.group(1)))          # not found / another company's sheet
+        sheet = {k: s[k] for k in SHEET_FIELDS}
+        sheet["has_image"] = bool(s["image_path"])
+        ps = store.load_plan_set(conn, ctx, s["plan_set_id"])
+        return _ok(sheet=sheet, viewports=store.viewports(conn, ctx, s["id"])["viewports"],
+                   plan_set={"id": ps["id"], "file": ps["original_name"], "estimate_id": ps["estimate_id"]},
+                   can_edit=can_edit)
+
+    mm = _SHEET_IMAGE.match(sub)
+    if mm and m == "GET":
+        from estimator import config
+        img = store.sheet_image(conn, ctx, int(mm.group(1)))
+        if not img.get("ok"):
+            raise _Refuse(404, "not_found", img.get("message") or "this sheet has no image")
+        path, root = Path(img["path"]).resolve(), config.data_dir().resolve()
+        if root not in path.parents or path.suffix.lower() not in (".png", ".jpg", ".jpeg"):
+            raise _Refuse(404, "not_found", "this sheet's image isn't in the Estimator's folder")
+        ctype = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+        return Response(200, ctype, path.read_bytes(), {"Cache-Control": "private, max-age=300", **SECURITY_HEADERS})
+
+    mm = _VP_SCALE.match(sub)
+    if mm and m == "POST":
+        b = _body(req)
+        cal = b.get("calibration")
+        if cal is not None and not isinstance(cal, dict):
+            raise _Refuse(400, "invalid_input", "calibration must be {p1: [x, y], p2: [x, y], distance: \"12'-6\\\"\"}")
+        ratio = b.get("scale_ratio")
+        return _ask_first(lambda: store.set_scale(conn, ctx, int(mm.group(1)), scale_note=_opt(b, "scale_note"),
+                                                  scale_ratio=None if ratio in (None, "") else str(ratio),
+                                                  calibration=cal or None, confirm=b.get("confirm") is True))
+
+    return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
 
 
 # ------------------------------------------------------------------ Sprint 4: Help (how-to guides)
