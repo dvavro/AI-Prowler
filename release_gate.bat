@@ -23,8 +23,8 @@ REM      Home-tab opt-in banner posts here) and the admin subscriber list.
 REM   4. E2E server isolation tests       (tests/e2e)
 REM      Spawns a real AI-Prowler Server subprocess, probes over HTTP.
 REM      Covers: auth/identity (ST1), scope isolation (ST2), concurrent (ST3)
-REM   5. Estimator suite                  (tests/estimator)       ~630 tests
-REM      Run through run_tests_estimate.bat (sandboxed Estimator database,
+REM   5. Estimator suite                  (tests/estimator)       ~1,300 tests
+REM      Run through run_tests_estimator.bat (sandboxed Estimator database,
 REM      watcher off). Left out of Suite 1 so it runs once, with its own verdict line.
 REM
 REM KNOWN GAP — flagged deliberately rather than silently ignored:
@@ -194,13 +194,15 @@ if "%SUITE4_RC%"=="0" (
 echo.
 
 REM ── Suite 5: Estimator suite ─────────────────────────────────────────────
-REM tests\estimator through run_tests_estimate.bat: throwaway Estimator database,
+REM tests\estimator through run_tests_estimator.bat: throwaway Estimator database,
 REM background watcher off, no real emails or API calls, log in test_logs\.
+REM (2026-11-09, Coder 1 Sprint 27) Suite 5 calls run_tests_estimator.bat, the unified
+REM Coder 1 + Coder 2 runner; run_tests_estimate.bat is the older pre-unification runner.
 echo [5/5] Running Estimator suite ...
-echo       Expected: ~630 tests (estimating, trades, Director, agents, tab, data move)
+echo       Expected: ~1,300 tests (Coder 1 + Coder 2 tracks; browser tests run separately)
 echo.
 cd /d "%AIPROWLER_ROOT%"
-call run_tests_estimate.bat
+call run_tests_estimator.bat
 set "SUITE5_RC=%ERRORLEVEL%"
 echo.
 if "%SUITE5_RC%"=="0" (
