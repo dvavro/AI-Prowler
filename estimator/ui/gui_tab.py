@@ -461,6 +461,11 @@ class EstimatorTab:
             self._note(box, f"   •  \"{p}\"", "#333")
         self._note(box, "Ask \"how do I use the Estimator?\" and your AI will read the Estimator's own instructions "
                         "(how_to_estimate).", GREY, 8)
+        from pathlib import Path
+        guide = Path(__file__).resolve().parents[2] / "COMPLETE_USER_GUIDE.md"
+        if guide.exists():
+            ttk.Button(box, text="📖 Open the User Guide (Estimator is chapter 29)",
+                       command=lambda: _open_folder(guide)).pack(anchor="w", pady=(6, 0))
 
 
 def _open_folder(path) -> None:

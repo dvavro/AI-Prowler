@@ -34,6 +34,7 @@
 26. Remote PWA App
 27. Service Desk (tickets)
 28. AI Agents — Service Desk, Booking & scheduling, Jobs (with Route flow) and HR
+29. Estimator — Estimates, Takeoffs and Bids
 
 ---
 
@@ -3382,6 +3383,138 @@ By voice: *"Run the AI-Prowler agent"*, *"What is the agent waiting on?"*, *"App
 
 **Rules every agent keeps** (none of these can be switched off): no money handling — it never takes or records a payment or marks anything paid; it never changes prices or settings; never deletes or cancels; never edits mileage or time entries; never messages a customer who opted out; a phone number is always required on customer forms; no Google Calendar on a server; and on a server, managers approve by default.
 
+
+---
+
+## 29. Estimator — Estimates, Takeoffs and Bids
+
+### What it is
+
+The Estimator is AI-Prowler's estimating office. It prices jobs two ways:
+
+- **Quick quotes** for services — pressure washing, house washing and other per-job services, priced from your price book in a few questions.
+- **Plan-based estimates** — give it a plan set (PDF or CAD), set the scale, and it measures lengths, areas and counts, counts symbols, and turns the quantities into a priced estimate and a bid.
+
+Your prices live in a **price book** you control. The Estimator applies your sales tax, overhead, profit and minimum charge, keeps drafts and sent bids apart, watches deadlines, and learns from finished jobs by comparing what you bid with what the job really cost. You can work three ways: ask your AI in chat, use the **🏗 Estimator tab** on the desktop, or open the **Estimator web app** in a browser.
+
+### Turning it on
+
+The Estimator has a switch, like AI-Prowler's other features: **Setup AI-Prowler → Estimator**, or the switch at the top of the 🏗 Estimator tab. While it is off, the tab's sections fold up and nothing you saved is lost. Setup and saves on the desktop are the owner's job; the rest of the team works in the web app or through the AI, with the access described under *Who can do what* below.
+
+### The 🏗 Estimator tab
+
+The tab is the Estimator's control panel. From top to bottom:
+
+- **🧭 Estimator setup** — on/off, what is installed, the setup checklist, and the practice project.
+- **🏢 Company and pricing** — name, phone, license, sales tax, overhead, profit, minimum charge.
+- **🏗 Trades** — which construction trades the Estimator runs takeoffs for.
+- **🤖 AI agents and budget** — which AI runs each agent, its backup, and the daily and monthly budget.
+- **🧑‍💼 Director** — review limit, quick-send limit, follow-ups, the daily briefing, and the watcher.
+- **📦 Modules** — every installed trade and service, its version, and how it is priced.
+- **💾 Data and backups** — where the Estimator database lives, and a **Back up now** button.
+- **🔧 CAD and tools** — whether DXF reading, the DWG converter and OCR are ready on this PC.
+- **📱 Phone and web app** — the web app's address, and who can sign in.
+- **❓ Help** — things to ask your AI, and a button that opens this guide.
+
+### First run — the setup wizard
+
+The first time the Estimator is turned on, run the setup wizard from the tab's checklist. It has ten steps, and they can be done in any order, skipped, and finished later:
+
+1. **Company profile** — name, address, phone, license number.
+2. **Services and trades you offer** — only those modules and agents are turned on.
+3. **Sales tax** — your rate, and what it applies to.
+4. **Labor rates** — crew types and hourly rates.
+5. **Overhead, profit and minimum charge** — your markups.
+6. **Review sample prices and set your own** — the Estimator starts with sample prices, clearly marked. A first real bid can't go out on unreviewed sample prices: review them, set your own, or confirm the samples are fine to use.
+7. **Bid template and terms** — how your bids look, and the terms that go on them.
+8. **Team and approvals** — who can estimate, review, approve and send (set with the user accounts and the Estimating scope — see *Who can do what*), and the dollar limits for review and quick-send.
+9. **AI connection check** — confirms your AI is connected and answering.
+10. **Try a sample quote** — a practice run, end to end.
+
+Only the owner runs setup. The tab's checklist always shows what is done, what was skipped, and what is left.
+
+### The practice project
+
+On the tab, **Make a practice project** creates a ready-made roof and house-wash estimate to try things on. It stays out of your job history, and **Delete the practice project** removes it in one click. It is the safest way to learn the flow — or to show someone else how it works — before touching a real bid.
+
+### Estimating by chat
+
+Most day-to-day work is just asking. For example:
+
+- "Quote a pressure wash for the Garcia house: 1,800 sq ft driveway and patio"
+- "Replace the roof on 2,000 sq ft, 5/12 pitch, architectural shingles"
+- "Bid the Miller plans: framing, drywall and a new roof (has plans)"
+- "Show me the practice estimate"
+- "What's waiting for review?"
+- "The Garcia roof is done: it really cost $8,600. How did that compare?"
+- "Export the Miller estimate to Excel"
+
+Ask "how do I use the Estimator?" and your AI will read the Estimator's own instructions and walk you through it.
+
+### Plans and takeoffs
+
+Give the Estimator a plan set — PDF pages, a DXF drawing, or a DWG (with the converter below) — and set the scale once. It then measures lengths, areas and counts sheet by sheet. Symbols (doors, windows, fixtures, devices) can be counted with AI help: the AI proposes, you confirm, and crops are only sent if you have that turned on. **Blueprint Review** checks the finished takeoff before it is priced. When revised plans arrive, the Estimator re-measures the changed sheets instead of starting over. Quantities from the takeoff flow straight into the estimate, so the bid and the drawings always agree.
+
+### The Runner
+
+For a guided pass over a plan set, start a **Runner**: it walks the set sheet by sheet, you confirm each measurement as it goes, and nothing is priced until the takeoff is reviewed. Reviews are a separate step from measuring — the person who approves can be different from the person who measured, and a **second check** by another person can sign off an approved version. The approver can't second-check their own approval.
+
+### Quotes, approvals and sending
+
+Every estimate is priced from your price book plus your tax and markups. Two Director settings control how bids leave the building (defaults shown; change them on the tab or in the wizard's Team and approvals step):
+
+- **Review limit ($500)** — a standard estimate over this needs a reviewer's sign-off before it can be sent.
+- **Quick-send limit ($100)** — a quick quote at or under this can be sent with one tap.
+
+Bids go out by email, as a PDF, or printed. The **Director** watches what happens next: follow-ups on sent bids, reminders when a review is waiting, bids past their valid-until date, and a daily briefing. When a job finishes, record what it really cost — the Estimator compares bid vs. actual and shows where your prices run high or low.
+
+### Who can do what
+
+Sign-in uses your normal AI-Prowler accounts. What a person can do in the Estimator comes from their account role, plus one extra — the **Estimating scope**, set in **Admin → Manage Scopes**:
+
+| Person | In the Estimator they can… |
+| --- | --- |
+| Owner | Everything, including setup, prices, approvals and data moves |
+| Manager or staff, **with** the Estimating scope | Work as an **estimator**: create and change estimates, run takeoffs, review and approve |
+| Manager or staff, without the scope | Work as **office**: see estimates and bids, approve measurements and symbol counts |
+| Field crew | Look only — job totals, never costs or margins, and no approving |
+
+The scope is the key: giving a manager or staff member the Estimating scope is what turns them into an estimator. Field crew stay view-only either way.
+
+### The web app
+
+The Estimator web app runs in a browser — same estimates, plans and reviews as the desktop, nothing to install:
+
+- **On this PC:** `http://localhost:8770/estimator/`
+- **On your phone:** open the same address through **Remote Access**. In Server mode, your office network address works too.
+
+Sign in with your AI-Prowler account; the roles above apply exactly the same way. The tab's **📱 Phone and web app** section shows the address for your install.
+
+### CAD and tools
+
+The tab's **🔧 CAD and tools** section shows what this PC can open:
+
+- **DXF drawings** — read directly; support ships with AI-Prowler.
+- **DWG drawings** — need the free **ODA File Converter** from the Open Design Alliance (opendesign.com → Guest Files → ODA File Converter). Without it, DWG files can't be opened.
+- **Scanned plans and photos** — text is read with **Tesseract OCR**; without it, scanned plans can't be text-read.
+
+Each line shows ✅ or ❌, so you can see at a glance what to install before a plan set arrives.
+
+### AI agents and budget
+
+Different agents do different jobs — measuring, symbol counting, reviewing, the Director's watching — and each can use a different AI provider and model, with a backup if the first doesn't answer. The tab's **🤖 AI agents and budget** section sets a daily and monthly budget; when the budget runs out, the agents stop instead of spending. Agent API keys are kept with the other keys on the **🏢 Small Business** tab.
+
+### Data and backups
+
+Everything lives in one database file, `estimator.db`, in the Estimator data folder (the tab shows where). **Back up now** on the tab takes a copy on the spot, and the tab lists recent backups. To move between a PC and a server, use the Estimator's data export/import ("Pack up my Estimator data to move to the server") — it carries the whole company, prices and history.
+
+### When something isn't right
+
+- **A DWG file won't open** — the ODA File Converter isn't installed. Check the tab's 🔧 CAD and tools section.
+- **A bid won't send and mentions sample prices** — some prices are still samples. Review the price book (wizard step 6) and set your own, or confirm the samples.
+- **The web app won't load** — is the Estimator switched on? On a phone, are you connected through Remote Access? The address is `http://localhost:8770/estimator/` on the PC itself.
+- **A teammate can't approve** — approving needs the owner account, an estimator (the Estimating scope), or a reviewer. Field crew can't approve. See *Who can do what*.
+- **Setup feels unfinished** — the tab's checklist shows exactly which steps are left; any step can be re-run.
 
 ---
 
