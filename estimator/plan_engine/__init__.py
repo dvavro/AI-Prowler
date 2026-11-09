@@ -30,6 +30,14 @@ Sprint 9:
 - Tags (tags.py): words on the plans matching a schedule mark, so the drawing model links rows to plan tags.
 - Legends (legends.py): legend blocks and the plan-set symbol dictionary (entries, item types, template crops),
   written to symbol_dictionary.json beside the sheet images.
+
+Sprint 16 (this version, 0.9):
+- Scans and photos (raster.py): photos squared up, blueprints inverted, tilted scans straightened (the saved sheet image
+  and the OCR words with them), and the line work traced, so walls, rooms, elevations and site objects are found on
+  scans too. Everything found on a scan or photo is source "raster", confidence 0.5 at most, and the sheet says it's
+  to check; the building model and the measurements made from it carry "needs review" (method raster).
+- DWG (dwg.py): converted to DXF by the ODA File Converter or LibreDWG when the user installed one; otherwise the
+  plans say how to get one, or to save the drawing as DXF or PDF.
 """
 from __future__ import annotations
 
@@ -37,9 +45,11 @@ import contextvars
 from pathlib import Path
 
 _LIBRARY: contextvars.ContextVar = contextvars.ContextVar("symbol_library", default=[])
-ENGINE_NAME = "AI-Prowler Plan Engine 0.8 (PDF, images, DXF, OCR, schedules, legends, symbols)"
-VERSION = "0.8"
+ENGINE_NAME = "AI-Prowler Plan Engine 0.9 (PDF, scans and photos, DXF, DWG, OCR, schedules, legends, symbols)"
+VERSION = "0.9"
 DICTIONARY_FILE = "symbol_dictionary.json"
+RASTER_NOTE = "scan or photo: everything found here is marked to check"
+SCAN_MAX_SEGMENTS = 20          # a PDF page with no text and less line work than this is a scan
 
 
 def _max_sheets() -> int:
@@ -63,15 +73,40 @@ def process(file_path: Path, file_type: str, info: dict) -> dict:
     finally:
         _LIBRARY.reset(token)
     if kind == "dxf":
-        from estimator.plan_engine import dxf_reader, symbols
-        out = dxf_reader.read(file_path, work, _max_sheets())
-        for s in out["sheets"]:                          # Sprint 10: CAD block names say what each symbol is
-            symbols.cad_symbols(s)
-        return out
+        return _dxf(file_path, work)
     if kind == "dwg":
-        raise ValueError("DWG drawings need a converter, which comes in a later release. For now, save the drawing as "
-                         "DXF from your CAD program (Save As > DXF) and upload that, or print the sheets to PDF")
+        return _dwg(file_path, work)
     raise ValueError(f"the plan engine can't read '{file_type}' files")
+
+
+def _dxf(file_path: Path, work: Path | None) -> dict:
+    from estimator.plan_engine import dxf_reader, symbols
+    out = dxf_reader.read(file_path, work, _max_sheets())
+    for s in out["sheets"]:                              # Sprint 10: CAD block names say what each symbol is
+        symbols.cad_symbols(s)
+    return out
+
+
+def _dwg(file_path: Path, work: Path | None) -> dict:
+    """Sprint 16: a DWG is converted to DXF by the converter the user installed, then read like any DXF."""
+    import tempfile
+
+    from estimator.plan_engine import dwg
+
+    conv = dwg.find_converter()
+    if conv is None:
+        raise ValueError(dwg.GUIDANCE)
+    if work is not None:
+        dxf = dwg.convert(file_path, work / "converted", conv)
+        out = _dxf(dxf, work)
+    else:
+        with tempfile.TemporaryDirectory(prefix="dwg_") as tmp:
+            out = _dxf(dwg.convert(file_path, Path(tmp), conv), None)
+    note = f"converted from DWG with the {conv['name']}"
+    for s in out["sheets"]:
+        s["note"] = "; ".join(x for x in (note, s.get("note")) if x)
+    out["converted_with"] = conv["name"]
+    return out
 
 
 def _analyze(page, source: str) -> tuple[dict, dict]:
@@ -96,9 +131,11 @@ def _analyze(page, source: str) -> tuple[dict, dict]:
              "confidence": tb.confidence if page.words else 0.1, "viewports": vps, "objects": objects + dims,
              "schedules": [{k: s[k] for k in ("schedule_type", "title", "bbox", "confidence", "rows")} for s in scheds],
              "legends": [{k: lg[k] for k in ("title", "discipline", "bbox", "confidence")} for lg in legs]}
-    if source == "raster" and page.words:
+    if source == "raster":                               # Sprint 16: marked to check, never trusted like line work
+        from estimator.plan_engine import raster
         for o in sheet["objects"]:
             o["source"] = "raster"
+            o["confidence"] = raster.confidence(o.get("confidence"))
     return sheet, {"page": page, "zone": tb.zone, "tables": tables, "schedules": scheds, "legends": legs,
                    "notes": notes, "source": source}
 
@@ -160,20 +197,58 @@ def _pdf(path: Path, work: Path | None) -> dict:
     sheets, extras = [], []
     for page in pages:
         source = "vector"
-        if not page.words and ocr.available():               # a scan saved as PDF: read its words
-            page.words = ocr.pdf_page_words(path, page.page_no, page.width, page.height)
-            page.lines = pdf_pages.group_lines(page.words)
+        prep_notes: list[str] = []
+        if not page.words and len(page.segments) < SCAN_MAX_SEGMENTS:     # a scan saved as PDF
             source = "raster"
+            prep_notes = _scan_page(path, page)
         sheet, e = _analyze(page, source)
         if not page.words:
             e["notes"].insert(0, "no text on this page (a scan?): " + (ocr.status_note() or "OCR found no words")
                               + "; the title and scale need a person")
         elif source == "raster":
             e["notes"].insert(0, "text read by OCR - check the sheet number and scale")
+        if source == "raster":
+            e["notes"][1:1] = prep_notes + [RASTER_NOTE]
         sheets.append(sheet)
         extras.append(e)
     entries = _finish(sheets, extras, work, pdf_path=path)
     return {"page_count": count, "sheets": sheets, "engine": ENGINE_NAME, "symbol_dictionary": entries}
+
+
+def _scan_page(path: Path, page) -> list[str]:
+    """Sprint 16: a scanned PDF page through the raster pipeline - straightened (and the review image with it), its
+    line work traced, then its words read by OCR from the straightened picture. Returns the notes."""
+    from estimator.plan_engine import ocr, pdf_pages
+
+    try:
+        img, dpi = ocr.render_pdf_page(path, page.page_no, page.width, page.height)
+    except Exception as exc:  # noqa: BLE001 - the page can't be drawn: read nothing more from it
+        return [f"the scan couldn't be drawn for reading ({exc})"]
+    notes: list[str] = []
+    try:
+        from estimator.plan_engine import raster
+        prep = raster.prepare(img, dpi)
+    except ImportError as exc:
+        prep = None
+        notes.append(f"the line work wasn't traced ({exc})")
+    if prep is not None:
+        notes += prep.notes
+        page.segments = prep.segments
+        img = prep.image
+        if prep.squared_up:
+            page.width, page.height = round(img.size[0] / dpi, 3), round(img.size[1] / dpi, 3)
+        if prep.changed and page.image_path:                 # the review picture shows the straightened sheet
+            try:
+                from PIL import Image
+                with Image.open(page.image_path) as old:
+                    size = (old.size[0], max(1, round(old.size[0] * img.size[1] / img.size[0])))
+                img.resize(size, Image.Resampling.LANCZOS).convert("RGB").save(page.image_path, "PNG", optimize=True)
+            except Exception:  # noqa: BLE001 - keep the original picture
+                pass
+    if ocr.available():
+        page.words = ocr.words_from_image(img, dpi)
+        page.lines = pdf_pages.group_lines(page.words)
+    return notes
 
 
 def _images(path: Path, work: Path | None) -> dict:
@@ -182,21 +257,23 @@ def _images(path: Path, work: Path | None) -> dict:
     out = images.read(path, work, _max_sheets(), ocr_words=ocr.available())
     sheets, extras = [], []
     for s in out["sheets"]:
-        words = s.pop("_words", None)
-        if not words:
+        words = s.pop("_words", None) or []
+        segments = s.pop("_segments", None) or []                # Sprint 16: the traced line work
+        if not words and not segments:
             note = s.get("note")
-            s["note"] = "; ".join(x for x in (note, ocr.status_note()) if x) or None
+            s["note"] = "; ".join(x for x in (note, ocr.status_note()) if x) or None     # nothing found: nothing to check
             if not s["note"]:
                 s.pop("note")
             sheets.append(s)
             extras.append(None)
             continue
         page = pdf_pages.Page(page_no=s["page_no"], width=s["width"], height=s["height"], words=words,
-                              lines=pdf_pages.group_lines(words), image_path=s["image_path"])
+                              lines=pdf_pages.group_lines(words), segments=segments, image_path=s["image_path"])
         sheet, e = _analyze(page, "raster")
-        if s.get("note"):
-            e["notes"].insert(0, s["note"])
-        e["notes"].insert(1 if s.get("note") else 0, "text read by OCR - check the sheet number and scale")
+        first = [s["note"]] if s.get("note") else []
+        first.append("text read by OCR - check the sheet number and scale" if words else
+                     (ocr.status_note() or "OCR found no words"))
+        e["notes"][:0] = first + [RASTER_NOTE]
         sheets.append(sheet)
         extras.append(e)
     read = [(s, e) for s, e in zip(sheets, extras) if e is not None]

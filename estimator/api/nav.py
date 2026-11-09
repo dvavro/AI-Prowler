@@ -45,17 +45,20 @@ SCREENS = (
     {"id": "bids", "label": "Bids", "icon": "📨", "roles": ("owner", "estimator", "office", "field"), "status": "ready",
      "sprint": 4, "tools": ["bid_generate", "bid_preview", "bid_send", "bid_set_status", "bid_convert_to_job",
                             "bid_list"]},
+    # Sprint 17: the full Price Book adds each price's history against job costs (est_compare_history).
     {"id": "price_book", "label": "Price Book", "icon": "💲", "roles": ("owner", "estimator"), "status": "ready",
-     "sprint": 3, "tools": ["pricebook_get", "pricebook_update", "pricebook_import"]},
+     "sprint": 3, "tools": ["pricebook_get", "pricebook_update", "pricebook_import", "est_compare_history"]},
     {"id": "symbol_library", "label": "Symbol Library", "icon": "🔣", "roles": ("owner", "estimator", "reviewer"),
      "status": "ready", "sprint": 11, "tools": ["symbol_library_list", "symbol_define"]},
     {"id": "agents", "label": "Agents", "icon": "🤖", "roles": ("owner", "estimator"), "status": "ready",
      "sprint": 11, "tools": ["agent_config_get", "agent_config_update", "runner_start", "runner_status",
                              "runner_retry_task"]},
     {"id": "reports", "label": "Reports", "icon": "📊", "roles": ("owner", "estimator", "reviewer", "office"),
-     "status": "coming", "sprint": 17, "tools": ["est_export", "est_compare_history"]},
-    {"id": "settings", "label": "Settings", "icon": "⚙️", "roles": ("owner",), "status": "coming", "sprint": 17,
-     "tools": ["est_setup_step"]},
+     "status": "ready", "sprint": 17, "tools": ["est_export", "est_compare_history", "takeoff_list",
+                                                "plan_compare_revisions"]},
+    {"id": "settings", "label": "Settings", "icon": "⚙️", "roles": ("owner",), "status": "ready", "sprint": 17,
+     "tools": ["est_setup_step", "est_setup_status", "est_ai_privacy", "est_director_settings_get",
+               "est_director_settings_update", "pricebook_update"]},
     {"id": "help", "label": "Help", "icon": "❓", "roles": ALL, "status": "ready", "sprint": 4,
      "tools": ["how_to_estimate", "est_sample_project"]},
 )
@@ -99,6 +102,9 @@ PAGES = (
     {"id": "mobile_reviews", "label": "Reviews (phone)", "from": "reviews", "sprint": 13,
      "tools": ["symbol_detections_list", "symbol_detection_review", "takeoff_list", "takeoff_confirm", "takeoff_delete",
                "review_highlight"]},
+    # Sprint 17: one plan revision report drawn over the sheets (red removed, green added, orange changed or moved).
+    {"id": "revision", "label": "Plan revision", "from": "reports", "sprint": 17,
+     "tools": ["plan_compare_revisions", "plan_get_sheet_image", "takeoff_detail"]},
 )
 
 # What each role may do, sent to the browser so it can hide buttons. The server

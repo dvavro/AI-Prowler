@@ -107,7 +107,11 @@ def check_file(file_path: str) -> dict:
     if file_type == "image":
         warnings += _image_warnings(path)
     if file_type == "dwg":
-        warnings.append("DWG needs a DWG-to-DXF converter installed on this PC before it can be processed")
+        # Coder 2 Sprint 16: DWG is converted when a converter is installed; only warn when there isn't one.
+        from estimator.plan_engine import dwg
+        if dwg.find_converter() is None:
+            warnings.append("DWG needs a DWG-to-DXF converter installed on this PC before it can be processed: the "
+                            "free ODA File Converter (opendesign.com), or save the drawing as DXF or PDF")
     return {"path": path, "name": path.name, "file_type": file_type, "size": size, "sha256": _sha256(path),
             "warnings": warnings}
 

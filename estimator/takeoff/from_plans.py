@@ -87,6 +87,10 @@ def propose(conn, ctx: RequestContext, estimate_id: int, module_id: str, *, plan
             "SELECT estimate_id FROM plan_sets WHERE id = ? AND company_id = ?", (int(plan_set_id), ctx.company_id))}:
         raise InvalidInput(f"plan set {plan_set_id} isn't on estimate {est['id']}", plan_set_id=plan_set_id)
     source = found.get("source", "the plans")
+    # Coder 2 Sprint 16: from scanned or photographed plans the measurements say so (method raster, low confidence),
+    # and the ask says to check each one; like every measurement here they wait for a person to approve them.
+    method = found.get("method") if found.get("method") in ("cad", "vector", "raster") else "vector"
+    confidence = "0.5" if method == "raster" else None
     plan_set_ids = found.get("plan_set_ids") or []
     model_key = found.get("model_key")
     plan, choices, skipped = [], {}, []
@@ -130,8 +134,9 @@ def propose(conn, ctx: RequestContext, estimate_id: int, module_id: str, *, plan
         lines = [f"{p['label']}: {p['qty']} {p['unit']}" + {"new": "", "update": f" (was {p['was']})",
                                                               "suggest": f" (approved {p['was']}: as a suggested "
                                                                          "change)"}[p["action"]] for p in todo]
+        raster = " (from scanned or photographed plans: check each one before approving)" if method == "raster" else ""
         raise ConfirmationRequired(
-            f"Propose {mod.name} from {source}: " + "; ".join(lines) + ". Call again with confirm=true.",
+            f"Propose {mod.name} from {source}{raster}: " + "; ".join(lines) + ". Call again with confirm=true.",
             measurements=plan, counts=counts, notes=found.get("notes", []), choices=choices)
     made, now = [], _now()
     with service.transaction(conn):
@@ -144,17 +149,19 @@ def propose(conn, ctx: RequestContext, estimate_id: int, module_id: str, *, plan
             if p["action"] == "new":
                 mid = conn.execute(
                     "INSERT INTO measurements (company_id, estimate_id, module_id, feeds, kind, label, qty, unit,"
-                    " calc_json, method, proposed_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " calc_json, method, confidence, proposed_by, created_at, updated_at)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (ctx.company_id, est["id"], module_id, p["feeds"], p["kind"], p["label"], p["qty"], p["unit"],
-                     json.dumps(calc), "vector", ctx.actor, now, now)).lastrowid
+                     json.dumps(calc), method, confidence, ctx.actor, now, now)).lastrowid
                 row = m._load(conn, ctx, mid)
                 m._log(conn, ctx, row, "measurement_proposed", {"qty": p["qty"], "unit": p["unit"],
                                                                "feeds": p["feeds"], "from": source})
             elif p["action"] == "update":
                 before = m._load(conn, ctx, p["measurement_id"])
-                conn.execute("UPDATE measurements SET qty = ?, unit = ?, kind = ?, calc_json = ?, proposed_by = ?,"
-                             " needs_remeasure = 0, updated_at = ? WHERE id = ?",
-                             (p["qty"], p["unit"], p["kind"], json.dumps(calc), ctx.actor, now, before["id"]))
+                conn.execute("UPDATE measurements SET qty = ?, unit = ?, kind = ?, calc_json = ?, method = ?,"
+                             " confidence = ?, proposed_by = ?, needs_remeasure = 0, updated_at = ? WHERE id = ?",
+                             (p["qty"], p["unit"], p["kind"], json.dumps(calc), method, confidence, ctx.actor, now,
+                              before["id"]))
                 row = m._load(conn, ctx, before["id"])
                 m._log(conn, ctx, row, "measurement_updated", {"qty": p["qty"], "from": source},
                        before={"qty": before["qty"]})

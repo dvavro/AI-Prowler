@@ -1,5 +1,5 @@
 # Upload plans and check the scale
-<!-- screen: plans; words: upload, plans, pdf, sheets, scale, calibrate, viewport, read, blueprint -->
+<!-- screen: plans; words: upload, plans, pdf, sheets, scale, calibrate, viewport, read, blueprint, scan, photo, dwg, needs review -->
 The plan engine reads a PDF plan set: it splits it into sheets, reads each title block (sheet number, title, revision) and finds each view's scale. Check the scales before anything is measured.
 
 1. Open the project and, under **Plans**, choose the PDF (or a scan or photo) and click **Upload and check**, then **Attach**.
@@ -11,7 +11,8 @@ The plan engine reads a PDF plan set: it splits it into sheets, reads each title
 
 ## Good to know
 - Changing a scale re-measures everything in that view.
-- Scans and photos have no text the engine can read yet, so calibrate them.
+- Scans and photos: a tilted scan is straightened, a blueprint (light lines on a dark sheet) is turned the right way round, and a phone photo of a sheet on a table is squared up to its page edges. Walls and straight lines are traced, and with OCR (Tesseract) installed the words are read too. Everything found on a scan or photo says **needs review**: check each quantity on the plan before approving it.
+- A photo has no true size: always **📏 Calibrate…** it from something you know the length of. A tilted or curled page measures less well than a scan; for bidding, ask for the PDF.
 - **Found on this sheet** lists the walls and rooms the engine found (and, for DXF drawings, symbols, notes and dimensions), with their measured totals once the view has a scale.
-- DXF drawings are read at real size, so they never need a scale. DWG files need converting: save as DXF from your CAD program, or print to PDF.
+- DXF drawings are read at real size, so they never need a scale. DWG files are converted to DXF when the free **ODA File Converter** (opendesign.com, Guest Files) or LibreDWG is installed on this PC; the Estimator tab's **CAD and tools** section shows whether one was found. Without one, save the drawing as DXF from your CAD program, or print to PDF.
 - Owners and estimators can read plans and set scales; reviewers and field staff can look at them.

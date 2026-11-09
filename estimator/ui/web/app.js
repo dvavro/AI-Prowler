@@ -196,6 +196,8 @@ function parseHash() {
   if (parts[0] === "quantities" && /^\d+$/.test(parts[1] || "")) return { screen: "takeoffs", page: "quantities", arg: +parts[1] };
   // Sprint 13: reviews on a phone or tablet (mobile.js), from the Jobs app's Estimates tab; ?kind=&estimate=&i=.
   if (parts[0] === "m" && parts[1] === "reviews") return { screen: "reviews", page: "mobile_reviews", arg: null };
+  // Sprint 17: one plan revision report drawn over the sheets (reports.js); ?sheet=<n>&old=1.
+  if (parts[0] === "revisions" && /^\d+$/.test(parts[1] || "")) return { screen: "reports", page: "revision", arg: +parts[1] };
   return { screen: parts[0] || "dashboard", page: null, arg: null };
 }
 
@@ -617,13 +619,20 @@ function dollars(cents) { return (Number(cents || 0) / 100).toFixed(2); }
 async function renderPriceBook(main, screen) {
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
   const moduleId = q.get("module") || "", samples = q.get("samples") === "1";
-  const [book, mods] = await Promise.all([
+  const [book, mods, marks] = await Promise.all([
     api("GET", "/price-book?" + (moduleId ? "module_id=" + encodeURIComponent(moduleId) + "&" : "") + (samples ? "samples_only=1" : "")),
-    api("GET", "/modules")]);
+    api("GET", "/modules"), api("GET", "/price-book/markups")]);
   const parts = [el("div", { class: "page-head" }, el("h2", {}, screen.label), helpLink("price_book")),
     el("p", { class: "muted" }, "Your costs per unit. Prices marked sample are placeholders shipped with a trade — set your own before sending bids. " +
       "Changing a price never changes a bid already made."),
-    book.samples_left ? el("p", { class: "note warn", id: "samples-left" }, book.samples_left + " price(s) here are still samples.") : null];
+    book.samples_left ? el("p", { class: "note warn", id: "samples-left" }, book.samples_left + " price(s) here are still samples.") : null,
+    // Sprint 17: what's added on top of these costs.
+    el("div", { class: "card section row", id: "pb-markups" }, el("strong", {}, "On top of these costs:"),
+      el("span", {}, "overhead " + marks.overhead_pct + "%"), el("span", {}, "profit " + marks.profit_pct + "%"),
+      el("span", {}, "labor burden " + marks.labor_burden_pct + "%"),
+      el("span", {}, "tax " + marks.tax_pct + "% on " + marks.taxable_kinds.map(words).join(", ") + " (" + marks.tax_base + ")"),
+      marks.minimum_charge_cents ? el("span", {}, "minimum " + money(marks.minimum_charge_cents)) : null,
+      marks.can_change ? el("a", { href: "#/settings?section=money", id: "pb-markups-edit" }, "Change in Settings") : null)];
 
   const pickMod = el("select", { id: "pb-module", "aria-label": "Trade or service" }, el("option", { value: "" }, "All trades and services"),
     mods.modules.map(m => el("option", { value: m.id, selected: m.id === moduleId }, m.name)));
@@ -632,8 +641,11 @@ async function renderPriceBook(main, screen) {
   pickMod.addEventListener("change", refilter);
   onlySamples.addEventListener("change", refilter);
   const find = el("input", { type: "search", id: "pb-find", placeholder: "Find a price", "aria-label": "Find" });
-  parts.push(el("div", { class: "row filters" }, el("label", {}, "Show", pickMod), el("label", {}, "Find", find),
-    el("label", { class: "check" }, onlySamples, " Samples only")));
+  const kinds = [...new Set(book.prices.map(p => p.kind))].sort();
+  const pickKind = el("select", { id: "pb-kind", "aria-label": "Kind" }, el("option", { value: "" }, "all kinds"),
+    kinds.map(k => el("option", { value: k }, words(k))));
+  parts.push(el("div", { class: "row filters" }, el("label", {}, "Show", pickMod), el("label", {}, "Kind", pickKind),
+    el("label", {}, "Find", find), el("label", { class: "check" }, onlySamples, " Samples only")));
 
   if (!book.prices.length) {
     parts.push(el("div", { class: "card empty" }, "No prices here."));
@@ -642,20 +654,30 @@ async function renderPriceBook(main, screen) {
       const input = el("input", { type: "text", inputmode: "decimal", class: "cost", "data-key": p.price_key,
                                   "data-old": dollars(p.cost_cents), value: dollars(p.cost_cents), "aria-label": "Cost for " + p.description });
       input.addEventListener("input", () => input.classList.toggle("changed", input.value.trim() !== input.dataset.old));
-      return el("tr", {},
+      const hist = el("button", { class: "link-btn", type: "button", "data-history": p.price_key, title: "Price history and job costs" }, "📈 History");
+      const row = el("tr", { "data-key": p.price_key, "data-kind": p.kind },
         el("td", {}, p.description, el("div", { class: "muted small" }, p.price_key)),
         el("td", {}, p.kind), el("td", {}, p.unit),
         el("td", { class: "money" }, "$", input),
         el("td", {}, el("span", { class: "status" + (p.sample ? " sample" : "") }, p.sample ? "sample" : "yours"),
-          p.effective_date ? el("div", { class: "muted small" }, "from " + p.effective_date) : null));
+          p.effective_date ? el("div", { class: "muted small" }, "from " + p.effective_date) : null),
+        el("td", {}, hist));
+      hist.addEventListener("click", () => priceHistory(row, p));
+      return row;
     }));
     const table = el("table", { class: "list", id: "prices" },
       el("thead", {}, el("tr", {}, el("th", {}, "Item"), el("th", {}, "Kind"), el("th", {}, "Unit"),
-        el("th", {}, "Cost per unit"), el("th", {}, "Source"))), tbody);
-    find.addEventListener("input", () => {
-      const t = find.value.trim().toLowerCase();
-      for (const tr of tbody.querySelectorAll("tr")) tr.hidden = !!t && !tr.textContent.toLowerCase().includes(t);
-    });
+        el("th", {}, "Cost per unit"), el("th", {}, "Source"), el("th", {}, ""))), tbody);
+    const narrow = () => {
+      const t = find.value.trim().toLowerCase(), k = pickKind.value;
+      for (const tr of tbody.querySelectorAll("tr[data-key]")) {
+        tr.hidden = (!!t && !tr.textContent.toLowerCase().includes(t)) || (!!k && tr.dataset.kind !== k);
+        const next = tr.nextElementSibling;
+        if (next && next.classList.contains("pb-history")) next.hidden = tr.hidden;
+      }
+    };
+    find.addEventListener("input", narrow);
+    pickKind.addEventListener("change", narrow);
     const eff = el("input", { type: "date", id: "pb-effective", "aria-label": "Effective date" });
     const save = el("button", { class: "primary", type: "button", id: "pb-save" }, "Save changes…");
     const msg = el("div", { id: "pb-message", role: "status" });
@@ -712,21 +734,70 @@ async function askThenSave(msg, btn, path, body, doneText) {
   } finally { btn.disabled = false; state.busy = false; }
 }
 
+// Sprint 17: one price's dated history and what jobs really paid, opened under its row.
+async function priceHistory(row, p) {
+  const next = row.nextElementSibling;
+  if (next && next.classList.contains("pb-history")) { next.remove(); return; }
+  const cell = el("td", { colspan: 6 }, el("p", { class: "muted" }, "Loading…"));
+  row.after(el("tr", { class: "pb-history", "data-history-for": p.price_key }, cell));
+  try {
+    const h = await api("GET", "/price-book/history/" + encodeURIComponent(p.price_key));
+    const j = h.jobs || {};
+    cell.replaceChildren(
+      h.history.length ? el("table", { class: "list small" }, el("thead", {}, el("tr", {}, ["From", "Cost", "Source", "Set by"].map(x => el("th", {}, x)))),
+        el("tbody", {}, h.history.map(x => el("tr", {}, el("td", {}, x.effective_date), el("td", { class: "num" }, money(x.cost_cents) + " / " + x.unit),
+          el("td", {}, x.sample ? "sample" : (x.supplier || "yours")), el("td", {}, x.created_by || "")))))
+        : el("p", { class: "muted" }, h.note || "No history yet."),
+      el("p", { class: "small" }, (j.estimates_using_it || 0) + " estimate(s) used it" +
+        (j.usual_estimated_unit_cost ? ", usually at " + j.usual_estimated_unit_cost : "") +
+        (j.jobs_with_actuals ? "; " + j.jobs_with_actuals + " job(s) recorded, paying " + (j.actual_unit_cost || "—") + " per unit" +
+          (j.jobs_run ? " (" + j.jobs_run + ")" : "") : "; no job costs recorded yet") + "."),
+      ...(h.suggestions || []).map(s => el("p", { class: "note warn" }, s.message)));
+  } catch (e) { if (e.status !== 401) cell.replaceChildren(errorBox(e)); }
+}
+
 function importBox() {
   const text = el("textarea", { id: "pb-csv", rows: 6, placeholder: "Item,Unit,Unit Price\nDriveway cleaning,sqft,0.18" });
   const addNew = el("input", { type: "checkbox", id: "pb-addnew" });
-  const go = el("button", { class: "primary", type: "button", id: "pb-import" }, "Check the list…");
+  const eff = el("input", { type: "date", id: "pb-import-effective", "aria-label": "Effective date" });
+  const check = el("button", { class: "button", type: "button", id: "pb-columns" }, "1. Check the columns…");
+  const go = el("button", { class: "primary", type: "button", id: "pb-import" }, "2. Check the list…");
+  const cols = el("div", { id: "pb-mapping" });
   const msg = el("div", { id: "pb-import-message", role: "status" });
+  const pickers = {};
+  // Sprint 17: column mapping - the server guesses each column from its name; the user can change any of them.
+  check.addEventListener("click", async () => {
+    msg.replaceChildren();
+    if (!text.value.trim()) { msg.append(el("p", { class: "error" }, "Paste the price list first.")); return; }
+    try {
+      const r = await api("POST", "/price-book/import/preview", { csv_text: text.value });
+      for (const k of Object.keys(pickers)) delete pickers[k];
+      const LABELS = { price_key: "Item code", cost: "Cost", description: "Description", unit: "Unit", kind: "Kind", supplier: "Supplier" };
+      cols.replaceChildren(el("p", { class: "muted small" }, r.row_count + " row(s). Which column holds what:"),
+        el("div", { class: "row filters" }, r.fields.map(f => {
+          pickers[f] = el("select", { "data-field": f, "aria-label": LABELS[f] || f }, el("option", { value: "" }, "(none)"),
+            r.columns.map(c => el("option", { value: c, selected: r.mapping[f] === c }, c)));
+          return el("label", {}, LABELS[f] || words(f), pickers[f]);
+        })),
+        r.rows.length ? el("table", { class: "list small" }, el("thead", {}, el("tr", {}, r.columns.map(c => el("th", {}, c)))),
+          el("tbody", {}, r.rows.map(row => el("tr", {}, r.columns.map(c => el("td", {}, row[c] || "")))))) : null);
+    } catch (e) { if (e.status !== 401) msg.replaceChildren(errorBox(e)); }
+  });
   go.addEventListener("click", async () => {
     msg.replaceChildren();
     if (!text.value.trim()) { msg.append(el("p", { class: "error" }, "Paste the price list first.")); return; }
-    await askThenSave(msg, go, "/price-book/import", { csv_text: text.value, add_new: addNew.checked },
+    const mapping = {};
+    for (const [f, s] of Object.entries(pickers)) if (s.value) mapping[f] = s.value;
+    await askThenSave(msg, go, "/price-book/import", { csv_text: text.value, add_new: addNew.checked, effective_date: eff.value || null,
+      mapping: Object.keys(mapping).length ? mapping : null },
       r => "Imported " + (r.saved !== undefined ? r.saved : "") + " price(s).");
   });
   return el("details", { class: "card section", id: "pb-import-box" }, el("summary", {}, "Import a supplier price list (paste CSV)"),
     el("p", { class: "muted" }, "Copy the rows from your supplier's spreadsheet, header row first. Columns are found by name " +
-      "(item code, description, unit, unit price / cost). Rows with a different unit are skipped, never converted."),
-    text, el("label", { class: "check" }, addNew, " Add rows that don't match a price as new prices"), go, msg);
+      "(item code, description, unit, unit price / cost); check them and change any that are wrong. Rows with a different unit are skipped, never converted."),
+    text, el("div", { class: "row" }, check), cols,
+    el("label", { class: "check" }, addNew, " Add rows that don't match a price as new prices"),
+    el("label", {}, "Takes effect (optional)", eff), go, msg);
 }
 
 // ------------------------------------------------------------------ Plans (Sprint 5: plan engine, sheets, scales)
@@ -773,7 +844,16 @@ async function renderPlanSet(main, id) {
         ps.status === "processed" ? "Read the plans again…" : "📖 Read the plans…");
       read.addEventListener("click", () => askThen(msg, read, "/plan-sets/" + id + "/process", {},
         () => "Reading the plans in the background…", "plan"));
-      parts.push(el("div", { class: "row" }, read));
+      const row = el("div", { class: "row" }, read);
+      // Sprint 17: a revised set (Rev B) is compared with the one it replaces, then drawn over the sheets.
+      if (ps.supersedes_plan_set_id && ps.status === "processed" && canOpen("reports")) {
+        const cmp = el("button", { class: "button", type: "button", id: "plan-compare" }, "🔀 Compare with the plans it replaces…");
+        cmp.addEventListener("click", () => askConfirm(msg, cmp, "/reports/revisions", { new_plan_set_id: id },
+          done => { toast("Revision report saved."); go("#/revisions/" + done.report_id); }, "plan-compare"));
+        row.append(cmp, el("a", { class: "button", href: "#/reports?tab=revisions&estimate=" + r.estimate.id, id: "plan-revisions" },
+          "Revision reports"));
+      }
+      parts.push(row);
     }
   }
   parts.push(msg);
