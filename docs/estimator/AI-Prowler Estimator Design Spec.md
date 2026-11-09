@@ -1126,7 +1126,7 @@ Nine phases (about 39–43 developer-weeks of sequential work, overlapped as abo
     - Director tuned on pilot jobs: triage accuracy, checkpoint limits, briefing content. Customer-facing Director (web form or text intake, site-visit booking on AI-Prowler's calendar) is planned for after release.
     - Gate: pilot users send real bids and rate the feature ready for release.
 
-### Build status by coder (as of Nov 7, 2026)
+### Build status by coder (as of Nov 9, 2026)
 
 Who builds what, phase by phase, and where each piece stands. **Green** is built, tested on Jamie's PC and pushed to the `estimator` branch. **Yellow** is in progress. **Grey** isn't started or isn't merged yet. Coder 2's work is happening on David's PC; nothing from it is on GitHub yet, so it shows grey until it's merged. The full sprint history is in the Implementation Plan's progress log.
 
@@ -1138,33 +1138,33 @@ flowchart LR
         A0["P0 · Core, money, formulas,<br/>pricing, database"]:::done
         A1["P1 · Modules, quick quotes,<br/>price book, setup backend"]:::done
         A2["P1 · Director quick lane,<br/>quotes, quote → job"]:::done
-        A3["P2 · Drawing model tables<br/>and plan_* tools (Sprint 21)"]:::wip
-        A4["P2 · Measurements, approval locks,<br/>takeoff_* tools, review versions"]:::todo
+        A3["P2 · Drawing model tables<br/>and plan_* tools (Sprint 21)"]:::done
+        A4["P2 · Measurements, approval locks,<br/>takeoff_* tools, review versions"]:::done
         A5["P3 · Concrete, flooring, roofing,<br/>options, standard lane"]:::done
         A6["P4 · Estimate Runner, Agent Manager,<br/>API-key agents, watcher, briefing"]:::done
-        A7["P4 · takeoff_propose, review_* tools,<br/>AI crop reasoning"]:::todo
+        A7["P4 · takeoff_propose, review_* tools,<br/>AI crop reasoning"]:::done
         A8["P5–P6 · All 15 trades and 8 services<br/>from typed measurements"]:::done
         A9["P7 · Learning loop, price import,<br/>revisions, Personal → Server move"]:::done
-        A10["P7 · Team work: assign, my work,<br/>editing warning; Server sign-in to come"]:::wip
-        A11["P7 · Plan revision comparison,<br/>processing-PC queue, publish to server"]:::todo
+        A10["P7 · Team work: assign, my work,<br/>editing warning, Server sign-in"]:::done
+        A11["P7 · Plan revision comparison,<br/>processing-PC queue, publish to server"]:::done
         A12["P8 · Estimator tab, Setup step,<br/>practice project, release gate"]:::done
-        A13["P8 · Full setup wizard, Web access<br/>and CAD tab sections, installer"]:::todo
+        A13["P8 · Full setup wizard, Web access<br/>and CAD tab sections, installer"]:::done
         A0 ~~~ A1 ~~~ A2 ~~~ A3 ~~~ A4 ~~~ A5 ~~~ A6 ~~~ A7 ~~~ A8 ~~~ A9 ~~~ A10 ~~~ A11 ~~~ A12 ~~~ A13
     end
     subgraph C2["Coder 2 — David · plan engine and web app"]
         direction TB
-        B0["P0 · Web app shell, login,<br/>JSON API"]:::todo
-        B1["P1 · Documents, Dashboard, Projects,<br/>Quick estimate screens, PWA Estimates tab"]:::todo
+        B0["P0 · Web app shell, login,<br/>JSON API"]:::done
+        B1["P1 · Documents, Dashboard, Projects,<br/>Quick estimate screens, PWA Estimates tab"]:::done
         B2["P1 · Estimator tab in AI-Prowler<br/>(moved to Coder 1, built Sprint 16)"]:::done
-        B3["P1 · Bids and Jobs board screens,<br/>how-to guide panel"]:::todo
-        B4["P2 · Sheet split, title blocks,<br/>viewports and scales"]:::todo
-        B5["P2 · Vector PDF, DXF, geometry:<br/>walls, rooms, polygons"]:::todo
-        B6["P2 · Blueprint Review v1"]:::todo
-        B7["P3 · Two-way linking,<br/>Estimates screen"]:::todo
-        B8["P4 · OCR, legends, schedules,<br/>Symbol Recognition Engine"]:::todo
-        B9["P4 · Visual verification, Reviews,<br/>Agents, Symbol Library screens"]:::todo
-        B10["P5–P6 · Wall-and-room model, symbol libraries,<br/>elevations, site zones, PWA reviews"]:::todo
-        B11["P7 · Scans and photos, DWG,<br/>revision overlay, Reports, Settings"]:::todo
+        B3["P1 · Bids and Jobs board screens,<br/>how-to guide panel"]:::done
+        B4["P2 · Sheet split, title blocks,<br/>viewports and scales"]:::done
+        B5["P2 · Vector PDF, DXF, geometry:<br/>walls, rooms, polygons"]:::done
+        B6["P2 · Blueprint Review v1"]:::done
+        B7["P3 · Two-way linking,<br/>Estimates screen"]:::done
+        B8["P4 · OCR, legends, schedules,<br/>Symbol Recognition Engine"]:::done
+        B9["P4 · Visual verification, Reviews,<br/>Agents, Symbol Library screens"]:::done
+        B10["P5–P6 · Wall-and-room model, symbol libraries,<br/>elevations, site zones, PWA reviews"]:::done
+        B11["P7 · Scans and photos, DWG,<br/>revision overlay, Reports, Settings"]:::done
         B12["P8 · Guided tours, help panel,<br/>contextual help"]:::todo
         B0 ~~~ B1 ~~~ B2 ~~~ B3 ~~~ B4 ~~~ B5 ~~~ B6 ~~~ B7 ~~~ B8 ~~~ B9 ~~~ B10 ~~~ B11 ~~~ B12
     end
@@ -1174,7 +1174,7 @@ flowchart LR
     classDef todo fill:#eceff1,stroke:#90a4ae,color:#37474f
 ```
 
-**Score so far:** Coder 1 has 8 of 14 blocks done, 2 in progress and 4 not started. Coder 2 has 1 of 13 done (the Estimator tab, which moved to Coder 1); the other 12 are being built on David's PC and aren't merged yet. The installed build has 64 Estimator MCP tools and passes 630 tests; Sprint 21 adds 11 `plan_*` tools (75 in all) once it is on Jamie's PC.
+**Score so far:** Coder 1 has all 14 blocks done (Sprints 1-29). Coder 2 has 12 of 13 blocks built and merged - his Sprints 1-14 are code-done and covered by the shared test suite; the guided tours and help panel (B12) come with his Sprint 18, his Sprint 15 (site-plan zones) is next, and his M-series manual checks are still open. The build has 108 Estimator MCP tools and the unified Estimator suite passes 1,310 tests on Jamie's PC.
 
 **How the two halves connect.** Coder 2's pieces plug into Coder 1's at three points, so either side can be built and tested without waiting for the other:
 
@@ -1199,21 +1199,21 @@ flowchart LR
     classDef wip fill:#fff1bf,stroke:#b8860b,color:#4a3800
     classDef todo fill:#eceff1,stroke:#90a4ae,color:#37474f
     class SVC,TR done
-    class DM wip
-    class TK,ENG,WEB,BR todo
+    class DM,TK done
+    class ENG,WEB,BR done
 ```
 
 | Phase | Coder 1 — Jamie | Coder 2 — David | Gate |
 | --- | --- | --- | --- |
-| 0 Foundations | Done (Sprint 1) | Web app shell: not merged | Open: waits on David's code review |
-| 1 Quick service estimates | Done (Sprints 2–6) | Estimator tab done by Coder 1 (Sprint 16); web screens and PWA tab not merged | Met by chat; web screens still to come |
-| 2 Plan engine MVP | Drawing model and `plan_*` tools built (Sprint 21, moving to the PC); measurements and `takeoff_*` not started | Not merged | Open: needs the plan engine |
-| 3 First construction trades | Done (Sprints 7–8) | Linking and Estimates screen not merged | Open: needs 5 pilot jobs within ±5% |
-| 4 AI detection and agents | Runner, Agent Manager, agents, watcher and briefing done (Sprints 9, 14, 15); `takeoff_propose`, `review_*` and crop reasoning not started | Not merged | Open: needs plan detection |
-| 5 Remaining core trades | All 5 trades done from typed measurements (Sprints 10–11) | Wall-and-room model not merged | Golden tests pass; the one-plan-set test waits on plans |
-| 6 Expansion trades and services | All trades, services and recurring jobs done (Sprints 5, 6, 12, 13) | Not merged | Golden tests pass; pilots pending |
-| 7 Scans, CAD, revisions, learning | Learning, price import, revisions and data move done (Sprints 6, 17, 19); team work partly done (Sprint 18); plan comparison and processing-PC queue not started | Not merged | Open |
-| 8 Beta and release | Tab, Setup step, practice project, beta tests and release gate done (Sprints 16, 18, 20); installer and full wizard not started | Not merged | Open: needs both halves and the pilots |
+| 0 Foundations | Done (Sprint 1) | Web app shell built and merged (Coder 2 Sprint 1) | Open: waits on David's code review |
+| 1 Quick service estimates | Done (Sprints 2–6) | Estimator tab done by Coder 1 (Sprint 16); web screens and PWA tab built and merged (Coder 2 Sprints 1-14, code-done) | Met by chat and in the web app; formal gate pass still pending |
+| 2 Plan engine MVP | Drawing model and `plan_*` tools built (Sprints 21-25); measurements and `takeoff_*` tools built | Built and merged | Open: seeded-plan accuracy evidence still to run |
+| 3 First construction trades | Done (Sprints 7–8) | Linking and Estimates screen built and merged | Open: needs 5 pilot jobs within ±5% |
+| 4 AI detection and agents | Runner, Agent Manager, agents, watcher and briefing done (Sprints 9, 14, 15); `takeoff_propose`, `review_*` and crop support built (Sprints 21-25) | Built and merged | Open: detection accuracy evidence still to run |
+| 5 Remaining core trades | All 5 trades done from typed measurements (Sprints 10–11) | Wall-and-room model built and merged | Golden tests pass; the one-plan-set test waits on plans |
+| 6 Expansion trades and services | All trades, services and recurring jobs done (Sprints 5, 6, 12, 13) | Built and merged | Golden tests pass; pilots pending |
+| 7 Scans, CAD, revisions, learning | Learning, price import, revisions and data move done (Sprints 6, 17, 19); team work done (Sprint 18); plan comparison and processing-PC queue built (Sprint 24) | Built and merged | Open |
+| 8 Beta and release | Tab, Setup step, practice project, beta tests and release gate done (Sprints 16, 18, 20); full wizard, remaining tab sections and installer done (Sprints 26-28); Estimator guide chapter done (Sprint 29) | Guided tours and help panel not started (Coder 2 Sprint 18) | Open: needs both halves and the pilots |
 
 ## Test plan
 
@@ -1325,6 +1325,7 @@ Add one line per spec change: date, sprint, section, what changed, who. Newest f
 
 | Date | Sprint | Section | Change | By |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 | Sprint 30 (Coder 1) | Coder 1 (Jamie) | Build status by coder section refreshed from its Nov 7 snapshot: Coder 1 blocks A3, A4, A7, A10, A11, A13 marked done after a code audit verified the work in the tree (takeoff and review tools, revision comparison, processing-PC queue and publish, plus the Sprint 26-28 installer/wizard and Sprint 29 guide chapter); Coder 2 blocks B0-B11 marked done per the Plan progress log (Sprints 1-14 code-done), B12 still to do; score line and phase table updated. Phase gates were NOT marked passed. Guard tests S30-G01..G06 in `tests/estimator/unit/test_spec_build_status.py`. | All Estimator tests 1316 passed |
 | 2026-11-09 | Sprint 29 (Coder 1) | Coder 1 (Jamie) | The Estimator chapter of the Complete User Guide (Phase 8 scope list: 'Estimator chapter in COMPLETE_USER_GUIDE'): the guide gained chapter 29, 'Estimator — Estimates, Takeoffs and Bids', and its table-of-contents entry; the Estimator tab's Help section now has an 'Open the User Guide' button (Desktop tab: Help row). Guard tests S29-G01..G04 in `tests/estimator/unit/test_user_guide_estimator_chapter.py`. | All Estimator tests 1310 passed |
 | 2026-11-09 | Sprint 28 (Coder 1) | Coder 1 (Jamie) | The setup wizard and the Estimator tab now match this spec (Setup wizard; Desktop tab sections): wizard step 8, Team and approvals, is built as `team_approvals` in `estimator/estimating/setup.py` (the review and quick-send thresholds are applied to the Director settings; membership itself comes from the AI-Prowler users/roles and the Estimating scope), the tab has the CAD and tools section (DXF support, DWG converter detection with the ODA guidance, Tesseract OCR status), and the Phone and web app section shows the web app access address and sign-in rules in place of the old 'coming next' note. | All Estimator tests 1306 passed |
 | 2026-11-09 | Sprint 27 (Coder 1) | Coder 1 (Jamie) | release_gate.bat updated for the Estimator (Release gate; the planned Sprint 18 Tester 1 item): Suite 5 calls `run_tests_estimator.bat`, the unified Coder 1 + Coder 2 runner, replacing the older `run_tests_estimate.bat`, and the advertised Estimator suite size was corrected from ~630 to ~1,300 tests. Guard tests S27-G01..G03 in `tests/estimator/unit/test_release_gate_estimator_step.py` pin the gate to the unified runner. | All Estimator tests 1300 passed |
