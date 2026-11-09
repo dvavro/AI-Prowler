@@ -657,7 +657,7 @@ The whole estimating process can be run three ways, and they can be mixed on the
 
 ## MCP tool catalog
 
-About 45 new tools, prefixed by area so the AI can find them, registered in the same MCP server as AI-Prowler's existing tools. All return JSON with ids, units and a `warnings` list.
+108 tools, prefixed by area so the AI can find them, registered in the same MCP server as AI-Prowler's existing tools. All return JSON with ids, units and a `warnings` list.
 
 | Area | Tool | Purpose | Writes? |
 | --- | --- | --- | --- |
@@ -667,10 +667,17 @@ About 45 new tools, prefixed by area so the AI can find them, registered in the 
 | Director | `est_director_change_lane` | Move a job to another lane, keeping everything collected | Needs confirm |
 | Director | `est_job_status` / `est_jobs_board` | One job's stage, open questions, who it's waiting on; all open jobs by lane and stage | No |
 | Director | `est_director_briefing` | Daily briefing for the user (or company view for owners) | No |
+| Director | `est_director_add_trade` | Add another service or trade to a Director job so it is priced, approved and bid together | Yes |
+| Director | `est_director_book_site_visit` | Book a site visit to measure, as a scheduled job in AI-Prowler (only when the Director setting allows it) | Yes |
+| Director | `est_director_inbox` | What the Director noticed on its own: follow-ups due, quotes expiring, jobs waiting on a reviewer | No |
+| Director | `est_director_watch_now` | Run the Director's background check right now | Yes |
+| Director | `est_director_watch_status` | Whether the Director watcher is on, how often it runs, its last run and what it found | No |
+| Director | `est_followups_due` | Quotes that need a follow-up today, quotes about to expire, and jobs waiting | No |
 | Director | `est_playbook_list` / `est_playbook_update` | Read playbooks; adjust company overrides (required steps, extra checkpoints) | Update needs confirm |
 | Director | `est_director_settings_get` / `est_director_settings_update` | Quick-send limit, calendar booking, customer-facing intake, follow-up days, briefing, reminders | Update needs confirm |
 | Setup | `est_setup_status` | Setup wizard progress: completed, skipped and remaining steps | No |
 | Setup | `est_setup_step` | Save one setup step (company profile, trades, tax, labor, markups, price book, template, roles, AI) | Needs confirm |
+| Setup | `est_ai_privacy` | What the Estimator sends to your AI provider: symbol-crop sending on/off, the one-time notice, and the send log | Update needs confirm |
 | Setup | `est_sample_project` | Create or delete the practice project | Yes |
 | Modules | `est_list_modules` | Installed trades, versions, takeoff types | No |
 | Modules | `est_get_assemblies` | Assemblies and parameters for a trade | No |
@@ -682,13 +689,17 @@ About 45 new tools, prefixed by area so the AI can find them, registered in the 
 | Estimate | `est_calculate` | Recompute all quantities and totals | Yes |
 | Estimate | `est_validate` | QA checks, returns warnings | No |
 | Estimate | `est_scenarios` | Good/better/best or alternate pricing | Yes |
+| Estimate | `est_choose_scenario` | Switch an estimate to one of its priced options (re-prices that trade; not once approved) | Yes |
 | Estimate | `est_compare_history` | Compare unit costs to past estimates and actuals | No |
+| Estimate | `est_record_actuals` | Record what a sold job really cost, line by line, for the learning loop | Yes |
 | Quick | `est_quick_questions` / `est_quick_answer` | Service intake interview | Yes |
 | Plans | `plan_upload` | Get upload URL or attach an indexed file | Yes |
 | Plans | `plan_process` | Start background processing, returns task id | Yes |
 | Plans | `plan_status` | Progress of a processing task | No |
 | Plans | `plan_get_sheets` / `plan_get_sheet_image` | Sheet list, types, scale; rendered page for AI vision | No |
+| Plans | `plan_get_crop` | A small image of part of the plans for the AI to look at; the send is logged | No |
 | Plans | `plan_set_scale` | Set scale or two-point calibration for a viewport | Yes |
+| Plans | `plan_set_design_firm` | Record the architect or engineer who drew a plan set, so symbol learning stays per firm | Yes |
 | Plans | `plan_get_viewports` | Viewports on a sheet with scale and confidence | No |
 | Plans | `plan_get_objects` | Query the drawing model by sheet, kind, layer, tag or area | No |
 | Plans | `plan_get_schedules` / `plan_update_schedule_row` | Read extracted schedules; correct a row | Update: Yes |
@@ -701,10 +712,12 @@ About 45 new tools, prefixed by area so the AI can find them, registered in the 
 | Review | `symbol_find_similar` | Search all sheets for more matches of a selected symbol | Yes |
 | Review | `review_start` / `review_save` / `review_approve` | Open a review on a count or measurement, save changes as a new version, approve it | Yes |
 | Review | `review_history` | All versions of a count with who changed what | No |
+| Review | `review_require_before_send` | Owner setting: a quote can only be sent once every count and measurement on it is approved | Needs confirm |
 | Symbols | `symbol_library_list` / `symbol_define` | Browse the standard, company and firm libraries; save a newly confirmed symbol with examples | Define needs confirm |
 | Plans | `plan_compare_revisions` | Compare two plan sets; returns revision report and flagged takeoffs | Yes |
 | Server | `plan_processing_queue` | Server mode: plan sets waiting for a processing PC, which PC has each, and progress | No |
 | Server | `plan_publish_to_server` | On a processing PC: send a processed plan set's results (drawing model, schedules, detections, proposed measurements, sheet tiles) to the company server | Yes |
+| Server | `est_server_compute` | Server-mode compute limits: the server does light work only; the owner can allow small plan processing on it (off by default, capped) | Update needs confirm |
 | Takeoff | `takeoff_propose` | Detected regions for a trade on a sheet | Yes |
 | Takeoff | `takeoff_list` | Measurements with status and confidence | No |
 | Takeoff | `takeoff_confirm` / `takeoff_edit` / `takeoff_delete` | Review actions | Yes |
@@ -712,16 +725,31 @@ About 45 new tools, prefixed by area so the AI can find them, registered in the 
 | Takeoff | `takeoff_detail` | Calculation, scale, viewport, source page and objects, confidence, approval history | No |
 | Takeoff | `takeoff_suggest_change` | Propose a new value for an approved (locked) measurement; never overwrites it | Yes |
 | Runner | `runner_start` / `runner_status` / `runner_retry_task` | Start the multi-trade run, poll task states, retry a failed or blocked trade | Yes |
+| Runner | `runner_review_task` | A person checks a trade's submitted quantities; approving prices them onto the estimate | Yes |
+| Runner | `runner_submit_takeoff` | Hand in one trade's quantities, measured from the plans | Yes |
 | Project | `est_project_status` | Project dashboard: overall status, per-trade task states, headline quantities | No |
+| Project | `est_assign` | Assign an estimate and its Director job to a person by sign-in name; they get a notice | Yes |
+| Project | `est_my_work` | Open estimates and Director jobs assigned to me, with new notices | No |
 | Agents | `agent_config_get` / `agent_config_update` | Read or change trade-agent settings (enabled, thresholds, sheets, auto-advance) | Update needs confirm |
+| Agents | `agent_budget_update` | Set the AI agents' spending limits in cents (owner only) | Yes |
+| Agents | `agent_roles_get` | The agent roles that can run on their own, and how each runs (provider, model) | No |
+| Agents | `agent_roles_update` | Choose how one agent role runs: claude_api, grok_api, chat_only or off (owner only) | Yes |
+| Agents | `est_agent_apply` | Use an agent's finished draft (a Bid Writer draft becomes a new draft quote) | Yes |
+| Agents | `est_agent_next` | The next agent task waiting for an AI in chat, with its instructions and context | No |
+| Agents | `est_agent_run_now` | Queue and run the agents' work now instead of waiting for the watcher (uses the API budget) | Yes |
+| Agents | `est_agent_submit` | Hand in the actions for one agent task; they are checked before being applied | Yes |
+| Agents | `est_agent_tasks` | Agent work by state: queued, waiting for AI, paused on budget, done | No |
 | Estimate | `est_create_revision` | New revision of a finalized estimate with change summary | Yes |
 | Pricing | `pricebook_get` / `pricebook_update` | Company prices, labor rates, markups | Update needs confirm |
 | Pricing | `pricebook_import` | Import CSV or Excel price lists | Needs confirm |
 | Bid | `bid_generate` / `bid_preview` | Build proposal PDF and HTML preview | Yes |
 | Bid | `bid_send` | Email bid via existing `send_email` | Needs confirm |
 | Bid | `bid_set_status` | Draft, sent, viewed, won, lost, expired | Yes |
+| Bid | `bid_list` | List bids, newest first; filter by status or estimate | No |
 | Bid | `bid_convert_to_job` | Won bid → `create_quote` + `create_job` | Needs confirm |
 | Export | `est_export` | Excel, CSV, QuickBooks CSV via existing exporters | No |
+| Export | `est_data_export` | Pack all of this company's Estimator data (estimates, quotes and PDFs, prices, settings, Director jobs) into a .zip | No |
+| Export | `est_data_import` | Load a .zip made by est_data_export into this company; imported estimates get new numbers | Yes |
 
 **Conventions**: units are always explicit fields (`qty`, `unit`); money is integer cents; every write returns the new `estimate_rev` so stale edits from two users are rejected; tools respect AI-Prowler's existing write-access grants per directory and per user.
 
@@ -1323,6 +1351,7 @@ Add one line per spec change: date, sprint, section, what changed, who. Newest f
 
 | Date | Sprint | Section | Change | By |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 | Sprint 31 (Coder 1) | Coder 1 (Jamie) | MCP tool catalog reconciled with the registered tools - the 28 registered tools the catalog was missing are now listed in their areas with Purpose and Writes? from the code, and the intro states the true count (108). Drift guards S31-G01..G03 added (tests/estimator/unit/test_mcp_catalog_matches_registry.py). Suite 1,367 passed / 14 skipped. |
 | 2026-11-09 | Sprint 30 (Coder 1) | Coder 1 (Jamie) | Build status by coder section refreshed from its Nov 7 snapshot: Coder 1 blocks A3, A4, A7, A10, A11, A13 marked done after a code audit verified the work in the tree (takeoff and review tools, revision comparison, processing-PC queue and publish, plus the Sprint 26-28 installer/wizard and Sprint 29 guide chapter); Coder 2 blocks B0-B11 marked done per the Plan progress log (Sprints 1-14 code-done), B12 still to do; score line and phase table updated. Phase gates were NOT marked passed. Guard tests S30-G01..G06 in `tests/estimator/unit/test_spec_build_status.py`. | All Estimator tests 1316 passed |
 | 2026-11-09 | Sprint 29 (Coder 1) | Coder 1 (Jamie) | The Estimator chapter of the Complete User Guide (Phase 8 scope list: 'Estimator chapter in COMPLETE_USER_GUIDE'): the guide gained chapter 29, 'Estimator — Estimates, Takeoffs and Bids', and its table-of-contents entry; the Estimator tab's Help section now has an 'Open the User Guide' button (Desktop tab: Help row). Guard tests S29-G01..G04 in `tests/estimator/unit/test_user_guide_estimator_chapter.py`. | All Estimator tests 1310 passed |
 | 2026-11-09 | Sprint 28 (Coder 1) | Coder 1 (Jamie) | The setup wizard and the Estimator tab now match this spec (Setup wizard; Desktop tab sections): wizard step 8, Team and approvals, is built as `team_approvals` in `estimator/estimating/setup.py` (the review and quick-send thresholds are applied to the Director settings; membership itself comes from the AI-Prowler users/roles and the Estimating scope), the tab has the CAD and tools section (DXF support, DWG converter detection with the ODA guidance, Tesseract OCR status), and the Phone and web app section shows the web app access address and sign-in rules in place of the old 'coming next' note. | All Estimator tests 1306 passed |
