@@ -20,7 +20,7 @@ from estimator.context import RequestContext
 from estimator.errors import ConfirmationRequired, InvalidInput, NotFound, PermissionDenied
 
 DEFINE_ROLES = ("owner", "estimator", "reviewer")      # the same people who approve counts; never an agent
-TRADES = ("electrical", "plumbing", "mechanical", "fire", "architectural", "low_voltage", "other")
+TRADES = ("electrical", "plumbing", "mechanical", "fire", "architectural", "low_voltage", "landscape", "other")
 MAX_EXAMPLES_PER_DEFINITION = 12
 ITEM_RE = re.compile(r"^[a-z][a-z0-9_]{1,59}$")
 

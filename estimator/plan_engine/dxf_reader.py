@@ -71,7 +71,7 @@ def read(path: Path, work: Path | None, max_sheets: int) -> dict:
     hidden = _hidden_layers(doc)
     msp = doc.modelspace()
 
-    paths, texts, inserts, dims, render_extra = [], [], [], [], []
+    paths, texts, inserts, dims, render_extra, hatches = [], [], [], [], [], []
     for e in msp:
         layer = (e.dxf.layer or "0") if e.dxf.hasattr("layer") else "0"
         if layer.upper() in hidden:
@@ -107,6 +107,15 @@ def read(path: Path, work: Path | None, max_sheets: int) -> dict:
                             render_extra.append([(v.x, v.y) for v in ezpath.make_path(ve).flattening(distance=tol)])
                 except Exception:  # noqa: BLE001
                     pass
+        elif t == "HATCH":
+            # Sprint 15: a hatch's boundary is an area (a sod or rock zone on a landscape plan); its pattern isn't drawn.
+            try:
+                loops = [[(v.x, v.y) for v in p.flattening(distance=tol)] for p in ezpath.from_hatch(e)]
+                loops = [lp[:-1] if len(lp) > 3 and lp[0] == lp[-1] else lp for lp in loops]
+                if any(len(lp) >= 3 for lp in loops) and len(hatches) < MAX_SYMBOLS:
+                    hatches.append((layer, str(getattr(e.dxf, "pattern_name", "") or ""), loops))
+            except Exception:  # noqa: BLE001 - odd hatch boundaries are skipped
+                continue
         elif t == "DIMENSION":
             try:
                 value = e.get_measurement()
@@ -125,6 +134,10 @@ def read(path: Path, work: Path | None, max_sheets: int) -> dict:
     for _, _, p, *_ in texts + inserts:
         xs.append(p[0])
         ys.append(p[1])
+    for _, _, loops in hatches:
+        for lp in loops:
+            xs += [p[0] for p in lp]
+            ys += [p[1] for p in lp]
     if not xs:
         raise ValueError("this DXF has nothing drawn in model space (the drawing may be in a paper-space layout only)")
     minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
@@ -182,6 +195,14 @@ def read(path: Path, work: Path | None, max_sheets: int) -> dict:
     if note:
         notes.append(note)
     objects += vectors.room_objects(rooms, "model", "cad")
+
+    # Sprint 15: site and landscape drawings - zones (zone layers, hatches, notes), fence lines and gates.
+    from estimator.plan_engine import site
+    title_guess = Path(path).stem.replace("_", " ")[:120]
+    site_objs, site_notes = site.dxf_objects(paths, texts, inserts, hatches, tr, k,
+                                             _discipline([layer for _, layer, _, _ in paths], title_guess), w, h)
+    objects += site_objs
+    notes += site_notes
 
     image_path = None
     if work is not None:

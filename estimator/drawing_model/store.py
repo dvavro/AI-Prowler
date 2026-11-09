@@ -35,7 +35,8 @@ DISCIPLINES = ("architectural", "structural", "plumbing", "electrical", "mechani
 KINDS = ("line", "polyline", "polygon", "room", "wall", "opening", "symbol", "text", "dimension")
 SOURCES = ("cad", "vector", "raster", "ai", "manual")
 SCALE_METHODS = ("note", "bar", "dimension", "calibration", "cad", "ai", "manual", "none")
-SCHEDULE_TYPES = ("door", "window", "finish", "plumbing", "lighting", "panel", "equipment", "wall-type", "other")
+SCHEDULE_TYPES = ("door", "window", "finish", "plumbing", "lighting", "panel", "equipment", "wall-type", "plant",
+                  "other")                         # plant: Coder 2 Sprint 15 (trees and shrubs for landscaping)
 MAX_SHEETS = 2000
 MAX_OBJECTS = 200000
 MAX_TEXT = 300

@@ -57,4 +57,4 @@ def test_a_project_without_plans_says_so(page, db):                             
     page.goto(page.base + f"#/quantities/{est['id']}")
     page.wait_for_selector("#qty-empty")
     assert "Read the plans" in page.inner_text("#qty-empty")
-    assert page.locator("#qty-trades .card").count() == 10                           # 7 + Sprint 14's three
+    assert page.locator("#qty-trades .card").count() == 12          # 7 + Sprint 14's three + Sprint 15's two

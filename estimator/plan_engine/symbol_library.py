@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import re
 
-VERSION = 3                         # Sprint 12: fuller electrical and plumbing libraries, and what each one feeds
-                                    # Sprint 14: the HVAC library
+VERSION = 4                         # Sprint 12: fuller electrical and plumbing libraries, and what each one feeds
+                                    # Sprint 14: the HVAC library; Sprint 15: the landscape library
 
 #  item type, trade, description, OCR aliases, CAD block-name words
 _ROWS = (
@@ -92,6 +92,15 @@ _ROWS = (
     ("water_meter", "plumbing", "Water meter", ("MTR",), ("WATERMETER",)),
     ("sprinkler_head", "fire", "Sprinkler head", (), ("SPRINKLER", "SPK")),
     ("fire_extinguisher", "fire", "Fire extinguisher", ("FE",), ("EXTING",)),
+    # Sprint 15: the landscape library (plants and irrigation valves on landscape and irrigation plans)
+    ("tree", "landscape", "Tree", (), ("TREE", "DECIDUOUS", "EVERGREEN", "SHADETREE")),
+    ("palm", "landscape", "Palm", (), ("PALM",)),
+    ("shrub", "landscape", "Shrub", (), ("SHRUB", "BUSH", "HEDGE")),
+    # (DV is the dryer vent's code and IC is too short to trust, so the valves use DCV, RCV and ZV.)
+    ("drip_valve", "landscape", "Drip zone valve", ("DCV",), ("DRIPVALVE", "DRIPZONE", "DRIPKIT")),
+    ("irrigation_valve", "landscape", "Irrigation (sprinkler) zone valve", ("RCV", "ZV"), ("REMOTECONTROLVALVE",
+                                                                                       "ZONEVALVE", "IRRVALVE")),
+    ("irrigation_controller", "landscape", "Irrigation controller", (), ("IRRCONTROL", "IRRIGATIONCONTROLLER")),
 )
 
 # Sprint 12: which trade question each symbol counts toward (module id, question id[, choice value]). A symbol not
@@ -126,10 +135,13 @@ FEEDS = {
     "mini_split_head": (("hvac", "zones"), ("hvac", "system", "mini_split")),
     "heat_pump": ("hvac", "system", "heat_pump"), "package_unit": ("hvac", "system", "package"),
     "condensing_unit": ("hvac", "system", "split"),
+    # Sprint 15: landscaping. A palm is a tree to the landscaping trade; each zone valve is one zone.
+    "tree": ("landscaping", "trees"), "palm": ("landscaping", "trees"), "shrub": ("landscaping", "shrubs"),
+    "drip_valve": ("landscaping", "drip_zones"), "irrigation_valve": ("landscaping", "sprinkler_zones"),
 }
 
 # The trade a symbol is filed under and the estimating module it's priced in, where the names differ.
-TRADE_MODULES = {"mechanical": "hvac"}
+TRADE_MODULES = {"mechanical": "hvac", "landscape": "landscaping"}
 
 # When several symbols answer the same choice, the more particular one wins (a tankless heater over a tank).
 CHOICE_ORDER = {"water_heater": ("tankless", "tank"), "system": ("mini_split", "heat_pump", "package", "split")}

@@ -4,6 +4,8 @@
   always agree with each other;
 - Sprint 14: windows and doors (door and window tags linked to their schedules), siding (elevations, else the floor
   plans' outside walls; corners from the building's outline) and HVAC (the area to heat and cool) from the same model;
+- Sprint 15: fencing (fence lines, gates) and landscaping (zones by kind, the plant schedule) from the site and landscape
+  plans (building.site), landscaping's trees, shrubs and zone valves also from symbols when there's no plant schedule;
 - electrical, plumbing, HVAC: from the symbols counted on the plans (symbol_detections), each item type counted toward its
   trade question (plan_engine.symbol_library.FEEDS). Only symbols a person approved count unless include_proposed is
   set; the ones still to check are reported so nothing is priced from an unchecked count by surprise.
@@ -17,7 +19,7 @@ from estimator.building import model as building
 from estimator.context import RequestContext
 from estimator.errors import InvalidInput
 
-SYMBOL_TRADES = ("electrical", "plumbing", "hvac")
+SYMBOL_TRADES = ("electrical", "plumbing", "hvac", "landscaping")   # Sprint 15: trees, shrubs and zone valves
 TRADES = building.MODEL_TRADES + tuple(t for t in SYMBOL_TRADES if t not in building.MODEL_TRADES)
 
 
@@ -123,9 +125,12 @@ def _one(conn, ctx, m: dict, module_id: str, include_proposed: bool) -> dict:
     if module_id in SYMBOL_TRADES:
         s = symbol_answers(conn, ctx, module_id, m["plan_set_ids"], include_proposed)
         for k, v in s["answers"].items():
-            out["answers"].setdefault(k, v)
+            out["answers"].setdefault(k, v)                 # the model's own answer wins (a plant schedule's counts)
             out["from"].setdefault(k, s["from"].get(k, "symbols counted on the plans"))
-        out["notes"] = s["notes"] + out["notes"]
+        snotes = s["notes"]
+        if module_id in building.SITE_TRADES and not s["counts"]:
+            snotes = []                                     # no landscape symbols at all: nothing to say about them
+        out["notes"] = snotes + out["notes"]
         out.update(waiting=s["waiting"], counts=s["counts"], include_proposed=include_proposed,
                    source="wall-and-room model and symbols counted on the plans")
     return out

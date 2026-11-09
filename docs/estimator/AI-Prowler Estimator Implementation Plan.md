@@ -374,7 +374,7 @@ Each sprint lists what the coders build and what the testers prepare and test in
 - The design spec's phase gates are checked off in this file at each gate.
 - A short sprint summary is added to `notes\` in the work folder after every demo.
 
-**Coder 2 sprint status** (updated 2026-11-09)
+**Coder 2 sprint status** (updated 2026-11-09, after Sprint 15)
 
 | Sprint | Coder 2 work (from the sprint plan) | Status |
 | --- | --- | --- |
@@ -393,13 +393,13 @@ Each sprint lists what the coders build and what the testers prepare and test in
 | 13 | PWA mobile reviews | Done |
 | 14 | Elevations; door/window schedule linking; HVAC symbol library | Done |
 | — | Roles: office approves symbols and measurements; Estimating scope | Done (2026-11-09) |
-| 15 | Site-plan zones for fencing and landscaping | Next |
-| 16 | Raster pipeline for scans and photos; DWG via a user-installed converter | Not started |
+| 15 | Site-plan zones for fencing and landscaping | Done (2026-11-09) |
+| 16 | Raster pipeline for scans and photos; DWG via a user-installed converter | Next |
 | 17 | Revision overlay UI; Reports, Settings and full Price Book screens | Not started |
 | 18 | Guided tours, help panel, contextual help and empty states | Not started |
 | 19–20 | Beta, release candidate, release (whole team) | Not started |
 
-Manual checks for Sprints 10–14 (in each sprint's `tests/estimator/SPRINT_n_CODER2_TEST_PLAN.md`) are still open, starting with real plan sets. Gates G0 onward are still unchecked below.
+Manual checks for Sprints 10–15 (in each sprint's `tests/estimator/SPRINT_n_CODER2_TEST_PLAN.md`) are still open, starting with real plan sets. Gates G0 onward are still unchecked below.
 
 **Progress log**
 
@@ -458,6 +458,7 @@ Manual checks for Sprints 10–14 (in each sprint's `tests/estimator/SPRINT_n_CO
 | 2026-11-09 | Sprint 28 (Coder 1 part of planned Sprint 18, Phase 8) | Coder 1 (Jamie) | Done | The rest of the planned Sprint 18 tab/wizard work: the setup wizard gained its Spec step 8, `team_approvals` (Team and approvals) — who can estimate, review, approve and send comes from the AI-Prowler users, roles and the Estimating scope (the Sprint 26 sign-off), and the step applies the review and quick-send thresholds to the Director settings; the wizard now has the Spec's 10 steps. The Estimator tab gained the Spec's CAD and tools section (DXF/ezdxf, ODA DWG converter and Tesseract OCR status from `model.tool_status()`), and Phone and web app now shows the real web app address and sign-in rules instead of the stale 'coming next' note. Older tests that pinned the 9-step wizard / 9-section tab were updated. All Estimator tests 1306 passed. Test plan: `tests/estimator/SPRINT_28_CODER1_TEST_PLAN.md` |
 | 2026-11-09 | Sprint 29 (Coder 1) | Coder 1 (Jamie) | Done | The Estimator chapter of the Complete User Guide (the Spec's Phase 8 list; the guide chapters every phase gate requires): COMPLETE_USER_GUIDE.md gained chapter 29, 'Estimator — Estimates, Takeoffs and Bids', plus its table-of-contents entry — before this the shipped guide never mentioned the Estimator at all. The chapter covers the tab and its sections, the 10-step setup wizard, the practice project, chat estimating, takeoffs and the Runner, approvals and the roles/Estimating-scope rules, the web app, CAD and tools, and troubleshooting. The tab's Help section gained an 'Open the User Guide' button (the Spec's Help row). Guard tests S29-G01..G04 in `tests/estimator/unit/test_user_guide_estimator_chapter.py`. All Estimator tests 1310 passed. Test plan: `tests/estimator/SPRINT_29_CODER1_TEST_PLAN.md` |
 | 2026-11-09 | Sprint 30 (Coder 1) | Coder 1 (Jamie) | Done | The Design Spec's 'Build status by coder' section brought current (it was a Nov 7 snapshot): a code audit verified the blocks it still showed as not started are built - takeoff_* tools and takeoff_propose, review_* with second check, plan_compare_revisions, plan_processing_queue / plan_publish_to_server, drawing-model crops, 42 plan_* identifiers - so Coder 1's chart blocks A3, A4, A7, A10, A11, A13 are now done (14 of 14), Coder 2's B0-B11 are done per his Sprints 1-14 code-done in this log (B12 tours/help stays todo), the score line and phase table were refreshed (108 MCP tools, 1,310-test suite before this sprint), and the Phase 2/4 gate notes now say the accuracy evidence runs are still to do. No phase gate was marked passed - the gate checklist below stays unchecked; the gates' spec review, version bump, Word copy and evidence/pilot runs are still outstanding. Also verified: the installer's two COMPLETE_USER_GUIDE.md entries install to different destinations ({app} and Documents\AI-Prowler) - not a duplicate, left as is. Guard tests S30-G01..G06 in `tests/estimator/unit/test_spec_build_status.py`. All Estimator tests 1316 passed. Test plan: `tests/estimator/SPRINT_30_CODER1_TEST_PLAN.md` |
+| 2026-11-09 | Sprint 15 (Coder 2) | Coder 2 (David) / Tester 2 | Code done; manual checks M1-M8 open | Site-plan zones for fencing and landscaping: on site, landscape, planting and irrigation plans, lawn, artificial turf, rock, mulch, pavers and planting beds are measured from the note inside each area (or its leader), with hatching ignored and the house left out of the lawn; existing areas aren't counted. Fence lines are followed from their notes through dashes and corners (marked to check), with material and height from the note and old fences to remove; walk and drive gates. CAD: zone layers and hatches, fence layers, GATE blocks. Plant schedules give trees and shrubs; landscape symbol library v4 (trees, palms, shrubs, drip and zone valves). Fencing and landscaping answers from the plans (12 plan trades), counted once when a site plan and a landscape plan show the same yard; Jamie's from-plans measurements work for both with no change on his side. Plan quantities: Site and landscape section, Fencing and Landscaping cards. Changes in Coder 1 files: "plant" schedule type in the drawing model; the two new files in the installer. No new tables or tools. All Estimator tests 1354 pass (48 new), browser track 14. Plan sets read before this sprint need reading again. Test plan: `tests/estimator/SPRINT_15_CODER2_TEST_PLAN.md` |
 
 **Gate checklist** (each gate also requires the spec review, version bump and regenerated Word copy, plus that phase's User Guide chapters written and followed successfully)
 

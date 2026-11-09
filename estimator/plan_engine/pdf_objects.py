@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from estimator.drawing_model import geometry as geo
 from estimator.errors import InvalidInput
-from estimator.plan_engine import elevations, vectors
+from estimator.plan_engine import elevations, site, vectors
 from estimator.plan_engine.pdf_pages import Page
 from estimator.plan_engine.titleblock import _inside
 
@@ -37,8 +37,9 @@ def _room_labels(page: Page, box: list[float], skip: set[str]) -> list[tuple[str
     return out
 
 
-def find(page: Page, viewports: list[dict]) -> tuple[list[dict], list[str]]:
-    """(objects, notes) for one sheet."""
+def find(page: Page, viewports: list[dict], discipline: str | None = None) -> tuple[list[dict], list[str]]:
+    """(objects, notes) for one sheet. discipline: the title block's, so every view on a site or landscape sheet is read
+    as a site plan."""
     segments = vectors.clean_segments(page.segments)
     objects: list[dict] = []
     notes: list[str] = []
@@ -55,6 +56,12 @@ def find(page: Page, viewports: list[dict]) -> tuple[list[dict], list[str]]:
             found, enotes = elevations.find(page, vp, segs, ratio)
             objects += found
             notes += enotes
+            continue
+        # Sprint 15: a site or landscape plan gives zones, fence lines and gates, never walls or rooms.
+        if site.is_site_view(vp.get("label"), discipline):
+            found, snotes = site.find(page, vp, segs, ratio)
+            objects += found
+            notes += snotes
             continue
         walls = vectors.find_walls(segs, ratio)
         objects += vectors.wall_objects(walls, vp["key"], "vector")

@@ -43,7 +43,8 @@ def test_quantities_for_a_project(call, house, session_for):                    
     assert b["estimate_title"] == "Smith house" and b["include_proposed"] is False
     assert b["model"]["totals"]["floor_sqft"] == 234.0 and len(b["model"]["rooms"]) == 2
     assert set(b["trades"]) == {"framing", "drywall", "painting", "insulation", "flooring", "electrical", "plumbing",
-                                "windows_doors", "siding", "hvac"}                # + the Sprint 14 trades
+                                "windows_doors", "siding", "hvac",                # + the Sprint 14 trades
+                                "fencing", "landscaping"}                         # + the Sprint 15 site trades
     assert b["trades"]["drywall"]["answers"]["ceiling_sqft"] == b["trades"]["flooring"]["answers"]["area_sqft"]
     tall = call("GET", f"{API}/estimates/{house}/quantities?height=10&proposed=1").json()
     assert tall["model"]["totals"]["height_ft"] == 10.0 and tall["include_proposed"] is True

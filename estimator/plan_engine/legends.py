@@ -23,6 +23,13 @@ SYMBOL_GAP = 0.25            # a gap this big after the first words separates th
 
 # Standard item types (the start of the spec's standard symbol library): (item type, trade, words that must all appear)
 ITEM_TYPES = (
+    # Sprint 15 (landscape library): irrigation valves before any plumbing valve, palms before trees.
+    ("drip_valve", "landscape", ("drip", "valve")), ("drip_valve", "landscape", ("drip", "zone")),
+    ("irrigation_valve", "landscape", ("remote control valve",)), ("irrigation_valve", "landscape", ("zone", "valve")),
+    ("irrigation_valve", "landscape", ("irrigation", "valve")), ("irrigation_valve", "landscape", ("sprinkler", "valve")),
+    ("irrigation_controller", "landscape", ("irrigation", "controller")),
+    ("irrigation_controller", "landscape", ("irrigation", "timer")),
+    ("palm", "landscape", ("palm",)), ("tree", "landscape", ("tree",)), ("shrub", "landscape", ("shrub",)),
     # Sprint 14 (HVAC library): before the smoke detectors, diffusers and fans below.
     ("duct_smoke_detector", "mechanical", ("duct", "smoke")),
     ("linear_diffuser", "mechanical", ("linear", "diffuser")), ("linear_diffuser", "mechanical", ("slot", "diffuser")),
@@ -85,7 +92,8 @@ ITEM_TYPES = (
     ("gas_outlet", "plumbing", ("gas",)),                   # last, so a gas water heater is a water heater
 )
 DISCIPLINE_WORDS = (("electrical", r"ELECTRICAL|POWER|LIGHTING"), ("plumbing", r"PLUMBING"),
-                    ("mechanical", r"MECHANICAL|HVAC"), ("fire", r"FIRE"), ("architectural", r"ARCHITECTURAL|DOOR|WINDOW"))
+                    ("mechanical", r"MECHANICAL|HVAC"), ("fire", r"FIRE"), ("architectural", r"ARCHITECTURAL|DOOR|WINDOW"),
+                    ("landscape", r"LANDSCAPE|PLANT|IRRIGATION"))
 
 
 def item_type(description: str) -> tuple[str | None, str | None]:

@@ -80,7 +80,7 @@ def _analyze(page, source: str) -> tuple[dict, dict]:
 
     tb = titleblock.read(page)
     vps = viewports.find(page, tb.zone)
-    objects, notes = pdf_objects.find(page, vps)
+    objects, notes = pdf_objects.find(page, vps, tb.discipline)
     scheds = schedules.find(page, tb.zone)
     tables = [s["bbox"] for s in scheds]
     legs = legends.find(page, tb.discipline, tb.zone, skip=tables)

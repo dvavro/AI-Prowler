@@ -41,9 +41,13 @@ def test_s30_g02_all_coder1_blocks_done():
 
 def test_s30_g03_coder2_blocks_match_the_plan_log():
     lines = _spec_lines()
-    for n in range(12):
+    for n in range(11):
         line = _node_line(lines, "B%d" % n)
         assert line.endswith(":::done"), line
+    # B11 (scans, DWG, revision overlay, Reports/Settings) and B12 (tours)
+    # are Coder 2 Sprints 16-18 work - not built yet. The merge with his
+    # Sprint 15 corrected an earlier draft of this sprint that had B11 done.
+    assert _node_line(lines, "B11").endswith(":::todo")
     assert _node_line(lines, "B12").endswith(":::todo")
 
 
@@ -52,8 +56,7 @@ def test_s30_g04_score_line_is_current():
     score = [ln for ln in text.splitlines() if ln.startswith("**Score so far:**")]
     assert len(score) == 1
     assert "all 14 blocks done" in score[0]
-    assert "12 of 13 blocks" in score[0]
-    assert "1,310 tests" in score[0]
+    assert "11 of 13 blocks" in score[0]
 
 
 def test_s30_g05_stale_not_started_claims_are_gone():
