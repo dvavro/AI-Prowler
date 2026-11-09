@@ -611,9 +611,32 @@ def legends(conn, ctx: RequestContext, plan_set_id: int) -> dict:
             "confidence": r["confidence"]}
            for r in conn.execute("SELECT l.*, s.sheet_no FROM legends l JOIN sheets s ON s.id = l.sheet_id"
                                  " WHERE s.plan_set_id = ? ORDER BY s.page_no, l.id", (ps["id"],))]
-    return {"ok": True, "plan_set_id": ps["id"], "count": len(out), "legends": out,
-            "symbol_dictionary": None, "note": "the symbol dictionary built from legends comes with the Symbol "
-                                               "Recognition Engine (planned Phase 4)"}
+    entries = _symbol_dictionary(conn, ps["id"])
+    if entries is None:
+        return {"ok": True, "plan_set_id": ps["id"], "count": len(out), "legends": out,
+                "symbol_dictionary": None, "note": "no symbol dictionary yet: the plan engine builds one from the "
+                                                   "legends when it reads the plans"}
+    return {"ok": True, "plan_set_id": ps["id"], "count": len(out), "legends": out, "symbol_dictionary": entries,
+            "note": "dictionary entries were read from the legends; ones marked needs_confirming want a person"}
+
+
+def _symbol_dictionary(conn, plan_set_id: int) -> list[dict] | None:
+    """The plan engine's symbol dictionary (Sprint 9, Coder 2): symbol_dictionary.json beside the sheet images, until
+    the spec's symbol_definitions table exists. Entries: {sheet_no, legend, code, description, item_type, trade,
+    has_symbol, confidence, needs_confirming}."""
+    from pathlib import Path
+    r = conn.execute("SELECT image_path FROM sheets WHERE plan_set_id = ? AND image_path IS NOT NULL ORDER BY page_no"
+                     " LIMIT 1", (plan_set_id,)).fetchone()
+    if not r or not r["image_path"]:
+        return None
+    path = Path(r["image_path"]).parent / "symbol_dictionary.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    keep = ("code", "description", "item_type", "trade", "has_symbol", "confidence", "needs_confirming")
+    return [{"sheet_no": lg.get("sheet_no"), "legend": lg.get("title"), **{k: e.get(k) for k in keep}}
+            for lg in data.get("legends", []) for e in lg.get("entries", [])][:2000]
 
 
 # ---------------------------------------------------------------- corrections by a person

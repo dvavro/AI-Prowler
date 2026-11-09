@@ -61,6 +61,10 @@ Sprint 6-7 (Coder 2):
   GET  /sheets/<id> also returns found (what the plan engine found, by kind) and tiles (zoom levels for the viewer)
   GET  /sheets/<id>/objects?kind=   drawing objects with their shapes and layer group (plan_get_objects), up to 5,000
   GET  /sheets/<id>/tiles/<level>/<x>/<y>.png   one 512 px viewer tile (plan_engine/tiles.py)
+Sprint 9 (Coder 2):
+  GET  /plan-sets/<id>/schedules?type=   schedules read from the plans, rows linked to plan tags (plan_get_schedules)
+  GET  /plan-sets/<id>/legends           legends and the symbol dictionary (plan_get_legends)
+  POST /schedule-rows/<id> {mark?, fields?, confirm?}   correct a row read from the plans (plan_update_schedule_row; asks)
   Blueprint Review (Takeoffs screen: owner, estimator, reviewer): see estimator/api/takeoff_api.py -
   GET /takeoffs, GET /estimates/<id>/takeoff, POST /estimates/<id>/measurements[/propose], GET /measurements/<id>,
   POST /measurements/approve, POST /measurements/<id>/edit|reject|suggest (takeoff_* tools; writes ask first)
@@ -413,7 +417,7 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
         return _help(m, sub, req)
 
     # ---------------------------------------------------------- Sprint 5: Plans (plan engine, sheets, scales)
-    if sub == "/plans" or sub.startswith(("/plan-sets/", "/sheets/", "/viewports/")):
+    if sub == "/plans" or sub.startswith(("/plan-sets/", "/sheets/", "/viewports/", "/schedule-rows/")):
         return _plans(m, sub, req, ctx, conn)
 
     # ---------------------------------------------------------- Sprint 8: Estimates screen (linked to measurements)
@@ -668,6 +672,8 @@ def _bid_file(conn, ctx, bid_id: int, kind: str) -> Response:
 
 _PLAN_SET = re.compile(r"^/plan-sets/(\d+)$")
 _PLAN_SET_PROCESS = re.compile(r"^/plan-sets/(\d+)/process$")
+_PLAN_SET_TABLES = re.compile(r"^/plan-sets/(\d+)/(schedules|legends)$")
+_SCHEDULE_ROW = re.compile(r"^/schedule-rows/(\d+)$")
 _SHEET = re.compile(r"^/sheets/(\d+)$")
 _SHEET_IMAGE = re.compile(r"^/sheets/(\d+)/image$")
 _VP_SCALE = re.compile(r"^/viewports/(\d+)/scale$")
@@ -729,6 +735,29 @@ def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
         est = service.get_estimate(conn, ctx, st["estimate_id"])
         return _ok(plan_set=st, sheets=store.sheets(conn, ctx, pid)["sheets"], engine=plan_engine.engine_info(),
                    estimate={"id": est["id"], "title": est["title"]}, can_edit=can_edit)
+
+    mm = _PLAN_SET_TABLES.match(sub)
+    if mm and m == "GET":
+        # Sprint 9: schedules read from the plans (rows by mark, linked to plan tags) and legends with the dictionary.
+        pid, what = int(mm.group(1)), mm.group(2)
+        if what == "schedules":
+            kind = (req.query.get("type") or "").strip() or None
+            return _ok(**{k: v for k, v in store.schedules(conn, ctx, pid, kind).items() if k != "ok"}, can_edit=can_edit)
+        return _ok(**{k: v for k, v in store.legends(conn, ctx, pid).items() if k != "ok"}, can_edit=can_edit)
+
+    mm = _SCHEDULE_ROW.match(sub)
+    if mm and m == "POST":
+        if not can_edit:
+            raise _Refuse(403, "permission_denied", "your role can't correct schedules")
+        b = _body(req)
+        fields = b.get("fields")
+        if fields is not None and not isinstance(fields, dict):
+            raise _Refuse(400, "invalid_input", "fields must be {column: value}")
+        mark = b.get("mark")
+        if mark is not None and not isinstance(mark, str):
+            raise _Refuse(400, "invalid_input", "mark must be text")
+        return _ask_first(lambda: store.update_schedule_row(conn, ctx, int(mm.group(1)), fields=fields, mark=mark,
+                                                            confirm=b.get("confirm") is True))
 
     mm = _PLAN_SET_PROCESS.match(sub)
     if mm and m == "POST":

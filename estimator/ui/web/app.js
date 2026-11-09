@@ -776,7 +776,86 @@ async function renderPlanSet(main, id) {
   } else if (ps.status === "processed") {
     parts.push(el("div", { class: "card empty" }, "No sheets were found in this file."));
   }
+  if (ps.status === "processed" && r.sheets.length) {
+    const tables = el("div", { id: "plan-tables" });
+    parts.push(tables);
+    planTables(tables, id, r.can_edit);
+  }
   main.replaceChildren(...parts);
+}
+
+// Sprint 9: schedules read from the plans (rows linked to plan tags) and legends with the symbol dictionary.
+async function planTables(box, id, canEdit) {
+  let s, l;
+  try {
+    [s, l] = await Promise.all([api("GET", "/plan-sets/" + id + "/schedules"), api("GET", "/plan-sets/" + id + "/legends")]);
+  } catch (e) { if (e.status !== 401) box.replaceChildren(errorBox(e)); return; }
+  const parts = [];
+  if (s.schedules.length) {
+    parts.push(el("h3", {}, "Schedules"));
+    s.schedules.forEach(sc => parts.push(scheduleCard(sc, canEdit)));
+  }
+  if (l.legends.length) {
+    parts.push(el("h3", {}, "Legends"));
+    const dict = l.symbol_dictionary || [];
+    l.legends.forEach(lg => {
+      const entries = dict.filter(e => e.legend === lg.title && e.sheet_no === lg.sheet_no);
+      parts.push(el("div", { class: "card section", "data-legend": lg.id },
+        el("h4", {}, lg.title + " — " + (lg.sheet_no || "sheet") + (lg.discipline ? " · " + words(lg.discipline) : "")),
+        entries.length ? el("table", { class: "list legend-entries" },
+          el("thead", {}, el("tr", {}, el("th", {}, "Code"), el("th", {}, "Description"), el("th", {}, "Item"), el("th", {}, "Trade"))),
+          el("tbody", {}, entries.map(e => el("tr", { class: e.needs_confirming ? "needs-confirming" : "" },
+            el("td", {}, e.code || (e.has_symbol ? "(symbol)" : "—")),
+            el("td", {}, e.description),
+            el("td", {}, e.item_type ? words(e.item_type) : el("span", { class: "status sample" }, "needs a person")),
+            el("td", {}, e.trade ? words(e.trade) : "—"))))) : el("p", { class: "muted" }, "No entries were read.")));
+    });
+    parts.push(el("p", { class: "muted small" }, l.note));
+  }
+  box.replaceChildren(...parts);
+}
+
+function scheduleCard(sc, canEdit) {
+  const msg = el("div", { role: "status" });
+  const cols = [];
+  sc.rows.forEach(r => Object.keys(r.fields).forEach(k => { if (!cols.includes(k)) cols.push(k); }));
+  const body = el("tbody", {}, sc.rows.map(r => {
+    const tr = el("tr", { "data-row": r.id },
+      el("td", {}, r.mark || "—"),
+      ...cols.slice(1).map(c => el("td", {}, r.fields[c] || "")),
+      el("td", {}, r.linked_object_ids.length ? r.linked_object_ids.length + " on plans" : el("span", { class: "status sample" }, "not found")),
+      el("td", {}, r.reviewed_by ? "✓ " + r.reviewed_by : ""));
+    if (canEdit) {
+      const fix = el("button", { class: "button small", type: "button", "data-fix": r.id }, "Correct…");
+      fix.addEventListener("click", () => { fix.disabled = true; scheduleRowForm(tr, r, cols, msg); });
+      tr.append(el("td", {}, fix));
+    }
+    return tr;
+  }));
+  const head = el("tr", {}, el("th", {}, cols[0] || "Mark"), ...cols.slice(1).map(c => el("th", {}, c)),
+    el("th", {}, "On the plans"), el("th", {}, "Checked"), canEdit ? el("th", {}, "") : null);
+  return el("div", { class: "card section", "data-schedule": sc.id },
+    el("h4", {}, sc.title + " — " + (sc.sheet_no || "page " + sc.page_no) + " · " + words(sc.schedule_type)),
+    sc.unlinked_marks.length ? el("p", { class: "note warn" }, "Not found on the plans: " + sc.unlinked_marks.join(", ")) : null,
+    el("table", { class: "list schedule-rows" }, el("thead", {}, head), body), msg);
+}
+
+function scheduleRowForm(tr, row, cols, msg) {
+  const mark = el("input", { type: "text", value: row.mark || "", "aria-label": "Mark", id: "sr-mark" });
+  const inputs = cols.slice(1).map(c => [c, el("input", { type: "text", value: row.fields[c] || "", "aria-label": c })]);
+  const save = el("button", { class: "primary", type: "button", id: "sr-save" }, "Save…");
+  save.addEventListener("click", () => {
+    const fields = {};
+    inputs.forEach(([c, inp]) => { if ((inp.value || "") !== (row.fields[c] || "")) fields[c] = inp.value; });
+    const body = {};
+    if (Object.keys(fields).length) body.fields = fields;
+    if (mark.value.trim() !== (row.mark || "")) body.mark = mark.value.trim();
+    if (!Object.keys(body).length) { msg.replaceChildren(el("p", { class: "muted" }, "Nothing changed.")); return; }
+    askThen(msg, save, "/schedule-rows/" + row.id, body, () => "Schedule row corrected.", "schedule");
+  });
+  const form = el("tr", { class: "schedule-row-form" }, el("td", { colspan: String(cols.length + 3) },
+    el("div", { class: "row" }, el("label", {}, "Mark", mark), ...inputs.map(([c, inp]) => el("label", {}, c, inp)), save)));
+  tr.after(form);
 }
 
 // The sheet image comes through the API with the same sign-in as everything else (cookie or the Jobs app's token).

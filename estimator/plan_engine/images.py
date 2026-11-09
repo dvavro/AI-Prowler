@@ -1,8 +1,9 @@
 """Scans and photos of plans (PNG, JPG, TIFF): one sheet per image (or per TIFF page).
 
 The paper size comes from the image's DPI when it has one (a scanner records it), otherwise 150 DPI is assumed and the
-sheet says so. There's no scale: a person sets it from a note or calibrates from two points on the image. Reading text
-from images (OCR) comes in a later sprint.
+sheet says so. When Tesseract is installed (Sprint 9) the words are read too, so the engine finds the title block,
+scale notes, schedules, legends and dimensions the same way as on a PDF; otherwise a person sets the scale from a note
+or calibrates from two points on the image.
 """
 from __future__ import annotations
 
@@ -12,7 +13,8 @@ ASSUMED_DPI = 150
 MAX_PIXELS = 20000 * 20000       # refuse decompression bombs, allow big E-size scans
 
 
-def read(path: Path, work: Path | None, max_sheets: int) -> dict:
+def read(path: Path, work: Path | None, max_sheets: int, ocr_words: bool = False) -> dict:
+    """ocr_words=True adds each sheet's OCR words under "_words" (the engine reads them and removes the key)."""
     from PIL import Image, ImageSequence
 
     Image.MAX_IMAGE_PIXELS = MAX_PIXELS
@@ -51,5 +53,21 @@ def read(path: Path, work: Path | None, max_sheets: int) -> dict:
                                     "scale_method": "none", "scale_confidence": 0}]}
             if assumed:
                 sheet["note"] = f"the image has no DPI, so {ASSUMED_DPI} DPI was assumed; calibrate the scale"
+            if ocr_words:
+                sheet["_words"] = _ocr(frame, use_dpi)
             sheets.append(sheet)
     return {"page_count": len(sheets), "sheets": sheets}
+
+
+def _ocr(frame, dpi: float) -> list:
+    """The frame's words in sheet inches; a very large scan is read at a lower resolution."""
+    from estimator.plan_engine import ocr
+
+    img = frame.convert("L")
+    longest = max(img.size)
+    px_per_in = dpi
+    if longest > ocr.MAX_OCR_PX:
+        k = ocr.MAX_OCR_PX / longest
+        img = img.resize((max(1, int(img.size[0] * k)), max(1, int(img.size[1] * k))))
+        px_per_in = dpi * k
+    return ocr.words_from_image(img, px_per_in)
