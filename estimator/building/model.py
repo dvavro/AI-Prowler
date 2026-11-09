@@ -42,7 +42,8 @@ HIGH_KEYS = re.compile(r"^(?:H|HT|HGT|HEIGHT)\.?$", re.I)
 SIZE_KEYS = re.compile(r"SIZE|DIM", re.I)
 WALL_TRADES = ("framing", "drywall", "painting", "insulation", "flooring")
 # Sprint 14: the other trades the model answers - windows and doors (schedule linking), siding (elevations), HVAC (area).
-MODEL_TRADES = WALL_TRADES + ("windows_doors", "siding", "hvac")
+MODEL_TRADES = WALL_TRADES + ("windows_doors", "siding", "hvac", "fencing", "landscaping")
+SITE_TRADES = ("fencing", "landscaping")            # Sprint 15: from the site and landscape plans (building.site)
 TYPE_KEYS = re.compile(r"TYPE|DESC|REMARK|OPERATION|STYLE|MATERIAL", re.I)
 QTY_KEYS = re.compile(r"^(?:QTY|QUANTITY|NO\.?|COUNT)$", re.I)
 WINDOW_SMALL_SQFT = 15.0                    # the windows and doors trade's line between small and large windows
@@ -402,16 +403,23 @@ def build(conn, ctx: RequestContext, *, estimate_id: int | None = None, plan_set
         notes.append(f"only {len(ev['elevations'])} exterior elevation(s) found; siding and exterior paint use the floor "
                      "plans' outside walls until every side is drawn")
 
+    # Sprint 15: the site - landscape zones, fence lines, gates and the plant schedule.
+    from estimator.building import site as site_mod
+    site = site_mod.read(conn, sheets, lambda s: _factors(conn, s), rows)
+
     for x in out_rooms:
         x.pop("_poly"), x.pop("_vp")
     for x in out_walls:
         x.pop("_pts"), x.pop("_f"), x.pop("_vp")
     totals = _totals(out_rooms, out_walls, out_openings, default_h, corners)
     totals.update(_more_totals(out_rooms, out_openings, ev["elevations"], footprint))
-    key = hashlib.sha1(json.dumps({"r": out_rooms, "w": out_walls, "o": out_openings, "e": ev["elevations"]},
+    totals.update(fence_lf=site["fence_lf"], **{f"{k}_sqft": v for k, v in site["zone_sqft"].items()})
+    key = hashlib.sha1(json.dumps({"r": out_rooms, "w": out_walls, "o": out_openings, "e": ev["elevations"],
+                                   "s": [site["zones"], site["fences"], site["gates"], site["plants"]]},
                                   sort_keys=True, default=str).encode()).hexdigest()[:12]
     return {"ok": True, "plan_set_ids": ps_ids, "model_key": key, "rooms": out_rooms, "walls": out_walls,
-            "openings": out_openings, "elevations": ev["elevations"], "schedule_marks": marks, "totals": totals,
+            "openings": out_openings, "elevations": ev["elevations"], "schedule_marks": marks, "site": site,
+            "totals": totals,
             "skipped_sheets": skipped, "notes": notes, "trades": list(MODEL_TRADES),
             "summary": (f"{len(out_rooms)} room(s), {totals['floor_sqft']:g} sq ft; walls {totals['exterior_wall_lf']:g} lf "
                         f"exterior and {totals['interior_wall_lf']:g} lf interior; {totals['doors']} door(s) and "
@@ -647,6 +655,13 @@ def answers_for(model: dict, module_id: str) -> dict:
             if ans else {}
         if t["unconditioned_sqft"]:
             notes.append(f"{t['unconditioned_sqft']:g} sq ft of garages, porches and similar rooms isn't heated or cooled")
+    elif module_id in SITE_TRADES:
+        # Sprint 15: from the site and landscape plans; the house's room and wall notes don't apply to them.
+        from estimator.building import site as site_mod
+        fn = site_mod.fencing_answers if module_id == "fencing" else site_mod.landscaping_answers
+        ans, src, notes = fn(model["site"])
+        return {"ok": True, "module_id": module_id, "model_key": model["model_key"], "answers": ans, "from": src,
+                "notes": notes + model["site"]["notes"]}
     else:
         raise InvalidInput(f"the wall-and-room model gives answers for {', '.join(MODEL_TRADES)}", module_id=module_id)
     return {"ok": True, "module_id": module_id, "model_key": model["model_key"], "answers": ans, "from": src,

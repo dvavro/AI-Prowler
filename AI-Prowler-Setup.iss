@@ -454,6 +454,7 @@ Source: "estimator\bids\service.py"; DestDir: "{app}\estimator\bids"; Flags: ign
 Source: "estimator\building\__init__.py"; DestDir: "{app}\estimator\building"; Flags: ignoreversion
 Source: "estimator\building\elevations.py"; DestDir: "{app}\estimator\building"; Flags: ignoreversion
 Source: "estimator\building\model.py"; DestDir: "{app}\estimator\building"; Flags: ignoreversion
+Source: "estimator\building\site.py"; DestDir: "{app}\estimator\building"; Flags: ignoreversion
 Source: "estimator\building\trades.py"; DestDir: "{app}\estimator\building"; Flags: ignoreversion
 Source: "estimator\config.py"; DestDir: "{app}\estimator"; Flags: ignoreversion
 Source: "estimator\context.py"; DestDir: "{app}\estimator"; Flags: ignoreversion
@@ -589,6 +590,7 @@ Source: "estimator\plan_engine\ocr.py"; DestDir: "{app}\estimator\plan_engine"; 
 Source: "estimator\plan_engine\pdf_objects.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
 Source: "estimator\plan_engine\pdf_pages.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
 Source: "estimator\plan_engine\schedules.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
+Source: "estimator\plan_engine\site.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
 Source: "estimator\plan_engine\symbol_library.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
 Source: "estimator\plan_engine\symbols.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
 Source: "estimator\plan_engine\tags.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion

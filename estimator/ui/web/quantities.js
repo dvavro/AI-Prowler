@@ -1,6 +1,7 @@
 /* Plan quantities page (Coder 2 Sprint 12): the shared wall-and-room model of a project and each trade's answers
  * from it, so framing, drywall, painting, insulation and flooring all use the same rooms, walls and openings, and
- * electrical and plumbing use the symbols a person approved.
+ * electrical and plumbing use the symbols a person approved. Sprint 15: the site (zones, fences, gates) for fencing
+ * and landscaping.
  *
  * Loaded after app.js (el, api, words, helpLink, tile, errorBox, go ...).
  * Route: #/quantities/<estimate id>   ?height=<ft> ceiling height for rooms the finish schedule doesn't give;
@@ -12,7 +13,10 @@
 
 const QTY_TRADES = { framing: "🪵 Framing", drywall: "🧱 Drywall", painting: "🎨 Painting", insulation: "🧶 Insulation",
                      flooring: "🟫 Flooring", windows_doors: "🪟 Windows and doors", siding: "🏠 Siding",
-                     hvac: "❄️ HVAC", electrical: "⚡ Electrical", plumbing: "🚰 Plumbing" };
+                     hvac: "❄️ HVAC", fencing: "🚧 Fencing", landscaping: "🌳 Landscaping",
+                     electrical: "⚡ Electrical", plumbing: "🚰 Plumbing" };
+const QTY_ZONES = { sod: "Sod / lawn", turf: "Artificial turf", rock: "Rock / gravel", mulch: "Mulch",
+                    pavers: "Pavers", bed: "Planting beds" };
 
 function qtyNum(v, unit) {
   if (v === null || v === undefined || v === "") return "—";
@@ -77,7 +81,11 @@ async function renderQuantities(main, estimateId) {
     el("label", {}, pIn, " Count symbols still to check"), apply));
 
   for (const n of m.notes || []) parts.push(el("p", { class: "note" }, n));
-  if (!m.rooms.length) {
+  const st = m.site || {};
+  const hasSite = (st.zones || []).length || (st.fences || []).length;
+  if (!m.rooms.length && hasSite) {
+    parts.push(el("p", { class: "muted", id: "qty-site-only" }, "No floor plan rooms: this project's plans are site and landscape plans."));
+  } else if (!m.rooms.length) {
     parts.push(el("div", { class: "card empty", id: "qty-empty" },
       "No rooms found yet. Read the plans on the Plans screen (each floor plan needs a scale) and the rooms, walls and openings are worked out here."));
   } else {
@@ -113,6 +121,27 @@ async function renderQuantities(main, estimateId) {
       ["Side", "Sheet", "Wall sq ft", "Openings", "Less openings", "Stories"],
       elevs.map(e => [e.view, e.sheet_no || "", qtyNum(e.wall_sqft), String(e.openings.length) + " (" + qtyNum(e.openings_sqft) + " sq ft)",
         qtyNum(e.net_sqft), String(e.stories)])));
+  }
+  // Sprint 15: the site - landscape zones by kind, fence lines and gates.
+  if (hasSite) {
+    parts.push(el("h3", {}, "Site and landscape"));
+    const z = st.zone_sqft || {};
+    const zk = Object.keys(QTY_ZONES).filter(k => z[k]);
+    if (zk.length) {
+      parts.push(qtyTable("qty-zones", ["Zone", "Sq ft", "Areas"],
+        zk.map(k => [QTY_ZONES[k], qtyNum(z[k]), String((st.zones || []).filter(x => x.kind === k).length)])));
+    }
+    const fg = st.fence_groups || [];
+    if (fg.length) {
+      parts.push(qtyTable("qty-fences", ["Fence", "Height", "Length", "Runs"],
+        fg.map(g => [words(g.material || "not given"), g.height_ft ? qtyNum(g.height_ft, "ft") : "—", qtyNum(g.length_ft, "lf"),
+          String(g.runs)])));
+    }
+    const gates = st.gates || {};
+    if (gates.walk || gates.drive) {
+      parts.push(el("p", { id: "qty-gates" }, "Gates: " + (gates.walk || 0) + " walk, " + (gates.drive || 0) + " drive"));
+    }
+    for (const n of st.notes || []) parts.push(el("p", { class: "small note" }, n));
   }
   if ((m.skipped_sheets || []).length) {
     parts.push(el("details", { id: "qty-skipped" }, el("summary", {}, "Sheets not counted (" + m.skipped_sheets.length + ")"),

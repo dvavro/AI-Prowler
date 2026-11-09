@@ -1,5 +1,5 @@
-"""Schedule tables on sheets: door, window, room finish, plumbing fixture, light fixture, panel, equipment and wall-type
-schedules (spec "Legend and schedule extraction"), turned into rows of {column: value} with the row's mark.
+"""Schedule tables on sheets: door, window, room finish, plumbing fixture, light fixture, panel, equipment, wall-type and
+(Sprint 15) plant schedules (spec "Legend and schedule extraction"), turned into rows of {column: value} with the row's mark.
 
 How a table is read (vector text, or OCR words on scans):
 1. The title: a short line such as "DOOR SCHEDULE" or "LIGHT FIXTURE SCHEDULE" (the type comes from its words).
@@ -15,9 +15,11 @@ from __future__ import annotations
 import re
 
 TITLE = re.compile(r"\b(?:(DOOR|WINDOW|ROOM\s+FINISH|FINISH|PLUMBING(?:\s+FIXTURE)?|LIGHT(?:ING)?(?:\s+FIXTURE)?|"
-                   r"LUMINAIRE|FIXTURE|PANEL(?:BOARD)?|(?:MECHANICAL\s+|HVAC\s+)?EQUIPMENT|WALL\s+TYPE|PARTITION)S?\s+)?"
-                   r"SCHEDULES?\b", re.I)
-TYPE_OF = (("door", r"DOOR"), ("window", r"WINDOW"), ("finish", r"FINISH"), ("plumbing", r"PLUMBING"),
+                   r"LUMINAIRE|FIXTURE|PANEL(?:BOARD)?|(?:MECHANICAL\s+|HVAC\s+)?EQUIPMENT|WALL\s+TYPE|PARTITION|"
+                   r"PLANT(?:ING)?|LANDSCAPE(?:\s+PLANT)?)S?\s+)?SCHEDULES?\b", re.I)
+# Sprint 15: plant schedules (trees and shrubs with their quantities) before the others ("LANDSCAPE PLANT SCHEDULE").
+TYPE_OF = (("plant", r"PLANT|LANDSCAPE"), ("door", r"DOOR"), ("window", r"WINDOW"), ("finish", r"FINISH"),
+           ("plumbing", r"PLUMBING"),
            ("lighting", r"LIGHT|LUMINAIRE"), ("panel", r"PANEL"), ("equipment", r"EQUIPMENT|HVAC"),
            ("wall-type", r"WALL\s+TYPE|PARTITION"), ("plumbing", r"FIXTURE"))
 MARK_HEAD = re.compile(r"^(MARK|NO\.?|NUMBER|TAG|TYPE|SYM(BOL)?|ID|DOOR|WINDOW|ROOM|FIXTURE|PANEL|ITEM|KEY)$", re.I)
