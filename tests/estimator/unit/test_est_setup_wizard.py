@@ -13,7 +13,7 @@ REG = ModuleRegistry().load()
 
 def test_fresh_status(db):  # S3-W01
     s = setup.setup_status(db, CTX)
-    assert s["done"] == 0 and s["total"] == 9 and s["next_step"] == "company_profile"
+    assert s["done"] == 0 and s["total"] == 10 and s["next_step"] == "company_profile"
     assert s["ready_for_first_bid"] is False
 
 

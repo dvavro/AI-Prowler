@@ -345,3 +345,68 @@ def example_prompts() -> list[str]:
 
 def as_json(obj) -> str:
     return json.dumps(obj, indent=1, default=str)
+
+
+# ---------------------------------------------------------------- CAD and tools, web app access
+
+def _oda_glob() -> str:
+    """The ODA File Converter exe from its usual install folders ("" when it is not installed)."""
+    import glob
+    import os
+    drive = os.environ.get("SystemDrive", "C:")
+    for base in (("Program Files", "ODA"), ("Program Files (x86)", "ODA")):
+        pat = os.path.join(drive + os.sep, *base, "ODAFileConverter*", "ODAFileConverter.exe")
+        hits = sorted(glob.glob(pat))
+        if hits:
+            return hits[0]
+    return ""
+
+
+def tool_status(which=None, find_spec=None) -> list[dict]:
+    """CAD and file tools the Estimator can use on this PC, for the CAD and tools section of the tab.
+
+    Each entry is {"tool", "ok", "detail"}. Tests pass their own `which` / `find_spec` to fake the
+    whole environment; with the real ones, the ODA converter is also looked for in its install folders.
+    """
+    import importlib.util
+    import shutil
+    real_which = which is None
+    which = which or shutil.which
+    find_spec = find_spec or importlib.util.find_spec
+    dxf = find_spec("ezdxf") is not None
+    oda = which("ODAFileConverter") or (_oda_glob() if real_which else "")
+    tess = which("tesseract") or ""
+    return [
+        {"tool": "DXF drawings", "ok": dxf,
+         "detail": "ezdxf is installed, so DXF plan files can be read directly." if dxf else
+                   "ezdxf is missing, so DXF plan files cannot be read. It ships in requirements.txt;"
+                   " reinstalling AI-Prowler restores it."},
+        {"tool": "DWG converter (ODA File Converter)", "ok": bool(oda),
+         "detail": f"Found at {oda}; DWG plan files are converted to DXF with it." if oda else
+                   "Not installed, so DWG plan files cannot be opened. It is a free download from the"
+                   " Open Design Alliance (opendesign.com, Guest Files, ODA File Converter)."},
+        {"tool": "Tesseract OCR (reads scanned plans)", "ok": bool(tess),
+         "detail": f"Found at {tess}." if tess else
+                   "Not installed, so scanned plans and photos cannot be text-read (OCR)."},
+    ]
+
+
+def web_app_access() -> dict:
+    """Where the Estimator web app is and who can sign in, for the Phone and web app section of the tab.
+
+    The port matches estimator.api.server (ESTIMATOR_WEB_PORT, default 8770). The sign-in rules are
+    the roles mapping in estimator.api.prowler_link (Jamie, 2026-11-09).
+    """
+    import os
+    port = os.environ.get("ESTIMATOR_WEB_PORT", "8770")
+    return {
+        "url": f"http://localhost:{port}/estimator/",
+        "port": port,
+        "lines": [
+            "The Estimator web app is built: plans, reviews and takeoffs in a browser, on this PC or a phone.",
+            f"On this PC: http://localhost:{port}/estimator/",
+            "On your phone: open the same address through Remote Access (in Server mode, your office network address works too).",
+            "Sign-in uses AI-Prowler accounts. The owner has full access; managers and staff sign in as office, and with the Estimating scope (Admin, Manage Scopes) as estimators who can change and approve; field crew can look, but not change or approve.",
+        ],
+    }
+

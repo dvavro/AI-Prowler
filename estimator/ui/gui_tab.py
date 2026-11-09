@@ -11,7 +11,8 @@ to, so keep the first words stable):
     🧑‍💼 Director              review limit, quick-send limit, follow-ups, daily briefing, watcher
     📦 Modules               every installed trade and service, its version and how it's priced
     💾 Data and backups       where estimator.db lives, back up now
-    📱 Phone and web app      what's coming (David's track) and how to use it from chat today
+      🔧 CAD and tools          DXF support, the DWG converter and OCR status
+    📱 Phone and web app      the web app address on this PC and your phone, and who can sign in
     ❓ Help                   what to ask your AI
 
 While the Estimator is switched off, every section but the first folds up to "(not enabled)" (the same as
@@ -52,7 +53,7 @@ class EstimatorTab:
         self.sections = {}
         self._setup_section()
         for build in (self._company_section, self._trades_section, self._agents_section, self._director_section,
-                      self._modules_section, self._data_section, self._phone_section, self._help_section):
+                      self._modules_section, self._data_section, self._cad_section, self._phone_section, self._help_section):
             try:
                 build()
             except Exception as exc:  # noqa: BLE001 - one broken section doesn't take the rest down
@@ -170,7 +171,7 @@ class EstimatorTab:
                   font=("Arial", 9, "bold")).pack(anchor="w")
         icons = {"done": "✅", "skipped": "⏭", "not_started": "⬜"}
         quick = {"company_profile": "🏢 Company and pricing", "tax": "🏢 Company and pricing",
-                 "markups": "🏢 Company and pricing", "services": "🏗 Trades", "ai_check": "🤖 AI agents and budget"}
+                 "markups": "🏢 Company and pricing", "services": "🏗 Trades", "team_approvals": "🧑‍💼 Director", "ai_check": "🤖 AI agents and budget"}
         rows = ttk.Frame(self.check_frame)
         rows.pack(fill="x")
         for i, s in enumerate(st["steps"]):
@@ -439,10 +440,16 @@ class EstimatorTab:
 
     def _phone_section(self):
         box = self._box("📱 Phone and web app", "phone")
-        self._note(box, "Coming next: an Estimates tab in the Jobs app on your phone, and an Estimator web app for "
-                        "plan review on this PC (being built on the shared estimator branch). Until then, everything "
-                        "works from your AI in chat, on this PC or on your phone through Remote Access: start, "
-                        "review, approve and send estimates by asking.", "#444")
+        for line in model.web_app_access()["lines"]:
+            self._note(box, line, "#444")
+
+    # ------------------------------------------------------------ 🔧 CAD and tools
+
+    def _cad_section(self):
+        box = self._box("🔧 CAD and tools", "cad")
+        for tool in model.tool_status():
+            mark = "✅" if tool["ok"] else "❌"
+            self._note(box, mark + " " + tool["tool"] + ": " + tool["detail"], GREEN if tool["ok"] else RED)
 
     # ------------------------------------------------------------ ❓ help
 

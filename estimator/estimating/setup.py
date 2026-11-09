@@ -24,6 +24,7 @@ STEPS = (
     ("markups", "Overhead, profit and minimum charge"),
     ("price_book_review", "Review sample prices and set your own"),
     ("bid_template", "Bid template and terms"),
+    ("team_approvals", "Team and approvals (who can estimate, review, approve and send)"),
     ("ai_check", "AI connection check"),
     ("sample_quote", "Try a sample quote"),
 )
@@ -135,6 +136,29 @@ def _apply(conn, ctx, step: str, data: dict) -> dict:
                              (ctx.company_id,))
                 applied["kept_samples"] = True
         return {"prices_cents": applied}
+    if step == "team_approvals":
+        # Spec step 8 (Business mode): who can estimate, review, approve and send is set by
+        # the AI-Prowler users and roles (Admin); the Estimator-side setting is the review
+        # threshold, which lives with the Director settings. Dollars or cents both accepted.
+        allowed = ("review_required_over", "review_required_over_cents", "quick_send_limit",
+                   "quick_send_limit_cents")
+        bad = sorted(set(data) - set(allowed))
+        if bad:
+            raise InvalidInput(f"unknown team and approvals fields: {bad}", valid=list(allowed))
+        changes = {}
+        for dollars_key, cents_key in (("review_required_over", "review_required_over_cents"),
+                                       ("quick_send_limit", "quick_send_limit_cents")):
+            if dollars_key in data:
+                try:
+                    changes[cents_key] = cents_from_decimal(str(data[dollars_key]))
+                except (ValueError, TypeError):
+                    raise InvalidInput(f"{dollars_key} must be dollars like \"750\"", field=dollars_key) from None
+            if cents_key in data:
+                changes[cents_key] = data[cents_key]
+        if changes:
+            from estimator.director import settings as director_settings
+            director_settings.update_settings(conn, ctx, changes)
+        return {"director_settings": changes}
     return {}
 
 

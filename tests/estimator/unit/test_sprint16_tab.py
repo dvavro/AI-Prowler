@@ -148,11 +148,11 @@ def test_tab_is_added_with_its_sections(root, db_home, switch, wizard):  # S16-G
     frame = build_estimator_tab(app)
     assert frame is not None and app.notebook.tab(1, "text") == model.TAB_TITLE
     tab = app._estimator_tab
-    assert set(tab.sections) == {"setup", "company", "trades", "agents", "director", "modules", "data", "phone",
+    assert set(tab.sections) == {"setup", "company", "trades", "agents", "director", "modules", "data", "cad", "phone",
                                  "help"}
     texts = _texts(frame)
     assert any(t.startswith("🧭 Estimator setup") for t in texts)        # Setup AI-Prowler scrolls to this
-    assert any("The Estimator is ON" in t for t in texts) and any("Setup checklist: 0 of 9" in t for t in texts)
+    assert any("The Estimator is ON" in t for t in texts) and any("Setup checklist: 0 of 10" in t for t in texts)
     assert len(tab.trade_vars) == 15 and all(v.get() for v in tab.trade_vars.values())
 
 
@@ -165,7 +165,7 @@ def test_company_form_saves(root, db_home, switch, wizard):  # S16-G02
         tab.company_vars[k].set(v)
     _find(tab.sections["company"], "💾 Save company").invoke()
     assert model.profile()["name"] == "Vavro Roofing" and model.setup_light() is True
-    assert any("2 of 9" in t or "3 of 9" in t for t in _texts(tab.check_frame))
+    assert any("2 of 10" in t or "3 of 10" in t for t in _texts(tab.check_frame))
 
 
 def test_switch_off_folds_sections(root, db_home, switch, wizard):  # S16-G03

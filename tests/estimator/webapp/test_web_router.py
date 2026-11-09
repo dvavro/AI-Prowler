@@ -149,7 +149,7 @@ def test_dashboard_counts_and_setup(call, session_for):
     _create(call, "B")
     d = call("GET", "/estimator-api/dashboard").json()
     assert d["total"] == 2 and d["counts"] == {"draft": 2} and len(d["recent"]) == 2
-    assert d["setup"]["total"] == 9                      # owner sees the setup checklist
+    assert d["setup"]["total"] == 10                      # owner sees the setup checklist
     assert call("GET", "/estimator-api/dashboard", headers=session_for("estimator")).json()["setup"] is None
 
 
