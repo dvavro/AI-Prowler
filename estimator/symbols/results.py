@@ -75,6 +75,14 @@ def save(conn, ctx, plan_set: dict, results: dict, saved: list[dict]) -> dict:
     for e in entries[:MAX_ENTRIES]:
         if not isinstance(e, dict) or not isinstance(e.get("key"), str):
             continue
+        if e["key"].startswith("lib:"):          # Sprint 11: a learned company definition, already in the library
+            lib_id = e["key"][4:]
+            row = conn.execute("SELECT f.id FROM symbol_definitions f JOIN symbol_libraries l ON l.id = f.library_id"
+                               " WHERE f.id = ? AND f.company_id = ? AND l.level IN ('company', 'firm')",
+                               (int(lib_id) if lib_id.isdigit() else -1, company)).fetchone()
+            if row:
+                defs[e["key"]] = row["id"]
+            continue
         s = by_page.get(e.get("page_no"))
         li = e.get("legend_index")
         legend_id = s["legend_ids"][li] if s and isinstance(li, int) and 0 <= li < len(s["legend_ids"]) else None
@@ -139,15 +147,30 @@ def save(conn, ctx, plan_set: dict, results: dict, saved: list[dict]) -> dict:
             if bbox and any(v is None for v in bbox):
                 bbox = None
             rot = _num(rec.get("rotation"))
-            conn.execute(
-                "INSERT INTO symbol_detections (company_id, plan_set_id, drawing_object_id, definition_id, sheet_id,"
-                " viewport_id, room_id, item_type, trade, label, location_json, rotation, mirrored, method, scores_json,"
-                " confidence, needs_review, status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'proposed',?)",
-                (company, plan_set["id"], obj_id, definition, s["sheet_id"], row["viewport_id"] if row else None,
-                 room_id, item_type, _txt(rec.get("trade"), 40), _txt(o.get("label")) or _txt(o.get("block_name")),
-                 json.dumps({"point": [round(p[0], 4), round(p[1], 4)], "bbox": bbox}),
-                 None if rot is None else str(round(rot, 1)), int(bool(rec.get("mirrored"))), method,
-                 json.dumps(scores), _conf(rec.get("confidence")), int(bool(rec.get("needs_review")) or not item_type),
-                 now))
+            origin = "library" if str(rec.get("entry") or "").startswith("lib:") else "engine"
+            insert_detection(conn, company, plan_set["id"], sheet_id=s["sheet_id"], object_id=obj_id,
+                             definition_id=definition, viewport_id=row["viewport_id"] if row else None, room_id=room_id,
+                             item_type=item_type, trade=_txt(rec.get("trade"), 40),
+                             label=_txt(o.get("label")) or _txt(o.get("block_name")), point=p, bbox=bbox, rotation=rot,
+                             mirrored=bool(rec.get("mirrored")), method=method, scores=scores,
+                             confidence=_conf(rec.get("confidence")),
+                             needs_review=bool(rec.get("needs_review")) or not item_type, origin=origin, now=now)
             out["symbol_detections"] += 1
     return out
+
+
+def insert_detection(conn, company, plan_set_id, *, sheet_id, object_id, definition_id, viewport_id, room_id,
+                     item_type, trade, label, point, bbox, rotation, mirrored, method, scores, confidence, needs_review,
+                     origin, now, status="proposed", reviewed_by=None) -> int:
+    """One symbol_detections row, with what it first said kept in original_json (history is never rewritten)."""
+    original = {"item_type": item_type, "definition_id": definition_id, "status": status, "origin": origin}
+    return conn.execute(
+        "INSERT INTO symbol_detections (company_id, plan_set_id, drawing_object_id, definition_id, sheet_id, viewport_id,"
+        " room_id, item_type, trade, label, location_json, rotation, mirrored, method, scores_json, confidence,"
+        " needs_review, status, reviewed_by, reviewed_at, created_at, origin, original_json)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (company, plan_set_id, object_id, definition_id, sheet_id, viewport_id, room_id, item_type, trade, label,
+         json.dumps({"point": [round(point[0], 4), round(point[1], 4)], "bbox": bbox}),
+         None if rotation is None else str(round(rotation, 1)), int(bool(mirrored)), method, json.dumps(scores),
+         confidence, int(bool(needs_review)), status, reviewed_by, now if reviewed_by else None, now, origin,
+         json.dumps(original))).lastrowid

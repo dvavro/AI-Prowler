@@ -123,7 +123,7 @@ def test_v1_database_upgrades_to_v2(tmp_path):  # S3-B02
     conn = connect(tmp_path / "old.db")
     mig.migrate(conn, target=1)
     conn.execute("INSERT INTO estimates (company_id, title, created_at, updated_at) VALUES ('default', 'old', 'now', 'now')")
-    assert mig.migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]   # 14: symbols (Coder 2 Sprint 10)
+    assert mig.migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]   # 14-15: symbols (Coder 2 Sprints 10-11)
     assert conn.execute("SELECT title FROM estimates").fetchone()[0] == "old"
     conn.close()
 

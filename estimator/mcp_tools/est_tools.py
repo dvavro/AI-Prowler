@@ -772,6 +772,59 @@ def symbol_detections_list(plan_set_id: int = 0, estimate_id: int = 0, item_type
     return _run(go)
 
 
+def symbol_detection_review(detection_ids: list | str = "", action: str = "approve", item_type: str = "",
+                            apply_to_matches: bool = False, sheet_id: int = 0, point: list | str = "",
+                            note: str = "", confirm: bool = False) -> str:
+    """Check symbols the plan engine found. action: approve, reject (take out of the count), relabel (give item_type,
+    e.g. floor_box), reset (back to proposed), or add (a missed symbol: give sheet_id, point [x, y] and item_type).
+    apply_to_matches=true changes every identical match on the plan set. The first result is kept in the history;
+    approved, relabelled and added symbols teach the company library. A person's decision (never an agent). Asks first."""
+    def go(c):
+        from estimator.symbols import review
+        ids = _ids(detection_ids, "detection_ids") if detection_ids not in ("", None, []) else []
+        pt = [float(x) for x in _list(point, "point")] if point not in ("", None, []) else None
+        return review.review(c, _ctx(), ids, action, item_type or None, bool(apply_to_matches), int(sheet_id) or None,
+                             pt, note or None, bool(confirm))
+    return _run(go)
+
+
+def symbol_find_similar(detection_id: int = 0, sheet_id: int = 0, box: list | str = "", item_type: str = "",
+                        confirm: bool = False) -> str:
+    """Search every sheet of the plan set for more of a symbol's shape: give a detection_id, or a sheet_id and a box
+    [x0, y0, x1, y1] (sheet inches) drawn round a symbol (with its item_type). New matches are added as proposed, to
+    approve or reject in review. Asks first, saying how many it found."""
+    def go(c):
+        from estimator.symbols import review
+        b = [float(x) for x in _list(box, "box")] if box not in ("", None, []) else None
+        return review.find_similar(c, _ctx(), int(detection_id) or None, int(sheet_id) or None, b, item_type or None,
+                                   bool(confirm))
+    return _run(go)
+
+
+def symbol_library_list(level: str = "", trade: str = "") -> str:
+    """The symbol libraries: the company's own (learned and defined symbols), firm profiles and AI-Prowler's standard
+    library, by trade, with how many examples each definition has and how often it was found. level: standard,
+    company or firm."""
+    def go(c):
+        from estimator.symbols import library
+        return library.list_library(c, _ctx(), level or None, trade or None)
+    return _run(go)
+
+
+def symbol_define(item_type: str, description: str = "", trade: str = "", code: str = "", assembly_id: str = "",
+                  definition_id: int = 0, from_detection_ids: list | str = "", confirm: bool = False) -> str:
+    """Save a symbol to the company library (or a new version of one: give definition_id): its item type (e.g.
+    floor_box), description, trade, the code written beside it (e.g. FB) and the assembly it prices with.
+    from_detection_ids adds those detections' shapes as examples, so future plan sets find it. Approved detections
+    and measurements don't change. Asks first."""
+    def go(c):
+        from estimator.symbols import library
+        ids = _ids(from_detection_ids, "from_detection_ids") if from_detection_ids not in ("", None, []) else None
+        return library.define(c, _ctx(), item_type, description or None, trade or None, code or None,
+                              assembly_id or None, int(definition_id) or None, ids, bool(confirm))
+    return _run(go)
+
+
 # ---------------------------------------------------------------- takeoff measurements
 
 def _ids(value, name: str) -> list[int]:
@@ -954,7 +1007,7 @@ TOOLS = (
     est_agent_submit, est_agent_apply, est_agent_run_now,
     plan_upload, plan_process, plan_status, plan_get_sheets, plan_get_sheet_image, plan_get_viewports,
     plan_set_scale, plan_get_objects, plan_get_schedules, plan_update_schedule_row, plan_get_legends,
-    symbol_detections_list,
+    symbol_detections_list, symbol_detection_review, symbol_find_similar, symbol_library_list, symbol_define,
     takeoff_propose, takeoff_manual, takeoff_list, takeoff_confirm, takeoff_edit, takeoff_delete,
     takeoff_detail, takeoff_suggest_change,
     review_start, review_save, review_approve, review_history, review_highlight, review_require_before_send,

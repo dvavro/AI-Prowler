@@ -63,9 +63,10 @@ def detections_list(conn, ctx: RequestContext, plan_set_id: int | None = None, e
         where.append("UPPER(r.label) = UPPER(?)")
         args.append(room.strip())
     sql = ("SELECT d.*, s.sheet_no, s.page_no, r.label AS room_label, f.code AS def_code, f.description AS def_description,"
-           " f.library_id AS def_library, f.entry_key AS def_entry FROM symbol_detections d"
+           " f.library_id AS def_library, f.entry_key AS def_entry, lb.level AS def_level FROM symbol_detections d"
            " JOIN sheets s ON s.id = d.sheet_id LEFT JOIN drawing_objects r ON r.id = d.room_id"
-           " LEFT JOIN symbol_definitions f ON f.id = d.definition_id WHERE " + " AND ".join(where) +
+           " LEFT JOIN symbol_definitions f ON f.id = d.definition_id LEFT JOIN symbol_libraries lb ON lb.id = f.library_id"
+           " WHERE " + " AND ".join(where) +
            " ORDER BY s.page_no, d.item_type, d.id")
     rows = [dict(r) for r in conn.execute(sql, args)]
     if min_conf is not None:
@@ -76,9 +77,11 @@ def detections_list(conn, ctx: RequestContext, plan_set_id: int | None = None, e
         t = counts["by_type"].setdefault(key, {"item_type": r["item_type"], "trade": r["trade"], "count": 0,
                                                 "approved": 0, "proposed": 0, "rejected": 0, "needs_review": 0,
                                                 "label": r["def_description"] or r["label"]})
-        t["count"] += 1
         t[r["status"]] += 1
-        t["needs_review"] += r["needs_review"]
+        if r["status"] == "rejected":                 # taken out of the count in review (Sprint 11): listed, not counted
+            continue
+        t["count"] += 1
+        t["needs_review"] += r["needs_review"] if r["status"] == "proposed" else 0
         sh = counts["by_sheet"].setdefault(r["sheet_id"], {"sheet_id": r["sheet_id"], "sheet_no": r["sheet_no"],
                                                            "page_no": r["page_no"], "count": 0, "by_type": {}})
         sh["count"] += 1
@@ -100,9 +103,10 @@ def _empty() -> dict:
 
 def _out(r: dict) -> dict:
     loc = json.loads(r["location_json"])
-    source = "plan-set legend" if r["def_entry"] else ("standard library" if r["def_library"] else None)
+    source = "plan-set legend" if r["def_entry"] else (r["def_level"] + " library" if r.get("def_level") else None)
     if r["method"] == "cad" and not source:
         source = "CAD block name"
+    original = json.loads(r["original_json"]) if r.get("original_json") else None
     return {"id": r["id"], "plan_set_id": r["plan_set_id"], "sheet_id": r["sheet_id"], "sheet_no": r["sheet_no"],
             "drawing_object_id": r["drawing_object_id"], "definition_id": r["definition_id"],
             "item_type": r["item_type"], "trade": r["trade"], "label": r["label"], "code": r["def_code"],
@@ -111,7 +115,9 @@ def _out(r: dict) -> dict:
             "rotation": float(r["rotation"]) if r["rotation"] is not None else None, "mirrored": bool(r["mirrored"]),
             "method": r["method"], "definition_from": source, "scores": json.loads(r["scores_json"]),
             "confidence": r["confidence"], "needs_review": bool(r["needs_review"]), "status": r["status"],
-            "reviewed_by": r["reviewed_by"]}
+            "reviewed_by": r["reviewed_by"], "origin": r.get("origin") or "engine",
+            "original": original if original and (original.get("item_type") != r["item_type"]
+                                                  or original.get("status") != r["status"]) else None}
 
 
 def dictionary(conn, plan_set_id: int) -> list[dict] | None:

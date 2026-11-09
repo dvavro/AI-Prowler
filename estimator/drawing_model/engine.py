@@ -50,6 +50,7 @@ the company's crop-sending setting and the one-time notice, and logs what was se
 from __future__ import annotations
 
 import importlib
+import logging
 import threading
 from contextlib import closing
 from pathlib import Path
@@ -57,6 +58,8 @@ from pathlib import Path
 from estimator.context import RequestContext
 from estimator.drawing_model import store, uploads
 from estimator.errors import EstimatorError, InvalidInput, NotAvailable
+
+log = logging.getLogger("estimator.drawing_model")
 
 ENGINE_MODULES = ("estimator.plan_engine",)
 RUN_INLINE = False                    # tests set this to process in the caller's thread
@@ -103,6 +106,14 @@ def _run_engine(conn, ctx: RequestContext, plan_set_id: int, eng: dict) -> dict:
     work.mkdir(parents=True, exist_ok=True)
     info = {"plan_set_id": ps["id"], "estimate_id": ps["estimate_id"], "original_name": ps["original_name"],
             "revision": ps["revision"], "work_dir": str(work)}
+    # Coder 2 Sprint 11: the company's learned symbols, so the engine finds them on new plan sets too.
+    # A problem with the library never stops the plans being read: they're read with the legend alone.
+    try:
+        from estimator.symbols import library as symbol_library
+        info["symbol_library"] = symbol_library.engine_templates(conn, ctx.company_id)
+    except Exception:  # noqa: BLE001
+        log.warning("company symbol library not used for plan set %s", ps["id"], exc_info=True)
+        info["symbol_library"] = []
     try:
         results = eng["fn"](Path(ps["file_path"]), ps["file_type"], info)
         return store.save_results(conn, ctx, ps["id"], results, eng["name"])

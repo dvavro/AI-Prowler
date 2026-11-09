@@ -138,6 +138,19 @@ def group_lines(words: list[Word]) -> list[Line]:
     return lines
 
 
+def page_segments(path, page_no: int) -> list:
+    """The line work of one page (Sprint 11: Find similar and learned symbols, without reading the whole set)."""
+    import logging
+
+    import pdfplumber
+
+    logging.getLogger("pdfminer").setLevel(logging.ERROR)
+    with pdfplumber.open(str(path)) as plumb:
+        if not 1 <= page_no <= len(plumb.pages):
+            raise ValueError(f"the PDF has no page {page_no}")
+        return _segments(plumb.pages[page_no - 1])
+
+
 def read(path: Path, work_dir: Path | None, max_pages: int, render: bool = True) -> tuple[int, list[Page]]:
     """(page_count, pages). Raises a plain ValueError when the file can't be read."""
     import logging

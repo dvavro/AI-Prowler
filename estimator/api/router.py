@@ -68,6 +68,10 @@ Sprint 9 (Coder 2):
 Sprint 10 (Coder 2):
   GET  /plan-sets/<id>/symbols?type=&sheet=&room=&status=&min=&review=   symbols found from the legend, with counts by
                                          type, sheet and room (symbol_detections_list)
+Sprint 11 (Coder 2): Reviews, Symbol Library and Agents screens - see estimator/api/symbols_api.py:
+  GET /symbol-reviews, POST /symbol-detections/review|similar, GET /symbol-detections/<id>/crop.png,
+  GET /symbol-library, POST /symbol-library/define|import, GET /symbol-library/export, GET /agents,
+  POST /agents/<module_id>, GET /runs/<id>, POST /runs, POST /runner-tasks/<id>/retry (writes ask first)
   Blueprint Review (Takeoffs screen: owner, estimator, reviewer): see estimator/api/takeoff_api.py -
   GET /takeoffs, GET /estimates/<id>/takeoff, POST /estimates/<id>/measurements[/propose], GET /measurements/<id>,
   POST /measurements/approve, POST /measurements/<id>/edit|reject|suggest (takeoff_* tools; writes ask first)
@@ -432,6 +436,11 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
     from estimator.api import takeoff_api
     if takeoff_api.handles(sub):
         return takeoff_api.route(m, sub, req, ctx, conn)
+
+    # ---------------------------------------------------------- Sprint 11: Reviews, Symbol Library, Agents
+    from estimator.api import symbols_api
+    if symbols_api.handles(sub):
+        return symbols_api.route(m, sub, req, ctx, conn)
 
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
 

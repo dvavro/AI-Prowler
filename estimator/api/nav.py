@@ -31,7 +31,7 @@ SCREENS = (
      "tools": ["takeoff_propose", "takeoff_list", "takeoff_detail", "takeoff_confirm", "takeoff_edit",
                "takeoff_delete", "takeoff_manual", "takeoff_suggest_change", "plan_get_objects"]},
     {"id": "reviews", "label": "Reviews", "icon": "✅", "roles": ("owner", "estimator", "reviewer", "field"),
-     "status": "coming", "sprint": 11,
+     "status": "ready", "sprint": 11,
      "tools": ["review_highlight", "symbol_detections_list", "symbol_detection_review", "symbol_find_similar",
                "review_start", "review_save", "review_approve", "review_history"]},
     {"id": "estimates", "label": "Estimates", "icon": "🧮", "roles": ALL, "status": "ready", "sprint": 8,
@@ -45,8 +45,8 @@ SCREENS = (
     {"id": "price_book", "label": "Price Book", "icon": "💲", "roles": ("owner", "estimator"), "status": "ready",
      "sprint": 3, "tools": ["pricebook_get", "pricebook_update", "pricebook_import"]},
     {"id": "symbol_library", "label": "Symbol Library", "icon": "🔣", "roles": ("owner", "estimator", "reviewer"),
-     "status": "coming", "sprint": 11, "tools": ["symbol_library_list", "symbol_define"]},
-    {"id": "agents", "label": "Agents", "icon": "🤖", "roles": ("owner", "estimator"), "status": "coming",
+     "status": "ready", "sprint": 11, "tools": ["symbol_library_list", "symbol_define"]},
+    {"id": "agents", "label": "Agents", "icon": "🤖", "roles": ("owner", "estimator"), "status": "ready",
      "sprint": 11, "tools": ["agent_config_get", "agent_config_update", "runner_start", "runner_status",
                              "runner_retry_task"]},
     {"id": "reports", "label": "Reports", "icon": "📊", "roles": ("owner", "estimator", "reviewer", "office"),
@@ -86,6 +86,9 @@ PAGES = (
     {"id": "estimate", "label": "Estimate", "from": "estimates", "sprint": 8,
      "tools": ["est_get_estimate", "est_add_line_item", "est_calculate", "est_validate", "est_scenarios",
                "est_choose_scenario", "est_compare_history", "est_create_revision", "est_quick_answer", "takeoff_list"]},
+    # Sprint 11: one plan set's detection panel - thumbnails, filters, approve / take out / relabel, find similar.
+    {"id": "symbol_review", "label": "Check symbols", "from": "reviews", "sprint": 11,
+     "tools": ["symbol_detections_list", "symbol_detection_review", "symbol_find_similar", "plan_status"]},
 )
 
 # What each role may do, sent to the browser so it can hide buttons. The server

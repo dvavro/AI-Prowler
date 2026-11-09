@@ -172,6 +172,27 @@ polygon.bp-m.approved { fill: #2b8a3e; }
 .job-progress { font-size: 0.9em; line-height: 1.5; }
 .symbol-counts td:nth-child(n+3) { text-align: right; }
 
+/* Sprint 11: Reviews (symbol thumbnails), Symbol Library, Agents */
+.tile.active { outline: 2px solid var(--accent, #2563eb); }
+.small.warn, .warn { color: #9a5b00; }
+.sym-actions { margin: 8px 0; flex-wrap: wrap; }
+.sym-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 10px 0 18px; }
+.sym-card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px; cursor: pointer;
+            display: flex; flex-direction: column; gap: 3px; }
+.sym-card:focus { outline: 2px solid var(--accent, #2563eb); }
+.sym-card.selected { border-color: var(--accent, #2563eb); box-shadow: 0 0 0 2px var(--accent, #2563eb); background: #f1f6ff; }
+.sym-card.rejected { opacity: 0.6; }
+.sym-card.approved .status { background: #e3f6e8; }
+.sym-thumb { width: 100%; height: 96px; object-fit: contain; background: #fff; border: 1px solid var(--line); border-radius: 4px;
+             image-rendering: crisp-edges; }
+.sym-thumb.none { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; }
+.sym-name { font-weight: 600; text-transform: capitalize; }
+.sym-history { font-style: italic; }
+input.narrow { width: 5em; }
+.hidden { display: none; }
+.run-tasks { margin-top: 8px; }
+label.check { flex-direction: row; align-items: center; gap: 6px; }
+
 /* Sprint 8: Estimates screen - lines linked to their measurements */
 .estimate-trade .page-head h3 { margin: 0; }
 table.kv.sources { margin: 6px 0 12px; }

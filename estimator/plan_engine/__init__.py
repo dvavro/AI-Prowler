@@ -33,8 +33,10 @@ Sprint 9:
 """
 from __future__ import annotations
 
+import contextvars
 from pathlib import Path
 
+_LIBRARY: contextvars.ContextVar = contextvars.ContextVar("symbol_library", default=[])
 ENGINE_NAME = "AI-Prowler Plan Engine 0.8 (PDF, images, DXF, OCR, schedules, legends, symbols)"
 VERSION = "0.8"
 DICTIONARY_FILE = "symbol_dictionary.json"
@@ -52,10 +54,14 @@ def process(file_path: Path, file_type: str, info: dict) -> dict:
     if work is not None:
         work.mkdir(parents=True, exist_ok=True)
     kind = (file_type or "").lower()
-    if kind == "pdf":
-        return _pdf(file_path, work)
-    if kind == "image":
-        return _images(file_path, work)
+    token = _LIBRARY.set(info.get("symbol_library") or [])     # Sprint 11: the company's learned symbols
+    try:
+        if kind == "pdf":
+            return _pdf(file_path, work)
+        if kind == "image":
+            return _images(file_path, work)
+    finally:
+        _LIBRARY.reset(token)
     if kind == "dxf":
         from estimator.plan_engine import dxf_reader, symbols
         out = dxf_reader.read(file_path, work, _max_sheets())
@@ -123,10 +129,13 @@ def _symbols(sheets: list[dict], extras: list[dict], by_page: dict) -> list[dict
     from estimator.plan_engine import pdf_objects, symbols
 
     entries = symbols.dictionary(by_page)
-    if not entries:
+    lib_entries, lib_templates = symbols.library_entries(_LIBRARY.get())
+    if not entries and not lib_entries:
         return []
     by_sheet = {s["page_no"]: s for s in sheets}
     templates = symbols.templates_for(entries, {e["page"].page_no: e["page"] for e in extras}, by_sheet)
+    templates.update(lib_templates)
+    entries = entries + lib_entries
     for sheet, e in zip(sheets, extras):
         skip = list(e["tables"]) + ([e["zone"]] if e["zone"] else [])
         try:

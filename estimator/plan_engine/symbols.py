@@ -62,6 +62,10 @@ def template_from(segments, box) -> dict | None:
     segs = [s for s in segments if _inside(s[0], box, 0.02) and _inside(s[1], box, 0.02) and _seg_len(s) > 1e-4]
     if not segs:
         return None
+    return _build(segs)
+
+
+def _build(segs) -> dict | None:
     xs = [p[0] for s in segs for p in s]
     ys = [p[1] for s in segs for p in s]
     x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
@@ -73,6 +77,25 @@ def template_from(segments, box) -> dict | None:
     anchor = max(rel, key=_seg_len)
     return {"segs": rel, "pts": _sample(rel), "diag": diag, "w": x1 - x0, "h": y1 - y0, "anchor": anchor,
             "n_segs": len(rel)}
+
+
+MAX_TEMPLATE_SEGS = 400
+
+
+def template_to_json(tpl: dict) -> dict:
+    """A vector template as plain data (kept with a confirmed example in estimator.db, Sprint 11)."""
+    return {"kind": "vector", "segs": [[round(a[0], 5), round(a[1], 5), round(b[0], 5), round(b[1], 5)]
+                                       for a, b in tpl["segs"][:MAX_TEMPLATE_SEGS]]}
+
+
+def template_from_json(data) -> dict | None:
+    try:
+        segs = [((float(s[0]), float(s[1])), (float(s[2]), float(s[3]))) for s in data["segs"][:MAX_TEMPLATE_SEGS]]
+    except (KeyError, TypeError, ValueError, IndexError):
+        return None
+    segs = [s for s in segs if _seg_len(s) > 1e-4]
+    t = _build(segs) if segs else None
+    return {**t, "kind": "vector"} if t else None
 
 
 # ---------------------------------------------------------------- vector matching
@@ -301,6 +324,10 @@ def scan_sheet(page, sheet: dict, entries: list[dict], templates: dict, skip=(),
 
     out = []
     for g in groups:
+        # Resolution order: the plan set's own legend, then the company library (Sprint 11), then the standard library.
+        legend_hits = [kh for kh in g["hits"] if not by_key[kh[0]].get("library")]
+        if legend_hits:
+            g["hits"] = legend_hits
         words = _words_near(page, g["centre"], 0.6 * g["diag"] + 0.2, skip)
         best_score = max(h["score"] for _, h in g["hits"])
         coded = [(k, h) for k, h in g["hits"] if by_key[k].get("code") and lib.norm_code(by_key[k]["code"]) in words]
@@ -420,6 +447,61 @@ def templates_for(entries: list[dict], pages: dict, sheets: dict) -> dict:
             t = raster_template(sheet, box)
             if t:
                 out[e["key"]] = {**t, "kind": "raster"}
+    return out
+
+
+def library_entries(library: list | None) -> tuple[list[dict], dict]:
+    """The company library's learned symbols (Sprint 11), passed in by the drawing model as info["symbol_library"]:
+    [{"key": "lib:<definition id>", "item_type", "trade", "description", "code", "template": {...vector json}}].
+    Returns (dictionary entries, {key: template})."""
+    entries, templates = [], {}
+    for d in (library or [])[:500]:
+        if not isinstance(d, dict) or not str(d.get("key", "")).startswith("lib:"):
+            continue
+        t = template_from_json(d.get("template") or {})
+        if t is None:
+            continue
+        templates[d["key"]] = t
+        entries.append({"key": d["key"], "library": True, "page_no": None, "legend": "company library",
+                        "abbreviations": False, "code": d.get("code"), "description": d.get("description"),
+                        "item_type": d.get("item_type"), "trade": d.get("trade"), "confidence": 0.85,
+                        "needs_confirming": False, "has_symbol": True})
+    return entries, templates
+
+
+def find_similar(file_path, file_type: str, sheets: list[dict], source_page: int, box, skip_by_page=None) -> dict:
+    """Find similar (spec: "searches all sheets for more of the same shape"): the line work (or picture) inside box on
+    source_page is the template; returns {"template": json or None, "kind", "hits": {page_no: [hit, ...]}}.
+    sheets: [{"page_no", "width", "height", "image_path"}]."""
+    from estimator.plan_engine import pdf_pages
+    skip_by_page = skip_by_page or {}
+    by_page = {s["page_no"]: s for s in sheets}
+    out = {"template": None, "kind": None, "hits": {}}
+    tpl = None
+    if (file_type or "").lower() == "pdf":
+        seg_cache = {}
+
+        def segs_of(p):
+            if p not in seg_cache:
+                seg_cache[p] = pdf_pages.page_segments(file_path, p)
+            return seg_cache[p]
+        tpl = template_from(segs_of(source_page), box)
+        if tpl is not None:
+            out.update(template=template_to_json(tpl), kind="vector")
+            for p in sorted(by_page):
+                index = PageIndex(segs_of(p), min(2.25, LONG * tpl["diag"] * 1.2))
+                out["hits"][p] = match_vector(tpl, index, skip_by_page.get(p, ()))
+            return out
+    src = by_page.get(source_page)
+    rt = raster_template(src, box) if src else None
+    if rt is not None:
+        out["kind"] = "raster"
+        for p, s in sorted(by_page.items()):
+            if s.get("image_path"):
+                try:
+                    out["hits"][p] = match_raster(rt, s, skip_by_page.get(p, ()))
+                except Exception:  # noqa: BLE001 - a sheet without a picture is skipped
+                    out["hits"][p] = []
     return out
 
 

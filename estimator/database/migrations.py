@@ -719,6 +719,16 @@ CREATE TABLE symbol_detections (
 CREATE INDEX ix_symbol_detections ON symbol_detections (company_id, plan_set_id, item_type, status);
 CREATE INDEX ix_symbol_detections_sheet ON symbol_detections (sheet_id)
 """),
+    # Coder 2 Sprint 11 (visual verification, company library and learning): where a detection came from and what the
+    # engine first said (history is never rewritten); vector line work kept with a confirmed example so future plan
+    # sets can match it.
+    (15, "symbol review: detection origin and original result; example line work", """
+ALTER TABLE symbol_detections ADD COLUMN origin TEXT NOT NULL DEFAULT 'engine';
+ALTER TABLE symbol_detections ADD COLUMN original_json TEXT;
+ALTER TABLE symbol_examples ADD COLUMN template_json TEXT;
+ALTER TABLE symbol_examples ADD COLUMN detection_id INTEGER;
+ALTER TABLE symbol_examples ADD COLUMN added_by TEXT
+"""),
 ]
 
 
