@@ -4,7 +4,7 @@ Nov 5, 2026 · Jamie Vavro · **Spec version 1.0 (pre-implementation)**
 
 > **Living document.** This spec is updated as the Estimator is built and tested, as part of every sprint and phase gate (see *AI-Prowler Estimator Implementation Plan.md → Keeping the spec up to date*). Every change is recorded in the **Change log** at the end.
 
-> **Where the build is (2026-11-09, evening).** Coder 2 (David): Sprints 1–16 are built, tested and pushed (16: scans and photos, DWG); next is Sprint 17 (revision overlay; Reports, Settings and full Price Book screens), then 18 (guided tours and help). Coder 1 (Jamie): Sprints 1–29 of the Coder 1 track are done, including plan answers into measurements (`takeoff/from_plans.py`), plan revision comparison, the processing-PC queue, the installer, the full setup wizard and the Estimator chapter of the User Guide (see the Implementation Plan's progress log). All Estimator tests: 1393 pass (both tracks merged, through Jamie's Sprint 30). Status by sprint: *Implementation Plan → Tracking → Coder 2 sprint status*.
+> **Where the build is (2026-11-09, evening).** Coder 2 (David): Sprints 1–17 are built, tested and pushed (17: revision overlay; Reports, Settings and full Price Book screens), then 18 (guided tours and help). Coder 1 (Jamie): Sprints 1–29 of the Coder 1 track are done, including plan answers into measurements (`takeoff/from_plans.py`), plan revision comparison, the processing-PC queue, the installer, the full setup wizard and the Estimator chapter of the User Guide (see the Implementation Plan's progress log). All Estimator tests: 1428 pass (both tracks merged, through Jamie's Sprint 30). Status by sprint: *Implementation Plan → Tracking → Coder 2 sprint status*.
 
 ## Overview
 
@@ -1164,7 +1164,7 @@ flowchart LR
         B8["P4 · OCR, legends, schedules,<br/>Symbol Recognition Engine"]:::done
         B9["P4 · Visual verification, Reviews,<br/>Agents, Symbol Library screens"]:::done
         B10["P5–P6 · Wall-and-room model, symbol libraries,<br/>elevations, site zones, PWA reviews"]:::done
-        B11["P7 · Scans and photos, DWG (done),<br/>revision overlay, Reports, Settings"]:::wip
+        B11["P7 · Scans and photos, DWG,<br/>revision overlay, Reports, Settings"]:::done
         B12["P8 · Guided tours, help panel,<br/>contextual help"]:::todo
         B0 ~~~ B1 ~~~ B2 ~~~ B3 ~~~ B4 ~~~ B5 ~~~ B6 ~~~ B7 ~~~ B8 ~~~ B9 ~~~ B10 ~~~ B11 ~~~ B12
     end
@@ -1174,7 +1174,7 @@ flowchart LR
     classDef todo fill:#eceff1,stroke:#90a4ae,color:#37474f
 ```
 
-**Score so far:** Coder 1 has all 14 blocks done (Sprints 1-29). Coder 2 has 11 of 13 blocks done and pushed and B11 in progress (his Sprints 1-16, with the Estimator tab built by Coder 1 in Sprint 16): B11's scans and photos and DWG are built (Sprint 16), its revision overlay, Reports and Settings are next (Sprint 17), and B12 (guided tours and help panel) is still to build; his M-series manual checks are still open. The build has 108 Estimator MCP tools and the unified Estimator suite passes 1,393 tests on David's PC.
+**Score so far:** Coder 1 has all 14 blocks done (Sprints 1-29). Coder 2 has 12 of 13 blocks done and pushed (his Sprints 1-17, with the Estimator tab built by Coder 1 in Sprint 16): B11 is done — scans and photos and DWG (Sprint 16) plus its revision overlay, Reports, Settings and full Price Book screens (Sprint 17) — and B12 (guided tours and help panel) is still to build; his M-series manual checks are still open. The build has 108 Estimator MCP tools and the unified Estimator suite passes 1,428 tests on David's PC.
 
 **How the two halves connect.** Coder 2's pieces plug into Coder 1's at three points, so either side can be built and tested without waiting for the other:
 
@@ -1323,6 +1323,7 @@ Add one line per spec change: date, sprint, section, what changed, who. Newest f
 
 | Date | Sprint | Section | Change | By |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 | Sprint 17 (Coder 2) | Coder 2 (David) | Revision overlay UI; Reports, Settings and full Price Book screens (Build status by coder: B11 done). Revision overlay on the Reports screen (red removed, green added, orange changed or moved; unchanged measurements carry over, the rest flagged to re-measure with a deep link into Blueprint Review). Reports screen: summary, takeoff, actuals, export, revisions (reports_api.py, reports.js). Settings screen: 8 sections, owner-only (settings_api.py, settings.js). Full Price Book: per-row history, markups and tax, paste-CSV import with column-mapping preview. Router and nav role gates; guides use_reports, change_your_settings, compare_plan_revisions, set_up_your_price_book. Tests: test_web_sprint17.py (32 functions, 35 cases); all Estimator tests 1428 pass. Manual checks M1-M8 open; cloud/delta marks counted not drawn; import paste-only. |
 | 2026-11-09 | Sprint 30 (Coder 1) | Coder 1 (Jamie) | Build status by coder section refreshed from its Nov 7 snapshot: Coder 1 blocks A3, A4, A7, A10, A11, A13 marked done after a code audit verified the work in the tree (takeoff and review tools, revision comparison, processing-PC queue and publish, plus the Sprint 26-28 installer/wizard and Sprint 29 guide chapter); Coder 2 blocks B0-B11 marked done per the Plan progress log (Sprints 1-14 code-done), B12 still to do; score line and phase table updated. Phase gates were NOT marked passed. Guard tests S30-G01..G06 in `tests/estimator/unit/test_spec_build_status.py`. | All Estimator tests 1316 passed |
 | 2026-11-09 | Sprint 29 (Coder 1) | Coder 1 (Jamie) | The Estimator chapter of the Complete User Guide (Phase 8 scope list: 'Estimator chapter in COMPLETE_USER_GUIDE'): the guide gained chapter 29, 'Estimator — Estimates, Takeoffs and Bids', and its table-of-contents entry; the Estimator tab's Help section now has an 'Open the User Guide' button (Desktop tab: Help row). Guard tests S29-G01..G04 in `tests/estimator/unit/test_user_guide_estimator_chapter.py`. | All Estimator tests 1310 passed |
 | 2026-11-09 | Sprint 28 (Coder 1) | Coder 1 (Jamie) | The setup wizard and the Estimator tab now match this spec (Setup wizard; Desktop tab sections): wizard step 8, Team and approvals, is built as `team_approvals` in `estimator/estimating/setup.py` (the review and quick-send thresholds are applied to the Director settings; membership itself comes from the AI-Prowler users/roles and the Estimating scope), the tab has the CAD and tools section (DXF support, DWG converter detection with the ODA guidance, Tesseract OCR status), and the Phone and web app section shows the web app access address and sign-in rules in place of the old 'coming next' note. | All Estimator tests 1306 passed |

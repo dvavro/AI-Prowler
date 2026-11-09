@@ -443,6 +443,8 @@ Source: "estimator\api\mobile_api.py"; DestDir: "{app}\estimator\api"; Flags: ig
 Source: "estimator\api\nav.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\prowler_link.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\quantities_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
+Source: "estimator\api\reports_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
+Source: "estimator\api\settings_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\router.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\server.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\staging.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
@@ -634,6 +636,9 @@ Source: "estimator\ui\help\guides\set_up_your_price_book.md"; DestDir: "{app}\es
 Source: "estimator\ui\help\guides\turn_a_won_quote_into_a_job.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\upload_plans_and_check_the_scale.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\use_the_jobs_board.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
+Source: "estimator\ui\help\guides\use_reports.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
+Source: "estimator\ui\help\guides\compare_plan_revisions.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
+Source: "estimator\ui\help\guides\change_your_settings.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\model.py"; DestDir: "{app}\estimator\ui"; Flags: ignoreversion
 Source: "estimator\ui\setup_flow.py"; DestDir: "{app}\estimator\ui"; Flags: ignoreversion
 Source: "estimator\ui\web\app.css"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
@@ -644,6 +649,8 @@ Source: "estimator\ui\web\icon-512.png"; DestDir: "{app}\estimator\ui\web"; Flag
 Source: "estimator\ui\web\index.html"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
 Source: "estimator\ui\web\mobile.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
 Source: "estimator\ui\web\quantities.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
+Source: "estimator\ui\web\reports.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
+Source: "estimator\ui\web\settings.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
 Source: "estimator\ui\web\review.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
 Source: "estimator\ui\web\verify.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
 

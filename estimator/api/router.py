@@ -79,6 +79,11 @@ Sprint 13 (Coder 2): reviews on a phone - see estimator/api/mobile_api.py: GET /
   Blueprint Review (Takeoffs screen: owner, estimator, reviewer): see estimator/api/takeoff_api.py -
   GET /takeoffs, GET /estimates/<id>/takeoff, POST /estimates/<id>/measurements[/propose], GET /measurements/<id>,
   POST /measurements/approve, POST /measurements/<id>/edit|reject|suggest (takeoff_* tools; writes ask first)
+Sprint 17 (Coder 2): Reports and the plan revision overlay - see estimator/api/reports_api.py (GET /reports/summary,
+  /reports/takeoff/<id>, /reports/actuals, POST /reports/export, GET /reports/files/<name>, GET|POST /reports/revisions,
+  GET /reports/revisions/<id>); Settings (owner) - see estimator/api/settings_api.py (GET /settings, POST
+  /settings/<section>, POST /settings/backup, GET /settings/audit); the full Price Book: POST /price-book/import/preview
+  (columns and the guessed mapping), GET /price-book/history/<key>, GET /price-book/markups.
 Sprint 8 (Coder 2): Estimates screen - see estimator/api/estimate_api.py: GET /estimates/<id>/detail|validate|history,
   POST /estimates/<id>/options[/choose], /lines, /calculate, /revision, /use-measurements; links in estimator/api/links.py
 Static: /estimator and /estimator/<file> from estimator/ui/web/.
@@ -456,6 +461,13 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
     if mobile_api.handles(sub):
         return mobile_api.route(m, sub, req, ctx, conn)
 
+    # ---------------------------------------------------------- Sprint 17: Reports (and revision overlay), Settings
+    from estimator.api import reports_api, settings_api
+    if reports_api.handles(sub):
+        return reports_api.route(m, sub, req, ctx, conn)
+    if settings_api.handles(sub):
+        return settings_api.route(m, sub, req, ctx, conn)
+
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
 
 
@@ -509,7 +521,56 @@ def _price_book(m: str, sub: str, req: Request, ctx, conn) -> Response:
                                                          effective_date=_opt(b, "effective_date"),
                                                          add_new=b.get("add_new") is True,
                                                          confirm=b.get("confirm") is True))
+    # Sprint 17: the full Price Book - column mapping before an import, each price's history, markups and tax.
+    if sub == "/price-book/import/preview" and m == "POST":
+        b = _body(req)
+        text = b.get("csv_text")
+        if not isinstance(text, str) or not text.strip():
+            raise _Refuse(400, "invalid_input", "paste the price list (CSV with a header row)")
+        headers, rows = importer.read_table(csv_text=text)
+        return _ok(columns=headers, fields=list(importer.FIELDS), mapping=importer.guess_mapping(headers),
+                   rows=rows[:5], row_count=len(rows))
+    mm = _PRICE_HISTORY.match(sub)
+    if mm and m == "GET":
+        return _ok(**_price_history(conn, ctx, mm.group(1)))
+    if sub == "/price-book/markups" and m == "GET":
+        from estimator.api import settings_api
+        row = conn.execute("SELECT * FROM markups WHERE company_id = ?", (ctx.company_id,)).fetchone()
+        keys = ("overhead_pct", "profit_pct", "labor_burden_pct", "tax_pct")
+        return _ok(**{k: settings_api._pct(row[k] if row else 0) for k in keys},
+                   taxable_kinds=[k for k in (row["taxable_kinds"] if row else "material").split(",") if k],
+                   tax_base=row["tax_base"] if row else "cost",
+                   minimum_charge_cents=row["minimum_charge_cents"] if row else None,
+                   can_change=nav.can_open(ctx.role, "settings"))
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
+
+
+_PRICE_HISTORY = re.compile(r"^/price-book/history/([A-Za-z0-9_.-]{1,100})$")
+
+
+def _price_history(conn, ctx, key: str) -> dict:
+    """Every dated price for one key (newest first), and what jobs really paid (est_compare_history)."""
+    from estimator.errors import NotFound
+    rows = [dict(r) for r in conn.execute(
+        "SELECT description, kind, unit, cost_cents, is_sample, supplier, effective_date, created_by, created_at"
+        " FROM price_book WHERE company_id = ? AND price_key = ? ORDER BY effective_date DESC, id DESC",
+        (ctx.company_id, key))]
+    for r in rows:
+        r["sample"] = bool(r.pop("is_sample"))
+    jobs, suggestions = None, []
+    try:
+        from estimator.learning import history
+        got = history.compare_history(conn, ctx, None, key, None)
+        jobs = got["prices"][0] if got.get("prices") else None
+        suggestions = got.get("suggestions") or []
+    except NotFound:
+        pass
+    if not rows and jobs is None:
+        from estimator.pricing.price_book import _module_defaults
+        if key not in _module_defaults():
+            raise NotFound(f"no price called '{key}'", price_key=key)
+    return {"price_key": key, "history": rows, "jobs": jobs, "suggestions": suggestions,
+            "note": None if rows else "Not saved yet: the trade's sample price is used until you set your own."}
 
 
 # ------------------------------------------------------------------ Sprint 4: Jobs board (Director)
