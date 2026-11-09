@@ -825,6 +825,43 @@ def symbol_define(item_type: str, description: str = "", trade: str = "", code: 
     return _run(go)
 
 
+# ---------------------------------------------------------------- the shared wall-and-room model (Sprint 12)
+
+def _height(height_ft):
+    return None if height_ft in ("", None, 0, "0") else height_ft
+
+
+def plan_get_rooms_walls(estimate_id: int = 0, plan_set_id: int = 0, height_ft: float | str = "") -> str:
+    """The building as one model from the plans: each room (area, perimeter, ceiling height and where it came from,
+    its walls and openings, wall and ceiling surface), each wall (interior or exterior, length, thickness, the rooms
+    on each side), each door and window (size from the schedule, which wall and rooms) and the totals every
+    wall-and-room trade uses (floor, ceiling, wall faces, exterior and interior wall lf, corners, openings).
+    Give estimate_id (its current plan sets) or plan_set_id. height_ft is the ceiling height for rooms the finish
+    schedule doesn't give (default 8). Sheets that repeat rooms already counted are listed as skipped. Read only."""
+    def go(c):
+        from estimator.building import model as building
+        return building.build(c, _ctx(), estimate_id=int(estimate_id) or None, plan_set_id=int(plan_set_id) or None,
+                              height_ft=_height(height_ft))
+    return _run(go)
+
+
+def plan_trade_answers(module_id: str = "", estimate_id: int = 0, plan_set_id: int = 0, height_ft: float | str = "",
+                       include_proposed: bool = False) -> str:
+    """Each trade's quick-estimate answers worked out from the plans, so every trade uses the same quantities:
+    framing, drywall, painting, insulation and flooring from the wall-and-room model; electrical and plumbing from
+    the symbols a person approved (include_proposed=true also counts ones still waiting to be checked). Give a
+    module_id for one trade, or none for all. Each answer says where it came from; nothing is saved - pass the
+    answers to est_quick_answer to price them. Read only."""
+    def go(c):
+        from estimator.building import trades
+        kw = dict(estimate_id=int(estimate_id) or None, plan_set_id=int(plan_set_id) or None,
+                  height_ft=_height(height_ft), include_proposed=bool(include_proposed))
+        if module_id:
+            return trades.answers(c, _ctx(), module_id, **kw)
+        return trades.all_answers(c, _ctx(), **kw)
+    return _run(go)
+
+
 # ---------------------------------------------------------------- takeoff measurements
 
 def _ids(value, name: str) -> list[int]:
@@ -1011,7 +1048,7 @@ TOOLS = (
     takeoff_propose, takeoff_manual, takeoff_list, takeoff_confirm, takeoff_edit, takeoff_delete,
     takeoff_detail, takeoff_suggest_change,
     review_start, review_save, review_approve, review_history, review_highlight, review_require_before_send,
-    est_ai_privacy, plan_get_crop,
+    est_ai_privacy, plan_get_crop, plan_get_rooms_walls, plan_trade_answers,
 )
 
 

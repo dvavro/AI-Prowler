@@ -91,7 +91,8 @@ async function renderReview(main, estimateId) {
   const wanted = +(q.get("sheet") || 0) || lineSheet;
   const firstSheet = d.sheets.find(s => s.id === wanted) || d.sheets.find(s => s.id === RV.sheetId) ||
     d.sheets.find(s => s.objects) || d.sheets[0];
-  const head = [el("p", {}, el("a", { href: "#/projects/" + estimateId }, "← " + d.estimate.title)),
+  const head = [el("p", {}, el("a", { href: "#/projects/" + estimateId }, "← " + d.estimate.title), " · ",
+      el("a", { id: "bp-quantities", href: "#/quantities/" + estimateId }, "📐 Plan quantities")),
     el("div", { class: "page-head" }, el("h2", {}, "📏 Blueprint Review"), helpLink("takeoffs"))];
   const msg = el("div", { id: "review-message", role: "status" });
   if (!d.sheets.length) {

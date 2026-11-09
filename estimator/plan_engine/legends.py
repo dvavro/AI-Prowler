@@ -23,6 +23,26 @@ SYMBOL_GAP = 0.25            # a gap this big after the first words separates th
 
 # Standard item types (the start of the spec's standard symbol library): (item type, trade, words that must all appear)
 ITEM_TYPES = (
+    # Sprint 12 (fuller electrical and plumbing libraries): the specific ones first, the first match wins.
+    ("duplex_receptacle_usb", "electrical", ("receptacle", "usb")), ("duplex_receptacle_usb", "electrical", ("outlet", "usb")),
+    ("receptacle_dedicated", "electrical", ("dedicated",)), ("ev_charger", "electrical", ("ev charger",)),
+    ("ev_charger", "electrical", ("electric vehicle",)), ("disconnect", "electrical", ("disconnect",)),
+    ("switch_occupancy", "electrical", ("occupancy",)), ("switch_occupancy", "electrical", ("vacancy",)),
+    ("smoke_co_detector", "electrical", ("smoke", "carbon monoxide")), ("smoke_co_detector", "electrical", ("smoke/co",)),
+    ("smoke_co_detector", "electrical", ("smoke", "co detector")), ("smoke_co_detector", "electrical", ("combination", "smoke")),
+    ("light_wall", "electrical", ("sconce",)), ("light_wall", "electrical", ("wall", "light")),
+    ("light_pendant", "electrical", ("pendant",)), ("light_undercabinet", "electrical", ("under", "cabinet")),
+    ("light_exterior", "electrical", ("flood",)), ("light_exterior", "electrical", ("exterior", "light")),
+    ("doorbell", "electrical", ("doorbell",)), ("doorbell", "electrical", ("door chime",)),
+    ("speaker", "electrical", ("speaker",)),
+    ("kitchen_sink", "plumbing", ("kitchen sink",)), ("bar_sink", "plumbing", ("bar sink",)),
+    ("washer_box", "plumbing", ("washer",)), ("washer_box", "plumbing", ("washing machine",)),
+    ("laundry_sink", "plumbing", ("laundry",)), ("laundry_sink", "plumbing", ("utility sink",)),
+    ("mop_sink", "plumbing", ("mop",)), ("mop_sink", "plumbing", ("service sink",)),
+    ("urinal", "plumbing", ("urinal",)), ("dishwasher", "plumbing", ("dishwasher",)),
+    ("ice_maker_box", "plumbing", ("ice maker",)), ("tub_shower", "plumbing", ("tub", "shower")),
+    ("tankless_water_heater", "plumbing", ("tankless",)), ("drinking_fountain", "plumbing", ("fountain",)),
+    ("drinking_fountain", "plumbing", ("water cooler",)), ("water_meter", "plumbing", ("water meter",)),
     ("duplex_receptacle_gfci", "electrical", ("receptacle", "gfci")), ("duplex_receptacle_gfci", "electrical", ("outlet", "gfci")),
     ("duplex_receptacle_gfci", "electrical", ("receptacle", "ground fault")),
     ("duplex_receptacle_wp", "electrical", ("receptacle", "weather")),
@@ -49,6 +69,7 @@ ITEM_TYPES = (
     ("cleanout", "plumbing", ("cleanout",)), ("cleanout", "plumbing", ("clean out",)),
     ("shower", "plumbing", ("shower",)), ("tub", "plumbing", ("tub",)),
     ("sprinkler_head", "fire", ("sprinkler",)), ("fire_extinguisher", "fire", ("extinguisher",)),
+    ("gas_outlet", "plumbing", ("gas",)),                   # last, so a gas water heater is a water heater
 )
 DISCIPLINE_WORDS = (("electrical", r"ELECTRICAL|POWER|LIGHTING"), ("plumbing", r"PLUMBING"),
                     ("mechanical", r"MECHANICAL|HVAC"), ("fire", r"FIRE"), ("architectural", r"ARCHITECTURAL|DOOR|WINDOW"))

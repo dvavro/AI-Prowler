@@ -89,6 +89,9 @@ PAGES = (
     # Sprint 11: one plan set's detection panel - thumbnails, filters, approve / take out / relabel, find similar.
     {"id": "symbol_review", "label": "Check symbols", "from": "reviews", "sprint": 11,
      "tools": ["symbol_detections_list", "symbol_detection_review", "symbol_find_similar", "plan_status"]},
+    # Sprint 12: one project's plan quantities - the shared wall-and-room model and each trade's answers from it.
+    {"id": "quantities", "label": "Plan quantities", "from": "takeoffs", "sprint": 12,
+     "tools": ["plan_get_rooms_walls", "plan_trade_answers"]},
 )
 
 # What each role may do, sent to the browser so it can hide buttons. The server

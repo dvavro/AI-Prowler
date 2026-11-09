@@ -176,6 +176,8 @@ function parseHash() {
   if (parts[0] === "estimates" && /^\d+$/.test(parts[1] || "")) return { screen: "estimates", page: "estimate", arg: +parts[1] };
   // Sprint 11: one plan set's symbols to check (verify.js); ?type=&status=&sheet=&sort= filter the detection panel.
   if (parts[0] === "reviews" && /^\d+$/.test(parts[1] || "")) return { screen: "reviews", page: "symbol_review", arg: +parts[1] };
+  // Sprint 12: one project's plan quantities (quantities.js); ?height=&proposed=1.
+  if (parts[0] === "quantities" && /^\d+$/.test(parts[1] || "")) return { screen: "takeoffs", page: "quantities", arg: +parts[1] };
   return { screen: parts[0] || "dashboard", page: null, arg: null };
 }
 

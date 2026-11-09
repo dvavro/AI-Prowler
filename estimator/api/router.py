@@ -72,6 +72,8 @@ Sprint 11 (Coder 2): Reviews, Symbol Library and Agents screens - see estimator/
   GET /symbol-reviews, POST /symbol-detections/review|similar, GET /symbol-detections/<id>/crop.png,
   GET /symbol-library, POST /symbol-library/define|import, GET /symbol-library/export, GET /agents,
   POST /agents/<module_id>, GET /runs/<id>, POST /runs, POST /runner-tasks/<id>/retry (writes ask first)
+Sprint 12 (Coder 2): Plan quantities - see estimator/api/quantities_api.py: GET /estimates/<id>/quantities?height=&proposed=
+  (the shared wall-and-room model and each trade's answers from it; read only)
   Blueprint Review (Takeoffs screen: owner, estimator, reviewer): see estimator/api/takeoff_api.py -
   GET /takeoffs, GET /estimates/<id>/takeoff, POST /estimates/<id>/measurements[/propose], GET /measurements/<id>,
   POST /measurements/approve, POST /measurements/<id>/edit|reject|suggest (takeoff_* tools; writes ask first)
@@ -441,6 +443,11 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
     from estimator.api import symbols_api
     if symbols_api.handles(sub):
         return symbols_api.route(m, sub, req, ctx, conn)
+
+    # ---------------------------------------------------------- Sprint 12: Plan quantities
+    from estimator.api import quantities_api
+    if quantities_api.handles(sub):
+        return quantities_api.route(m, sub, req, ctx, conn)
 
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
 
