@@ -74,9 +74,9 @@ Test drawing: E-101 at 1/4" with 5 outlets, a 320 sq ft slab, a porch, door D1 a
 
 | Run | Result |
 |---|---|
-| Linux, Python 3.13 | 676 passed, 1 skipped (12 new) |
-| Windows 11, Python 3.11.8 (Jamie's PC) | PC_RESULT |
-| File check | FILE_RESULT |
+| Linux, Python 3.13 | 676 passed, 1 skipped (12 new), before the merge; after merging Coder 2 Sprints 1-14: all Estimator tests pass except the 2 OCR tests that need Tesseract (not in that container) |
+| Windows 11, Python 3.11.8 (Jamie's PC) | All Estimator tests (Coder 1 + Coder 2) on top of Coder 2's latest (Sprint 14, the office role change and the docs status, 46242e7): 1280 passed, 14 skipped (the browser tests, run with `run_tests_estimator.bat browser`), 0 failed. The first run on Sprint 13 had 9 failures and 19 errors in Coder 2's room tests because shapely and ezdxf (in requirements.txt since Coder 2 Sprint 6) weren't installed on this PC; installed shapely 2.2.0 and ezdxf 1.4.5, then 1228 passed. Coder 2 pushed three more commits meanwhile; the commit was rebased each time (no conflicts) and run again: 1273, then 1280 passed |
+| File check | Sent as a git bundle of the one commit on top of Coder 2's 0a8c7d3: sha256 2d57f0abffc7ab9cee039dac7b9fee4561062a144f8ecc37be9a239c3682d5d1 matched, `git bundle verify` OK, commit 21e18ee; then rebased on the PC onto 46242e7 |
 
 ## Manual check after deploying
 
