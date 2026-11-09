@@ -95,8 +95,8 @@ The test house is Coder 2's Sprint 12 house: LIVING 10 x 12 ft and BEDROOM 9.5 x
 | Run | Result |
 |---|---|
 | Linux, Python 3.13 | all Estimator tests pass except the 2 OCR tests that need Tesseract (not in that container); Sprint 25: 14 passed |
-| Windows 11, Python 3.11.8 (Jamie's PC) | PC_RESULT |
-| File check | FILE_RESULT |
+| Windows 11, Python 3.11.8 (Jamie's PC) | All Estimator tests (Coder 1 + Coder 2, on top of Coder 2's 46242e7 and Sprint 24): 1294 passed, 14 skipped (the browser tests, run with `run_tests_estimator.bat browser`), 0 failed |
+| File check | Sent as a git bundle of the one commit on top of 9d20748: sha256 863607dd909685449f57d0bbd3672e2813a55a955a97d4bc11843a85096f2503 matched (one 500-character window of the second piece was garbled in transfer, found by window hashes and replaced, then the whole bundle matched), `git bundle verify` OK, commit 46f56eb fast-forwarded |
 
 ## Manual check after deploying
 
