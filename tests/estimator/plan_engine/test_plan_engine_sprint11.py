@@ -90,9 +90,11 @@ def test_relabel_all_matches_and_learn(db, plans):                              
 
 
 def test_who_can_review(db, plans):                                                # C2S11-S03
-    for role in ("office", "field"):
-        with pytest.raises(PermissionDenied):
-            review.review(db, replace(CTX, role=role), plans["recept"], "approve", confirm=True)
+    # Field crews look only; office (the Jobs app's managers and staff) approve too (David, 2026-11-09).
+    with pytest.raises(PermissionDenied):
+        review.review(db, replace(CTX, role="field"), plans["recept"], "approve", confirm=True)
+    office = replace(CTX, role="office")
+    assert review.review(db, office, plans["recept"][1:2], "approve", confirm=True)["changed"] == 1
     agent = replace(CTX, role="estimator", agent="takeoff")
     with pytest.raises(PermissionDenied, match="agent"):
         review.review(db, agent, plans["recept"], "approve", confirm=True)

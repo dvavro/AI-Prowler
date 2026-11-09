@@ -48,10 +48,10 @@ def test_quantities_for_a_project(call, house, session_for):                    
     tall = call("GET", f"{API}/estimates/{house}/quantities?height=10&proposed=1").json()
     assert tall["model"]["totals"]["height_ft"] == 10.0 and tall["include_proposed"] is True
     assert tall["trades"]["framing"]["answers"]["wall_height"] == "10"
-    # Roles: the Takeoffs roles look; office and field don't; another company can't see it.
-    assert call("GET", f"{API}/estimates/{house}/quantities", headers=session_for("reviewer")).status == 200
-    for role in ("office", "field"):
-        assert call("GET", f"{API}/estimates/{house}/quantities", headers=session_for(role)).status == 403
+    # Roles: the Takeoffs roles look (office joined them 2026-11-09); field doesn't; another company can't see it.
+    for role in ("reviewer", "office"):
+        assert call("GET", f"{API}/estimates/{house}/quantities", headers=session_for(role)).status == 200
+    assert call("GET", f"{API}/estimates/{house}/quantities", headers=session_for("field")).status == 403
     assert call("GET", f"{API}/estimates/{house}/quantities", headers=session_for("owner", company="acme")).status == 404
 
 

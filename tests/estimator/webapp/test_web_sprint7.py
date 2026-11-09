@@ -90,7 +90,7 @@ def test_tile_errors(call, plan, session_for):                                  
         assert call("GET", f"{API}/sheets/{s}/tiles/{bad}.png").status == 404
     assert call("GET", f"{API}/sheets/{s}/tiles/a/0/0.png").status == 404
     assert call("GET", f"{API}/sheets/{s}/tiles/0/0/0.png", headers=session_for("owner", company="acme")).status == 404
-    assert call("GET", f"{API}/sheets/{s}/tiles/0/0/0.png", headers=session_for("office")).status == 403
+    assert call("GET", f"{API}/sheets/{s}/tiles/0/0/0.png", headers=session_for("office")).status == 200   # 2026-11-09
 
 
 def test_objects_with_shapes_and_layer_groups(call, plan):                          # C2S7-O01
@@ -231,8 +231,12 @@ def test_roles(call, plan, session_for):                                        
                    {k: v for k, v in body.items() if k != "confirm"})
     mid = done["proposed"][0]["id"]
     _yes(call, f"{API}/measurements/approve", {"measurement_ids": [mid]}, headers=reviewer)          # reviewers approve
-    for role in ("office", "field"):
-        assert call("GET", f"{API}/takeoffs", headers=session_for(role)).status == 403
+    assert call("GET", f"{API}/takeoffs", headers=session_for("field")).status == 403
+    # Office (the Jobs app's managers and staff) approve, but don't measure or correct (David, 2026-11-09).
+    office = session_for("office")
+    page = call("GET", f"{API}/estimates/{plan['est']}/takeoff", headers=office).json()
+    assert (page["can_measure"], page["can_approve"], page["can_correct"]) == (False, True, False)
+    assert call("POST", f"{API}/estimates/{plan['est']}/measurements/propose", body, headers=office).status == 403
     other = session_for("owner", company="acme")
     assert call("GET", f"{API}/measurements/{mid}", headers=other).status == 404
     assert call("GET", f"{API}/estimates/{plan['est']}/takeoff", headers=other).status == 404
@@ -263,7 +267,7 @@ def test_bad_requests(call, plan):                                              
 
 def test_screen_and_page_are_built():                                               # C2S7-W01
     screen = next(s for s in nav.SCREENS if s["id"] == "takeoffs")
-    assert screen["status"] == "ready" and screen["roles"] == ("owner", "estimator", "reviewer")
+    assert screen["status"] == "ready" and screen["roles"] == ("owner", "estimator", "reviewer", "office")
     page = next(p for p in nav.PAGES if p["id"] == "takeoff")
     assert page["from"] == "takeoffs" and "takeoff_confirm" in page["tools"]
     html = (router.WEB_DIR / "index.html").read_text(encoding="utf-8")

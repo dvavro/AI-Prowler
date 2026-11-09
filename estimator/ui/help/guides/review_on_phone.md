@@ -10,6 +10,6 @@ Symbols the plan engine counted and measurements proposed from the plans wait fo
 6. **Symbols** and **Measurements** at the top show just one kind; the project list shows one project.
 
 Drawing new shapes and setting scales stay on the desktop, where it's easier to be precise. Measurements that were typed in have no picture. A measurement with a suggested change says so: check it on the desktop.
-Field staff can look at the symbols; an owner, estimator or reviewer approves them.
+Field crews can look at the symbols; owners, managers and staff (and estimators and reviewers) approve them.
 
 Ask your AI: "what's still waiting for review on the Smith plans?", "approve measurement 52".

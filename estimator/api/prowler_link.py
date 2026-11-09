@@ -14,12 +14,15 @@ AI-Prowler roles are not Estimator roles, so they are mapped (least access
 first; Jamie owns the final mapping, see the spec's Change log):
 
     owner      -> owner
-    manager    -> office      (quotes and customers, no hand-entered lines)
+    manager    -> office      (quotes and customers; approves measurements and symbols)
     staff      -> office
-    field_crew -> field       (totals only, never costs or margins)
+    field_crew -> field       (totals only, never costs or margins; looks at symbols, never approves)
 
-A user can be given a different Estimator role with "estimator_role" in
-users.json (owner, estimator, reviewer, office or field). "none" keeps them
+A manager or staff member with the Estimating scope (Admin -> Manage Scopes) is an estimator instead: they
+build and edit estimates, prices and takeoffs (David, 2026-11-09). Field crews stay field with or without it.
+
+A user can still be given a different Estimator role with "estimator_role" in
+users.json (owner, estimator, reviewer, office or field); it wins over the scope. "none" keeps them
 out of the Estimator.
 """
 from __future__ import annotations
@@ -35,6 +38,29 @@ log = logging.getLogger("estimator.api.prowler_link")
 
 ROLE_MAP = {"owner": "owner", "manager": "office", "staff": "office", "field_crew": "field"}
 NO_ACCESS = "none"
+# The Estimating scope (David, 2026-11-09): a manager or staff member with it, ticked in AI-Prowler's
+# Admin -> Manage Scopes, builds and edits estimates, prices and takeoffs (Estimator role "estimator").
+# It doesn't change owners, and field crews stay field.
+ESTIMATING_SCOPES = ("estimating", "estimator")
+SCOPE_ROLES = ("manager", "staff")
+
+
+def _scope_names(user: dict) -> set[str]:
+    """The user's scopes, bare and lower case ('scope:Estimating' -> 'estimating'), like scope_lookup."""
+    raw = user.get("scopes") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    out = set()
+    for s in raw:
+        s = str(s or "").strip().lower()
+        if s.startswith(("scope:", "role:")):
+            s = s.split(":", 1)[1]
+        out.add(s.strip())
+    return out
+
+
+def has_estimating_scope(user: dict) -> bool:
+    return bool(_scope_names(user) & set(ESTIMATING_SCOPES))
 
 
 def estimator_role(user: dict) -> str:
@@ -44,7 +70,10 @@ def estimator_role(user: dict) -> str:
         return ""
     if override in ROLES:
         return override
-    return ROLE_MAP.get(str(user.get("role") or "").strip().lower(), "")
+    role = str(user.get("role") or "").strip().lower()
+    if role in SCOPE_ROLES and has_estimating_scope(user):
+        return "estimator"
+    return ROLE_MAP.get(role, "")
 
 
 def make_server_verifier(load_users: Callable[[], "dict | None"],

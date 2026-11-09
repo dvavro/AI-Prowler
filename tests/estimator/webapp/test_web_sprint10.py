@@ -75,7 +75,7 @@ def test_symbols_roles_and_errors(call, plan_set, session_for):                 
     for role in ("reviewer", "field"):
         got = call("GET", f"{API}/plan-sets/{ps}/symbols", headers=session_for(role)).json()
         assert got["count"] == 4 and got["can_edit"] is False
-    assert call("GET", f"{API}/plan-sets/{ps}/symbols", headers=session_for("office")).status == 403
+    assert call("GET", f"{API}/plan-sets/{ps}/symbols", headers=session_for("office")).status == 200   # 2026-11-09
     assert call("GET", f"{API}/plan-sets/{ps}/symbols", headers=session_for("owner", company="acme")).status == 404
     assert call("GET", f"{API}/plan-sets/999/symbols").status == 404
 

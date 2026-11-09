@@ -92,7 +92,7 @@ def test_roles_and_errors(call, plan_set, session_for):                         
         assert got["can_edit"] is False and got["count"] == 1
         assert call("GET", f"{API}/plan-sets/{plan_set}/legends", headers=h).status == 200
         assert call("POST", f"{API}/schedule-rows/{row}", {"mark": "X", "confirm": True}, headers=h).status == 403
-    assert call("GET", f"{API}/plan-sets/{plan_set}/schedules", headers=session_for("office")).status == 403
+    assert call("GET", f"{API}/plan-sets/{plan_set}/schedules", headers=session_for("office")).status == 200  # 2026-11-09
     assert call("GET", f"{API}/plan-sets/{plan_set}/legends", headers=session_for("owner", company="acme")).status == 404
     assert call("GET", f"{API}/plan-sets/999/schedules").status == 404
     assert call("POST", f"{API}/schedule-rows/999", {"mark": "X", "confirm": True}).status == 404

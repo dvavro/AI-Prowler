@@ -25,7 +25,9 @@ from estimator.errors import ConfirmationRequired, InvalidInput, NotEditable, No
 from estimator.estimating import service
 
 PROPOSE_ROLES = service.EDIT_ROLES               # owner, estimator (and agents acting as estimator)
-APPROVE_ROLES = service.APPROVE_ROLES            # owner, estimator, reviewer, and never an agent
+# owner, estimator, reviewer and office (the Jobs app's managers and staff, David 2026-11-09), and never an agent.
+# Approving a whole estimate stays service.APPROVE_ROLES.
+APPROVE_ROLES = service.APPROVE_ROLES + ("office",)
 KINDS = ("area", "length", "perimeter", "count", "volume", "other")
 KIND_UNITS = {"area": "sqft", "length": "lf", "perimeter": "lf", "count": "ea"}
 SOURCE_METHODS = {"cad": "cad", "vector": "vector", "raster": "raster", "ai": "ai", "manual": "manual"}

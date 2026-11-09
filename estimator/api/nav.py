@@ -21,16 +21,19 @@ SCREENS = (
     {"id": "projects", "label": "Projects", "icon": "📁", "roles": ALL, "status": "ready", "sprint": 1,
      "tools": ["est_create_estimate", "est_list_estimates", "est_add_trade", "est_remove_trade",
                "est_project_status"]},
-    {"id": "plans", "label": "Plans", "icon": "📐", "roles": ("owner", "estimator", "reviewer", "field"),
+    # Office see the plans they approve from (and already upload); scales and fixes stay store.EDIT_ROLES.
+    {"id": "plans", "label": "Plans", "icon": "📐", "roles": ("owner", "estimator", "reviewer", "office", "field"),
      "status": "ready", "sprint": 5,
      "tools": ["plan_upload", "plan_process", "plan_status", "plan_get_sheets", "plan_get_viewports",
                "plan_set_scale", "plan_get_legends", "plan_get_schedules", "plan_update_schedule_row",
                "plan_compare_revisions"]},
-    {"id": "takeoffs", "label": "Takeoffs", "icon": "📏", "roles": ("owner", "estimator", "reviewer"),
+    # Office (the Jobs app's managers and staff) approve measurements and symbols too; field crews look at symbols
+    # only (David, 2026-11-09).
+    {"id": "takeoffs", "label": "Takeoffs", "icon": "📏", "roles": ("owner", "estimator", "reviewer", "office"),
      "status": "ready", "sprint": 7,
      "tools": ["takeoff_propose", "takeoff_list", "takeoff_detail", "takeoff_confirm", "takeoff_edit",
                "takeoff_delete", "takeoff_manual", "takeoff_suggest_change", "plan_get_objects"]},
-    {"id": "reviews", "label": "Reviews", "icon": "✅", "roles": ("owner", "estimator", "reviewer", "field"),
+    {"id": "reviews", "label": "Reviews", "icon": "✅", "roles": ("owner", "estimator", "reviewer", "office", "field"),
      "status": "ready", "sprint": 11,
      "tools": ["review_highlight", "symbol_detections_list", "symbol_detection_review", "symbol_find_similar",
                "review_start", "review_save", "review_approve", "review_history"]},

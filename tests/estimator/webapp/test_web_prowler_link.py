@@ -45,6 +45,19 @@ def test_ai_prowler_roles_map_to_least_access(prowler_role, expected):
     assert prowler_link.estimator_role({"role": prowler_role}) == expected
 
 
+@pytest.mark.parametrize("prowler_role, scopes, expected", [
+    ("manager", ["scope:estimating"], "estimator"), ("staff", ["Estimating"], "estimator"),
+    ("staff", "scope:estimator", "estimator"), ("staff", ["scope:sales"], "office"),
+    ("field_crew", ["scope:estimating"], "field"), ("owner", ["scope:estimating"], "owner"),
+    ("manager", None, "office")])
+def test_estimating_scope_makes_managers_and_staff_estimators(prowler_role, scopes, expected):
+    """David 2026-11-09: estimating is a scope, not a role; field crews stay field with it."""
+    assert prowler_link.estimator_role({"role": prowler_role, "scopes": scopes}) == expected
+    # The users.json override still wins over the scope.
+    assert prowler_link.estimator_role({"role": "staff", "scopes": ["scope:estimating"],
+                                        "estimator_role": "reviewer"}) == "reviewer"
+
+
 def test_estimator_role_override_and_opt_out():
     assert prowler_link.estimator_role({"role": "staff", "estimator_role": "Reviewer"}) == "reviewer"
     assert prowler_link.estimator_role({"role": "owner", "estimator_role": "none"}) == ""

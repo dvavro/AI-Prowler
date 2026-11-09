@@ -116,7 +116,9 @@ def test_who_sees_what(call, job, session_for):                                 
     assert field["can"]["review_symbols"] is False and field["can"]["measurement"] is False
     rev = call("GET", f"{API}/mobile/reviews", headers=session_for("reviewer")).json()
     assert rev["can"]["review_symbols"] and rev["can"]["approve_measurements"] and rev["waiting"] == 8
-    assert call("GET", f"{API}/mobile/reviews", headers=session_for("office")).status == 403
+    # Office (the Jobs app's managers and staff) decide both, like reviewers (David, 2026-11-09).
+    off = call("GET", f"{API}/mobile/reviews", headers=session_for("office")).json()
+    assert off["can"]["review_symbols"] and off["can"]["approve_measurements"] and off["waiting"] == 8
     other = call("GET", f"{API}/mobile/reviews", headers=session_for("owner", company="acme")).json()
     assert other["waiting"] == 0 and other["items"] == []
 

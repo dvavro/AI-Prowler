@@ -23,7 +23,8 @@ from pathlib import Path
 from estimator.context import RequestContext
 from estimator.errors import ConfirmationRequired, InvalidInput, NotFound, PermissionDenied
 
-REVIEW_ROLES = ("owner", "estimator", "reviewer")
+REVIEW_ROLES = ("owner", "estimator", "reviewer", "office")   # office: the Jobs app's managers and staff (David,
+                                                              # 2026-11-09); field crews look only
 ACTIONS = ("approve", "reject", "relabel", "reset", "add")
 MAX_IDS = 5000
 EXAMPLES_PER_REVIEW = 3

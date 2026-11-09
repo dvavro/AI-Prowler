@@ -176,7 +176,7 @@ def test_roles(call, plan_set, session_for, db):
         assert call("POST", f"{API}/plan-sets/{ps}/process", {"confirm": True}, headers=h).status == 403
         assert call("POST", f"{API}/viewports/{vp['id']}/scale", {"scale_note": "1:50", "confirm": True},
                     headers=h).status == 403
-    assert call("GET", f"{API}/plans", headers=session_for("office")).status == 403
+    assert call("GET", f"{API}/plans", headers=session_for("office")).status == 200   # office look (2026-11-09)
     assert call("GET", f"{API}/sheets/{a101['id']}", headers=session_for("owner", company="acme")).status == 404
     assert call("POST", f"{API}/plan-sets/{ps}/process", {"confirm": True}, write_header=False).status == 403
 
@@ -191,7 +191,7 @@ def test_unknown_things_are_404(call):
 
 def test_plans_screen_ready_with_its_pages():
     plans = next(s for s in nav.SCREENS if s["id"] == "plans")
-    assert plans["status"] == "ready" and set(plans["roles"]) == {"owner", "estimator", "reviewer", "field"}
+    assert plans["status"] == "ready" and set(plans["roles"]) == {"owner", "estimator", "reviewer", "office", "field"}
     assert {"plan_set", "sheet"} <= {p["id"] for p in nav.PAGES}
 
 

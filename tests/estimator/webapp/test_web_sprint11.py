@@ -55,7 +55,8 @@ def test_reviews_lists_plan_sets_to_check(call, plans, session_for):            
     assert r["can_review"] is True and "relabel" in r["actions"]
     f = call("GET", f"{API}/symbol-reviews", headers=session_for("field")).json()
     assert f["count"] == 1 and f["can_review"] is False                            # field staff look, don't decide
-    assert call("GET", f"{API}/symbol-reviews", headers=session_for("office")).status == 403
+    o = call("GET", f"{API}/symbol-reviews", headers=session_for("office")).json()   # managers and staff decide
+    assert o["count"] == 1 and o["can_review"] is True                                # (David, 2026-11-09)
     assert call("GET", f"{API}/symbol-reviews", headers=session_for("owner", company="acme")).json()["count"] == 0
 
 
@@ -89,11 +90,11 @@ def test_relabel_add_and_find_similar(call, plans):                             
 
 def test_review_refusals(call, plans, session_for):                                 # C2S11-W04
     url = f"{API}/symbol-detections/review"
-    for role in ("field", "office"):
-        assert call("POST", url, {"detection_ids": plans["recept"], "action": "approve", "confirm": True},
-                    headers=session_for(role)).status == 403
     assert call("POST", url, {"detection_ids": plans["recept"], "action": "approve", "confirm": True},
-                headers=session_for("reviewer")).status == 200
+                headers=session_for("field")).status == 403
+    for role in ("reviewer", "office"):
+        assert call("POST", url, {"detection_ids": plans["recept"], "action": "approve", "confirm": True},
+                    headers=session_for(role)).status == 200
     assert call("POST", url, {"detection_ids": "1,2", "action": "approve"}).status == 400
     assert call("POST", url, {"detection_ids": [True], "action": "approve"}).status == 400
     assert call("POST", url, {"detection_ids": plans["recept"], "action": "explode"}).status == 400
@@ -109,7 +110,7 @@ def test_thumbnail(call, plans, session_for):                                   
     assert r.status == 200 and r.content_type == "image/png" and r.body[:8] == b"\x89PNG\r\n\x1a\n"
     assert r.headers["X-Content-Type-Options"] == "nosniff"
     assert call("GET", f"{API}/symbol-detections/{plans['recept'][0]}/crop.png", headers=session_for("field")).status == 200
-    assert call("GET", f"{API}/symbol-detections/{plans['recept'][0]}/crop.png", headers=session_for("office")).status == 403
+    assert call("GET", f"{API}/symbol-detections/{plans['recept'][0]}/crop.png", headers=session_for("office")).status == 200
     assert call("GET", f"{API}/symbol-detections/999999/crop.png").status == 404
 
 
