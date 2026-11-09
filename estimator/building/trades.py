@@ -113,7 +113,11 @@ def answers(conn, ctx: RequestContext, module_id: str, *, estimate_id: int | Non
         return _fit(module_id, _one(conn, ctx, m, module_id, include_proposed))
     sets = building._plan_sets(conn, ctx, plan_set_id, estimate_id)
     out = symbol_answers(conn, ctx, module_id, [p["id"] for p in sets], include_proposed)
-    out.update(plan_set_ids=[p["id"] for p in sets], source="symbols counted on the plans")
+    method = building.plan_method(conn, sets)                     # Sprint 16: from a scan or photo, marked to check
+    out.update(plan_set_ids=[p["id"] for p in sets], source="symbols counted on the plans", method=method,
+               needs_review=method == "raster")
+    if method == "raster":
+        out["notes"].insert(0, building.RASTER_NOTE)
     return _fit(module_id, out)
 
 

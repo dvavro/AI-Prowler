@@ -66,6 +66,9 @@ async function renderQuantities(main, estimateId) {
   const m = r.model, t = m.totals;
   const parts = [...head, el("p", { class: "muted" }, r.estimate_title || ""),
     el("p", { id: "qty-summary" }, m.summary)];
+  // Sprint 16: plans read from a scan or photo - every number here is marked to check.
+  if (m.needs_review) parts.push(el("p", { id: "qty-needs-review", class: "badge warn" },
+    "Needs review: read from scanned or photographed plans"));
 
   // Settings: ceiling height for rooms the finish schedule doesn't give, and whether to count symbols still to check.
   const hIn = el("input", { id: "qty-height", type: "number", min: "4", max: "40", step: "0.5", value: height,

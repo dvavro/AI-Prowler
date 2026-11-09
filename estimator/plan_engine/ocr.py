@@ -105,8 +105,8 @@ def ocr_dpi(width_in: float, height_in: float) -> float:
     return max(72.0, min(float(OCR_DPI), MAX_OCR_PX / max(width_in, height_in, 1.0)))
 
 
-def pdf_page_words(pdf_path, page_no: int, width_in: float, height_in: float) -> list:
-    """Render one PDF page for OCR (a scan saved as PDF) and read its words."""
+def render_pdf_page(pdf_path, page_no: int, width_in: float, height_in: float):
+    """(grey PIL image, DPI) of one PDF page, at the resolution OCR reads it."""
     import pypdfium2 as pdfium
 
     from estimator.plan_engine.pdf_pages import PDFIUM_LOCK
@@ -122,4 +122,10 @@ def pdf_page_words(pdf_path, page_no: int, width_in: float, height_in: float) ->
                 page.close()
         finally:
             doc.close()
+    return img, dpi
+
+
+def pdf_page_words(pdf_path, page_no: int, width_in: float, height_in: float) -> list:
+    """Render one PDF page for OCR (a scan saved as PDF) and read its words."""
+    img, dpi = render_pdf_page(pdf_path, page_no, width_in, height_in)
     return words_from_image(img, dpi)

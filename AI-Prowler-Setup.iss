@@ -591,6 +591,8 @@ Source: "estimator\plan_engine\pdf_objects.py"; DestDir: "{app}\estimator\plan_e
 Source: "estimator\plan_engine\pdf_pages.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
 Source: "estimator\plan_engine\schedules.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
 Source: "estimator\plan_engine\site.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
+Source: "estimator\plan_engine\raster.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
+Source: "estimator\plan_engine\dwg.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
 Source: "estimator\plan_engine\symbol_library.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
 Source: "estimator\plan_engine\symbols.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
 Source: "estimator\plan_engine\tags.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion

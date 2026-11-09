@@ -374,7 +374,10 @@ def tool_status(which=None, find_spec=None) -> list[dict]:
     which = which or shutil.which
     find_spec = find_spec or importlib.util.find_spec
     dxf = find_spec("ezdxf") is not None
-    oda = which("ODAFileConverter") or (_oda_glob() if real_which else "")
+    # Coder 2 Sprint 16: the same search the plan engine converts DWG with (ODA, else LibreDWG's dwg2dxf).
+    from estimator.plan_engine import dwg
+    conv = dwg.find_converter(which=which, search_installs=real_which)
+    oda = conv["path"] if conv else ""
     tess = which("tesseract") or ""
     return [
         {"tool": "DXF drawings", "ok": dxf,
@@ -382,7 +385,7 @@ def tool_status(which=None, find_spec=None) -> list[dict]:
                    "ezdxf is missing, so DXF plan files cannot be read. It ships in requirements.txt;"
                    " reinstalling AI-Prowler restores it."},
         {"tool": "DWG converter (ODA File Converter)", "ok": bool(oda),
-         "detail": f"Found at {oda}; DWG plan files are converted to DXF with it." if oda else
+         "detail": f"{conv['name']} found at {oda}; DWG plan files are converted to DXF with it." if oda else
                    "Not installed, so DWG plan files cannot be opened. It is a free download from the"
                    " Open Design Alliance (opendesign.com, Guest Files, ODA File Converter)."},
         {"tool": "Tesseract OCR (reads scanned plans)", "ok": bool(tess),

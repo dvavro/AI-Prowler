@@ -135,6 +135,27 @@ def _plan_sets(conn, ctx, plan_set_id, estimate_id) -> list[dict]:
     return [r for r in rows if r["id"] not in replaced]                   # the current revision of each set
 
 
+RASTER_NOTE = ("read from scanned or photographed plans: every quantity is marked to check - look at each one on the plan "
+               "before approving it")
+
+
+def plan_method(conn, sets: list[dict]) -> str:
+    """How the plans were read (Sprint 16): "raster" when any sheet is a scan or photo, "cad" when every set is a DXF or
+    DWG drawing, else "vector"."""
+    ids = [p["id"] for p in sets]
+    if not ids:
+        return "vector"
+    if any(p.get("file_type") == "image" for p in sets):
+        return "raster"
+    q = ",".join("?" * len(ids))
+    if conn.execute(f"SELECT 1 FROM drawing_objects o JOIN sheets s ON s.id = o.sheet_id WHERE s.plan_set_id IN ({q})"
+                    " AND o.source = 'raster' LIMIT 1", ids).fetchone():
+        return "raster"
+    if all(p.get("file_type") in ("dxf", "dwg") for p in sets):
+        return "cad"
+    return "vector"
+
+
 def _sheet_rows(conn, plan_set_ids: list[int]) -> list[dict]:
     if not plan_set_ids:
         return []
@@ -202,6 +223,9 @@ def build(conn, ctx: RequestContext, *, estimate_id: int | None = None, plan_set
     rows = _schedule_rows(conn, ps_ids)
     default_h = height_ft or DEFAULT_HEIGHT_FT
     notes, skipped = [], []
+    method = plan_method(conn, sets)                                       # Sprint 16: scans and photos are checked
+    if method == "raster":
+        notes.append(RASTER_NOTE)
 
     # Which sheets: floor plans with measured rooms; architectural ones when there are any; repeat views left out.
     per_sheet = []
@@ -417,7 +441,8 @@ def build(conn, ctx: RequestContext, *, estimate_id: int | None = None, plan_set
     key = hashlib.sha1(json.dumps({"r": out_rooms, "w": out_walls, "o": out_openings, "e": ev["elevations"],
                                    "s": [site["zones"], site["fences"], site["gates"], site["plants"]]},
                                   sort_keys=True, default=str).encode()).hexdigest()[:12]
-    return {"ok": True, "plan_set_ids": ps_ids, "model_key": key, "rooms": out_rooms, "walls": out_walls,
+    return {"ok": True, "plan_set_ids": ps_ids, "model_key": key, "method": method, "needs_review": method == "raster",
+            "rooms": out_rooms, "walls": out_walls,
             "openings": out_openings, "elevations": ev["elevations"], "schedule_marks": marks, "site": site,
             "totals": totals,
             "skipped_sheets": skipped, "notes": notes, "trades": list(MODEL_TRADES),
@@ -660,9 +685,12 @@ def answers_for(model: dict, module_id: str) -> dict:
         from estimator.building import site as site_mod
         fn = site_mod.fencing_answers if module_id == "fencing" else site_mod.landscaping_answers
         ans, src, notes = fn(model["site"])
+        raster = [RASTER_NOTE] if model.get("needs_review") else []
         return {"ok": True, "module_id": module_id, "model_key": model["model_key"], "answers": ans, "from": src,
-                "notes": notes + model["site"]["notes"]}
+                "method": model.get("method", "vector"), "needs_review": bool(model.get("needs_review")),
+                "notes": raster + notes + model["site"]["notes"]}
     else:
         raise InvalidInput(f"the wall-and-room model gives answers for {', '.join(MODEL_TRADES)}", module_id=module_id)
     return {"ok": True, "module_id": module_id, "model_key": model["model_key"], "answers": ans, "from": src,
+            "method": model.get("method", "vector"), "needs_review": bool(model.get("needs_review")),
             "notes": notes + model["notes"]}
