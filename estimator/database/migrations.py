@@ -641,6 +641,84 @@ CREATE INDEX ix_ai_send_log ON ai_send_log (company_id, created_at);
 ALTER TABLE company_profile ADD COLUMN crop_notice_shown_at TEXT;
 ALTER TABLE company_profile ADD COLUMN require_reviews_before_send INTEGER NOT NULL DEFAULT 0
 """),
+    # Coder 2 Sprint 10 (Symbol Recognition Engine v1). Plan-set dictionary entries are definitions with a legend_id
+    # and no library (they go when the plan set is read again); standard, company and firm definitions have a library.
+    (14, "symbol libraries, definitions, examples and detections", """
+CREATE TABLE symbol_libraries (
+    id          INTEGER PRIMARY KEY,
+    company_id  TEXT NOT NULL,
+    level       TEXT NOT NULL CHECK (level IN ('standard', 'company', 'firm')),
+    firm_name   TEXT,
+    version     INTEGER NOT NULL DEFAULT 1,
+    updated_at  TEXT NOT NULL
+);
+CREATE UNIQUE INDEX ux_symbol_libraries ON symbol_libraries (company_id, level, COALESCE(firm_name, ''));
+
+CREATE TABLE symbol_definitions (
+    id                INTEGER PRIMARY KEY,
+    company_id        TEXT NOT NULL,
+    library_id        INTEGER REFERENCES symbol_libraries (id) ON DELETE CASCADE,
+    plan_set_id       INTEGER REFERENCES plan_sets (id) ON DELETE CASCADE,
+    legend_id         INTEGER REFERENCES legends (id) ON DELETE CASCADE,
+    entry_key         TEXT,
+    code              TEXT,
+    description       TEXT,
+    subscripts_json   TEXT NOT NULL DEFAULT '[]',
+    item_type         TEXT,
+    trade             TEXT,
+    assembly_id       TEXT,
+    ocr_aliases_json  TEXT NOT NULL DEFAULT '[]',
+    block_names_json  TEXT NOT NULL DEFAULT '[]',
+    confidence        TEXT,
+    needs_confirming  INTEGER NOT NULL DEFAULT 0,
+    status            TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'approved', 'rejected')),
+    approved_by       TEXT,
+    approved_at       TEXT,
+    version           INTEGER NOT NULL DEFAULT 1,
+    created_at        TEXT NOT NULL
+);
+CREATE INDEX ix_symbol_definitions_library ON symbol_definitions (company_id, library_id, item_type);
+CREATE INDEX ix_symbol_definitions_plan_set ON symbol_definitions (plan_set_id);
+
+CREATE TABLE symbol_examples (
+    id               INTEGER PRIMARY KEY,
+    company_id       TEXT NOT NULL,
+    definition_id    INTEGER NOT NULL REFERENCES symbol_definitions (id) ON DELETE CASCADE,
+    image_path       TEXT,
+    source_sheet_id  INTEGER REFERENCES sheets (id) ON DELETE SET NULL,
+    source           TEXT NOT NULL CHECK (source IN ('legend', 'confirmed', 'standard')),
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX ix_symbol_examples ON symbol_examples (definition_id);
+
+CREATE TABLE symbol_detections (
+    id                 INTEGER PRIMARY KEY,
+    company_id         TEXT NOT NULL,
+    plan_set_id        INTEGER NOT NULL REFERENCES plan_sets (id) ON DELETE CASCADE,
+    drawing_object_id  INTEGER REFERENCES drawing_objects (id) ON DELETE CASCADE,
+    definition_id      INTEGER REFERENCES symbol_definitions (id) ON DELETE SET NULL,
+    sheet_id           INTEGER NOT NULL REFERENCES sheets (id) ON DELETE CASCADE,
+    viewport_id        INTEGER REFERENCES viewports (id) ON DELETE SET NULL,
+    room_id            INTEGER REFERENCES drawing_objects (id) ON DELETE SET NULL,
+    item_type          TEXT,
+    trade              TEXT,
+    label              TEXT,
+    location_json      TEXT NOT NULL,
+    rotation           TEXT,
+    mirrored           INTEGER NOT NULL DEFAULT 0,
+    method             TEXT NOT NULL CHECK (method IN ('cad', 'vector', 'raster', 'ocr', 'ai', 'manual')),
+    scores_json        TEXT NOT NULL DEFAULT '{}',
+    confidence         TEXT,
+    needs_review       INTEGER NOT NULL DEFAULT 0,
+    evidence_crop      TEXT,
+    status             TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'approved', 'rejected')),
+    reviewed_by        TEXT,
+    reviewed_at        TEXT,
+    created_at         TEXT NOT NULL
+);
+CREATE INDEX ix_symbol_detections ON symbol_detections (company_id, plan_set_id, item_type, status);
+CREATE INDEX ix_symbol_detections_sheet ON symbol_detections (sheet_id)
+"""),
 ]
 
 

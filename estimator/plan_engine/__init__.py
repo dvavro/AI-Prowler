@@ -16,7 +16,12 @@ Sprint 6:
 
 Sprint 7: viewer tiles (tiles.py) and layer groups (layers.py) for Blueprint Review.
 
-Sprint 9 (this version):
+Sprint 10 (this version): the Symbol Recognition Engine v1 (symbols.py, symbol_library.py). Every legend symbol is
+searched for on every sheet (vector line work, or the scan's picture), fused with the codes beside each hit, and
+returned as symbol objects with a "symbol" record plus results["symbol_dictionary"]; CAD blocks are named from their
+block names. The drawing model saves them in symbol_definitions / symbol_detections (estimator/symbols/).
+
+Sprint 9:
 - OCR (ocr.py, Tesseract): scanned PDF pages and images get their words read, so the title block, scales, schedules,
   legends and dimensions work on scans too.
 - Dimensions (dimensions.py): dimension strings become objects; each view's scale is checked against them, and a
@@ -30,8 +35,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-ENGINE_NAME = "AI-Prowler Plan Engine 0.7 (PDF, images, DXF, OCR, schedules, legends)"
-VERSION = "0.7"
+ENGINE_NAME = "AI-Prowler Plan Engine 0.8 (PDF, images, DXF, OCR, schedules, legends, symbols)"
+VERSION = "0.8"
 DICTIONARY_FILE = "symbol_dictionary.json"
 
 
@@ -52,8 +57,11 @@ def process(file_path: Path, file_type: str, info: dict) -> dict:
     if kind == "image":
         return _images(file_path, work)
     if kind == "dxf":
-        from estimator.plan_engine import dxf_reader
-        return dxf_reader.read(file_path, work, _max_sheets())
+        from estimator.plan_engine import dxf_reader, symbols
+        out = dxf_reader.read(file_path, work, _max_sheets())
+        for s in out["sheets"]:                          # Sprint 10: CAD block names say what each symbol is
+            symbols.cad_symbols(s)
+        return out
     if kind == "dwg":
         raise ValueError("DWG drawings need a converter, which comes in a later release. For now, save the drawing as "
                          "DXF from your CAD program (Save As > DXF) and upload that, or print the sheets to PDF")
@@ -107,6 +115,33 @@ def _finish(sheets: list[dict], extras: list[dict], work, pdf_path=None) -> None
     if by_page:
         legends.crop_templates(by_page, pdf_path, {s["page_no"]: s for s in sheets}, work)
     tags.write_dictionary(work, ENGINE_NAME, by_page, {s["page_no"]: s for s in sheets})
+    return _symbols(sheets, extras, by_page)
+
+
+def _symbols(sheets: list[dict], extras: list[dict], by_page: dict) -> list[dict]:
+    """Sprint 10: search every sheet for the legend's symbols and fuse each hit with the words around it."""
+    from estimator.plan_engine import pdf_objects, symbols
+
+    entries = symbols.dictionary(by_page)
+    if not entries:
+        return []
+    by_sheet = {s["page_no"]: s for s in sheets}
+    templates = symbols.templates_for(entries, {e["page"].page_no: e["page"] for e in extras}, by_sheet)
+    for sheet, e in zip(sheets, extras):
+        skip = list(e["tables"]) + ([e["zone"]] if e["zone"] else [])
+        try:
+            found = symbols.scan_sheet(e["page"], sheet, entries, templates, skip, e["source"])
+        except ImportError as exc:                       # numpy/scipy missing: say so, read everything else
+            sheet["note"] = "; ".join(x for x in (sheet.get("note"), f"symbols weren't searched ({exc})") if x)
+            found = []
+        room = max(pdf_objects.MAX_OBJECTS_PER_SHEET - len(sheet["objects"]), 0)
+        if found:
+            sheet["objects"] += found[:room]
+            n = min(len(found), room)
+            unsure = sum(1 for o in found[:room] if o["symbol"]["needs_review"])
+            msg = f"{n} symbol(s) found from the legend" + (f", {unsure} to check" if unsure else "")
+            sheet["note"] = "; ".join(x for x in (sheet.get("note"), msg) if x)
+    return entries
 
 
 def _pdf(path: Path, work: Path | None) -> dict:
@@ -128,8 +163,8 @@ def _pdf(path: Path, work: Path | None) -> dict:
             e["notes"].insert(0, "text read by OCR - check the sheet number and scale")
         sheets.append(sheet)
         extras.append(e)
-    _finish(sheets, extras, work, pdf_path=path)
-    return {"page_count": count, "sheets": sheets, "engine": ENGINE_NAME}
+    entries = _finish(sheets, extras, work, pdf_path=path)
+    return {"page_count": count, "sheets": sheets, "engine": ENGINE_NAME, "symbol_dictionary": entries}
 
 
 def _images(path: Path, work: Path | None) -> dict:
@@ -156,9 +191,8 @@ def _images(path: Path, work: Path | None) -> dict:
         sheets.append(sheet)
         extras.append(e)
     read = [(s, e) for s, e in zip(sheets, extras) if e is not None]
-    if read:
-        _finish([s for s, _ in read], [e for _, e in read], work)
-    return {"page_count": out["page_count"], "sheets": sheets, "engine": ENGINE_NAME}
+    entries = _finish([s for s, _ in read], [e for _, e in read], work) if read else []
+    return {"page_count": out["page_count"], "sheets": sheets, "engine": ENGINE_NAME, "symbol_dictionary": entries}
 
 
 def _centre(geometry: dict) -> tuple[float, float]:

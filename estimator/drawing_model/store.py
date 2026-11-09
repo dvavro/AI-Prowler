@@ -354,6 +354,8 @@ def save_results(conn, ctx: RequestContext, plan_set_id: int, results: dict, eng
         from estimator.takeoff import measurements
         reread = measurements.plan_set_reread(conn, ctx, ps["id"])            # approved ones are flagged, never lost
         conn.execute("DELETE FROM sheets WHERE plan_set_id = ?", (ps["id"],))     # cascades to everything below
+        conn.execute("DELETE FROM symbol_definitions WHERE plan_set_id = ?", (ps["id"],))   # the old dictionary
+        saved = []
         for s in checked:
             sheet_id = conn.execute(
                 "INSERT INTO sheets (company_id, plan_set_id, page_no, sheet_no, title, discipline, revision,"
@@ -372,16 +374,17 @@ def save_results(conn, ctx: RequestContext, plan_set_id: int, results: dict, eng
                 vp_rows[v["key"]] = {"id": vid, "scale_ratio": str(v["scale_ratio"]) if v["scale_ratio"] else None,
                                      "is_nts": v["is_nts"]}
                 counts["viewports"] += 1
+            saved.append({"page_no": s["page_no"], "sheet_id": sheet_id, "object_ids": [], "legend_ids": []})
             for o in s["objects"]:
                 vp = vp_rows.get(o["viewport"]) if o["viewport"] else None
                 real = _real_units(s["units"], vp, o["geometry"])
-                conn.execute(
+                saved[-1]["object_ids"].append(conn.execute(
                     "INSERT INTO drawing_objects (company_id, sheet_id, viewport_id, kind, geometry_json,"
                     " real_units_json, layer, block_name, label, tag, source, confidence)"
                     " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     (company, sheet_id, vp["id"] if vp else None, o["kind"],
                      json.dumps(geo.to_json_geometry(o["geometry"])), real, o["layer"], o["block_name"], o["label"],
-                     o["tag"], o["source"], o["confidence"]))
+                     o["tag"], o["source"], o["confidence"])).lastrowid)
                 counts["objects"] += 1
                 counts["measured"] += real is not None and real != "{}"
             for sc in s["schedules"]:
@@ -396,11 +399,15 @@ def save_results(conn, ctx: RequestContext, plan_set_id: int, results: dict, eng
                                                          r["confidence"]))
                     counts["schedule_rows"] += 1
             for lg in s["legends"]:
-                conn.execute("INSERT INTO legends (company_id, sheet_id, discipline, title, bbox_json, confidence)"
-                             " VALUES (?,?,?,?,?,?)", (company, sheet_id, lg["discipline"], lg["title"],
-                                                       lg["bbox_json"], lg["confidence"]))
+                saved[-1]["legend_ids"].append(conn.execute(
+                    "INSERT INTO legends (company_id, sheet_id, discipline, title, bbox_json, confidence)"
+                    " VALUES (?,?,?,?,?,?)", (company, sheet_id, lg["discipline"], lg["title"],
+                                              lg["bbox_json"], lg["confidence"])).lastrowid)
                 counts["legends"] += 1
         counts["linked_rows"] = _link_rows(conn, ps["id"])
+        # Coder 2 Sprint 10: the plan-set symbol dictionary and the symbols found (estimator/symbols/results.py).
+        from estimator.symbols import results as symbol_results
+        counts.update(symbol_results.save(conn, ctx, ps, results, saved))
         conn.execute("UPDATE plan_sets SET status = 'processed', error = NULL, processed_at = ?, engine = ?,"
                      " page_count = COALESCE(?, page_count, ?) WHERE id = ?",
                      (_now(), engine_name or None, page_count, counts["sheets"], ps["id"]))
@@ -625,6 +632,10 @@ def _symbol_dictionary(conn, plan_set_id: int) -> list[dict] | None:
     the spec's symbol_definitions table exists. Entries: {sheet_no, legend, code, description, item_type, trade,
     has_symbol, confidence, needs_confirming}."""
     from pathlib import Path
+    from estimator.symbols import service as symbols
+    table = symbols.dictionary(conn, plan_set_id)            # Sprint 10: symbol_definitions (the file is the fallback)
+    if table is not None:
+        return table
     r = conn.execute("SELECT image_path FROM sheets WHERE plan_set_id = ? AND image_path IS NOT NULL ORDER BY page_no"
                      " LIMIT 1", (plan_set_id,)).fetchone()
     if not r or not r["image_path"]:

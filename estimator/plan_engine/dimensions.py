@@ -57,7 +57,9 @@ def value_inches(text: str) -> Decimal | None:
 
 def candidates(page) -> list[dict]:
     """Dimension strings on a page: a word, or a word plus the fraction after it (3'-0 1/2")."""
-    words = sorted(page.words, key=lambda w: ((w.top + w.bottom) / 2, w.x0))
+    # The 1'-0" in "SCALE: 1/4" = 1'-0"" is part of a scale note, not a dimension.
+    in_notes = {id(w) for ln in page.lines if re.search(r"=|\bSCALE\b", ln.text, re.I) for w in ln.words}
+    words = sorted((w for w in page.words if id(w) not in in_notes), key=lambda w: ((w.top + w.bottom) / 2, w.x0))
     out, used = [], set()
     for i, w in enumerate(words):
         if i in used:

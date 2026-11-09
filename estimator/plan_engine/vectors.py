@@ -136,6 +136,10 @@ def is_room_name(text: str) -> bool:
     words = re.findall(r"[A-Z]+", t)
     if not words or all(w in ROOM_WORDS_STOP for w in words) or any(w in ("SCALE", "PLAN", "PLANS") for w in words):
         return False
+    from estimator.plan_engine import symbol_library
+    code = symbol_library.by_alias(t)
+    if code is not None and code["trade"] in ("electrical", "mechanical"):   # a device code (GFI, WP, TV), not a
+        return False                                                          # room; WC and LAV can be rooms
     return not re.fullmatch(r"[A-Z]{1,3}-?\d+(\.\d+)?[A-Z]?", t)       # sheet numbers and tags aren't room names
 
 

@@ -165,6 +165,13 @@ polygon.bp-m.approved { fill: #2b8a3e; }
 .bp-dot.draft { stroke: #1c7ed6; pointer-events: none; }
 .bp-snap { fill: none; stroke: #e03131; stroke-opacity: .55; stroke-width: 16px; stroke-linecap: round; pointer-events: none; }
 
+/* Sprint 10: symbol counts on the plan set page; progress on the Jobs board */
+.chip { display: inline-block; padding: 2px 10px; margin: 0 6px 6px 0; border-radius: 999px; background: #eef2f7;
+        font-size: 0.9em; }
+.chip.warn { background: #fff1d6; }
+.job-progress { font-size: 0.9em; line-height: 1.5; }
+.symbol-counts td:nth-child(n+3) { text-align: right; }
+
 /* Sprint 8: Estimates screen - lines linked to their measurements */
 .estimate-trade .page-head h3 { margin: 0; }
 table.kv.sources { margin: 6px 0 12px; }

@@ -755,6 +755,23 @@ def plan_get_legends(plan_set_id: int) -> str:
     return _run(lambda c: plans.legends(c, _ctx(), int(plan_set_id)))
 
 
+def symbol_detections_list(plan_set_id: int = 0, estimate_id: int = 0, item_type: str = "", sheet_id: int = 0,
+                           room: str = "", status: str = "", min_confidence: str = "", needs_review: str = "",
+                           limit: int = 200, offset: int = 0) -> str:
+    """Symbols the plan engine found from the plan set's legend (outlets, switches, fixtures, detectors...), with
+    counts by item type, sheet and room. Filter by item_type (e.g. duplex_receptacle_gfci), sheet, room name,
+    status (proposed/approved/rejected), min_confidence (0-1) or needs_review (true/false). Each detection says
+    where it is, which legend entry or library it came from and each technology's score (legend, vision, ocr, cad).
+    Counts are proposals until a person approves them in Blueprint Review."""
+    def go(c):
+        from estimator.symbols import service as symbol_service
+        nr = None if needs_review in ("", None) else str(needs_review).strip().lower() in ("1", "true", "yes")
+        return symbol_service.detections_list(c, _ctx(), int(plan_set_id) or None, int(estimate_id) or None,
+                                              item_type or None, int(sheet_id) or None, room or None, status or None,
+                                              min_confidence or None, nr, int(limit), int(offset))
+    return _run(go)
+
+
 # ---------------------------------------------------------------- takeoff measurements
 
 def _ids(value, name: str) -> list[int]:
@@ -937,6 +954,7 @@ TOOLS = (
     est_agent_submit, est_agent_apply, est_agent_run_now,
     plan_upload, plan_process, plan_status, plan_get_sheets, plan_get_sheet_image, plan_get_viewports,
     plan_set_scale, plan_get_objects, plan_get_schedules, plan_update_schedule_row, plan_get_legends,
+    symbol_detections_list,
     takeoff_propose, takeoff_manual, takeoff_list, takeoff_confirm, takeoff_edit, takeoff_delete,
     takeoff_detail, takeoff_suggest_change,
     review_start, review_save, review_approve, review_history, review_highlight, review_require_before_send,

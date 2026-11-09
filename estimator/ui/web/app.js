@@ -786,11 +786,13 @@ async function renderPlanSet(main, id) {
 
 // Sprint 9: schedules read from the plans (rows linked to plan tags) and legends with the symbol dictionary.
 async function planTables(box, id, canEdit) {
-  let s, l;
+  let s, l, y;
   try {
-    [s, l] = await Promise.all([api("GET", "/plan-sets/" + id + "/schedules"), api("GET", "/plan-sets/" + id + "/legends")]);
+    [s, l, y] = await Promise.all([api("GET", "/plan-sets/" + id + "/schedules"), api("GET", "/plan-sets/" + id + "/legends"),
+      api("GET", "/plan-sets/" + id + "/symbols?limit=1")]);
   } catch (e) { if (e.status !== 401) box.replaceChildren(errorBox(e)); return; }
   const parts = [];
+  if (y.count) parts.push(symbolCounts(y));
   if (s.schedules.length) {
     parts.push(el("h3", {}, "Schedules"));
     s.schedules.forEach(sc => parts.push(scheduleCard(sc, canEdit)));
@@ -803,16 +805,35 @@ async function planTables(box, id, canEdit) {
       parts.push(el("div", { class: "card section", "data-legend": lg.id },
         el("h4", {}, lg.title + " — " + (lg.sheet_no || "sheet") + (lg.discipline ? " · " + words(lg.discipline) : "")),
         entries.length ? el("table", { class: "list legend-entries" },
-          el("thead", {}, el("tr", {}, el("th", {}, "Code"), el("th", {}, "Description"), el("th", {}, "Item"), el("th", {}, "Trade"))),
+          el("thead", {}, el("tr", {}, el("th", {}, "Code"), el("th", {}, "Description"), el("th", {}, "Item"), el("th", {}, "Trade"),
+            el("th", {}, "Found"))),
           el("tbody", {}, entries.map(e => el("tr", { class: e.needs_confirming ? "needs-confirming" : "" },
             el("td", {}, e.code || (e.has_symbol ? "(symbol)" : "—")),
             el("td", {}, e.description),
             el("td", {}, e.item_type ? words(e.item_type) : el("span", { class: "status sample" }, "needs a person")),
-            el("td", {}, e.trade ? words(e.trade) : "—"))))) : el("p", { class: "muted" }, "No entries were read.")));
+            el("td", {}, e.trade ? words(e.trade) : "—"),
+            el("td", {}, e.found === undefined || e.found === null ? "" : String(e.found)))))) : el("p", { class: "muted" }, "No entries were read.")));
     });
     parts.push(el("p", { class: "muted small" }, l.note));
   }
   box.replaceChildren(...parts);
+}
+
+// Sprint 10: what the Symbol Recognition Engine counted from the legend, by type and sheet. Proposals until approved.
+function symbolCounts(y) {
+  const sheets = y.counts.by_sheet;
+  const head = el("tr", {}, el("th", {}, "Symbol"), el("th", {}, "Trade"), el("th", {}, "Found"), el("th", {}, "To check"),
+    ...sheets.map(sh => el("th", {}, sh.sheet_no || "page " + sh.page_no)));
+  const rows = y.counts.by_type.map(t => el("tr", { "data-item": t.item_type || "unknown" },
+    el("td", {}, t.item_type ? words(t.item_type) : el("span", { class: "status sample" }, (t.label || "unknown") + " — needs a person")),
+    el("td", {}, t.trade ? words(t.trade) : "—"),
+    el("td", {}, String(t.count)),
+    el("td", {}, t.needs_review ? el("span", { class: "status sample" }, String(t.needs_review)) : "0"),
+    ...sheets.map(sh => el("td", {}, String(sh.by_type[t.item_type || "unknown"] || "")))));
+  return el("div", { class: "card section", id: "plan-symbols" },
+    el("h3", {}, "Symbols found from the legend"),
+    el("p", { class: "muted small" }, y.count + " symbol(s). These are proposals: approve them in Blueprint Review before they're priced."),
+    el("table", { class: "list symbol-counts" }, el("thead", {}, head), el("tbody", {}, rows)));
 }
 
 function scheduleCard(sc, canEdit) {
@@ -1020,21 +1041,59 @@ async function renderJobs(main) {
     el("label", { class: "check" }, doneBox, " Show finished")));
   if (!b.count) {
     parts.push(el("div", { class: "card empty", id: "jobs-empty" }, "No jobs yet — start one with ⚡ New quick quote, or ask your AI to quote a job."));
+  } else if (b.summary) {
+    const w = b.summary.waiting;
+    parts.push(el("p", { class: "row", id: "jobs-summary" },
+      ...LANES.filter(([lane]) => b.summary.by_lane[lane]).map(([lane, label]) => el("span", { class: "chip" }, label + ": " + b.summary.by_lane[lane])),
+      w.you ? el("span", { class: "chip warn" }, w.you + " waiting on you") : null,
+      w.customer ? el("span", { class: "chip" }, w.customer + " waiting on the customer") : null));
   }
   for (const [lane, label] of LANES) {
     const rows = (b.by_lane || {})[lane];
     if (!rows || !rows.length) continue;
+    const plansLane = lane === "full_takeoff" || lane === "standard_estimate";
     parts.push(el("h3", {}, label + " (" + rows.length + ")"), el("table", { class: "list clickable", "data-lane": lane },
       el("thead", {}, el("tr", {}, el("th", {}, "#"), el("th", {}, "Job"), el("th", {}, "Step"), el("th", {}, "Waiting on"),
-        el("th", {}, "Updated"))),
+        plansLane ? el("th", {}, "Progress") : null, el("th", {}, "Updated"))),
       el("tbody", {}, rows.map(r => el("tr", { "data-id": r.id, onclick: () => go("#/jobs/" + r.id) },
         el("td", {}, r.id),
         el("td", {}, el("a", { href: "#/jobs/" + r.id }, r.request_text || words(r.module_id) || "Job " + r.id)),
-        el("td", {}, el("span", { class: "status" }, words(r.stage)), r.state === "done" ? " ✓" : ""),
+        el("td", {}, el("span", { class: "status" }, words(r.stage)), r.state === "done" ? " ✓" : "",
+          r.progress && r.progress.step ? el("div", { class: "muted small" }, "step " + r.progress.step.number + " of " + r.progress.step.of +
+            (r.progress.step.next && r.state !== "done" ? " · then " + r.progress.step.next : "")) : null),
         el("td", {}, r.state === "done" ? "—" : (WAITING[r.waiting_on] || words(r.waiting_on) || "—")),
+        plansLane ? el("td", { class: "job-progress" }, ...jobProgress(r, b.links || {})) : null,
         el("td", {}, when(r.updated_at)))))));
   }
   main.replaceChildren(...parts);
+}
+
+// Sprint 10: where a plans job stands - plans read, symbols found, measurements approved, the runner's trades, reviews.
+function jobProgress(r, links) {
+  const p = r.progress || {}, out = [], eid = r.estimate_id;
+  const stop = ev => ev.stopPropagation();
+  if (p.plans) {
+    const pl = p.plans;
+    const text = "📐 " + pl.sheets + " sheet(s)" + (pl.processing ? " · reading…" : "") + (pl.failed ? " · " + pl.failed + " failed" : "") +
+      (pl.need_scale ? " · " + pl.need_scale + " need a scale" : "");
+    out.push(el("div", {}, links.plans && eid ? el("a", { href: "#/projects/" + eid, onclick: stop }, text) : text));
+  } else if (eid) {
+    out.push(el("div", { class: "muted" }, "📐 no plans yet"));
+  }
+  if (p.symbols) out.push(el("div", {}, "🔣 " + p.symbols.found + " symbol(s)" + (p.symbols.to_check ? " · " + p.symbols.to_check + " to check" : "")));
+  if (p.takeoff) {
+    const t = p.takeoff;
+    const text = "📏 " + t.approved + " approved" + (t.proposed ? " · " + t.proposed + " waiting" : "") + (t.suggested ? " · " + t.suggested + " suggested change(s)" : "");
+    out.push(el("div", {}, links.takeoffs && eid ? el("a", { href: "#/takeoffs/" + eid, onclick: stop }, text) : text));
+  }
+  if (p.runner) {
+    const rn = p.runner;
+    out.push(el("div", {}, "⚙ " + rn.completed + "/" + rn.trades + " trade(s) done" + (rn.needs_review ? " · " + rn.needs_review + " to review" : "") +
+      (rn.failed ? " · " + rn.failed + " failed" : "")));
+  }
+  if (p.reviews) out.push(el("div", {}, "🔍 " + p.reviews.in_review + " review(s) open"));
+  if (links.estimates && eid) out.push(el("div", {}, el("a", { href: "#/estimates/" + eid, onclick: stop }, "🧮 estimate")));
+  return out.length ? out : ["—"];
 }
 
 // One job: what the Director needs next, with the controls to give it.

@@ -65,6 +65,9 @@ Sprint 9 (Coder 2):
   GET  /plan-sets/<id>/schedules?type=   schedules read from the plans, rows linked to plan tags (plan_get_schedules)
   GET  /plan-sets/<id>/legends           legends and the symbol dictionary (plan_get_legends)
   POST /schedule-rows/<id> {mark?, fields?, confirm?}   correct a row read from the plans (plan_update_schedule_row; asks)
+Sprint 10 (Coder 2):
+  GET  /plan-sets/<id>/symbols?type=&sheet=&room=&status=&min=&review=   symbols found from the legend, with counts by
+                                         type, sheet and room (symbol_detections_list)
   Blueprint Review (Takeoffs screen: owner, estimator, reviewer): see estimator/api/takeoff_api.py -
   GET /takeoffs, GET /estimates/<id>/takeoff, POST /estimates/<id>/measurements[/propose], GET /measurements/<id>,
   POST /measurements/approve, POST /measurements/<id>/edit|reject|suggest (takeoff_* tools; writes ask first)
@@ -545,7 +548,16 @@ def _jobs(m: str, sub: str, req: Request, ctx, conn, see: bool) -> Response:
 
     if sub == "/jobs" and m == "GET":
         out = director.board(conn, ctx, mine=_flag(req.query.get("mine")), include_done=_flag(req.query.get("done")))
-        return _json(200, {**redact(out, see), "can_start": ctx.role in service.QUICK_ROLES})
+        # Sprint 10: every lane's progress (plans, symbols, takeoff, runner, reviews) and the board's counts.
+        from estimator.api import jobs_board
+        prog = jobs_board.progress(conn, ctx, out["jobs"])
+        for lane_rows in out["by_lane"].values():
+            for r in lane_rows:
+                r["progress"] = prog.get(r["id"], {})
+        return _json(200, {**redact(out, see), "can_start": ctx.role in service.QUICK_ROLES,
+                           "summary": jobs_board.summary(out["jobs"], ctx.user_id),
+                           "links": {"plans": nav.can_open(ctx.role, "plans"), "takeoffs": nav.can_open(ctx.role, "takeoffs"),
+                                     "estimates": nav.can_open(ctx.role, "estimates")}})
 
     if sub == "/jobs" and m == "POST":
         if ctx.role not in service.QUICK_ROLES:
@@ -672,7 +684,7 @@ def _bid_file(conn, ctx, bid_id: int, kind: str) -> Response:
 
 _PLAN_SET = re.compile(r"^/plan-sets/(\d+)$")
 _PLAN_SET_PROCESS = re.compile(r"^/plan-sets/(\d+)/process$")
-_PLAN_SET_TABLES = re.compile(r"^/plan-sets/(\d+)/(schedules|legends)$")
+_PLAN_SET_TABLES = re.compile(r"^/plan-sets/(\d+)/(schedules|legends|symbols)$")
 _SCHEDULE_ROW = re.compile(r"^/schedule-rows/(\d+)$")
 _SHEET = re.compile(r"^/sheets/(\d+)$")
 _SHEET_IMAGE = re.compile(r"^/sheets/(\d+)/image$")
@@ -743,6 +755,20 @@ def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
         if what == "schedules":
             kind = (req.query.get("type") or "").strip() or None
             return _ok(**{k: v for k, v in store.schedules(conn, ctx, pid, kind).items() if k != "ok"}, can_edit=can_edit)
+        if what == "symbols":
+            # Sprint 10: symbols found from the legend, with counts (symbol_detections_list).
+            from estimator.symbols import service as symbol_service
+            q = req.query
+            review = (q.get("review") or "").strip().lower()
+            got = symbol_service.detections_list(
+                conn, ctx, plan_set_id=pid, item_type=(q.get("type") or "").strip() or None,
+                sheet_id=int(q["sheet"]) if (q.get("sheet") or "").isdigit() else None,
+                room=(q.get("room") or "").strip() or None, status=(q.get("status") or "").strip() or None,
+                min_confidence=(q.get("min") or "").strip() or None,
+                needs_review=None if not review else review in ("1", "true", "yes"),
+                limit=int(q["limit"]) if (q.get("limit") or "").isdigit() else 500,
+                offset=int(q["offset"]) if (q.get("offset") or "").isdigit() else 0)
+            return _ok(**{k: v for k, v in got.items() if k != "ok"}, can_edit=can_edit)
         return _ok(**{k: v for k, v in store.legends(conn, ctx, pid).items() if k != "ok"}, can_edit=can_edit)
 
     mm = _SCHEDULE_ROW.match(sub)
@@ -793,8 +819,18 @@ def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
             if not page["returned"] or offset >= page["count"]:
                 break
         got = got[:MAX_VIEW_OBJECTS]
+        # Sprint 10: symbols found from the legend go in their trade's group, with what was found.
+        found = {r["drawing_object_id"]: dict(r) for r in conn.execute(
+            "SELECT drawing_object_id, item_type, trade, confidence, needs_review, status FROM symbol_detections"
+            " WHERE sheet_id = ? AND company_id = ?", (sid, ctx.company_id))}
         for o in got:
             o["group"] = layers.group_for(o["kind"], o.get("layer"), o.get("block_name"))
+            d = found.get(o["id"])
+            if d:
+                o["symbol"] = {k: d[k] for k in ("item_type", "trade", "confidence", "status")} | {
+                    "needs_review": bool(d["needs_review"])}
+                if d["trade"] in layers.GROUP_IDS:
+                    o["group"] = d["trade"]
         return _ok(sheet_id=sid, objects=got, count=page["count"], returned=len(got), totals=page["totals"],
                    layers=layers.panel(got))
 
