@@ -374,6 +374,33 @@ Each sprint lists what the coders build and what the testers prepare and test in
 - The design spec's phase gates are checked off in this file at each gate.
 - A short sprint summary is added to `notes\` in the work folder after every demo.
 
+**Coder 2 sprint status** (updated 2026-11-09)
+
+| Sprint | Coder 2 work (from the sprint plan) | Status |
+| --- | --- | --- |
+| 1 | Web app shell, sign-in, navigation, JSON API, live updates | Done |
+| 2 | Documents upload; Dashboard, Projects, Quick estimate screens | Done |
+| 3 | Price Book screen (basic); PWA Estimates tab | Done (the 🏗 Estimator GUI tab was built by Coder 1, Sprint 16) |
+| 4 | Bids screen; how-to guides; Jobs board (quick lane) | Done |
+| 5 | Sheet splitting and rendering, title blocks, sheet classification, viewports, scales, calibration | Done |
+| 6 | Vector extraction, DXF import, walls, rooms, polygons | Done |
+| 7 | Blueprint Review v1 | Done |
+| 8 | Two-way linking; Estimates screen; manual takeoff polish | Done |
+| 9 | Text and dimension OCR; legends and symbol dictionary; schedules with tag linking | Done |
+| 10 | Symbol Recognition Engine v1; Jobs board for all lanes | Done |
+| 11 | Visual verification, find similar, company symbol library and learning; Reviews, Agents, Symbol Library screens | Done |
+| 12 | Shared wall-and-room model; electrical and plumbing symbol libraries | Done |
+| 13 | PWA mobile reviews | Done |
+| 14 | Elevations; door/window schedule linking; HVAC symbol library | Done |
+| — | Roles: office approves symbols and measurements; Estimating scope | Done (2026-11-09) |
+| 15 | Site-plan zones for fencing and landscaping | Next |
+| 16 | Raster pipeline for scans and photos; DWG via a user-installed converter | Not started |
+| 17 | Revision overlay UI; Reports, Settings and full Price Book screens | Not started |
+| 18 | Guided tours, help panel, contextual help and empty states | Not started |
+| 19–20 | Beta, release candidate, release (whole team) | Not started |
+
+Manual checks for Sprints 10–14 (in each sprint's `tests/estimator/SPRINT_n_CODER2_TEST_PLAN.md`) are still open, starting with real plan sets. Gates G0 onward are still unchecked below.
+
 **Progress log**
 
 | Date | Sprint | Who | Done |
