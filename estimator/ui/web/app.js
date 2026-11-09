@@ -102,6 +102,22 @@ async function api(method, path, body) {
   return data;
 }
 
+// Sprint 13: a picture from the API. Inside the Jobs app the Estimator is signed in by that app's token (no cookie),
+// and an <img src> can't send a token, so the picture is fetched with it and shown from a blob URL. Elsewhere the
+// cookie or same-PC access is enough and src is set as usual. A failed load fires the img's "error" event.
+function apiImage(img, url) {
+  if (!APP_TOKEN) { img.src = url; return img; }
+  fetch(url, { credentials: "same-origin", headers: { Authorization: "Bearer " + APP_TOKEN } })
+    .then(r => (r.ok ? r.blob() : Promise.reject(new Error("HTTP " + r.status))))
+    .then(b => {
+      const u = URL.createObjectURL(b);
+      img.addEventListener("load", () => URL.revokeObjectURL(u), { once: true });
+      img.src = u;
+    })
+    .catch(() => img.dispatchEvent(new Event("error")));
+  return img;
+}
+
 function can(perm) { return !!(state.me && state.me.permissions && state.me.permissions[perm]); }
 function canOpen(screenId) { return !!(state.me && state.me.menu.some(s => s.id === screenId && s.status === "ready")); }
 
@@ -178,6 +194,8 @@ function parseHash() {
   if (parts[0] === "reviews" && /^\d+$/.test(parts[1] || "")) return { screen: "reviews", page: "symbol_review", arg: +parts[1] };
   // Sprint 12: one project's plan quantities (quantities.js); ?height=&proposed=1.
   if (parts[0] === "quantities" && /^\d+$/.test(parts[1] || "")) return { screen: "takeoffs", page: "quantities", arg: +parts[1] };
+  // Sprint 13: reviews on a phone or tablet (mobile.js), from the Jobs app's Estimates tab; ?kind=&estimate=&i=.
+  if (parts[0] === "m" && parts[1] === "reviews") return { screen: "reviews", page: "mobile_reviews", arg: null };
   return { screen: parts[0] || "dashboard", page: null, arg: null };
 }
 

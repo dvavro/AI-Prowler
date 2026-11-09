@@ -117,9 +117,9 @@ function hashWith(changes) {
 }
 
 function symbolCard(d, estId, canReview, toggle) {
-  const img = el("img", { src: "/estimator-api/symbol-detections/" + d.id + "/crop.png", alt: symName(d.item_type) + " on " + (d.sheet_no || "the sheet"),
-                          loading: "lazy", class: "sym-thumb" });
+  const img = el("img", { alt: symName(d.item_type) + " on " + (d.sheet_no || "the sheet"), loading: "lazy", class: "sym-thumb" });
   img.addEventListener("error", () => { img.replaceWith(el("div", { class: "sym-thumb none" }, "no picture")); }, { once: true });
+  apiImage(img, "/estimator-api/symbol-detections/" + d.id + "/crop.png");   // with the Jobs app's token (Sprint 13)
   const card = el("div", { class: "sym-card " + d.status, "data-id": d.id, "data-status": d.status, tabindex: "0",
                            role: canReview ? "button" : null, "aria-pressed": canReview ? "false" : null },
     img,

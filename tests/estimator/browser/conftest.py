@@ -61,7 +61,18 @@ def site(estimator_sandbox, monkeypatch):
 
 @pytest.fixture
 def page(browser, site):
-    ctx = browser.new_context(viewport={"width": 1400, "height": 950})
+    yield from _watched_page(browser, site, viewport={"width": 1400, "height": 950})
+
+
+@pytest.fixture
+def phone(browser, site):
+    """A phone-sized touch screen (Sprint 13 mobile reviews): 390 x 844, touch, mobile."""
+    yield from _watched_page(browser, site, viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True,
+                             device_scale_factor=2)
+
+
+def _watched_page(browser, site, **context_args):
+    ctx = browser.new_context(**context_args)
     pg = ctx.new_page()
     pg.set_default_timeout(15000)
     problems = []

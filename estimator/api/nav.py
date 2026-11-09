@@ -92,6 +92,10 @@ PAGES = (
     # Sprint 12: one project's plan quantities - the shared wall-and-room model and each trade's answers from it.
     {"id": "quantities", "label": "Plan quantities", "from": "takeoffs", "sprint": 12,
      "tools": ["plan_get_rooms_walls", "plan_trade_answers"]},
+    # Sprint 13: reviews on a phone or tablet (the Jobs app's Estimates tab) - symbols and measurements by touch.
+    {"id": "mobile_reviews", "label": "Reviews (phone)", "from": "reviews", "sprint": 13,
+     "tools": ["symbol_detections_list", "symbol_detection_review", "takeoff_list", "takeoff_confirm", "takeoff_delete",
+               "review_highlight"]},
 )
 
 # What each role may do, sent to the browser so it can hide buttons. The server

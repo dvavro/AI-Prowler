@@ -74,6 +74,8 @@ Sprint 11 (Coder 2): Reviews, Symbol Library and Agents screens - see estimator/
   POST /agents/<module_id>, GET /runs/<id>, POST /runs, POST /runner-tasks/<id>/retry (writes ask first)
 Sprint 12 (Coder 2): Plan quantities - see estimator/api/quantities_api.py: GET /estimates/<id>/quantities?height=&proposed=
   (the shared wall-and-room model and each trade's answers from it; read only)
+Sprint 13 (Coder 2): reviews on a phone - see estimator/api/mobile_api.py: GET /mobile/reviews,
+  GET /mobile/symbols/<id>/view.png, GET /mobile/measurements/<id>/view.png
   Blueprint Review (Takeoffs screen: owner, estimator, reviewer): see estimator/api/takeoff_api.py -
   GET /takeoffs, GET /estimates/<id>/takeoff, POST /estimates/<id>/measurements[/propose], GET /measurements/<id>,
   POST /measurements/approve, POST /measurements/<id>/edit|reject|suggest (takeoff_* tools; writes ask first)
@@ -448,6 +450,11 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
     from estimator.api import quantities_api
     if quantities_api.handles(sub):
         return quantities_api.route(m, sub, req, ctx, conn)
+
+    # ---------------------------------------------------------- Sprint 13: reviews on a phone or tablet
+    from estimator.api import mobile_api
+    if mobile_api.handles(sub):
+        return mobile_api.route(m, sub, req, ctx, conn)
 
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
 

@@ -1086,8 +1086,16 @@ textarea::placeholder{color:#c0c6d8}
          server (/estimator/), framed so the bottom bar stays. It signs in with this app's own token
          (localStorage ap_auth), so no second login. Loaded the first time the tab is opened. -->
     <div id="screen-estimates" class="screen">
+      <!-- 2026-11-09 (Estimator Coder 2 Sprint 13): Quick estimate or Reviews (symbols and measurements to check
+           by touch); the Reviews count comes from /estimator-api/mobile/reviews. -->
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button type="button" id="estModeQuick" data-testid="est-mode-quick" onclick="estimatesMode('quick')"
+                style="flex:1;min-height:44px;border-radius:10px;border:1px solid #cbd5e1;background:#1e3a8a;color:#fff;font-size:15px">Quick estimate</button>
+        <button type="button" id="estModeReviews" data-testid="est-mode-reviews" onclick="estimatesMode('reviews')"
+                style="flex:1;min-height:44px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;color:#1e293b;font-size:15px">Reviews <span id="estReviewCount" data-testid="est-review-count"></span></button>
+      </div>
       <iframe id="estimatesFrame" title="Estimates" data-testid="estimates-frame"
-              style="width:100%;height:calc(100vh - 150px);border:0;border-radius:12px;background:#fff"></iframe>
+              style="width:100%;height:calc(100vh - 202px);border:0;border-radius:12px;background:#fff"></iframe>
     </div>
 
     <div id="screen-profile" class="screen">
@@ -1742,6 +1750,37 @@ async function estimatesInit() {
 function estimatesOpen() {
   const f = document.getElementById('estimatesFrame');
   if (f && !f.getAttribute('src')) f.setAttribute('src', '/estimator/?embed=1#/quick');
+  estimatesReviewCount();
+}
+// 2026-11-09 (Estimator Coder 2 Sprint 13): Quick estimate | Reviews. Reviews opens the Estimator's touch review
+// page (symbols and measurements waiting for a person, one at a time, approve / take out / relabel, swipe).
+const EST_PAGES = { quick: '/estimator/?embed=1#/quick', reviews: '/estimator/?embed=1#/m/reviews' };
+function estimatesMode(mode) {
+  const f = document.getElementById('estimatesFrame');
+  if (!f || !EST_PAGES[mode]) return;
+  f.setAttribute('src', EST_PAGES[mode]);
+  for (const [m, id] of [['quick', 'estModeQuick'], ['reviews', 'estModeReviews']]) {
+    const b = document.getElementById(id);
+    if (!b) continue;
+    b.style.background = m === mode ? '#1e3a8a' : '#fff';
+    b.style.color = m === mode ? '#fff' : '#1e293b';
+  }
+  estimatesReviewCount();
+}
+async function estimatesReviewCount() {
+  const span = document.getElementById('estReviewCount');
+  if (!span) return;
+  try {
+    let tok = '';
+    try {   // the same rule as the Estimator's appToken(): Server mode keeps access_token, Personal keeps token
+      const s = JSON.parse(localStorage.getItem('ap_auth') || 'null') || {};
+      tok = (s.mode === 'server' ? s.access_token : s.token) || '';
+    } catch (e) { tok = ''; }
+    const r = await fetch('/estimator-api/mobile/reviews?limit=1', { cache: 'no-store',
+      headers: tok ? { Authorization: 'Bearer ' + tok } : {} });
+    const d = r.ok ? await r.json() : null;
+    span.textContent = d && d.waiting ? '(' + d.waiting + ')' : '';
+  } catch (e) { span.textContent = ''; }
 }
 
 // ── STATE ─────────────────────────────────────────────────────────────────

@@ -248,3 +248,26 @@ button.danger { color: var(--bad); border-color: #f1b8bc; }
   .nav.open { transform: none; box-shadow: 0 0 20px rgba(0, 0, 0, .25); }
   .main { padding: 14px; }
 }
+
+/* Sprint 13: reviews on a phone or tablet (#/m/reviews) - big targets for thumbs, one item at a time */
+.mrev-chips { margin: 4px 0 8px; }
+.mrev-chips .chip { padding: 8px 16px; text-decoration: none; color: inherit; }
+.chip.active { background: var(--brand); color: var(--brand-ink); }
+#mrev-project { width: 100%; min-height: 44px; margin-bottom: 8px; font-size: 16px; }
+.mrev-pos { align-items: center; justify-content: space-between; margin: 6px 0; }
+.mrev-pos .button { min-width: 56px; min-height: 44px; text-align: center; font-size: 18px; }
+.mrev-pos [aria-disabled="true"] { opacity: .35; pointer-events: none; }
+.mrev-card { touch-action: pan-y; user-select: none; transition: transform .12s, box-shadow .12s; max-width: 720px; }
+.mrev-card.swipe-right { transform: translateX(24px); box-shadow: -6px 0 0 #16a34a inset; }
+.mrev-card.swipe-left { transform: translateX(-24px); box-shadow: 6px 0 0 #dc2626 inset; }
+.mrev-picture { display: block; width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line);
+                background: #fff; -webkit-user-drag: none; }
+.mrev-picture.none { padding: 48px 12px; text-align: center; color: #667085; background: #f6f7f9; }
+.mrev-title { margin: 10px 0 2px; font-size: 18px; }
+.mrev-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0 6px; max-width: 720px; }
+button.big { min-height: 56px; font-size: 18px; border-radius: 10px; }
+.mrev-relabel { display: grid; gap: 10px; max-width: 720px; }
+.mrev-relabel select { min-height: 48px; font-size: 16px; }
+.mrev-check { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.mrev-check input { width: 24px; height: 24px; }
+#mrev-confirm-box button { min-height: 56px; min-width: 120px; font-size: 18px; }
