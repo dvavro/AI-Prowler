@@ -29,6 +29,9 @@ MIN_DIAG, MAX_DIAG = 0.06, 1.5
 LONG = 1.5                   # line work longer than this x the symbol's size is a wall or a leader, not a symbol
 MIN_FORWARD = 0.8
 MIN_SCORE = 0.78
+# Sprint 11: learned shapes must explain nearly all the line work where they're found (a true copy scores 1.0, a
+# receptacle with one extra bar 0.93). Tune on real plan sets (manual check M3).
+MIN_REVERSE_LIBRARY = 0.95
 SCALE_TOL = 0.10
 MAX_CANDIDATES = 20000       # anchor tries per template per sheet
 MAX_DETECTIONS = 3000        # per sheet
@@ -135,8 +138,10 @@ def _transform(pts, theta, mirror, scale, t):
     return out
 
 
-def match_vector(tpl: dict, index: PageIndex, exclude=()) -> list[dict]:
-    """Every place the template's line work appears on the sheet: [{centre, score, rotation, mirrored, bbox}]."""
+def match_vector(tpl: dict, index: PageIndex, exclude=(), min_rev: float = 0.0) -> list[dict]:
+    """Every place the template's line work appears on the sheet: [{centre, score, rotation, mirrored, bbox}].
+    min_rev: how much of the line work there the template must explain (company-library shapes use
+    MIN_REVERSE_LIBRARY: with no legend entry to compete, a fourplex mustn't be taken for a learned duplex)."""
     import numpy as np
     if index.tree is None:
         return []
@@ -185,7 +190,8 @@ def match_vector(tpl: dict, index: PageIndex, exclude=()) -> list[dict]:
                     best = {"centre": centre, "score": score, "fwd": fwd, "rev": rev,
                             "rotation": round(math.degrees(theta) % 360, 1), "mirrored": mirror,
                             "bbox": [float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())]}
-        if best and best["score"] >= MIN_SCORE and not any(_inside(best["centre"], b) for b in exclude):
+        if (best and best["score"] >= MIN_SCORE and best["rev"] >= min_rev
+                and not any(_inside(best["centre"], b) for b in exclude)):
             hits.append(best)
     return _nms(hits, 0.5 * diag)
 
@@ -297,7 +303,8 @@ def scan_sheet(page, sheet: dict, entries: list[dict], templates: dict, skip=(),
         if vec and page.segments:
             index = PageIndex(page.segments, min(2.25, LONG * max(t["diag"] for t in vec.values()) * 1.2))
             for k, t in vec.items():
-                raw += [(k, h) for h in match_vector(t, index, skip)]
+                raw += [(k, h) for h in match_vector(t, index, skip,
+                                                     MIN_REVERSE_LIBRARY if str(k).startswith("lib:") else 0.0)]
     elif source == "raster" and templates and sheet.get("image_path"):
         ras = {k: t for k, t in templates.items() if t.get("kind") == "raster"}
         if ras:

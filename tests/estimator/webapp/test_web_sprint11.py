@@ -187,6 +187,17 @@ def test_takeoff_runs_start_status_retry(call, db):                             
     assert call("GET", f"{API}/runs/999999").status == 404
 
 
+def test_sheet_objects_carry_the_detection_for_blueprint_review(call, plans):       # C2S11-W11
+    objs = call("GET", f"{API}/sheets/{plans['sheet_id']}/objects?kind=symbol").json()["objects"]
+    by_det = {o["symbol"]["detection_id"]: o for o in objs}
+    assert set(plans["recept"]) | set(plans["flag"]) <= set(by_det)
+    s = by_det[plans["recept"][0]]["symbol"]
+    assert (s["item_type"], s["status"], s["origin"]) == ("duplex_receptacle", "proposed", "engine") and "label" in s
+    js = (WEB / "review.js").read_text(encoding="utf-8")
+    for part in ('tabButton("symbols"', 'q.get("symbol")', "bp-symbol-next", '"symbol", "✳"'):
+        assert part in js
+
+
 # ---------------------------------------------------------------- the page                        C2S11-W10
 
 def test_screens_are_ready_and_the_page_is_wired():                                  # C2S11-W10
@@ -199,3 +210,14 @@ def test_screens_are_ready_and_the_page_is_wired():                             
     html = (WEB / "index.html").read_text(encoding="utf-8")
     assert html.index("review.js") < html.index("verify.js")                       # verify.js uses review.js's pct()
     assert 'style="' not in js and ".style." not in js                             # CSP: no inline styles
+
+
+def test_the_estimator_has_the_same_ai_prowler_icon_as_the_other_apps(call):      # C2S11-W12
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    assert '<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">' in html
+    assert '<link rel="apple-touch-icon" href="icon-192.png">' in html
+    repo = WEB.parents[2]
+    for name in ("icon-192.png", "icon-512.png"):
+        assert (WEB / name).read_bytes() == (repo / "jobs" / name).read_bytes()       # the Jobs app's icon, unchanged
+    r = call("GET", "/estimator/icon-192.png")
+    assert r.status == 200 and r.content_type == "image/png" and r.body[:4] == b"\x89PNG"

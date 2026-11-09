@@ -217,6 +217,29 @@ def test_export_and_import_the_company_library(db, plans):                      
         library.import_library(db, other, {"format": "something else"}, confirm=True)
 
 
+def test_same_firm_plan_pair_the_second_set_is_counted_from_what_was_learned(db, plans, tmp_path):   # C2S11-S13
+    """Tester 2's learning test: a person checks the first plan set from an architect (approves the receptacles, names
+    the unknown special devices floor boxes); the firm's next plan set has no legend at all, a different layout, two
+    sheets, the symbols turned, mirrored and 5% bigger, a wall through a receptacle, and look-alikes that must not be
+    counted. Every learned symbol is found (recall) and nothing else is (precision)."""
+    review.review(db, CTX, plans["recept"], "approve", confirm=True)
+    review.review(db, CTX, plans["flag"][:1], "relabel", item_type="floor_box", apply_to_matches=True, confirm=True)
+    wall = [(2, 6, 20, 6)]                                                # a wall line through the receptacle at (9, 6)
+    p1 = (shape("flag", 4, 4) + shape("flag", 8, 4, 90) + shape("flag", 12, 4, mirror=True) +
+          shape("recept", 5, 6) + shape("recept", 9, 6) + wall +
+          shape("tri", 15, 9) + shape("quad", 17, 9))                      # not learned / a receptacle with an extra bar
+    p2 = shape("flag", 6, 12, 200, s=1.05) + shape("recept", 10, 12, 45, s=1.05) + shape("tri", 14, 12)
+    _e, ps2 = _read(db, tmp_path, [plan([], p1), plan([], p2, sheet_no="E-102", title="POWER PLAN 2")],
+                    name="firm2.pdf", title="Same architect, next job")
+    d = sym.detections_list(db, CTX, plan_set_id=ps2)
+    found = {t["item_type"]: t["count"] for t in d["counts"]["by_type"]}
+    assert found == {"floor_box": 4, "duplex_receptacle": 3}                # 100% recall, nothing extra
+    assert {s["sheet_no"]: s["count"] for s in d["counts"]["by_sheet"]} == {"E-101": 5, "E-102": 2}
+    assert all(x["origin"] == "library" and x["status"] == "proposed" for x in d["detections"])
+    near = lambda x, y: any(abs(q["point"][0] - x) < 0.15 and abs(q["point"][1] - y) < 0.15 for q in d["detections"])
+    assert near(9, 6) and not near(17, 9) and not near(15, 9) and not near(14, 12)
+
+
 def test_a_broken_library_never_stops_the_plans_being_read(db, tmp_path, monkeypatch):   # C2S11-S12
     def boom(conn, company_id):
         raise RuntimeError("bad library row")

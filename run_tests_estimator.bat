@@ -11,6 +11,8 @@ REM    run_tests_estimator.bat coder1          Coder 1 track only   (tests\estim
 REM    run_tests_estimator.bat coder2          Coder 2 track only   (tests\estimator\webapp + plan_engine)
 REM    run_tests_estimator.bat webapp          web app + JSON API   (tests\estimator\webapp)
 REM    run_tests_estimator.bat planengine      plan engine only     (tests\estimator\plan_engine)
+REM    run_tests_estimator.bat browser         Playwright browser tests (tests\estimator\browser; skipped elsewhere)
+REM    run_tests_estimator.bat browser --human the same in a visible, slowed-down browser, to watch
 REM    run_tests_estimator.bat -k login        any pytest args, applied to all Estimator tests
 REM    run_tests_estimator.bat coder2 -k sse   a track plus pytest args
 REM
@@ -53,6 +55,10 @@ REM are written as  first' 'second .
 if /i "%~1"=="coder2" (set "TARGET=tests\estimator\webapp' 'tests\estimator\plan_engine"& set "TRACK=coder2"& shift)
 if /i "%~1"=="webapp" (set "TARGET=tests\estimator\webapp"& set "TRACK=webapp"& shift)
 if /i "%~1"=="planengine" (set "TARGET=tests\estimator\plan_engine"& set "TRACK=planengine"& shift)
+REM browser = the Playwright tests (Chromium); they're skipped on every other track. --human: a visible, slowed-down
+REM browser to watch it like a person.
+if /i "%~1"=="browser" (set "TARGET=tests\estimator\browser"& set "TRACK=browser"& set "ESTIMATOR_BROWSER=1"& shift)
+if /i "%~1"=="--human" (set "ESTIMATOR_BROWSER_HUMAN=1"& shift)
 
 REM Collect the remaining arguments (SHIFT doesn't change %%*).
 set "REST="

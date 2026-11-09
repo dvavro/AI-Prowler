@@ -87,11 +87,37 @@ Every write answers `needs_confirmation` first. Starting a run and retrying a ta
 
 Also fixed: Find similar no longer finds the legend's own sample as a new symbol.
 
+## Sprint 11 leftovers (2026-11-09)
+
+Finished after the first push (`bf37759`), so Sprint 11 matches its plan row:
+
+- **Click-to-highlight counts in Blueprint Review:**
+  - **Symbols tab:** each type on the sheet with how many were found, to check and taken out. Click a type to highlight every one of them on the plan; ◀ ▶ step through them one at a time ("1 of 3") with each one's state; "✅ Check these in Reviews" opens that type.
+  - **`?symbol=<detection id>`:** "open on the plan" in Reviews now opens that symbol highlighted on its sheet, with the Symbols tab open. A symbol in a hidden layer is shown while highlighted.
+  - **✳ Add symbol tool** (owner, estimator, reviewer): click a missed symbol on the plan and say what it is. It's approved and the library learns it.
+  - **API:** `GET /sheets/<id>/objects` symbols carry `detection_id`, `label` and `origin`.
+- **Playwright tests** (Tester 2): new `tests/estimator/browser/`, run with `run_tests_estimator.bat browser` (add `--human` to watch in a visible, slowed-down browser). They're skipped on every other track, and any failed request or console error fails a test.
+- **Learning test, same-firm plan pair** (C2S11-S13). It found a real precision bug: with no legend to compete, a learned duplex receptacle also counted a receptacle with an extra bar (a fourplex). Learned (company-library) shapes must now explain at least 95% of the line work where they're found (`MIN_REVERSE_LIBRARY`): a true copy scores 1.0, the fourplex 0.93. Legend matching is unchanged. Tune this on real plans (M3).
+- **Icon:** the Estimator web app had no icon (every browser got a 404). It now uses the same AI-Prowler icon as the Jobs, Desk, Remote and HR apps (`icon-192.png` / `icon-512.png`, the same files), linked the same way.
+
+| ID | Test | Checks |
+|---|---|---|
+| C2S11-S13 | same-firm plan pair | the next plan set (no legend, 2 sheets, turned, mirrored, 5% bigger, a wall through a receptacle) counts 4 floor boxes and 3 receptacles from what was learned; the fourplex and the triangles aren't counted |
+| C2S11-W11 | objects for Blueprint Review | symbols carry detection_id, label, origin; review.js has the Symbols tab, ?symbol=, step-through and the Add symbol tool |
+| C2S11-W12 | icon | linked like the Jobs app; the same files as jobs/; served as PNG |
+| C2S11-B01 | Reviews in the browser | thumbnails load; select 2 → "3 matches, 2 selected"; approve; relabel all matches as floor boxes; "was unidentified symbol" kept |
+| C2S11-B02 | add on the plan, find similar | ✳ Add symbol on a missed triangle; in Reviews Find similar says "Found 2 more"; 3 thermostats, the 2 found ones to check |
+| C2S11-B03 | open on the plan | from a Reviews card: that symbol highlighted, Symbols tab open, "1 of 1" |
+| C2S11-B04 | Symbols tab | 3 receptacles highlighted; ▶ steps, wraps round, ◀ back; link to Reviews for the type |
+| C2S11-B05 | Symbol Library in the browser | the learned floor box listed; standard library listed; a new company symbol saved; Export link |
+| C2S11-B06 | Agents in the browser | framing threshold saved; the run shows framing and drywall (queued) |
+
 ## Results
 
 | Run | Result |
 |---|---|
-| Windows 11, Python 3.11.8 (David's PC), Coder 2 track | 497 passed (2026-11-08) |
+| Windows 11, Python 3.11.8 (David's PC), Coder 2 track | 497 passed (2026-11-08); with the leftovers 501 passed (2026-11-09) |
+| Same PC, browser track (Playwright, Chromium), headless and `--human` | 6 passed (2026-11-09) |
 | Same PC, all Estimator tests | see the Implementation Plan progress row |
 | Browser smoke test (scratch `verify_smoke.py`, headless Chromium) | Reviews list, 5 thumbnails load, select 2 → "3 matches, 2 selected", approve, relabel all matches, library shows the learned floor box, new company symbol, Agents threshold saved, run trades shown: no problems |
 
@@ -116,4 +142,5 @@ Also fixed: Find similar no longer finds the legend's own sample as a new symbol
 - **`reviews.start("detection_set")`** still says the symbol engine isn't installed. Symbol review is done through `symbol_detection_review`; your review sessions could now point at it.
 - **Counts aren't fed into `takeoff_propose` yet.** `symbol_detections_list(estimate_id=…)` gives approved counts by type and room.
 - **Firm profiles** (`level = 'firm'`) are listed but never filled, because plan sets don't record their design firm. If you add `plan_sets.design_firm`, I'll learn per firm too.
-- **Blueprint Review:** the "open on the plan" link opens the sheet (`?sheet=`); `&symbol=` is passed but doesn't highlight yet. That's for Sprint 12, with a Symbols tab.
+- **Blueprint Review:** done on 2026-11-09 (Symbols tab, `?symbol=` highlight, Add symbol tool).
+- **Learned symbols are stricter than legend ones** (`MIN_REVERSE_LIBRARY = 0.95` in plan_engine/symbols.py), so a fourplex isn't counted as a learned duplex.

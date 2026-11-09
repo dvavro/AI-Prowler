@@ -226,6 +226,8 @@ def test_no_files_outside_the_web_folder(call, path):
 def test_web_app_is_self_contained():
     """Spec: no CDN, no web fonts - it must work with no internet."""
     for f in router.WEB_DIR.iterdir():
+        if f.suffix.lower() in (".png", ".ico", ".jpg"):          # Sprint 11: the app icons are pictures, not code
+            continue
         text = f.read_text(encoding="utf-8").lower()
         # Sprint 7: the SVG namespace (document.createElementNS) is a name, not something downloaded.
         text = text.replace('"http://www.w3.org/2000/svg"', "")

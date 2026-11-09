@@ -830,14 +830,15 @@ def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
         got = got[:MAX_VIEW_OBJECTS]
         # Sprint 10: symbols found from the legend go in their trade's group, with what was found.
         found = {r["drawing_object_id"]: dict(r) for r in conn.execute(
-            "SELECT drawing_object_id, item_type, trade, confidence, needs_review, status FROM symbol_detections"
-            " WHERE sheet_id = ? AND company_id = ?", (sid, ctx.company_id))}
+            "SELECT id, drawing_object_id, item_type, trade, label, confidence, needs_review, status, origin"
+            " FROM symbol_detections WHERE sheet_id = ? AND company_id = ?", (sid, ctx.company_id))}
         for o in got:
             o["group"] = layers.group_for(o["kind"], o.get("layer"), o.get("block_name"))
             d = found.get(o["id"])
             if d:
-                o["symbol"] = {k: d[k] for k in ("item_type", "trade", "confidence", "status")} | {
-                    "needs_review": bool(d["needs_review"])}
+                # Sprint 11: the detection id and label, for the Symbols tab and ?symbol=<detection id> links.
+                o["symbol"] = {k: d[k] for k in ("item_type", "trade", "label", "confidence", "status", "origin")} | {
+                    "detection_id": d["id"], "needs_review": bool(d["needs_review"])}
                 if d["trade"] in layers.GROUP_IDS:
                     o["group"] = d["trade"]
         return _ok(sheet_id=sid, objects=got, count=page["count"], returned=len(got), totals=page["totals"],

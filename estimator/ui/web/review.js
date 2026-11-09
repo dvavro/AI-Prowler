@@ -24,6 +24,7 @@ const TOOLS = [
   ["rect", "▭", "Rectangle", "Click two opposite corners."],
   ["count", "✚", "Count", "Click each item; press Enter or Finish when done."],
   ["calibrate", "📐", "Calibrate", "Click both ends of a distance you know, then type its real length."],
+  ["symbol", "✳", "Add symbol", "Click a symbol the plan engine missed, then say what it is."],
 ];
 const RV = { estimateId: null, data: null, sheetId: null, sheet: null, viewports: [], tiles: null, objects: [],
              groups: [], byId: new Map(), selected: new Set(), measurementId: null, tool: "select", draft: [],
@@ -79,10 +80,13 @@ async function renderReview(main, estimateId) {
   RV.data = await api("GET", "/estimates/" + estimateId + "/takeoff");
   const d = RV.data;
   RV.draft = [];
-  if (!d.can_measure && !["select", "pan"].includes(RV.tool)) RV.tool = "select";    // a reviewer only looks and approves
+  // A reviewer only looks, approves and adds missed symbols.
+  if (!d.can_measure && !["select", "pan"].concat(d.can_approve ? ["symbol"] : []).includes(RV.tool)) RV.tool = "select";
   if (q.get("m")) RV.measurementId = +q.get("m") || null;
   // Sprint 8: ?line=<id> (from the Estimates screen) highlights every measurement behind that priced line.
   RV.lineId = +(q.get("line") || 0) || null;
+  // Sprint 11: ?symbol=<detection id> (from Reviews) opens that symbol highlighted on its sheet.
+  RV.symbolId = +(q.get("symbol") || 0) || null;
   const lineSheet = RV.lineId ? (lineMeasurements(RV.lineId).find(m => m.sheet_id) || {}).sheet_id : null;
   const wanted = +(q.get("sheet") || 0) || lineSheet;
   const firstSheet = d.sheets.find(s => s.id === wanted) || d.sheets.find(s => s.id === RV.sheetId) ||
@@ -113,8 +117,10 @@ async function renderReview(main, estimateId) {
   const viewerBox = el("div", { class: "bp-viewer", id: "bp-viewer", tabindex: "0", "aria-label": "Blueprint" });
   const side = el("div", { class: "bp-side" },
     el("div", { class: "bp-tabs", role: "tablist" },
-      tabButton("list", "Measurements"), tabButton("lines", "Lines"), tabButton("layers", "Layers"), tabButton("detail", "Detail")),
-    el("div", { class: "bp-pane", id: "bp-pane-list" }), el("div", { class: "bp-pane", id: "bp-pane-lines", hidden: true }),
+      tabButton("list", "Measurements"), tabButton("symbols", "Symbols"), tabButton("lines", "Lines"), tabButton("layers", "Layers"),
+      tabButton("detail", "Detail")),
+    el("div", { class: "bp-pane", id: "bp-pane-list" }), el("div", { class: "bp-pane", id: "bp-pane-symbols", hidden: true }),
+    el("div", { class: "bp-pane", id: "bp-pane-lines", hidden: true }),
     el("div", { class: "bp-pane", id: "bp-pane-layers", hidden: true }), el("div", { class: "bp-pane", id: "bp-pane-detail", hidden: true }));
   main.replaceChildren(...head,
     el("div", { class: "row bp-bar" }, prev, sheetPick, next, toolPalette(msg), viewButtons()),
@@ -124,8 +130,125 @@ async function renderReview(main, estimateId) {
   RV.viewer = new Viewer(viewerBox, msg);
   $("bp-pane-list").replaceChildren(measurementPanel(msg));
   await openSheet(firstSheet.id, msg);
-  if (RV.lineId) { showTab("lines"); RV.viewer.zoomToSelection(true); }
+  if (RV.symbolId) {
+    const o = RV.objects.find(x => x.symbol && x.symbol.detection_id === RV.symbolId);
+    showTab("symbols");
+    if (o) highlightSymbols([o], o.symbol.item_type || "unknown");
+    else msg.replaceChildren(el("p", { class: "note warn", id: "bp-symbol-missing" }, "That symbol isn't on this sheet any more (the plans may have been read again)."));
+  } else if (RV.lineId) { showTab("lines"); RV.viewer.zoomToSelection(true); }
   else if (RV.measurementId) showDetail(RV.measurementId, msg, true);
+}
+
+// ------------------------------------------------------------------ Sprint 11: symbols on this sheet
+// Counts by type (taken-out ones aren't counted); click a type to highlight every one of them on the plan, step
+// through them one at a time, or open them in Reviews to approve, take out or relabel.
+function sheetSymbols() { return RV.objects.filter(o => o.symbol); }
+function symbolKey(o) { return o.symbol.item_type || "unknown"; }
+
+function drawSymbolsPanel(msg) {
+  const pane = $("bp-pane-symbols");
+  if (!pane) return;
+  const syms = sheetSymbols();
+  if (!syms.length) {
+    pane.replaceChildren(el("p", { class: "muted", id: "bp-symbols-empty" }, "No symbols were found on this sheet. Symbols are counted from the plan set's legend when the plans are read."),
+      RV.data.can_approve ? el("p", { class: "small muted" }, "Missed one? Use ✳ Add symbol and click it on the plan.") : null);
+    return;
+  }
+  const byType = new Map();
+  for (const o of syms) { const k = symbolKey(o); if (!byType.has(k)) byType.set(k, []); byType.get(k).push(o); }
+  const rows = [...byType.entries()].sort((a, b) => b[1].length - a[1].length);
+  const psId = RV.sheet && RV.sheet.plan_set_id;
+  const list = el("ul", { class: "bp-rows", id: "bp-symbol-types" }, rows.map(([k, os]) => {
+    const counted = os.filter(o => o.symbol.status !== "rejected");
+    const toCheck = os.filter(o => o.symbol.status === "proposed").length;
+    const li = el("li", { class: "bp-row" + (RV.symbolType === k ? " active" : ""), "data-symbol-type": k, tabindex: "0" },
+      el("span", { class: "bp-row-name" }, os[0].symbol.label || (k === "unknown" ? "Unidentified symbol" : words(k))),
+      el("span", { class: "bp-row-qty" }, counted.length + " found"),
+      el("span", { class: "muted small" }, (toCheck ? toCheck + " to check" : "all checked") +
+        (os.length > counted.length ? " · " + (os.length - counted.length) + " taken out" : "")));
+    const pick = () => highlightSymbols(counted.length ? counted : os, k);
+    li.addEventListener("click", pick);
+    li.addEventListener("keydown", ev => { if (ev.key === "Enter") pick(); });
+    return li;
+  }));
+  const prev = el("button", { class: "button", type: "button", id: "bp-symbol-prev", title: "Previous symbol" }, "◀");
+  const next = el("button", { class: "button", type: "button", id: "bp-symbol-next", title: "Next symbol" }, "▶");
+  const where = el("span", { class: "muted small", id: "bp-symbol-where" });
+  prev.addEventListener("click", () => stepSymbol(-1));
+  next.addEventListener("click", () => stepSymbol(1));
+  const parts = [el("p", { class: "muted small" }, "Click a type to see every one on the plan; ◀ ▶ go through them one at a time."),
+    list, el("div", { class: "row" }, prev, next, where), el("div", { id: "bp-symbol-one" })];
+  if (psId) parts.push(el("p", {}, el("a", { id: "bp-symbol-review", href: "#/reviews/" + psId + (RV.symbolType ? "?type=" + RV.symbolType : "") },
+    "✅ Check these in Reviews")));
+  if (RV.data.can_approve) parts.push(el("p", { class: "small muted" }, "Missed one? Use ✳ Add symbol and click it on the plan."));
+  pane.replaceChildren(...parts);
+  showSymbolPos();
+}
+
+function highlightSymbols(objs, key) {
+  RV.symbolType = key;
+  RV.symbolList = objs;
+  RV.symbolPos = objs.length === 1 ? 0 : -1;           // -1: all of them at once
+  RV.measurementId = null; RV.lineId = null;
+  RV.selected = new Set(objs.map(o => o.id));
+  // A symbol in a hidden layer is shown while it's highlighted (the layer setting itself isn't changed).
+  for (const o of objs) {
+    const g = RV.viewer.overlay.querySelector('[data-group="' + o.group + '"]');
+    if (g) g.classList.remove("hidden");
+  }
+  drawMeasurements();
+  RV.viewer.zoomToSelection(true);
+  drawSymbolsPanel($("review-message"));
+}
+
+function stepSymbol(dir) {
+  const list = RV.symbolList && RV.symbolList.length ? RV.symbolList : sheetSymbols();
+  if (!list.length) return;
+  if (!RV.symbolList || !RV.symbolList.length) { RV.symbolList = list; RV.symbolType = null; }
+  RV.symbolPos = RV.symbolPos < 0 ? (dir > 0 ? 0 : list.length - 1) : (RV.symbolPos + dir + list.length) % list.length;
+  const o = list[RV.symbolPos];
+  RV.selected = new Set([o.id]);
+  drawMeasurements();
+  RV.viewer.zoomToSelection(true);
+  showSymbolPos();
+}
+
+function showSymbolPos() {
+  const where = $("bp-symbol-where"), one = $("bp-symbol-one");
+  if (!where || !one) return;
+  const list = RV.symbolList || [];
+  if (!list.length) { where.textContent = ""; one.replaceChildren(); return; }
+  if (RV.symbolPos < 0) { where.textContent = list.length + " highlighted"; one.replaceChildren(); return; }
+  const o = list[RV.symbolPos], s = o.symbol;
+  where.textContent = (RV.symbolPos + 1) + " of " + list.length;
+  one.replaceChildren(el("div", { class: "card section", id: "bp-symbol-detail", "data-detection": s.detection_id },
+    el("strong", {}, s.label || (s.item_type ? words(s.item_type) : "Unidentified symbol")),
+    el("div", { class: "small" }, el("span", { class: "status" }, words(s.status === "proposed" ? "to check" : s.status === "rejected" ? "taken out" : s.status)),
+      " · " + pct(s.confidence) + (s.origin && s.origin !== "engine" ? " · " + words(s.origin) : "")),
+    RV.sheet && RV.sheet.plan_set_id ? el("a", { class: "small", href: "#/reviews/" + RV.sheet.plan_set_id + "?type=" + symbolKey(o) }, "check it in Reviews") : null));
+}
+
+function addSymbolForm(p, msg) {
+  const known = [...new Set(sheetSymbols().map(o => o.symbol.item_type).filter(Boolean))];
+  const list = el("datalist", { id: "bp-symbol-types-list" }, known.map(t => el("option", { value: t })));
+  const it = el("input", { id: "bp-symbol-type", maxlength: 60, list: "bp-symbol-types-list", placeholder: "e.g. duplex_receptacle", "aria-label": "What it is" });
+  const b = el("button", { class: "primary", type: "button", id: "bp-symbol-add" }, "Add…");
+  const no = el("button", { class: "button", type: "button", id: "bp-symbol-cancel" }, "Cancel");
+  const ask = el("div", {});
+  msg.replaceChildren(el("div", { class: "card section", id: "bp-symbol-form" },
+    el("strong", {}, "Add a symbol at " + num(p[0]) + "\", " + num(p[1]) + "\""),
+    el("div", { class: "row" }, el("label", {}, "What it is", it, list), b, no),
+    el("p", { class: "small muted" }, "It's counted as approved and your company's library learns its shape."), ask));
+  it.focus();
+  no.addEventListener("click", () => msg.replaceChildren());
+  const go = () => {
+    const t = it.value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+    if (!t) { it.focus(); return; }
+    reviewAsk(ask, b, "/symbol-detections/review", { action: "add", sheet_id: RV.sheetId, point: p, item_type: t },
+      () => words(t) + " added", "bp-sym", true);
+  };
+  b.addEventListener("click", go);
+  it.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); go(); } });
 }
 
 // ------------------------------------------------------------------ Sprint 8: priced lines <-> measurements
@@ -186,7 +309,7 @@ function tabButton(id, label) {
 }
 function showTab(id) {
   for (const t of document.querySelectorAll(".bp-tab")) t.classList.toggle("active", t.dataset.tab === id);
-  for (const p of ["list", "lines", "layers", "detail"]) { const n = $("bp-pane-" + p); if (n) n.hidden = p !== id; }
+  for (const p of ["list", "symbols", "lines", "layers", "detail"]) { const n = $("bp-pane-" + p); if (n) n.hidden = p !== id; }
 }
 
 function toolPalette(msg) {
@@ -194,6 +317,7 @@ function toolPalette(msg) {
   for (const [id, icon, label, help] of TOOLS) {
     if (["length", "area", "rect", "count"].includes(id) && !RV.data.can_measure) continue;
     if (id === "calibrate" && !RV.data.can_measure) continue;
+    if (id === "symbol" && !RV.data.can_approve) continue;          // adding a symbol is a reviewer's decision
     const b = el("button", { class: "bp-tool" + (id === RV.tool ? " active" : ""), type: "button", "data-tool": id, title: label + " — " + help }, icon + " " + label);
     b.addEventListener("click", () => setTool(id, msg));
     box.append(b);
@@ -223,6 +347,7 @@ function viewButtons() {
 async function openSheet(sheetId, msg) {
   RV.sheetId = sheetId;
   RV.selected = new Set();
+  RV.symbolList = []; RV.symbolPos = -1; RV.symbolType = null;      // the Symbols tab starts again on each sheet
   const [s, o] = await Promise.all([api("GET", "/sheets/" + sheetId), api("GET", "/sheets/" + sheetId + "/objects")]);
   RV.sheet = s.sheet; RV.viewports = s.viewports; RV.tiles = s.tiles;
   RV.objects = o.objects; RV.groups = o.layers;
@@ -235,6 +360,7 @@ async function openSheet(sheetId, msg) {
   $("bp-notes").replaceChildren(...(warn.length ? [el("p", { class: "note warn", id: "bp-sheet-note" }, warn.join(" "))] : []));
   RV.viewer.load();
   drawLayersPanel();
+  drawSymbolsPanel(msg);
   drawLinesPanel();
   refreshList(msg);
 }
@@ -400,6 +526,7 @@ class Viewer {
     if (RV.tool === "select") { pickAt(s.target, s.shift, this.msg); return; }
     if (RV.tool === "pan") return;
     const p = this.place(ev);
+    if (RV.tool === "symbol") { addSymbolForm([round3(p[0]), round3(p[1])], this.msg); return; }
     addDraftPoint([round3(p[0]), round3(p[1])], this.msg);
   }
   // Sprint 8 polish: snap to the drawing's corners (within 10 px; hold Alt to place freely), and Shift keeps the new
