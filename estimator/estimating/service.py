@@ -342,6 +342,10 @@ def get_estimate(conn, ctx: RequestContext, estimate_id: int) -> dict:
                 "id": li["id"], "kind": li["kind"], "description": li["description"], "quantity": li["quantity"],
                 "unit": li["unit"], "unit_cost_cents": li["unit_cost_cents"], "waste_pct": li["waste_pct"],
                 "price_key": li["price_key"], "total_cents": li["total_cents"], "calc": calc,
+                "assembly_use_id": li["assembly_use_id"],
+                "override": ({"by": li["override_by"], "reason": li["override_reason"], "at": li["override_at"],
+                              "changed": (calc.get("override") or {}).get("changed", {})}
+                             if li["override_by"] else None),
             })
         sections.append({
             "id": s["id"], "module_id": s["module_id"], "module_version": s["module_version"],
@@ -454,10 +458,11 @@ def create_revision(conn, ctx: RequestContext, estimate_id: int, change_summary:
                                    (sec["id"],)).fetchall():
                 conn.execute(
                     "INSERT INTO line_items (trade_section_id, kind, description, quantity, unit, unit_cost_cents,"
-                    " waste_pct, price_key, calc_json, sort_order, created_by, created_at, updated_at)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " waste_pct, price_key, calc_json, sort_order, created_by, created_at, updated_at, override_by,"
+                    " override_reason, override_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (sc.lastrowid, li["kind"], li["description"], li["quantity"], li["unit"], li["unit_cost_cents"],
-                     li["waste_pct"], li["price_key"], li["calc_json"], li["sort_order"], ctx.actor, now, now))
+                     li["waste_pct"], li["price_key"], li["calc_json"], li["sort_order"], ctx.actor, now, now,
+                     li["override_by"], li["override_reason"], li["override_at"]))   # hand changes go with it
         conn.execute(
             "INSERT INTO estimate_scenarios (company_id, estimate_id, module_id, option_id, label, answers_json,"
             " total_cents, totals_json, uses_samples, chosen, created_by, created_at) SELECT company_id, ?, module_id,"

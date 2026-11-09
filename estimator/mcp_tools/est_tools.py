@@ -26,7 +26,7 @@ from estimator.director import engine as director
 from estimator.director import overrides as director_overrides
 from estimator.director import settings as director_settings
 from estimator.director import watch as director_watch
-from estimator.estimating import quick, scenarios, service, setup, validate
+from estimator.estimating import assemblies, quick, scenarios, service, setup, validate
 from estimator import agent_manager
 from estimator.runner import runner
 from estimator.agents import queue as agent_queue
@@ -40,6 +40,7 @@ from estimator.drawing_model import engine as plan_engine
 from estimator.drawing_model import store as plans
 from estimator.takeoff import measurements as takeoffs
 from estimator.takeoff import reviews
+from estimator.takeoff import from_plans as plan_takeoffs
 from estimator.drawing_model import crops, revisions, server_jobs
 
 # Server mode will replace this with the API key / signed-in user's context.
@@ -115,6 +116,72 @@ def est_add_line_item(estimate_id: int, rev: int, kind: str, description: str, q
     return _run(lambda c: service.add_line_item(
         c, _ctx(), int(estimate_id), rev, kind=kind, description=description, quantity=quantity, unit=unit,
         unit_cost_cents=unit_cost_cents, price_key=price_key or None, waste_pct=waste_pct))
+
+
+def est_update_line_item(estimate_id: int, rev: int, line_id: int, quantity: str = "", unit_cost_cents: int | str = "",
+                         waste_pct: str = "", description: str = "", reason: str = "", revert: bool = False,
+                         remove: bool = False, confirm: bool = False) -> str:
+    """Change one line on an estimate (quantity, unit_cost_cents, waste_pct as a fraction, description), put a changed
+    line back the way it was (revert=true), or take a line off (remove=true). A change to a line the trade's pricing
+    made is an override: give the reason; it's kept with who changed it and when, and shows on the line. Re-applying
+    the trade keeps cost, waste and description overrides, not quantity ones. Asks first (confirm=true).
+    rev: the estimate's current rev."""
+    return _run(lambda c: assemblies.update_line_item(
+        c, _ctx(), int(estimate_id), rev, int(line_id), quantity=quantity or None,
+        unit_cost_cents=unit_cost_cents if unit_cost_cents not in ("", None) else None, waste_pct=waste_pct or None,
+        description=description or None, reason=reason or None, revert=bool(revert), remove=bool(remove),
+        confirm=bool(confirm)))
+
+
+def est_get_assemblies(module_id: str) -> str:
+    """A trade's assembly: its inputs (which ones a measurement can fill), the lines it makes (formula, waste, price
+    key), its good/better/best options, and whether the plans can answer it. Read only."""
+    try:
+        return json.dumps(assemblies.get_assemblies(module_id), default=str)
+    except EstimatorError as exc:
+        return json.dumps(exc.as_dict(), default=str)
+
+
+def est_apply_assembly(estimate_id: int, rev: int, module_id: str, params: dict | str = "", option: str = "",
+                       use_measurements: bool = True, measurement_ids: list | str = "", keep_overrides: bool = True,
+                       confirm: bool = False) -> str:
+    """Price a trade on an estimate from its approved measurements plus parameters: each quantity comes from the
+    trade's approved measurements (or the measurement_ids you pick), params are the other answers (e.g.
+    {"material": "tile"}), option picks a good/better/best choice. Answers the trade already has are kept, then
+    defaults. Proposed measurements are never priced. Replaces the trade's lines and records what was used; hand
+    changes to cost, waste and description carry over (keep_overrides). Asks first, showing every answer and where it
+    came from. rev: the estimate's current rev."""
+    return _run(lambda c: assemblies.apply_assembly(
+        c, _ctx(), int(estimate_id), rev, module_id, params=_opt_obj(params, "params"), option=option or None,
+        use_measurements=bool(use_measurements),
+        measurement_ids=_ids(measurement_ids, "measurement_ids") if measurement_ids not in ("", None) else None,
+        keep_overrides=bool(keep_overrides), confirm=bool(confirm)))
+
+
+def est_add_trade(estimate_id: int, rev: int, module_id: str) -> str:
+    """Add a trade section to an estimate (est_list_modules lists the trades; 'custom' is for hand lines). It starts
+    empty: price it with est_quick_answer, est_apply_assembly or the Runner. rev: the estimate's current rev."""
+    return _run(lambda c: service.add_trade(c, _ctx(), int(estimate_id), (module_id or "").strip().lower(), rev))
+
+
+def est_remove_trade(estimate_id: int, rev: int, module_id: str, confirm: bool = False) -> str:
+    """Take a trade off an estimate: its lines and saved options go; its measurements stay with the plans. Asks first
+    (confirm=true). rev: the estimate's current rev."""
+    def go(c):
+        est = service._load_row(c, _ctx(), int(estimate_id))
+        mid = (module_id or "").strip().lower()
+        sid = service._section_id(c, _ctx(), est["id"], mid, create=False)
+        if sid is None:
+            raise InvalidInput(f"estimate {est['id']} has no '{mid}' trade", module_id=mid)
+        lines, total = c.execute("SELECT COUNT(*), COALESCE(SUM(total_cents), 0) FROM line_items WHERE"
+                                 " trade_section_id = ?", (sid,)).fetchone()
+        if not confirm:
+            from estimator.errors import ConfirmationRequired
+            from estimator.core.units.money import format_cents
+            raise ConfirmationRequired(f"Take {mid} off estimate {est['id']} ({lines} line(s), {format_cents(total)})?"
+                                       " Call again with confirm=true.", lines=lines, total_cents=total)
+        return service.remove_trade(c, _ctx(), est["id"], mid, rev)
+    return _run(go)
 
 
 def est_calculate(estimate_id: int, rev: int) -> str:
@@ -523,16 +590,22 @@ def runner_status(run_id: int = 0, estimate_id: int = 0) -> str:
 
 
 def runner_submit_takeoff(task_id: int, answers: dict | str | None = None, confidence: int | None = None,
-                          note: str = "", cannot_measure: str = "", from_measurements: bool = False) -> str:
+                          note: str = "", cannot_measure: str = "", from_measurements: bool = False,
+                          from_plans: bool = False, plan_set_id: int = 0, height_ft: float | str = "",
+                          include_proposed: bool = False) -> str:
     """Hand in one trade's quantities, measured from the plans: answers are that trade's questions (see
     est_quick_questions(module_id)). Every number must come from the plans or the user, never a guess.
-    from_measurements=true fills them from the trade's approved measurements (takeoff_list); answers given too win.
-    confidence 0-100 is how sure you are. If the trade can't be measured, give cannot_measure="why" instead.
-    The quantities wait for a person's approval unless the owner turned on auto-advance for the trade."""
+    from_plans=true takes them from the read plans (the trades plan_trade_answers covers); from_measurements=true from the trade's approved measurements (takeoff_list),
+    which win over the plans' numbers; answers given too win over both. confidence 0-100 is how sure you are. If the
+    trade can't be measured, give cannot_measure="why" instead. The quantities wait for a person's approval unless
+    the owner turned on auto-advance for the trade (never when they include symbols nobody has checked)."""
     return _run(lambda c: runner.submit_takeoff(c, _ctx(), int(task_id), _opt_obj(answers, "answers"),
                                                 confidence=confidence, note=note or None,
                                                 cannot_measure=cannot_measure or None,
-                                                from_measurements=bool(from_measurements)))
+                                                from_measurements=bool(from_measurements),
+                                                from_plans=bool(from_plans), plan_set_id=int(plan_set_id) or None,
+                                                height_ft=_height(height_ft),
+                                                include_proposed=bool(include_proposed)))
 
 
 def runner_review_task(task_id: int, approve: bool = False, answers: dict | str | None = None, note: str = "") -> str:
@@ -661,12 +734,28 @@ def est_agent_run_now() -> str:
 
 # ---------------------------------------------------------------- plans and the drawing model
 
-def plan_upload(estimate_id: int, file_path: str, supersedes_plan_set_id: int = 0, confirm: bool = False) -> str:
+def plan_upload(estimate_id: int, file_path: str, supersedes_plan_set_id: int = 0, confirm: bool = False,
+                design_firm: str = "") -> str:
     """Attach a plan file on this PC (full path; PDF, PNG, JPG, TIFF, DXF or DWG, up to 300 MB) to an estimate. The file
     is checked first (real file type, not empty, not password-protected, not already on the estimate) and copied into
-    the Estimator's folder. For a revised set, give the plan set it replaces. Asks first (confirm=true)."""
+    the Estimator's folder. For a revised set, give the plan set it replaces (it keeps that set's design firm).
+    design_firm: the architect or engineer who drew it, if known. Asks first (confirm=true)."""
     return _run(lambda c: plans.upload(c, _ctx(), int(estimate_id), file_path, int(supersedes_plan_set_id) or None,
-                                       bool(confirm)))
+                                       bool(confirm), design_firm=design_firm or None))
+
+
+def plan_set_design_firm(plan_set_id: int = 0, design_firm: str = "", clear: bool = False,
+                         confirm: bool = False) -> str:
+    """Record the architect or engineer who drew a plan set (from its title block), so symbol learning can keep a
+    profile per firm. With no plan_set_id it lists the firms on file. clear=true removes it. Asks first."""
+    def go(c):
+        if not int(plan_set_id or 0):
+            return plans.design_firms(c, _ctx())
+        if not design_firm and not clear:
+            raise InvalidInput("give design_firm (or clear=true to remove it)", field="design_firm")
+        return plans.set_design_firm(c, _ctx(), int(plan_set_id), None if clear else design_firm,
+                                     confirm=bool(confirm))
+    return _run(go)
 
 
 def plan_process(plan_set_id: int, confirm: bool = False) -> str:
@@ -876,13 +965,23 @@ def _ids(value, name: str) -> list[int]:
         raise InvalidInput(f"{name} must be a list of numbers", field=name) from None
 
 
-def takeoff_propose(estimate_id: int, module_id: str, object_ids: list | str, feeds: str = "", kind: str = "",
+def takeoff_propose(estimate_id: int, module_id: str, object_ids: list | str = "", feeds: str = "", kind: str = "",
                     label: str = "", room: str = "", confidence: str = "", one_per_object: bool = False,
-                    confirm: bool = False) -> str:
-    """Propose measurements for a trade from drawing objects (ids from plan_get_objects). The quantity comes from the
-    drawing model's real sizes, never typed: kind area, perimeter, length or count (guessed from the shapes if left
-    out). feeds is the trade question it fills (e.g. roof_area_sqft). Unscaled or NTS objects are refused. Proposed
-    measurements wait for a person (takeoff_confirm). Asks first."""
+                    from_plans: bool = False, plan_set_id: int = 0, height_ft: float | str = "",
+                    include_proposed: bool = False, confirm: bool = False) -> str:
+    """Propose measurements for a trade. From drawing objects (object_ids from plan_get_objects): the quantity comes
+    from the drawing model's real sizes, never typed: kind area, perimeter, length or count (guessed from the shapes
+    if left out); feeds is the trade question it fills (e.g. roof_area_sqft); unscaled or NTS objects are refused.
+    Or from_plans=true: one measurement per question the read plans answer (the trades plan_trade_answers covers: the
+    wall-and-room model, the schedules and elevations, and approved symbol counts; include_proposed=true counts
+    unchecked symbols too). Running it again updates proposed ones and puts a suggested
+    change beside approved ones. Proposed measurements wait for a person (takeoff_confirm). Asks first."""
+    if from_plans:
+        if object_ids not in ("", None, []):
+            return json.dumps(InvalidInput("give object_ids or from_plans=true, not both").as_dict())
+        return _run(lambda c: plan_takeoffs.propose(c, _ctx(), int(estimate_id), module_id,
+                                                 plan_set_id=int(plan_set_id) or None, height_ft=_height(height_ft),
+                                                 include_proposed=bool(include_proposed), confirm=bool(confirm)))
     return _run(lambda c: takeoffs.propose(c, _ctx(), int(estimate_id), module_id, _ids(object_ids, "object_ids"),
                                            feeds=feeds or None, kind=kind or None, label=label or None,
                                            room=room or None, confidence=confidence or None,
@@ -1087,6 +1186,7 @@ TOOLS = (
     est_data_export, est_data_import,
     est_setup_status, est_setup_step,
     est_list_modules, est_create_estimate, est_get_estimate, est_list_estimates, est_add_line_item,
+    est_update_line_item, est_get_assemblies, est_apply_assembly, est_add_trade, est_remove_trade,
     est_calculate, est_quick_questions, est_quick_answer,
     bid_generate, bid_preview, bid_send, bid_set_status, bid_convert_to_job, bid_list,
     runner_start, runner_status, runner_submit_takeoff, runner_review_task, runner_retry_task, est_project_status,
@@ -1101,6 +1201,7 @@ TOOLS = (
     review_start, review_save, review_approve, review_history, review_highlight, review_require_before_send,
     est_ai_privacy, plan_get_crop, plan_get_rooms_walls, plan_trade_answers,
     plan_compare_revisions, plan_processing_queue, plan_publish_to_server, est_server_compute,
+    plan_set_design_firm,
 )
 
 

@@ -39,6 +39,15 @@ SUBMIT_ROLES = service.EDIT_ROLES
 REVIEW_ROLES = service.APPROVE_ROLES          # owner, estimator, reviewer
 
 
+def plan_trades() -> tuple[str, ...]:
+    """Trades the plans answer on their own (Coder 2's estimator.building.trades.TRADES); none if it can't load."""
+    try:
+        from estimator.building import trades
+        return tuple(trades.TRADES)
+    except Exception:  # noqa: BLE001 - the plan engine's packages aren't installed: no plan trades
+        return ()
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -245,15 +254,37 @@ def _nonzero(value) -> bool:
 
 def submit_takeoff(conn, ctx: RequestContext, task_id: int, answers: dict | None = None, *,
                    confidence: int | None = None, note: str | None = None, cannot_measure: str | None = None,
-                   from_measurements: bool = False, registry=None) -> dict:
+                   from_measurements: bool = False, from_plans: bool = False, plan_set_id: int | None = None,
+                   height_ft=None, include_proposed: bool = False, registry=None) -> dict:
     """A takeoff agent (or a person) hands in the quantities for one trade, or says why it can't.
 
-    from_measurements=true fills the answers from the trade's approved measurements (takeoff_list shows them);
-    answers given here are added on top and win for the same question."""
+    from_plans=true takes the trade's answers from the plans (plan_trade_answers: the wall-and-room model, or the
+    approved symbol counts); from_measurements=true takes the trade's approved measurements (takeoff_list shows them).
+    With both, approved measurements win over the plans' numbers for the same question (a person checked them), and
+    answers given here win over both. The task still waits for a person's review unless auto-advance is on."""
     if ctx.role not in SUBMIT_ROLES:
         raise PermissionDenied(f"role '{ctx.role}' can't submit takeoffs", role=ctx.role)
     reg = _registry(registry)
     task = _load_task(conn, ctx, task_id)
+    plan_notes: list[str] = []
+    unchecked = False
+    given = dict(answers) if isinstance(answers, dict) else {}
+    if from_plans and not cannot_measure:
+        from estimator.building import trades
+        if task["module_id"] not in trades.TRADES:
+            raise InvalidInput(f"the plans don't answer {task['module_id']} yet (they answer "
+                               f"{', '.join(trades.TRADES)}); give the answers or use from_measurements",
+                               task_id=task["id"], module_id=task["module_id"])
+        found = trades.answers(conn, ctx, task["module_id"], estimate_id=task["estimate_id"],
+                               plan_set_id=plan_set_id, height_ft=height_ft, include_proposed=include_proposed)
+        if not found["answers"] and not answers and not from_measurements:
+            raise InvalidInput(f"the plans don't answer any {task['module_id']} quantities yet: "
+                               + "; ".join(found.get("notes") or ["read the plans first"]), task_id=task["id"],
+                               notes=found.get("notes", []))
+        plan_notes = list(found.get("notes") or [])
+        unchecked = bool(found.get("waiting")) or bool(include_proposed)
+        answers = {**found["answers"], **given}
+        note = "; ".join([x for x in [note, "from the plans (" + found.get("source", "plans") + ")"] if x])
     if from_measurements and not cannot_measure:
         from estimator.takeoff import measurements
         approved = measurements.approved_answers(conn, ctx, task["estimate_id"], task["module_id"], reg)
@@ -261,7 +292,7 @@ def submit_takeoff(conn, ctx: RequestContext, task_id: int, answers: dict | None
         if not found and not answers:
             raise InvalidInput(f"there are no approved measurements for {task['module_id']} yet; approve some with "
                                "takeoff_confirm, or give the answers", task_id=task["id"])
-        answers = {**found, **(answers or {})}
+        answers = {**(answers or {}), **found, **given}
     if task["state"] not in ("running", "needs_review"):
         hint = {"queued": "it's waiting for " + ", ".join(task["depends_on"]),
                 "completed": "it's already approved; start a new run or revise the estimate to change it",
@@ -288,7 +319,9 @@ def submit_takeoff(conn, ctx: RequestContext, task_id: int, answers: dict | None
     cfg = get_config(conn, ctx.company_id, mod.id, reg)
     merged = {**cfg["defaults"], **answers}
     stored = _check_answers(mod, merged)
-    auto = cfg["auto_advance"] and confidence is not None and confidence >= cfg["confidence_threshold"]
+    # Counts with symbols nobody has checked yet always wait for a person, even with auto-advance on.
+    auto = cfg["auto_advance"] and confidence is not None and confidence >= cfg["confidence_threshold"] \
+        and not unchecked
     with service.transaction(conn):
         _set_task(conn, task["id"], state="needs_review", proposed_json=json.dumps(merged), confidence=confidence,
                   submitted_by=ctx.actor, note=note, error=None)
@@ -299,8 +332,13 @@ def submit_takeoff(conn, ctx: RequestContext, task_id: int, answers: dict | None
         out = _approve(conn, ctx, task["id"], merged, reg, reviewer=f"auto-advance ({confidence}% ≥ "
                                                                     f"{cfg['confidence_threshold']}%)")
         out["auto_approved"] = True
+        if plan_notes:
+            out["plan_notes"] = plan_notes
         return out
-    return _task_result(conn, ctx, task["id"])
+    out = _task_result(conn, ctx, task["id"])
+    if plan_notes:
+        out["plan_notes"] = plan_notes
+    return out
 
 
 def _approve(conn, ctx, task_id: int, answers: dict, reg, reviewer: str) -> dict:
@@ -372,7 +410,8 @@ def _next_action(t: dict) -> str:
     m = t["module_id"].replace("_", " ")
     return {
         "queued": f"waits for {', '.join(d.replace('_', ' ') for d in t['depends_on'])}",
-        "running": (f"measure {m} from the plans and submit it (runner_submit_takeoff task_id={t['id']})"
+        "running": (f"measure {m} from the plans and submit it (runner_submit_takeoff task_id={t['id']}"
+                    + (", from_plans=true once the plans are read" if t["module_id"] in plan_trades() else "") + ")"
                     + (f"; reviewer said: {t['note']}" if t["note"] else "")),
         "needs_review": f"a person checks the {m} quantities (runner_review_task task_id={t['id']}, approve=true)",
         "completed": "done",

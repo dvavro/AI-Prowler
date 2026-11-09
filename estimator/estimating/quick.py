@@ -161,6 +161,10 @@ def answer(conn, ctx: RequestContext, estimate_id: int, module_id: str, answers:
         service._check_writable(conn, ctx, estimate_id, rev, service.QUICK_ROLES)
         seeded = ensure_sample_prices(conn, ctx.company_id, mod, actor=ctx.actor)
         sid = service._section_id(conn, ctx, estimate_id, module_id, mod.version)
+        hand = conn.execute("SELECT COUNT(*) FROM line_items WHERE trade_section_id = ? AND override_by IS NOT NULL",
+                            (sid,)).fetchone()[0]
+        if hand:
+            warnings.append(f"{hand} hand change(s) on the old {mod.name} lines were replaced by the new pricing")
         conn.execute("DELETE FROM line_items WHERE trade_section_id = ?", (sid,))
         conn.execute("UPDATE trade_sections SET params_json = ?, module_version = ?, needs_reprice = 0 WHERE id = ?",
                      (json.dumps(stored), mod.version, sid))

@@ -85,9 +85,11 @@ def _load_viewport(conn, ctx, viewport_id: int) -> dict:
 # ---------------------------------------------------------------- upload
 
 def upload(conn, ctx: RequestContext, estimate_id: int, file_path: str, supersedes_plan_set_id: int | None = None,
-           confirm: bool = False) -> dict:
-    """Attach a plan file (PDF, image, DXF, DWG) to an estimate after checking it. Asks first."""
+           confirm: bool = False, design_firm: str | None = None) -> dict:
+    """Attach a plan file (PDF, image, DXF, DWG) to an estimate after checking it. Asks first.
+    design_firm: the architect or engineer who drew it (a revision keeps the firm of the set it replaces)."""
     _role(ctx, UPLOAD_ROLES, "upload plans")
+    firm = _clean_firm(design_firm) if design_firm else None
     est = service._load_row(conn, ctx, int(estimate_id))
     checked = uploads.check_file(file_path)
     dup = conn.execute("SELECT id FROM plan_sets WHERE company_id = ? AND estimate_id = ? AND sha256 = ?",
@@ -101,9 +103,16 @@ def upload(conn, ctx: RequestContext, estimate_id: int, file_path: str, supersed
         if prev["estimate_id"] != est["id"]:
             raise InvalidInput("a revised plan set must replace one on the same estimate")
         revision = prev["revision"] + 1
+    firm_source = "typed" if firm else None
+    if firm:
+        firm = _known_spelling(conn, ctx, firm)
+    elif prev and prev.get("design_firm"):
+        firm, firm_source = prev["design_firm"], f"plan set {prev['id']}"
     summary = {"file": checked["name"], "file_type": checked["file_type"],
                "size_mb": round(checked["size"] / (1024 * 1024), 2), "revision": revision,
                "warnings": checked["warnings"]}
+    if firm:
+        summary["design_firm"] = firm
     _confirm(confirm, f"Attach {checked['name']} ({checked['file_type'].upper()}, {summary['size_mb']} MB) to "
              f"estimate {est['id']}" + (f" as revision {revision} of plan set {prev['id']}" if prev else "") + "?",
              **summary)
@@ -122,9 +131,11 @@ def upload(conn, ctx: RequestContext, estimate_id: int, file_path: str, supersed
             shutil.copy2(checked["path"], dest)
         except OSError as exc:
             raise InvalidInput(f"the file couldn't be copied into the Estimator's folder: {exc}") from None
-        conn.execute("UPDATE plan_sets SET file_path = ? WHERE id = ?", (str(dest), plan_set_id))
+        conn.execute("UPDATE plan_sets SET file_path = ?, design_firm = ?, design_firm_source = ? WHERE id = ?",
+                     (str(dest), firm, firm_source, plan_set_id))
         service._log(conn, ctx, est["id"], "plan_uploaded",
-                     {"plan_set_id": plan_set_id, "file": checked["name"], "revision": revision})
+                     {"plan_set_id": plan_set_id, "file": checked["name"], "revision": revision,
+                      "design_firm": firm})
     out = {"ok": True, "plan_set_id": plan_set_id, "estimate_id": est["id"], "status": "uploaded", **summary,
            "next": "plan_process to read the sheets (needs the plan engine), then plan_get_sheets"}
     if ctx.mode == "server":                       # heavy work: queued for a processing PC (spec: compute limits)
@@ -133,6 +144,63 @@ def upload(conn, ctx: RequestContext, estimate_id: int, file_path: str, supersed
         out.update(queued_for=q["queued_for"], pcs_online=q["pcs_online"],
                    next=f"it's queued for plan processing on {q['queued_for']}'s PC; plan_status shows progress")
     return out
+
+
+# ---------------------------------------------------------------- design firm
+
+FIRM_MAX = 120
+
+
+def _clean_firm(name) -> str:
+    firm = " ".join(str(name or "").split())
+    if not firm:
+        raise InvalidInput("give the design firm's name", field="design_firm")
+    if len(firm) > FIRM_MAX:
+        raise InvalidInput(f"a firm name is at most {FIRM_MAX} characters", field="design_firm")
+    return firm
+
+
+def _known_spelling(conn, ctx: RequestContext, firm: str) -> str:
+    """The same firm typed differently ("smith & co" / "Smith & Co") is kept as one firm: the first spelling wins."""
+    row = conn.execute("SELECT design_firm FROM plan_sets WHERE company_id = ? AND design_firm IS NOT NULL AND"
+                       " lower(design_firm) = lower(?) ORDER BY id LIMIT 1", (ctx.company_id, firm)).fetchone()
+    return row["design_firm"] if row else firm
+
+
+def design_firms(conn, ctx: RequestContext) -> dict:
+    """Every design firm on the company's plan sets, with how many sets and estimates each has."""
+    rows = [dict(r) for r in conn.execute(
+        "SELECT design_firm AS name, COUNT(*) AS plan_sets, COUNT(DISTINCT estimate_id) AS estimates,"
+        " MAX(created_at) AS last_seen FROM plan_sets WHERE company_id = ? AND design_firm IS NOT NULL"
+        " GROUP BY design_firm ORDER BY lower(design_firm)", (ctx.company_id,))]
+    unset = conn.execute("SELECT COUNT(*) FROM plan_sets WHERE company_id = ? AND design_firm IS NULL",
+                         (ctx.company_id,)).fetchone()[0]
+    return {"ok": True, "firms": rows, "count": len(rows), "plan_sets_without_firm": unset}
+
+
+def set_design_firm(conn, ctx: RequestContext, plan_set_id: int, design_firm: str | None, *,
+                    source: str = "typed", confirm: bool = False) -> dict:
+    """Record (or clear, with an empty name) the architect or engineer who drew a plan set. Symbol learning keeps a
+    profile per firm, so the next set from the same firm starts from what was learned. Asks first."""
+    _role(ctx, EDIT_ROLES, "set a plan set's design firm")
+    ps = load_plan_set(conn, ctx, plan_set_id)
+    firm = _known_spelling(conn, ctx, _clean_firm(design_firm)) if design_firm not in (None, "") else None
+    if firm == ps.get("design_firm"):
+        return {"ok": True, "plan_set_id": ps["id"], "design_firm": firm, "changed": False}
+    others = conn.execute("SELECT COUNT(*) FROM plan_sets WHERE company_id = ? AND design_firm = ? AND id != ?",
+                          (ctx.company_id, firm, ps["id"])).fetchone()[0] if firm else 0
+    what = (f"Record {firm} as the design firm of plan set {ps['id']} ({ps['original_name']})"
+            if firm else f"Clear the design firm of plan set {ps['id']} (was {ps.get('design_firm')})")
+    if firm and ps.get("design_firm"):
+        what += f", replacing {ps['design_firm']}"
+    _confirm(confirm, what + "?", design_firm=firm, previous=ps.get("design_firm"), same_firm_plan_sets=others)
+    with service.transaction(conn):
+        conn.execute("UPDATE plan_sets SET design_firm = ?, design_firm_source = ? WHERE id = ?",
+                     (firm, source if firm else None, ps["id"]))
+        service._log(conn, ctx, ps["estimate_id"], "plan_design_firm_set",
+                     {"plan_set_id": ps["id"], "design_firm": firm}, before={"design_firm": ps.get("design_firm")})
+    return {"ok": True, "plan_set_id": ps["id"], "design_firm": firm, "previous": ps.get("design_firm"),
+            "changed": True, "same_firm_plan_sets": others}
 
 
 def list_plan_sets(conn, ctx: RequestContext, estimate_id: int) -> dict:

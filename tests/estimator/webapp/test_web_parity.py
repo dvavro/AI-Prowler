@@ -8,12 +8,10 @@ PENDING; the test fails when one of them appears, so the list stays honest.
 from estimator.api import nav
 from estimator.mcp_tools import est_tools
 
-# Spec'd for the Projects screen, not built yet as standalone tools (the Director has est_director_add_trade).
-PENDING = {"est_add_trade", "est_remove_trade",
-           # plan_compare_revisions is built (Coder 1 Sprint 24); the Plans screen's revision overlay is Coder 2's.
-           # Estimates screen (Sprint 8): assemblies and editing a line come with Coder 1's assemblies work; until
-           # then a line is changed by re-pricing its trade or by a hand-entered line.
-           "est_apply_assembly", "est_update_line_item"}
+# Spec'd tools a screen lists before they're built. Empty now: est_add_trade, est_remove_trade, est_apply_assembly and
+# est_update_line_item came with Coder 1 Sprint 25; plan_compare_revisions with Sprint 24 (the Plans screen's revision
+# overlay is Coder 2's).
+PENDING: set[str] = set()
 
 
 def _registered() -> set[str]:

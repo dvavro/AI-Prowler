@@ -755,6 +755,29 @@ ALTER TABLE plan_sets ADD COLUMN server_job TEXT;
 ALTER TABLE company_profile ADD COLUMN server_small_processing INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE company_profile ADD COLUMN server_small_max_sheets INTEGER NOT NULL DEFAULT 10
 """),
+    (17, "design firm on plan sets, assembly uses, line overrides", """
+ALTER TABLE plan_sets ADD COLUMN design_firm TEXT;
+ALTER TABLE plan_sets ADD COLUMN design_firm_source TEXT;
+CREATE INDEX ix_plan_sets_firm ON plan_sets (company_id, design_firm);
+
+CREATE TABLE assembly_uses (
+    id                INTEGER PRIMARY KEY,
+    company_id        TEXT NOT NULL,
+    estimate_id       INTEGER NOT NULL REFERENCES estimates (id) ON DELETE CASCADE,
+    trade_section_id  INTEGER NOT NULL REFERENCES trade_sections (id) ON DELETE CASCADE,
+    assembly_id       TEXT NOT NULL,          -- module id @ version: the module's line rules are its assembly
+    module_id         TEXT NOT NULL,
+    params_json       TEXT NOT NULL,          -- every answer used, measured or typed
+    sources_json      TEXT NOT NULL,          -- per question: measured (with measurement ids), typed or default
+    measurement_ids   TEXT NOT NULL DEFAULT '[]',
+    applied_by        TEXT NOT NULL,
+    applied_at        TEXT NOT NULL
+);
+CREATE INDEX ix_assembly_uses_section ON assembly_uses (trade_section_id);
+
+ALTER TABLE line_items ADD COLUMN override_reason TEXT;
+ALTER TABLE line_items ADD COLUMN override_at TEXT
+"""),
 ]
 
 
