@@ -41,6 +41,16 @@ WIDTH_KEYS = re.compile(r"^(?:W|WD|WIDTH)\.?$", re.I)
 HIGH_KEYS = re.compile(r"^(?:H|HT|HGT|HEIGHT)\.?$", re.I)
 SIZE_KEYS = re.compile(r"SIZE|DIM", re.I)
 WALL_TRADES = ("framing", "drywall", "painting", "insulation", "flooring")
+# Sprint 14: the other trades the model answers - windows and doors (schedule linking), siding (elevations), HVAC (area).
+MODEL_TRADES = WALL_TRADES + ("windows_doors", "siding", "hvac")
+TYPE_KEYS = re.compile(r"TYPE|DESC|REMARK|OPERATION|STYLE|MATERIAL", re.I)
+QTY_KEYS = re.compile(r"^(?:QTY|QUANTITY|NO\.?|COUNT)$", re.I)
+WINDOW_SMALL_SQFT = 15.0                    # the windows and doors trade's line between small and large windows
+GARAGE_RE = re.compile(r"GARAGE|OVERHEAD|\bO\.?H\.?\b|ROLL[- ]?UP", re.I)
+PATIO_RE = re.compile(r"SLID|PATIO|FRENCH|GLIDER|BIFOLD EXT|MULTI[- ]?SLIDE", re.I)
+UNCONDITIONED_RE = re.compile(r"GARAGE|PORCH|PATIO|DECK|BALCONY|LANAI|CARPORT|ATTIC|CRAWL|BREEZEWAY|SCREEN|STOOP|"
+                              r"TERRACE|VERANDA|PERGOLA|COVERED", re.I)
+ALL_SIDES = 4                               # elevations of every side: a house has four
 
 
 # ---------------------------------------------------------------------------------------------------- small helpers
@@ -233,10 +243,12 @@ def build(conn, ctx: RequestContext, *, estimate_id: int | None = None, plan_set
 
     # Door and window sizes from their schedules, by tag object.
     size_by_obj: dict[int, dict] = {}
+    marks: list[dict] = []                                     # Sprint 14: each door and window schedule row
     for r in rows:
         if r["schedule_type"] not in ("door", "window"):
             continue
-        w = h = None
+        w = h = qty = None
+        types = []
         for k, v in r["fields"].items():
             k2 = k.strip()
             if WIDTH_KEYS.match(k2):
@@ -246,10 +258,19 @@ def build(conn, ctx: RequestContext, *, estimate_id: int | None = None, plan_set
             elif SIZE_KEYS.search(k2):
                 sw, sh = _size_ft(v)
                 w, h = w or sw, h or sh
+            elif QTY_KEYS.match(k2) and str(v or "").strip().isdigit():
+                qty = int(str(v).strip())
+            elif TYPE_KEYS.search(k2) and v:
+                types.append(str(v).strip())
+        typ = " ".join(types)[:80] or None
+        marks.append({"schedule_row_id": r["id"], "mark": r["mark"], "kind": r["schedule_type"], "width_ft": w,
+                      "height_ft": h, "type": typ, "schedule_qty": qty, "on_plans": 0})
         for oid in r["linked"]:
-            size_by_obj[int(oid)] = {"width_ft": w, "height_ft": h, "schedule_row_id": r["id"], "mark": r["mark"]}
+            size_by_obj[int(oid)] = {"width_ft": w, "height_ft": h, "schedule_row_id": r["id"], "mark": r["mark"],
+                                     "type": typ}
 
     out_rooms, out_walls, out_openings, not_measured, corners = [], [], [], 0, 0
+    footprint = (0, 0)                                             # outside and inside corners of the building
     for s, objs, rooms in chosen:
         factors = _factors(conn, s)
         # ---- rooms
@@ -305,6 +326,9 @@ def build(conn, ctx: RequestContext, *, estimate_id: int | None = None, plan_set
             hs = [rm["height_ft"] for rm in sheet_rooms if rm["id"] in w["rooms"]]
             w["height_ft"] = _r(max(hs) if hs else default_h, 2)
         corners += _corners([w for w in sheet_walls if w["type"] != "other"])
+        out_c, in_c = _footprint_corners(sheet_rooms, sheet_walls, factors)
+        if out_c + in_c > footprint[0] + footprint[1]:                 # the biggest floor's outline (stories line up)
+            footprint = (out_c, in_c)
         # ---- openings (door and window tags)
         for o in objs:
             if o["kind"] != "text" or not o["tag"] or o["label"] not in ("door tag", "window tag"):
@@ -324,8 +348,9 @@ def build(conn, ctx: RequestContext, *, estimate_id: int | None = None, plan_set
             op = {"id": o["id"], "sheet_id": s["id"], "kind": kind, "mark": o["tag"], "width_ft": _r(wd, 2),
                   "height_ft": _r(ht, 2), "area_sqft": _r(wd * ht), "size_from":
                       "schedule" if size.get("width_ft") and size.get("height_ft") else "standard size",
-                  "schedule_row_id": size.get("schedule_row_id"),
-                  "wall_id": best[1]["id"] if best else None, "rooms": list(best[1]["rooms"]) if best else []}
+                  "schedule_row_id": size.get("schedule_row_id"), "type": size.get("type"),
+                  "wall_id": best[1]["id"] if best else None, "rooms": list(best[1]["rooms"]) if best else [],
+                  "wall_type": best[1]["type"] if best else None}
             if best:
                 best[1]["openings"].append(o["id"])
             for rm in sheet_rooms:
@@ -356,16 +381,38 @@ def build(conn, ctx: RequestContext, *, estimate_id: int | None = None, plan_set
     if std:
         notes.append(f"{len(std)} opening(s) have no size in a schedule; a standard size is used.")
 
+    # Sprint 14: door and window schedule linking - how many of each mark are tagged on the floor plans.
+    for m in marks:
+        m["on_plans"] = sum(1 for op in out_openings if op["schedule_row_id"] == m["schedule_row_id"])
+        for k in ("width_ft", "height_ft"):
+            m[k] = _r(m[k], 2) if m[k] else None
+    untagged = [m for m in marks if not m["on_plans"]]
+    if untagged:
+        notes.append("not tagged on the floor plans, so not counted: " + ", ".join(
+            f"{m['mark']}" + (f" ({m['schedule_qty']} in the schedule)" if m["schedule_qty"] else "") for m in untagged))
+    differs = [m for m in marks if m["on_plans"] and m["schedule_qty"] and m["schedule_qty"] != m["on_plans"]]
+    for m in differs:
+        notes.append(f"{m['mark']}: {m['on_plans']} tagged on the plans but {m['schedule_qty']} in the schedule - check")
+
+    # Sprint 14: exterior elevations (every sheet of the current plan sets).
+    from estimator.building import elevations as elev
+    ev = elev.read(conn, sheets, lambda s: _factors(conn, s))
+    notes += ev["notes"]
+    if ev["elevations"] and len(ev["elevations"]) < ALL_SIDES:
+        notes.append(f"only {len(ev['elevations'])} exterior elevation(s) found; siding and exterior paint use the floor "
+                     "plans' outside walls until every side is drawn")
+
     for x in out_rooms:
         x.pop("_poly"), x.pop("_vp")
     for x in out_walls:
         x.pop("_pts"), x.pop("_f"), x.pop("_vp")
     totals = _totals(out_rooms, out_walls, out_openings, default_h, corners)
-    key = hashlib.sha1(json.dumps({"r": out_rooms, "w": out_walls, "o": out_openings}, sort_keys=True,
-                                  default=str).encode()).hexdigest()[:12]
+    totals.update(_more_totals(out_rooms, out_openings, ev["elevations"], footprint))
+    key = hashlib.sha1(json.dumps({"r": out_rooms, "w": out_walls, "o": out_openings, "e": ev["elevations"]},
+                                  sort_keys=True, default=str).encode()).hexdigest()[:12]
     return {"ok": True, "plan_set_ids": ps_ids, "model_key": key, "rooms": out_rooms, "walls": out_walls,
-            "openings": out_openings, "totals": totals, "skipped_sheets": skipped, "notes": notes,
-            "trades": list(WALL_TRADES),
+            "openings": out_openings, "elevations": ev["elevations"], "schedule_marks": marks, "totals": totals,
+            "skipped_sheets": skipped, "notes": notes, "trades": list(MODEL_TRADES),
             "summary": (f"{len(out_rooms)} room(s), {totals['floor_sqft']:g} sq ft; walls {totals['exterior_wall_lf']:g} lf "
                         f"exterior and {totals['interior_wall_lf']:g} lf interior; {totals['doors']} door(s) and "
                         f"{totals['windows']} window(s).")}
@@ -413,6 +460,87 @@ def _totals(rooms, walls, openings, default_h, corners: int) -> dict:
         "height_ft": _r(max(set(heights), key=lambda h: (heights.count(h), h)), 2),
         "corners": corners,
     }
+
+
+def _door_class(op: dict) -> str:
+    """Which windows-and-doors question a door answers: garage, patio (sliding / French), exterior or interior."""
+    text = f"{op.get('type') or ''} {op.get('mark') or ''}"
+    if GARAGE_RE.search(text) or op["width_ft"] >= 8:
+        return "garage_doors"
+    if PATIO_RE.search(text) or (op["width_ft"] >= 5 and op.get("wall_type") == "exterior"):
+        return "patio_doors"
+    if op.get("wall_type") == "exterior" or re.search(r"\bEXT", text, re.I):
+        return "exterior_doors"
+    return "interior_doors"
+
+
+def _more_totals(rooms, openings, elevs, footprint) -> dict:
+    """Sprint 14 totals: windows and doors by kind, conditioned area, the outline's corners and the elevations."""
+    wd = {"windows_small": 0, "windows_large": 0, "patio_doors": 0, "exterior_doors": 0, "interior_doors": 0,
+          "garage_doors": 0}
+    for op in openings:
+        if op["kind"] == "window":
+            wd["windows_large" if op["area_sqft"] >= WINDOW_SMALL_SQFT else "windows_small"] += 1
+        else:
+            wd[_door_class(op)] += 1
+    ext_ops = [op for op in openings if op.get("wall_type") == "exterior"]
+    return {
+        **wd,
+        "conditioned_sqft": _r(sum(rm["area_sqft"] for rm in rooms if not UNCONDITIONED_RE.search(rm["name"] or ""))),
+        "unconditioned_sqft": _r(sum(rm["area_sqft"] for rm in rooms if UNCONDITIONED_RE.search(rm["name"] or ""))),
+        "outside_corners": footprint[0], "inside_corners": footprint[1],
+        "exterior_openings": len(ext_ops), "exterior_openings_sqft": _r(sum(op["area_sqft"] for op in ext_ops)),
+        "elevations": len(elevs),
+        "elevation_wall_sqft": _r(sum(e["wall_sqft"] for e in elevs)),
+        "elevation_openings": sum(len(e["openings"]) for e in elevs),
+        "elevation_net_sqft": _r(sum(e["net_sqft"] for e in elevs)),
+        "stories": max([e["stories"] for e in elevs] or [1]),
+    }
+
+
+def _footprint_corners(rooms, walls, factors) -> tuple[int, int]:
+    """(outside, inside) corners of the building's outline on one floor plan: the rooms joined with their walls
+    (each room grown by a wall's thickness), and each turn of the outline that's more than 20 degrees."""
+    try:
+        from shapely.geometry import Polygon
+        from shapely.ops import unary_union
+    except ImportError:
+        return 0, 0
+    by_vp: dict = {}
+    for rm in rooms:
+        by_vp.setdefault(rm["_vp"], []).append(rm)
+    if not by_vp:
+        return 0, 0
+    vp, rms = max(by_vp.items(), key=lambda kv: sum(r["area_sqft"] for r in kv[1]))
+    f = factors.get(vp)
+    if not f:
+        return 0, 0
+    ts = [w["thickness_in"] for w in walls if w["_vp"] == vp] or [DEFAULT_THICKNESS_IN]
+    t = (max(ts) / 12.0) / f
+    try:
+        shape = unary_union([Polygon(r["_poly"]).buffer(t, join_style=2) for r in rms])
+    except Exception:  # noqa: BLE001 - a broken room outline: no corners rather than a wrong count
+        return 0, 0
+    if shape.is_empty:
+        return 0, 0
+    shape = max(getattr(shape, "geoms", [shape]), key=lambda g: g.area)
+    ring = list(shape.simplify(t / 2, preserve_topology=True).exterior.coords)[:-1]
+    n = len(ring)
+    area2 = sum(ring[i][0] * ring[(i + 1) % n][1] - ring[(i + 1) % n][0] * ring[i][1] for i in range(n))
+    orient = 1 if area2 > 0 else -1
+    out_c = in_c = 0
+    for i in range(n):
+        (ax, ay), (bx, by), (cx, cy) = ring[i - 1], ring[i], ring[(i + 1) % n]
+        v1, v2 = (bx - ax, by - ay), (cx - bx, cy - by)
+        cross = v1[0] * v2[1] - v1[1] * v2[0]
+        dot = v1[0] * v2[0] + v1[1] * v2[1]
+        if abs(math.degrees(math.atan2(cross, dot))) < 20:
+            continue
+        if cross * orient > 0:
+            out_c += 1
+        else:
+            in_c += 1
+    return out_c, in_c
 
 
 def _corners(walls) -> int:
@@ -470,6 +598,13 @@ def answers_for(model: dict, module_id: str) -> dict:
                "trim_lf": t["base_lf"]}
         src = {"wall_sqft": "room wall faces x ceiling height, less openings (the drywall surfaces)",
                "ceiling_sqft": "room floor areas", "doors": "door tags", "trim_lf": "baseboard: room perimeters less doors"}
+        # Sprint 14: the outside walls - from the elevations when every side is drawn (real heights, no gables).
+        if t["elevations"] >= ALL_SIDES:
+            ans["exterior_sqft"] = t["elevation_net_sqft"]
+            src["exterior_sqft"] = f"{t['elevations']} exterior elevations, less their doors and windows"
+        elif t["exterior_wall_lf"]:
+            ans["exterior_sqft"] = t["exterior_wall_sqft"]
+            src["exterior_sqft"] = "outside walls on the floor plans x ceiling height, less their doors and windows"
     elif module_id == "insulation":
         ans = {"wall_sqft": t["exterior_wall_sqft"], "attic_sqft": t["ceiling_sqft"]}
         src = {"wall_sqft": "exterior walls x height, less their doors and windows",
@@ -477,7 +612,42 @@ def answers_for(model: dict, module_id: str) -> dict:
     elif module_id == "flooring":
         ans = {"area_sqft": t["floor_sqft"], "baseboard_lf": t["base_lf"]}
         src = {"area_sqft": "room floor areas", "baseboard_lf": "room perimeters less door widths"}
+    elif module_id == "windows_doors":
+        keys = ("windows_small", "windows_large", "patio_doors", "exterior_doors", "interior_doors", "garage_doors")
+        ans = {k: t[k] for k in keys if t[k]}
+        src = {k: v for k, v in {
+            "windows_small": "window tags, under 15 sq ft by their schedule size",
+            "windows_large": "window tags, 15 sq ft and over by their schedule size",
+            "patio_doors": "door tags typed sliding, French or patio (or 5 ft and wider in an outside wall)",
+            "exterior_doors": "door tags in outside walls", "interior_doors": "door tags in inside walls",
+            "garage_doors": "door tags typed garage or overhead (or 8 ft and wider)"}.items() if k in ans}
+        if not model["schedule_marks"]:
+            notes.append("no door or window schedule found: sizes are standard and types unknown")
+    elif module_id == "siding":
+        if t["elevations"] >= ALL_SIDES:
+            ans = {"wall_sqft": t["elevation_wall_sqft"], "openings": t["elevation_openings"]}
+            src = {"wall_sqft": f"{t['elevations']} exterior elevations, floor line to plate line (gables left out)",
+                   "openings": "doors and windows drawn on the elevations"}
+        else:
+            ans = {"wall_sqft": _r(t["exterior_wall_sqft"] + t["exterior_openings_sqft"]),
+                   "openings": t["exterior_openings"]}
+            src = {"wall_sqft": "outside walls on the floor plans x ceiling height (no gables)",
+                   "openings": "door and window tags in outside walls"}
+        ans["stories"] = "two" if t["stories"] >= 2 else "one"
+        src["stories"] = "plate lines on the elevations" if t["elevations"] else "one floor unless the elevations say more"
+        if t["outside_corners"]:
+            ans.update(outside_corners=t["outside_corners"], inside_corners=t["inside_corners"],
+                       walls="complex" if t["inside_corners"] >= 2 or t["outside_corners"] > 6 else "simple")
+            src.update(outside_corners="the building's outline on the floor plan",
+                       inside_corners="the building's outline on the floor plan",
+                       walls="simple: a plain box (4-6 outside corners, at most 1 inside)")
+    elif module_id == "hvac":
+        ans = {"conditioned_sqft": t["conditioned_sqft"]} if t["conditioned_sqft"] else {}
+        src = {"conditioned_sqft": "room floor areas, not counting garages, porches, patios and other outside rooms"} \
+            if ans else {}
+        if t["unconditioned_sqft"]:
+            notes.append(f"{t['unconditioned_sqft']:g} sq ft of garages, porches and similar rooms isn't heated or cooled")
     else:
-        raise InvalidInput(f"the wall-and-room model gives answers for {', '.join(WALL_TRADES)}", module_id=module_id)
+        raise InvalidInput(f"the wall-and-room model gives answers for {', '.join(MODEL_TRADES)}", module_id=module_id)
     return {"ok": True, "module_id": module_id, "model_key": model["model_key"], "answers": ans, "from": src,
             "notes": notes + model["notes"]}

@@ -2,7 +2,9 @@
 
 - framing, drywall, painting, insulation, flooring: from the shared wall-and-room model (building.model), so they
   always agree with each other;
-- electrical, plumbing: from the symbols counted on the plans (symbol_detections), each item type counted toward its
+- Sprint 14: windows and doors (door and window tags linked to their schedules), siding (elevations, else the floor
+  plans' outside walls; corners from the building's outline) and HVAC (the area to heat and cool) from the same model;
+- electrical, plumbing, HVAC: from the symbols counted on the plans (symbol_detections), each item type counted toward its
   trade question (plan_engine.symbol_library.FEEDS). Only symbols a person approved count unless include_proposed is
   set; the ones still to check are reported so nothing is priced from an unchecked count by surprise.
 
@@ -15,8 +17,8 @@ from estimator.building import model as building
 from estimator.context import RequestContext
 from estimator.errors import InvalidInput
 
-SYMBOL_TRADES = ("electrical", "plumbing")
-TRADES = building.WALL_TRADES + SYMBOL_TRADES
+SYMBOL_TRADES = ("electrical", "plumbing", "hvac")
+TRADES = building.MODEL_TRADES + tuple(t for t in SYMBOL_TRADES if t not in building.MODEL_TRADES)
 
 
 def _module_questions(module_id: str) -> dict | None:
@@ -57,24 +59,27 @@ def symbol_answers(conn, ctx: RequestContext, module_id: str, plan_set_ids: list
             c["trade"] = c["trade"] or r["trade"]
     answers, src, waiting, not_counted = {}, {}, {}, {}
     for it, c in sorted(counts.items()):
-        feed = lib.FEEDS.get(it)
+        feeds = [f for f in lib.feeds_of(it) if f[0] == module_id]
         n = c["approved"] + (c["proposed"] if include_proposed else 0)
-        if not feed or feed[0] != module_id:
-            if it != "unknown" and c["trade"] == module_id:          # this trade's, but not one of its questions
+        if not feeds:
+            if it != "unknown" and lib.module_of_trade(c["trade"]) == module_id:   # this trade's, not one of its questions
                 not_counted[it] = c["approved"] + c["proposed"]
             continue
-        qid = feed[1]
-        if not include_proposed and c["proposed"]:
-            waiting[qid] = waiting.get(qid, 0) + c["proposed"]
-        if len(feed) == 3:                                   # a choice: the water heater kind
+        for feed in feeds:
+            qid = feed[1]
+            if len(feed) == 3:                               # a choice (water heater kind, HVAC system)
+                if n:
+                    rank = {v: i for i, v in enumerate(lib.CHOICE_ORDER.get(qid, ()))}
+                    current = answers.get(qid)
+                    if current is None or rank.get(feed[2], 99) < rank.get(current, 99):
+                        answers[qid] = feed[2]
+                    src.setdefault(qid, []).append(f"{n} {it.replace('_', ' ')}")
+                continue
+            if not include_proposed and c["proposed"]:
+                waiting[qid] = waiting.get(qid, 0) + c["proposed"]
             if n:
-                current = answers.get(qid)
-                answers[qid] = "tankless" if "tankless" in (feed[2], current) else feed[2]
+                answers[qid] = answers.get(qid, 0) + n
                 src.setdefault(qid, []).append(f"{n} {it.replace('_', ' ')}")
-            continue
-        if n:
-            answers[qid] = answers.get(qid, 0) + n
-            src.setdefault(qid, []).append(f"{n} {it.replace('_', ' ')}")
     notes = []
     if waiting:
         notes.append("still to check in Reviews (not counted yet): " +
@@ -101,15 +106,29 @@ def answers(conn, ctx: RequestContext, module_id: str, *, estimate_id: int | Non
     if module_id not in TRADES:
         raise InvalidInput(f"answers from the plans are for {', '.join(TRADES)}", module_id=module_id,
                            valid=list(TRADES))
-    if module_id in building.WALL_TRADES:
+    if module_id in building.MODEL_TRADES:
         m = building.build(conn, ctx, estimate_id=estimate_id, plan_set_id=plan_set_id, height_ft=height_ft)
-        out = building.answers_for(m, module_id)
-        out.update(plan_set_ids=m["plan_set_ids"], source="wall-and-room model", summary=m["summary"])
-    else:
-        sets = building._plan_sets(conn, ctx, plan_set_id, estimate_id)
-        out = symbol_answers(conn, ctx, module_id, [p["id"] for p in sets], include_proposed)
-        out.update(plan_set_ids=[p["id"] for p in sets], source="symbols counted on the plans")
+        return _fit(module_id, _one(conn, ctx, m, module_id, include_proposed))
+    sets = building._plan_sets(conn, ctx, plan_set_id, estimate_id)
+    out = symbol_answers(conn, ctx, module_id, [p["id"] for p in sets], include_proposed)
+    out.update(plan_set_ids=[p["id"] for p in sets], source="symbols counted on the plans")
     return _fit(module_id, out)
+
+
+def _one(conn, ctx, m: dict, module_id: str, include_proposed: bool) -> dict:
+    """A model trade's answers; a trade that's also counted from symbols (HVAC) gets both, the symbols adding their
+    questions (registers, returns, thermostats, the system) to the model's (the area to heat and cool)."""
+    out = building.answers_for(m, module_id)
+    out.update(plan_set_ids=m["plan_set_ids"], source="wall-and-room model", summary=m["summary"])
+    if module_id in SYMBOL_TRADES:
+        s = symbol_answers(conn, ctx, module_id, m["plan_set_ids"], include_proposed)
+        for k, v in s["answers"].items():
+            out["answers"].setdefault(k, v)
+            out["from"].setdefault(k, s["from"].get(k, "symbols counted on the plans"))
+        out["notes"] = s["notes"] + out["notes"]
+        out.update(waiting=s["waiting"], counts=s["counts"], include_proposed=include_proposed,
+                   source="wall-and-room model and symbols counted on the plans")
+    return out
 
 
 def all_answers(conn, ctx: RequestContext, *, estimate_id: int | None = None, plan_set_id: int | None = None,
@@ -117,8 +136,9 @@ def all_answers(conn, ctx: RequestContext, *, estimate_id: int | None = None, pl
     """Every plan-read trade's answers at once, all from the same model (so they agree) - the Plan quantities page."""
     m = building.build(conn, ctx, estimate_id=estimate_id, plan_set_id=plan_set_id, height_ft=height_ft)
     out = {}
-    for t in building.WALL_TRADES:
-        out[t] = _fit(t, building.answers_for(m, t))
-    for t in SYMBOL_TRADES:
-        out[t] = _fit(t, symbol_answers(conn, ctx, t, m["plan_set_ids"], include_proposed))
+    for t in TRADES:
+        if t in building.MODEL_TRADES:
+            out[t] = _fit(t, _one(conn, ctx, m, t, include_proposed))
+        else:
+            out[t] = _fit(t, symbol_answers(conn, ctx, t, m["plan_set_ids"], include_proposed))
     return {"ok": True, "model": m, "trades": out}

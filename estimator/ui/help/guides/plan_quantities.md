@@ -9,6 +9,8 @@ When the plans are read, AI-Prowler builds one model of the building: the rooms,
 5. Rooms with no height in the finish schedule use 8 ft. To change that, type a height in **Ceiling height** and click **Work it out again**.
 6. **Each trade's answers** shows what each trade's quick estimate would be asked, and where each answer came from. Electrical and plumbing count the symbols approved in **Reviews**; tick **Count symbols still to check** to include the ones waiting.
 7. **Sheets not counted** lists sheets left out, such as a ceiling plan that draws the same rooms again, or an electrical sheet.
+8. **Door and window schedule** lists each mark with its size and type, and how many are tagged on the floor plans. A mark that isn't tagged (shown in yellow) isn't counted; a count that differs from the schedule's QTY is noted. Windows and doors are counted from these: windows under or over 15 sq ft, sliding and French doors, outside and inside doors, garage doors.
+9. **Exterior elevations** lists each side of the building: its wall from the floor line up to the plate line (gables left out) and the doors and windows drawn on it. When all four sides are drawn, siding and exterior paint use them; otherwise they use the outside walls on the floor plans. Mark the plate line ("T.O. PLATE") on the elevations so the roof isn't counted as wall.
 
 Nothing is saved on this page. To price a trade with these answers, use the Estimate page, or ask your AI.
 

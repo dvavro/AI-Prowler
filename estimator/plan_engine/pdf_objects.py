@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from estimator.drawing_model import geometry as geo
 from estimator.errors import InvalidInput
-from estimator.plan_engine import vectors
+from estimator.plan_engine import elevations, vectors
 from estimator.plan_engine.pdf_pages import Page
 from estimator.plan_engine.titleblock import _inside
 
@@ -50,6 +50,12 @@ def find(page: Page, viewports: list[dict]) -> tuple[list[dict], list[str]]:
         if not segs:
             continue
         ratio = _ratio(vp)
+        # Sprint 14: an exterior elevation gives the outside wall and its openings, never walls or rooms.
+        if elevations.is_exterior_elevation(vp.get("label")):
+            found, enotes = elevations.find(page, vp, segs, ratio)
+            objects += found
+            notes += enotes
+            continue
         walls = vectors.find_walls(segs, ratio)
         objects += vectors.wall_objects(walls, vp["key"], "vector")
         # Room-sized: at least 12 sq ft real (or 1/4 sq in on unscaled paper), at most 70% of the view.

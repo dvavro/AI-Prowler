@@ -23,6 +23,19 @@ SYMBOL_GAP = 0.25            # a gap this big after the first words separates th
 
 # Standard item types (the start of the spec's standard symbol library): (item type, trade, words that must all appear)
 ITEM_TYPES = (
+    # Sprint 14 (HVAC library): before the smoke detectors, diffusers and fans below.
+    ("duct_smoke_detector", "mechanical", ("duct", "smoke")),
+    ("linear_diffuser", "mechanical", ("linear", "diffuser")), ("linear_diffuser", "mechanical", ("slot", "diffuser")),
+    ("floor_register", "mechanical", ("floor", "register")), ("transfer_grille", "mechanical", ("transfer",)),
+    ("mini_split_head", "mechanical", ("mini", "split")), ("mini_split_head", "mechanical", ("minisplit",)),
+    ("mini_split_head", "mechanical", ("ductless",)), ("mini_split_head", "mechanical", ("indoor unit",)),
+    ("heat_pump", "mechanical", ("heat pump",)), ("package_unit", "mechanical", ("package", "unit")),
+    ("package_unit", "mechanical", ("rooftop unit",)), ("condensing_unit", "mechanical", ("condens",)),
+    ("condensing_unit", "mechanical", ("outdoor unit",)), ("air_handler", "mechanical", ("air handl",)),
+    ("air_handler", "mechanical", ("ahu",)), ("furnace", "mechanical", ("furnace",)),
+    ("range_hood", "mechanical", ("range hood",)), ("range_hood", "mechanical", ("hood", "exhaust")),
+    ("dryer_vent", "mechanical", ("dryer", "vent")), ("exhaust_fan", "mechanical", ("bath", "fan")),
+    ("supply_diffuser", "mechanical", ("ceiling", "diffuser")), ("supply_diffuser", "mechanical", ("supply", "register")),
     # Sprint 12 (fuller electrical and plumbing libraries): the specific ones first, the first match wins.
     ("duplex_receptacle_usb", "electrical", ("receptacle", "usb")), ("duplex_receptacle_usb", "electrical", ("outlet", "usb")),
     ("receptacle_dedicated", "electrical", ("dedicated",)), ("ev_charger", "electrical", ("ev charger",)),

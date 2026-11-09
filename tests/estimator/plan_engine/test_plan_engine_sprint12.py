@@ -196,12 +196,13 @@ def test_every_symbol_feeds_a_real_trade_question():                           #
     reg = get_registry()
     assert lib.VERSION >= 2 and len(lib.STANDARD) >= 60
     assert {e["item_type"] for e in lib.STANDARD} >= set(lib.FEEDS)
-    for it, feed in lib.FEEDS.items():
-        qs = {q.id: q for q in reg.get(feed[0]).questions}
-        assert feed[1] in qs, (it, feed)
-        if len(feed) == 3:
-            assert feed[2] in choice_values(qs[feed[1]]), (it, feed)
-        assert lib.BY_TYPE[it]["trade"] == feed[0], it
+    for it in lib.FEEDS:
+        for feed in lib.feeds_of(it):                          # Sprint 14: a symbol can answer two questions
+            qs = {q.id: q for q in reg.get(feed[0]).questions}
+            assert feed[1] in qs, (it, feed)
+            if len(feed) == 3:
+                assert feed[2] in choice_values(qs[feed[1]]), (it, feed)
+            assert lib.module_of_trade(lib.BY_TYPE[it]["trade"]) == feed[0], it   # mechanical symbols price in hvac
     aliases = [a for e in lib.STANDARD for a in e["aliases"]]
     assert len(aliases) == len(set(aliases)), "a short code may name only one symbol"
     assert lib.by_block_name("KITCHENSINK")["item_type"] == "kitchen_sink"

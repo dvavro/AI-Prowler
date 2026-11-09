@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import re
 
-VERSION = 2                         # Sprint 12: fuller electrical and plumbing libraries, and what each one feeds
+VERSION = 3                         # Sprint 12: fuller electrical and plumbing libraries, and what each one feeds
+                                    # Sprint 14: the HVAC library
 
 #  item type, trade, description, OCR aliases, CAD block-name words
 _ROWS = (
@@ -53,6 +54,19 @@ _ROWS = (
     ("exhaust_fan", "mechanical", "Exhaust fan", ("EF",), ("EXHAUST", "EF")),
     ("supply_diffuser", "mechanical", "Supply diffuser", ("SA",), ("DIFFUSER", "SUPPLY")),
     ("return_grille", "mechanical", "Return grille", ("RA",), ("RETURN", "GRILLE")),
+    # Sprint 14: the rest of a house's HVAC
+    ("linear_diffuser", "mechanical", "Linear (slot) diffuser", ("LD",), ("LINEARDIFF", "SLOTDIFF")),
+    ("floor_register", "mechanical", "Floor register", ("FR",), ("FLOORREG", "FLRREG")),
+    ("transfer_grille", "mechanical", "Transfer grille", ("TG",), ("TRANSFER",)),
+    ("mini_split_head", "mechanical", "Mini-split indoor head", ("IDU", "DH"), ("MINISPLIT", "DUCTLESS", "WALLCASSETTE")),
+    ("condensing_unit", "mechanical", "Condensing unit (outdoor)", ("CU", "ACCU", "ODU"), ("CONDENSER", "CONDENSING")),
+    ("heat_pump", "mechanical", "Heat pump (outdoor)", ("HP",), ("HEATPUMP",)),
+    ("air_handler", "mechanical", "Air handler", ("AHU",), ("AIRHANDLER", "AHU")),
+    ("furnace", "mechanical", "Furnace", ("FURN",), ("FURNACE",)),
+    ("package_unit", "mechanical", "Package unit", ("RTU", "PKG"), ("PACKAGEUNIT", "ROOFTOPUNIT", "RTU")),
+    ("duct_smoke_detector", "mechanical", "Duct smoke detector", ("DSD",), ("DUCTSMOKE",)),
+    ("range_hood", "mechanical", "Range hood", ("RH",), ("RANGEHOOD", "HOOD")),
+    ("dryer_vent", "mechanical", "Dryer vent", ("DV",), ("DRYERVENT",)),
     ("water_closet", "plumbing", "Water closet", ("WC",), ("TOILET", "WC", "WATERCLOSET")),
     ("lavatory", "plumbing", "Lavatory", ("LAV",), ("LAV", "LAVATORY")),
     ("sink", "plumbing", "Sink", (), ("SINK",)),
@@ -106,7 +120,32 @@ FEEDS = {
     "dishwasher": ("plumbing", "dishwashers"), "washer_box": ("plumbing", "washers"),
     "hose_bibb": ("plumbing", "hose_bibs"),
     "water_heater": ("plumbing", "water_heater", "tank"), "tankless_water_heater": ("plumbing", "water_heater", "tankless"),
+    # Sprint 14: HVAC. A symbol can answer two questions (a mini-split head is a zone and says what system it is).
+    "supply_diffuser": ("hvac", "registers"), "linear_diffuser": ("hvac", "registers"), "floor_register": ("hvac", "registers"),
+    "return_grille": ("hvac", "returns"), "thermostat": ("hvac", "thermostats"),
+    "mini_split_head": (("hvac", "zones"), ("hvac", "system", "mini_split")),
+    "heat_pump": ("hvac", "system", "heat_pump"), "package_unit": ("hvac", "system", "package"),
+    "condensing_unit": ("hvac", "system", "split"),
 }
+
+# The trade a symbol is filed under and the estimating module it's priced in, where the names differ.
+TRADE_MODULES = {"mechanical": "hvac"}
+
+# When several symbols answer the same choice, the more particular one wins (a tankless heater over a tank).
+CHOICE_ORDER = {"water_heater": ("tankless", "tank"), "system": ("mini_split", "heat_pump", "package", "split")}
+
+
+def feeds_of(item_type: str | None) -> list[tuple]:
+    """Every (module, question[, choice]) an item type counts toward."""
+    f = FEEDS.get(item_type or "")
+    if not f:
+        return []
+    return list(f) if isinstance(f[0], tuple) else [f]
+
+
+def module_of_trade(trade: str | None) -> str | None:
+    return TRADE_MODULES.get(trade or "", trade)
+
 
 STANDARD = [{"item_type": it, "trade": tr, "description": d, "aliases": list(al), "block_words": list(bw)}
             for it, tr, d, al, bw in _ROWS]

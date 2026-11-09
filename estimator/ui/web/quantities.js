@@ -11,7 +11,8 @@
 "use strict";
 
 const QTY_TRADES = { framing: "🪵 Framing", drywall: "🧱 Drywall", painting: "🎨 Painting", insulation: "🧶 Insulation",
-                     flooring: "🟫 Flooring", electrical: "⚡ Electrical", plumbing: "🚰 Plumbing" };
+                     flooring: "🟫 Flooring", windows_doors: "🪟 Windows and doors", siding: "🏠 Siding",
+                     hvac: "❄️ HVAC", electrical: "⚡ Electrical", plumbing: "🚰 Plumbing" };
 
 function qtyNum(v, unit) {
   if (v === null || v === undefined || v === "") return "—";
@@ -95,6 +96,23 @@ async function renderQuantities(main, estimateId) {
         ops.map(o => [o.mark || "", words(o.kind), qtyNum(o.width_ft), qtyNum(o.height_ft), words(o.size_from || ""),
           String((o.rooms || []).length)])));
     }
+  }
+  // Sprint 14: door and window schedule linking - each mark, its size and type, and how many are tagged on the plans.
+  const marks = m.schedule_marks || [];
+  if (marks.length) {
+    parts.push(el("h3", {}, "Door and window schedule"), qtyTable("qty-marks",
+      ["Mark", "Kind", "Size (ft)", "Type", "On the plans", "In the schedule"],
+      marks.map(k => [k.mark, words(k.kind), k.width_ft && k.height_ft ? qtyNum(k.width_ft) + " x " + qtyNum(k.height_ft) : "—",
+        k.type || "", el("span", { class: k.on_plans ? "" : "chip warn" }, String(k.on_plans)),
+        k.schedule_qty === null || k.schedule_qty === undefined ? "—" : String(k.schedule_qty)])));
+  }
+  // Sprint 14: exterior elevations - each side's wall (floor line to plate line) and its openings.
+  const elevs = m.elevations || [];
+  if (elevs.length) {
+    parts.push(el("h3", {}, "Exterior elevations"), qtyTable("qty-elevations",
+      ["Side", "Sheet", "Wall sq ft", "Openings", "Less openings", "Stories"],
+      elevs.map(e => [e.view, e.sheet_no || "", qtyNum(e.wall_sqft), String(e.openings.length) + " (" + qtyNum(e.openings_sqft) + " sq ft)",
+        qtyNum(e.net_sqft), String(e.stories)])));
   }
   if ((m.skipped_sheets || []).length) {
     parts.push(el("details", { id: "qty-skipped" }, el("summary", {}, "Sheets not counted (" + m.skipped_sheets.length + ")"),

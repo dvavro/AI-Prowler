@@ -834,8 +834,10 @@ def _height(height_ft):
 def plan_get_rooms_walls(estimate_id: int = 0, plan_set_id: int = 0, height_ft: float | str = "") -> str:
     """The building as one model from the plans: each room (area, perimeter, ceiling height and where it came from,
     its walls and openings, wall and ceiling surface), each wall (interior or exterior, length, thickness, the rooms
-    on each side), each door and window (size from the schedule, which wall and rooms) and the totals every
-    wall-and-room trade uses (floor, ceiling, wall faces, exterior and interior wall lf, corners, openings).
+    on each side), each door and window (size and type from the schedule, which wall and rooms), each door and window
+    schedule mark with how many are tagged on the floor plans, the exterior elevations (each side's wall from floor to
+    plate line and its openings) and the totals every trade uses (floor, ceiling, wall faces, exterior and interior
+    wall lf, corners of the building's outline, openings, windows and doors by kind, conditioned area).
     Give estimate_id (its current plan sets) or plan_set_id. height_ft is the ceiling height for rooms the finish
     schedule doesn't give (default 8). Sheets that repeat rooms already counted are listed as skipped. Read only."""
     def go(c):
@@ -848,8 +850,10 @@ def plan_get_rooms_walls(estimate_id: int = 0, plan_set_id: int = 0, height_ft: 
 def plan_trade_answers(module_id: str = "", estimate_id: int = 0, plan_set_id: int = 0, height_ft: float | str = "",
                        include_proposed: bool = False) -> str:
     """Each trade's quick-estimate answers worked out from the plans, so every trade uses the same quantities:
-    framing, drywall, painting, insulation and flooring from the wall-and-room model; electrical and plumbing from
-    the symbols a person approved (include_proposed=true also counts ones still waiting to be checked). Give a
+    framing, drywall, painting, insulation and flooring from the wall-and-room model; windows_doors from the door and
+    window tags linked to their schedules; siding (and exterior paint) from the exterior elevations when all four sides
+    are drawn, else the floor plans' outside walls; hvac's area to heat and cool from the rooms; electrical, plumbing
+    and hvac counts from the symbols a person approved (include_proposed=true also counts ones still to check). Give a
     module_id for one trade, or none for all. Each answer says where it came from; nothing is saved - pass the
     answers to est_quick_answer to price them. Read only."""
     def go(c):
