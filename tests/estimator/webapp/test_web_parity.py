@@ -10,8 +10,7 @@ from estimator.mcp_tools import est_tools
 
 # Spec'd for the Projects screen, not built yet as standalone tools (the Director has est_director_add_trade).
 PENDING = {"est_add_trade", "est_remove_trade",
-           # Plans screen (Sprint 5): comparing revisions comes with the revision overlay (Coder 2 Sprint 17).
-           "plan_compare_revisions",
+           # plan_compare_revisions is built (Coder 1 Sprint 24); the Plans screen's revision overlay is Coder 2's.
            # Estimates screen (Sprint 8): assemblies and editing a line come with Coder 1's assemblies work; until
            # then a line is changed by re-pricing its trade or by a hand-entered line.
            "est_apply_assembly", "est_update_line_item"}

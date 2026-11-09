@@ -751,6 +751,19 @@ def _collect_trades(conn, ctx, job, reg, stage, notes, **_):
 
 
 def _read_plans(conn, ctx, job, reg, stage, notes, **_):
+    if job["estimate_id"]:
+        from estimator.drawing_model import server_jobs
+        waiting = [dict(r) for r in conn.execute(
+            "SELECT * FROM plan_sets WHERE company_id = ? AND estimate_id = ? AND queue_state = 'waiting'",
+            (ctx.company_id, job["estimate_id"]))]
+        if waiting:
+            info = server_jobs.describe(conn, ctx, waiting[0]) or {}
+            _wait(conn, ctx, job, "waiting_on_user", "processing_pc", {
+                "stage": stage.id, "agent": stage.agent, "plan_set_id": waiting[0]["id"],
+                "say": info.get("say", "Waiting for plan processing on a processing PC.") +
+                       " I'll move on as soon as the results are published.",
+                "tools": ["plan_status(plan_set_id)", "plan_processing_queue()"]})
+            return False
     if not any(s["stage"] == stage.id for s in jobstore.steps(conn, job["id"])):
         notes.append("The Plan Engine isn't installed yet, so each trade is measured from the plans by a person or "
                      "by your AI in chat and handed to the Runner (runner_submit_takeoff).")

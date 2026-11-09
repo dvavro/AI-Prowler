@@ -729,6 +729,32 @@ ALTER TABLE symbol_examples ADD COLUMN template_json TEXT;
 ALTER TABLE symbol_examples ADD COLUMN detection_id INTEGER;
 ALTER TABLE symbol_examples ADD COLUMN added_by TEXT
 """),
+    (16, "revision reports, processing-PC queue, server compute limits", """
+CREATE TABLE revision_reports (
+    id                       INTEGER PRIMARY KEY,
+    company_id               TEXT NOT NULL,
+    estimate_id              INTEGER NOT NULL REFERENCES estimates (id) ON DELETE CASCADE,
+    old_plan_set_id          INTEGER REFERENCES plan_sets (id) ON DELETE SET NULL,
+    new_plan_set_id          INTEGER REFERENCES plan_sets (id) ON DELETE SET NULL,
+    summary_json             TEXT NOT NULL,
+    changed_object_ids       TEXT NOT NULL DEFAULT '[]',
+    flagged_measurement_ids  TEXT NOT NULL DEFAULT '[]',
+    carried_measurement_ids  TEXT NOT NULL DEFAULT '[]',
+    created_by               TEXT NOT NULL,
+    created_at               TEXT NOT NULL
+);
+CREATE INDEX ix_revision_reports ON revision_reports (company_id, estimate_id);
+
+ALTER TABLE plan_sets ADD COLUMN queue_state TEXT;
+ALTER TABLE plan_sets ADD COLUMN queue_pc TEXT;
+ALTER TABLE plan_sets ADD COLUMN queued_at TEXT;
+ALTER TABLE plan_sets ADD COLUMN published_from TEXT;
+ALTER TABLE plan_sets ADD COLUMN published_at TEXT;
+ALTER TABLE plan_sets ADD COLUMN server_job TEXT;
+
+ALTER TABLE company_profile ADD COLUMN server_small_processing INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE company_profile ADD COLUMN server_small_max_sheets INTEGER NOT NULL DEFAULT 10
+"""),
 ]
 
 

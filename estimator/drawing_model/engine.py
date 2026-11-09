@@ -114,9 +114,13 @@ def _run_engine(conn, ctx: RequestContext, plan_set_id: int, eng: dict) -> dict:
     except Exception:  # noqa: BLE001
         log.warning("company symbol library not used for plan set %s", ps["id"], exc_info=True)
         info["symbol_library"] = []
+    from estimator.drawing_model import server_jobs
+    server_jobs.note_progress(conn, ctx, ps["id"], "reading the plans")
     try:
         results = eng["fn"](Path(ps["file_path"]), ps["file_type"], info)
-        return store.save_results(conn, ctx, ps["id"], results, eng["name"])
+        saved = store.save_results(conn, ctx, ps["id"], results, eng["name"])
+        server_jobs.note_progress(conn, ctx, ps["id"], "read, not published yet")
+        return saved
     except EstimatorError as exc:
         store.mark_failed(conn, ctx, ps["id"], f"the plan engine's results didn't pass the checks: {exc.message}")
         raise
@@ -132,6 +136,15 @@ def start(conn, ctx: RequestContext, plan_set_id: int, confirm: bool = False, op
     Re-reading a processed plan set replaces its drawing model (schedule corrections included), so that asks first."""
     store._role(ctx, store.EDIT_ROLES, "process plans")
     ps = store.load_plan_set(conn, ctx, plan_set_id)
+    from estimator.drawing_model import server_jobs
+    where = server_jobs.guard(conn, ctx, ps)
+    if where["where"] != "here":                       # Server mode: heavy work goes to a processing PC
+        if ps["queue_state"] != "waiting":
+            server_jobs.enqueue(conn, ctx, ps, where["why"])
+            ps = store.load_plan_set(conn, ctx, plan_set_id)
+        info = server_jobs.describe(conn, ctx, ps) or {}
+        return {"ok": True, "plan_set_id": ps["id"], "status": "waiting_for_processing_pc", "why": where["why"],
+                "queue": info, "say": info.get("say", "Waiting for a processing PC.") + f" ({where['why']})"}
     eng = _discover()
     if eng is None:
         raise NotAvailable("the plan engine isn't installed yet (it's being built on the Coder 2 track). Until then, "
@@ -146,6 +159,10 @@ def start(conn, ctx: RequestContext, plan_set_id: int, confirm: bool = False, op
         store._confirm(False, f"Read plan set {ps['id']} ({ps['original_name']}) with the plan engine now?",
                        plan_set_id=ps["id"])
     store.mark_processing(conn, ctx, ps["id"], eng["name"])
+    if ctx.mode == "server" and ps["queue_state"] == "waiting":     # small set read here after all
+        import shutil
+        shutil.rmtree(server_jobs._dirs()["jobs"] / server_jobs._key(ctx.company_id, ps["id"]), ignore_errors=True)
+        conn.execute("UPDATE plan_sets SET queue_state = NULL WHERE id = ?", (ps["id"],))
     if RUN_INLINE or open_conn is None:
         return {**_run_engine(conn, ctx, ps["id"], eng)} | {"plan_set_id": ps["id"]}
 

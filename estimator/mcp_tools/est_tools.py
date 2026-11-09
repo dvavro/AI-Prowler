@@ -40,7 +40,7 @@ from estimator.drawing_model import engine as plan_engine
 from estimator.drawing_model import store as plans
 from estimator.takeoff import measurements as takeoffs
 from estimator.takeoff import reviews
-from estimator.drawing_model import crops
+from estimator.drawing_model import crops, revisions, server_jobs
 
 # Server mode will replace this with the API key / signed-in user's context.
 _context_provider = personal_context
@@ -1030,6 +1030,53 @@ def plan_get_crop(purpose: str, object_id: int | None = None, sheet_id: int | No
                                         user_asked=bool(user_asked)))
 
 
+# ---------------------------------------------------------------- revisions and Server mode compute limits
+
+def plan_compare_revisions(new_plan_set_id: int | None = None, old_plan_set_id: int | None = None,
+                           confirm: bool = False, report_id: int | None = None) -> str:
+    """Compare a revised plan set with the one it replaces (Rev A → Rev B): sheets matched by number, drawing objects
+    added, removed, moved or changed, schedule rows added, removed or changed, revision clouds counted. Unchanged
+    measurements carry over to the new set; measurements touching changes are flagged "re-measure" (quantities are
+    never changed). Saves a revision report with overlay boxes (red removed, green added). Asks first.
+    report_id: show a saved report instead."""
+    return _run(lambda c: revisions.compare(
+        c, _ctx(), int(new_plan_set_id) if new_plan_set_id not in (None, "") else None,
+        int(old_plan_set_id) if old_plan_set_id not in (None, "") else None, confirm=bool(confirm),
+        report_id=int(report_id) if report_id not in (None, "") else None))
+
+
+def plan_processing_queue(claim: bool = False, any_job: bool = False, server_user: str = "") -> str:
+    """Server mode plan processing. On the server: plan sets waiting for a processing PC, which PC has each and how
+    far it got, which PCs are online; also takes in results PCs have published. On a processing PC: claim=true picks
+    up the next plan job (your own uploads first; any_job=true takes anyone's) and puts the plan file into this PC's
+    Estimator; then run plan_process and plan_publish_to_server. server_user: your user name on the server."""
+    def go(c):
+        ctx = _ctx()
+        if claim:
+            return server_jobs.claim_next(c, ctx, user=server_user or None, any_job=bool(any_job))
+        return server_jobs.queue(c, ctx)
+    return _run(go)
+
+
+def plan_publish_to_server(plan_set_id: int, confirm: bool = False) -> str:
+    """On a processing PC: send a plan set you picked up and read (plan_process) to the company server: drawing
+    model, viewports, schedules, sheet images and proposed measurements. Asks first."""
+    return _run(lambda c: server_jobs.publish(c, _ctx(), int(plan_set_id), confirm=bool(confirm)))
+
+
+def est_server_compute(small_processing: bool | None = None, max_sheets: int | None = None,
+                       confirm: bool = False) -> str:
+    """What the server reads itself. The server does light work only; plans are read on processing PCs. The owner
+    can allow small plan processing on the server (off by default): vector PDF or DXF sets up to max_sheets (10),
+    one at a time. Without arguments, shows the setting. Changing it asks first."""
+    def go(c):
+        ctx = _ctx()
+        if small_processing is None and max_sheets in (None, ""):
+            return server_jobs.settings(c, ctx)
+        return server_jobs.set_settings(c, ctx, small_processing, max_sheets, bool(confirm))
+    return _run(go)
+
+
 TOOLS = (
     est_director_start, est_director_next, est_director_change_lane, est_job_status, est_jobs_board,
     est_director_add_trade, est_director_book_site_visit, est_validate, est_scenarios, est_choose_scenario,
@@ -1053,6 +1100,7 @@ TOOLS = (
     takeoff_detail, takeoff_suggest_change,
     review_start, review_save, review_approve, review_history, review_highlight, review_require_before_send,
     est_ai_privacy, plan_get_crop, plan_get_rooms_walls, plan_trade_answers,
+    plan_compare_revisions, plan_processing_queue, plan_publish_to_server, est_server_compute,
 )
 
 

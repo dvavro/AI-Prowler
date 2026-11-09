@@ -203,11 +203,18 @@ def tick(conn, ctx: RequestContext, now: datetime | None = None) -> dict:
     with service.transaction(conn):
         made = _quote_notices(conn, ctx, today) + _job_notices(conn, ctx, today, s)
     retried = _retry_email(conn, ctx, s)
+    plans = []
+    if ctx.mode == "server":                      # take in plan results published by processing PCs
+        from estimator.drawing_model import server_jobs
+        try:
+            plans = server_jobs.import_published(conn, ctx)
+        except (OSError, EstimatorError) as exc:
+            log.warning("couldn't check published plans: %s", exc)
     agents = _agents(conn, ctx, now)
     brief = _briefing(conn, ctx, now, s)
     result = {"ok": True, "company_id": ctx.company_id, "ran_at": now.isoformat(timespec="seconds"),
               "new_notices": made, "expired_bids": expired, "briefing": brief, "email_retries": retried,
-              "agents": agents, "unread": unread_count(conn, ctx)}
+              "agents": agents, "plans_published": plans, "unread": unread_count(conn, ctx)}
     with service.transaction(conn):
         conn.execute("INSERT INTO director_watch_runs (company_id, started_at, finished_at, result_json)"
                      " VALUES (?,?,?,?)", (ctx.company_id, started, _utc(),

@@ -53,3 +53,23 @@ def ensure_data_dirs(base: Path | None = None) -> Path:
     for sub in DATA_SUBDIRS:
         (root / sub).mkdir(parents=True, exist_ok=True)
     return root
+
+
+def exchange_dir() -> Path:
+    """The folder the server and processing PCs share for plan jobs and published results (Server mode).
+
+    ESTIMATOR_EXCHANGE_DIR points every install at the same shared folder (a network share in practice).
+    """
+    override = os.environ.get("ESTIMATOR_EXCHANGE_DIR", "").strip()
+    return Path(override) if override else data_dir() / "exchange"
+
+
+def pc_id() -> str:
+    """This install's name as a processing PC (ESTIMATOR_PC_ID, else the computer name)."""
+    import socket
+    return (os.environ.get("ESTIMATOR_PC_ID", "").strip() or socket.gethostname() or "this-pc")[:80]
+
+
+def server_user() -> str | None:
+    """Who this PC's user is on the company server (ESTIMATOR_SERVER_USER), so it picks up their own uploads first."""
+    return os.environ.get("ESTIMATOR_SERVER_USER", "").strip() or None

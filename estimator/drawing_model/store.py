@@ -125,8 +125,14 @@ def upload(conn, ctx: RequestContext, estimate_id: int, file_path: str, supersed
         conn.execute("UPDATE plan_sets SET file_path = ? WHERE id = ?", (str(dest), plan_set_id))
         service._log(conn, ctx, est["id"], "plan_uploaded",
                      {"plan_set_id": plan_set_id, "file": checked["name"], "revision": revision})
-    return {"ok": True, "plan_set_id": plan_set_id, "estimate_id": est["id"], "status": "uploaded", **summary,
-            "next": "plan_process to read the sheets (needs the plan engine), then plan_get_sheets"}
+    out = {"ok": True, "plan_set_id": plan_set_id, "estimate_id": est["id"], "status": "uploaded", **summary,
+           "next": "plan_process to read the sheets (needs the plan engine), then plan_get_sheets"}
+    if ctx.mode == "server":                       # heavy work: queued for a processing PC (spec: compute limits)
+        from estimator.drawing_model import server_jobs
+        q = server_jobs.enqueue(conn, ctx, load_plan_set(conn, ctx, plan_set_id), "uploaded in Server mode")
+        out.update(queued_for=q["queued_for"], pcs_online=q["pcs_online"],
+                   next=f"it's queued for plan processing on {q['queued_for']}'s PC; plan_status shows progress")
+    return out
 
 
 def list_plan_sets(conn, ctx: RequestContext, estimate_id: int) -> dict:
@@ -161,7 +167,13 @@ def status(conn, ctx: RequestContext, plan_set_id: int) -> dict:
            "failed": f"Reading failed: {ps['error']}"}[ps["status"]]
     if ps["status"] == "processed" and unscaled:
         say += f" {len(unscaled)} sheet(s) need a scale before measuring (plan_set_scale)."
-    return {"ok": True, **out, "sheets_needing_scale": unscaled, "say": say}
+    from estimator.drawing_model import server_jobs
+    queue = server_jobs.describe(conn, ctx, ps)
+    if queue and ps["status"] != "processed":
+        say = queue["say"]
+    elif queue:
+        say += " " + queue["say"]
+    return {"ok": True, **out, "sheets_needing_scale": unscaled, "queue": queue, "say": say}
 
 
 # ---------------------------------------------------------------- the plan engine's results
