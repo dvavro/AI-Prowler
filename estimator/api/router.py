@@ -492,10 +492,67 @@ def _ask_first(fn) -> Response:
         return _ok(needs_confirmation=True, question=_question(e.message), **e.details)
 
 
+def _stage_price_list(req: Request, ctx, conn) -> Response:
+    """Receive a price list file from the browser, check it reads, and hold it until the import confirms."""
+    import io
+
+    from estimator.api import staging
+    from estimator.pricing import importer
+
+    if ctx.role not in ("owner", "estimator"):
+        raise _Refuse(403, "permission_denied", "only the owner or an estimator can import prices")
+    name = (req.query.get("name") or "").strip()
+    if not name:
+        raise _Refuse(400, "invalid_input", "the file name is missing")
+    ext = Path(staging.safe_name(name)).suffix
+    if ext not in importer.SUFFIXES:
+        shown = ext or "no extension"
+        raise _Refuse(400, "invalid_input", shown + " cannot be used; "
+                                            "price lists can be CSV or Excel (.csv, .txt, .xlsx, .xlsm)")
+    length = req.length if req.stream is not None else len(req.body)
+    if length <= 0:
+        raise _Refuse(400, "invalid_input", f"{name} is empty")
+    if length > importer.MAX_BYTES:
+        raise _Refuse(413, "too_large", f"{name} is {length // (1024 * 1024)} MB; the limit is 5 MB. "
+                                        "Split the list or save just the columns you need")
+    stage_id, path = staging.new(ctx, None, name)
+    try:
+        got = staging.receive(req.stream if req.stream is not None else io.BytesIO(req.body), length, path)
+        if got != length:
+            raise _Refuse(400, "upload_incomplete", "the upload was cut off; please try again")
+        headers, rows = importer.read_table(file_path=str(path))
+        sheets = importer.list_sheets(str(path))
+    except BaseException:
+        staging.drop(stage_id)
+        raise
+    return _ok(stage_id=stage_id, file=staging.safe_name(name), sheets=sheets, columns=headers, row_count=len(rows))
+
+
+def _price_source(b, ctx):
+    """A price list to import or preview: either pasted CSV or a staged file. A file_path is the stage
+       id returned by the stage endpoint, never a server path; it is resolved through staging.get."""
+    from estimator.api import staging
+
+    text = b.get("csv_text")
+    staged = b.get("file_path")
+    text_ok = isinstance(text, str) and bool(text.strip())
+    staged_ok = isinstance(staged, str) and bool(staged.strip())
+    if text_ok and staged_ok:
+        raise _Refuse(400, "invalid_input", "give either pasted CSV or a staged file, not both")
+    if text_ok:
+        return {"csv_text": text}, None
+    if staged_ok:
+        path = staging.get(staged, ctx, None)
+        return {"file_path": str(path), "sheet": _opt(b, "sheet")}, staged
+    raise _Refuse(400, "invalid_input", "paste the price list (CSV with a header row)")
+
+
 def _price_book(m: str, sub: str, req: Request, ctx, conn) -> Response:
     """GET  /price-book?module_id=&samples_only=1     pricebook_get
        POST /price-book {prices, effective_date, confirm}                         pricebook_update
-       POST /price-book/import {csv_text, mapping, add_new, effective_date, confirm}   pricebook_import (pasted CSV)
+       POST /price-book/import/stage?name=<file>     stage a CSV/Excel price list for import
+       POST /price-book/import {csv_text | file_path, sheet, mapping, add_new, effective_date, confirm}   pricebook_import
+       POST /price-book/import/preview {csv_text | file_path, sheet}   columns before an import
     Costs are company secrets: only the roles that open the Price Book screen may read them here."""
     from estimator.pricing import importer, price_book
 
@@ -515,27 +572,32 @@ def _price_book(m: str, sub: str, req: Request, ctx, conn) -> Response:
         return _ask_first(lambda: price_book.update_prices(conn, ctx, {str(k): str(v) for k, v in prices.items()},
                                                            confirm=b.get("confirm") is True,
                                                            effective_date=_opt(b, "effective_date")))
+    if sub == "/price-book/import/stage" and m == "POST":
+        return _stage_price_list(req, ctx, conn)
     if sub == "/price-book/import" and m == "POST":
         b = _body(req)
-        text = b.get("csv_text")
-        if not isinstance(text, str) or not text.strip():
-            raise _Refuse(400, "invalid_input", "paste the price list (CSV with a header row)")
+        source, stage_id = _price_source(b, ctx)
         mapping = b.get("mapping") or None
         if mapping is not None and not isinstance(mapping, dict):
             raise _Refuse(400, "invalid_input", "mapping must be an object, e.g. {\"cost\": \"Unit Price\"}")
-        return _ask_first(lambda: importer.import_prices(conn, ctx, csv_text=text, mapping=mapping,
-                                                         effective_date=_opt(b, "effective_date"),
-                                                         add_new=b.get("add_new") is True,
-                                                         confirm=b.get("confirm") is True))
+        result = _ask_first(lambda: importer.import_prices(conn, ctx, mapping=mapping,
+                                                            effective_date=_opt(b, "effective_date"),
+                                                            add_new=b.get("add_new") is True,
+                                                            confirm=b.get("confirm") is True, **source))
+        if stage_id is not None and b.get("confirm") is True:
+            from estimator.api import staging
+            staging.drop(stage_id)
+        return result
     # Sprint 17: the full Price Book - column mapping before an import, each price's history, markups and tax.
     if sub == "/price-book/import/preview" and m == "POST":
         b = _body(req)
-        text = b.get("csv_text")
-        if not isinstance(text, str) or not text.strip():
-            raise _Refuse(400, "invalid_input", "paste the price list (CSV with a header row)")
-        headers, rows = importer.read_table(csv_text=text)
+        source, stage_id = _price_source(b, ctx)
+        headers, rows = importer.read_table(**source)
+        extra = {}
+        if stage_id is not None:
+            extra["sheets"] = importer.list_sheets(source["file_path"])
         return _ok(columns=headers, fields=list(importer.FIELDS), mapping=importer.guess_mapping(headers),
-                   rows=rows[:5], row_count=len(rows))
+                   rows=rows[:5], row_count=len(rows), **extra)
     mm = _PRICE_HISTORY.match(sub)
     if mm and m == "GET":
         return _ok(**_price_history(conn, ctx, mm.group(1)))

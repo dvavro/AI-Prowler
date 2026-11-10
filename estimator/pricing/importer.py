@@ -96,7 +96,10 @@ def _from_excel(path: Path, sheet: str | None) -> tuple[list[str], list[dict]]:
         import openpyxl
     except ImportError:
         raise InvalidInput("reading Excel needs openpyxl; save the sheet as CSV instead") from None
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    except Exception as exc:
+        raise InvalidInput("that Excel file could not be read; check it opens in Excel and try again") from exc
     try:
         if sheet:
             if sheet not in wb.sheetnames:
@@ -114,6 +117,22 @@ def _from_excel(path: Path, sheet: str | None) -> tuple[list[str], list[dict]]:
     finally:
         wb.close()
     return _table(rows)
+
+
+def list_sheets(path: str) -> list[str]:
+    """Sheet names of an Excel price list ([] for a CSV). The file must already have been read."""
+    p = Path(str(path).strip().strip('"'))
+    if p.suffix.lower() not in (".xlsx", ".xlsm"):
+        return []
+    try:
+        import openpyxl
+    except ImportError:
+        return []
+    wb = openpyxl.load_workbook(p, read_only=True, data_only=True)
+    try:
+        return list(wb.sheetnames)
+    finally:
+        wb.close()
 
 
 def _table(rows: list[list[str]]) -> tuple[list[str], list[dict]]:

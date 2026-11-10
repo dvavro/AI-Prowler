@@ -7,7 +7,7 @@ copy is then deleted (store.upload makes its own copy in projects\\estimate_NNNN
 
 - Files go to <data folder>\\cache\\web_uploads\\<stage id>\\<safe name>. cache\\ is "safe to delete" in the
   spec and is never indexed.
-- A stage belongs to the user, company and estimate that made it; nobody else can attach or cancel it.
+- A stage belongs to the user, company and estimate that made it (a price-list stage belongs to no estimate); nobody else can attach or cancel it.
 - Stages are forgotten after STAGE_TTL_SECONDS, and leftover folders (e.g. after a restart) are swept.
 """
 from __future__ import annotations
@@ -45,15 +45,15 @@ def safe_name(name: str) -> str:
     return stem + suffix
 
 
-def new(ctx: RequestContext, estimate_id: int, name: str) -> tuple[str, Path]:
+def new(ctx: RequestContext, estimate_id: int | None, name: str) -> tuple[str, Path]:
     sweep()
     stage_id = secrets.token_urlsafe(16)
     folder = (root() / stage_id).resolve()          # plan_upload's checks need a full path
     folder.mkdir(parents=True, exist_ok=False)
     path = folder / safe_name(name)
     with _lock:
-        _stages[stage_id] = {"path": path, "estimate_id": int(estimate_id), "company_id": ctx.company_id,
-                             "user_id": ctx.user_id, "created": _clock()}
+        _stages[stage_id] = {"path": path, "estimate_id": None if estimate_id is None else int(estimate_id),
+                             "company_id": ctx.company_id, "user_id": ctx.user_id, "created": _clock()}
     return stage_id, path
 
 
@@ -70,11 +70,12 @@ def receive(stream, length: int, path: Path) -> int:
     return got
 
 
-def get(stage_id: str, ctx: RequestContext, estimate_id: int) -> Path:
+def get(stage_id: str, ctx: RequestContext, estimate_id: int | None = None) -> Path:
     with _lock:
         s = _stages.get(str(stage_id or ""))
+    eid = None if estimate_id is None else int(estimate_id)
     if (s is None or s["company_id"] != ctx.company_id or s["user_id"] != ctx.user_id
-            or s["estimate_id"] != int(estimate_id) or _clock() - s["created"] > STAGE_TTL_SECONDS
+            or s["estimate_id"] != eid or _clock() - s["created"] > STAGE_TTL_SECONDS
             or not s["path"].is_file()):
         raise NotFound("that upload has expired or isn't yours; please choose the file again")
     return s["path"]

@@ -7,7 +7,7 @@ they are (kind, label, tag, block, layer) and where they are:
 - changed: a different size or shape (or the same lines measured at a new scale)
 - removed / added: no partner on the other sheet
 Schedule rows are matched by type and mark (added, removed, fields changed). Revision clouds and deltas on the new set
-are counted.
+are counted and drawn on the overlay.
 
 What happens to measurements (flag only; quantities are never changed here):
 - every source object unchanged → the measurement carries over to the new set (its objects, sheet and viewport point to
@@ -162,7 +162,8 @@ def _compare(conn, ctx, old_ps: dict, new_ps: dict) -> dict:
                 vp_map[v["id"]] = new_vps[_norm(v["label"])]
         dims = [float(x) for x in (n_s["width"], n_s["height"]) if x]
         diag = math.hypot(*dims) if len(dims) == 2 else None
-        d = _diff_sheet(_objects(conn, o_s["id"]), _objects(conn, n_s["id"]), diag)
+        new_objs = _objects(conn, n_s["id"])
+        d = _diff_sheet(_objects(conn, o_s["id"]), new_objs, diag)
         entry = {"old_sheet_id": o_s["id"], "new_sheet_id": n_s["id"], "sheet_no": n_s["sheet_no"] or o_s["sheet_no"],
                  "title": n_s["title"]}
         for kind, items in d.items():
@@ -177,7 +178,12 @@ def _compare(conn, ctx, old_ps: dict, new_ps: dict) -> dict:
                     changed_new.append(new_o["id"])
             if kind != "unchanged":
                 entry[f"{kind}_items"] = [{"old": _item(a), "new": _item(b)} for a, b in items[:OVERLAY_CAP]]
-        entry["changed_anything"] = any(entry[k] for k in ("moved", "changed", "removed", "added"))
+        marks = [o for o in new_objs
+                 if REV_MARK.search(" ".join(filter(None, (o["label"], o["layer"], o["block_name"]))))]
+        entry["marks"] = len(marks)
+        if marks:
+            entry["marks_items"] = [{"old": None, "new": _item(o)} for o in marks[:OVERLAY_CAP]]
+        entry["changed_anything"] = any(entry[k] for k in ("moved", "changed", "removed", "added", "marks"))
         per_sheet.append(entry)
     for s in gone:
         for o in _objects(conn, s["id"]):

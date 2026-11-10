@@ -288,12 +288,13 @@ meter { width: 120px; }
 .rev-overlay .rev-removed rect { fill: #dc2626; stroke: #b91c1c; stroke-dasharray: 6 3; }
 .rev-overlay .rev-changed rect { fill: #f59e0b; stroke: #b45309; }
 .rev-overlay .rev-moved rect { fill: #f59e0b; stroke: #b45309; stroke-dasharray: 3 3; }
+.rev-overlay .rev-marks rect { fill: #7c3aed; stroke: #6d28d9; }
 .tile.rev-added .num { color: #15803d; } .tile.rev-removed .num { color: #b91c1c; }
-.tile.rev-changed .num, .tile.rev-moved .num { color: #b45309; } .tile.warn .num { color: var(--warn); }
-label.rev-added { color: #15803d; } label.rev-removed { color: #b91c1c; } label.rev-changed, label.rev-moved { color: #b45309; }
+.tile.rev-changed .num, .tile.rev-moved .num { color: #b45309; } .tile.rev-marks .num { color: #6d28d9; } .tile.warn .num { color: var(--warn); }
+label.rev-added { color: #15803d; } label.rev-removed { color: #b91c1c; } label.rev-changed, label.rev-moved { color: #b45309; } label.rev-marks { color: #6d28d9; }
 .rev-tag { padding: 1px 6px; border-radius: 8px; font-size: 12px; border: 1px solid var(--line); }
 .rev-tag.rev-added { background: #dcfce7; } .rev-tag.rev-removed { background: #fee2e2; }
-.rev-tag.rev-changed, .rev-tag.rev-moved { background: #fef3c7; }
+.rev-tag.rev-changed, .rev-tag.rev-moved { background: #fef3c7; } .rev-tag.rev-marks { background: #ede9fe; }
 label.field { font-weight: 600; }
 label.field textarea { margin-top: 4px; font-family: inherit; }
 .form-grid > .field:has(textarea) { grid-column: 1 / -1; }

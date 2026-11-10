@@ -477,6 +477,27 @@ function uploadRaw(estimateId, f, replaces, onProgress) {
   });
 }
 
+function uploadPriceList(f) {
+  // Like uploadRaw, but for a supplier price list: the file goes as the raw body and the server
+  // stages it, checks it reads, and returns its columns and sheet names.
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", API + "/price-book/import/stage?name=" + encodeURIComponent(f.name));
+    x.withCredentials = true;
+    if (APP_TOKEN) x.setRequestHeader("Authorization", "Bearer " + APP_TOKEN);
+    x.setRequestHeader("X-Estimator-Request", "1");
+    x.setRequestHeader("Content-Type", "application/octet-stream");
+    x.onload = () => {
+      let data = null;
+      try { data = JSON.parse(x.responseText); } catch (e) { data = null; }
+      if (x.status === 401) { showLogin(data && data.message); reject(new ApiError(401, data)); return; }
+      if (x.status >= 400 || !data || data.ok === false) { reject(new ApiError(x.status, data)); return; }
+      resolve(data);
+    };
+    x.onerror = () => reject(new ApiError(0, { message: "the upload did not reach the Estimator; check the connection and try again" }));
+    x.send(f);
+  });
+}
 function showConfirm(msg, estimateId, staged, replaces, done) {
   const d = staged.details || {};
   const yes = el("button", { class: "primary", type: "button", id: "plan-attach" }, "Attach");
@@ -774,12 +795,38 @@ function importBox() {
   const cols = el("div", { id: "pb-mapping" });
   const msg = el("div", { id: "pb-import-message", role: "status" });
   const pickers = {};
+  const file = el("input", { type: "file", id: "pb-file", accept: ".csv,.txt,.xlsx,.xlsm" });
+  const sheet = el("select", { id: "pb-sheet", hidden: true, "aria-label": "Sheet" });
+  let staged = null; // The staged file from the stage endpoint, or null when pasting CSV.
+  file.addEventListener("change", async () => {
+    const f = file.files[0];
+    if (!f) return;
+    msg.replaceChildren();
+    staged = null;
+    sheet.hidden = true;
+    sheet.replaceChildren();
+    const ext = (f.name.split(".").pop() || "").toLowerCase();
+    if (ext === "csv" || ext === "txt") { text.value = await f.text(); return; }
+    try {
+      const r = await uploadPriceList(f);
+      staged = r;
+      if ((r.sheets || []).length > 1) {
+        sheet.replaceChildren(r.sheets.map(s => el("option", { value: s }, s)));
+        sheet.hidden = false;
+      }
+      msg.replaceChildren(el("p", { class: "muted" }, f.name + ": " + r.row_count + " row(s), " + r.columns.length + " column(s)."));
+    } catch (e) { if (e.status !== 401) msg.replaceChildren(errorBox(e)); }
+  });
+  sheet.addEventListener("change", () => check.click());
+  text.addEventListener("input", () => { staged = null; sheet.hidden = true; });
   // Sprint 17: column mapping - the server guesses each column from its name; the user can change any of them.
   check.addEventListener("click", async () => {
     msg.replaceChildren();
-    if (!text.value.trim()) { msg.append(el("p", { class: "error" }, "Paste the price list first.")); return; }
+    if (!staged && !text.value.trim()) { msg.append(el("p", { class: "error" }, "Paste the price list or choose a file first.")); return; }
     try {
-      const r = await api("POST", "/price-book/import/preview", { csv_text: text.value });
+      const body = staged ? { file_path: staged.stage_id } : { csv_text: text.value };
+      if (staged && !sheet.hidden) body.sheet = sheet.value;
+      const r = await api("POST", "/price-book/import/preview", body);
       for (const k of Object.keys(pickers)) delete pickers[k];
       const LABELS = { price_key: "Item code", cost: "Cost", description: "Description", unit: "Unit", kind: "Kind", supplier: "Supplier" };
       cols.replaceChildren(el("p", { class: "muted small" }, r.row_count + " row(s). Which column holds what:"),
@@ -794,16 +841,21 @@ function importBox() {
   });
   go.addEventListener("click", async () => {
     msg.replaceChildren();
-    if (!text.value.trim()) { msg.append(el("p", { class: "error" }, "Paste the price list first.")); return; }
+    if (!staged && !text.value.trim()) { msg.append(el("p", { class: "error" }, "Paste the price list or choose a file first.")); return; }
     const mapping = {};
     for (const [f, s] of Object.entries(pickers)) if (s.value) mapping[f] = s.value;
-    await askThenSave(msg, go, "/price-book/import", { csv_text: text.value, add_new: addNew.checked, effective_date: eff.value || null,
-      mapping: Object.keys(mapping).length ? mapping : null },
+    const body = { add_new: addNew.checked, effective_date: eff.value || null,
+      mapping: Object.keys(mapping).length ? mapping : null };
+    if (staged) { body.file_path = staged.stage_id; if (!sheet.hidden) body.sheet = sheet.value; }
+    else body.csv_text = text.value;
+    await askThenSave(msg, go, "/price-book/import", body,
       r => "Imported " + (r.saved !== undefined ? r.saved : "") + " price(s).");
   });
-  return el("details", { class: "card section", id: "pb-import-box" }, el("summary", {}, "Import a supplier price list (paste CSV)"),
-    el("p", { class: "muted" }, "Copy the rows from your supplier's spreadsheet, header row first. Columns are found by name " +
-      "(item code, description, unit, unit price / cost); check them and change any that are wrong. Rows with a different unit are skipped, never converted."),
+  return el("details", { class: "card section", id: "pb-import-box" }, el("summary", {}, "Import a supplier price list (CSV or Excel file)"),
+    el("p", { class: "muted" }, "Paste the rows from your supplier spreadsheet, header row first, or choose a CSV or Excel file. " +
+      "Columns are found by name (item code, description, unit, unit price / cost); check them and change any that are wrong. " +
+      "Rows with a different unit are skipped, never converted."),
+    el("div", { class: "row" }, el("label", {}, "Or choose a file: ", file), sheet),
     text, el("div", { class: "row" }, check), cols,
     el("label", { class: "check" }, addNew, " Add rows that don't match a price as new prices"),
     el("label", {}, "Takes effect (optional)", eff), go, msg);

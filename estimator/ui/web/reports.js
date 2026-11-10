@@ -11,7 +11,7 @@
 const REPORT_TABS = [["winloss", "🏆 Win / loss"], ["takeoff", "📏 Takeoff report"], ["revisions", "🔀 Plan revisions"],
                      ["actuals", "💵 Estimate vs actual"], ["exports", "⬇ Exports"]];
 const REV_KINDS = [["added", "Added", "rev-added"], ["removed", "Removed", "rev-removed"], ["changed", "Changed", "rev-changed"],
-                   ["moved", "Moved", "rev-moved"]];
+                   ["moved", "Moved", "rev-moved"], ["marks", "Revision clouds", "rev-marks"]];
 function svgEl(tag, attrs, ...kids) {
   const n = document.createElementNS(SVG_NS, tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -257,6 +257,7 @@ async function renderRevision(main, id) {
     el("p", { id: "rev-said" }, r.said || ""),
     el("div", { class: "grid tiles", id: "rev-tiles" }, tile(t.added || 0, "Added", "rev-added"), tile(t.removed || 0, "Removed", "rev-removed"),
       tile(t.changed || 0, "Changed", "rev-changed"), tile(t.moved || 0, "Moved", "rev-moved"), tile(t.unchanged || 0, "Unchanged"),
+      tile(r.revision_marks || 0, "Revision clouds", "rev-marks"),
       tile((r.flagged || []).length, "To re-measure", (r.flagged || []).length ? "warn" : ""))];
   if (!sheets.length) {
     parts.push(el("div", { class: "card empty" }, "No sheets of the two sets could be matched. The two plan sets have no sheets in common, so there is nothing to compare - compare a different revision pair from the plan set page."));
@@ -264,7 +265,7 @@ async function renderRevision(main, id) {
     const s = sheets[n];
     const pick = el("select", { id: "rev-sheet", "aria-label": "Sheet" }, sheets.map((x, i) =>
       el("option", { value: i, selected: i === n }, (x.sheet_no || "sheet " + (i + 1)) + (x.title ? " · " + x.title : "") +
-        (x.changed_anything ? "  (" + ["added", "removed", "changed", "moved"].filter(k => x[k]).map(k => x[k] + " " + k).join(", ") + ")" : "  (no change)"))));
+        (x.changed_anything ? "  (" + ["added", "removed", "changed", "moved", "marks"].filter(k => x[k]).map(k => x[k] + " " + k).join(", ") + ")" : "  (no change)"))));
     const flip = el("button", { class: "button", type: "button", id: "rev-flip" }, old ? "Show Rev " + r.to_rev + " (new)" : "Show Rev " + r.from_rev + " (old)");
     const goTo = (i, o) => go("#/revisions/" + id + "?sheet=" + i + (o ? "&old=1" : ""));
     pick.addEventListener("change", () => goTo(pick.value, old));
@@ -298,7 +299,7 @@ async function renderRevision(main, id) {
     if (sheet && sheet.has_image) apiImage(img, API + "/sheets/" + sheetId + "/image");
     parts.push(el("div", { class: "rev-stage", id: "rev-stage" }, sheet && sheet.has_image ? img : el("div", { class: "rev-blank" }), svg),
       el("p", { class: "muted small" }, old ? "Rev " + r.from_rev + ": red was removed, orange changed or moved in the new set." :
-        "Rev " + r.to_rev + ": green is new, orange changed or moved, red outlines what was removed."));
+        "Rev " + r.to_rev + ": green is new, orange changed or moved, red outlines what was removed, purple outlines revision clouds."));
     const rows = [];
     for (const [k] of REV_KINDS) for (const it of s[k + "_items"] || []) {
       const o = it.new || it.old || {};
