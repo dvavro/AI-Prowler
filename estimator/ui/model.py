@@ -387,7 +387,11 @@ def tool_status(which=None, find_spec=None) -> list[dict]:
         {"tool": "DWG converter (ODA File Converter)", "ok": bool(oda),
          "detail": f"{conv['name']} found at {oda}; DWG plan files are converted to DXF with it." if oda else
                    "Not installed, so DWG plan files cannot be opened. It is a free download from the"
-                   " Open Design Alliance (opendesign.com, Guest Files, ODA File Converter)."},
+                   " Open Design Alliance (ODA File Converter) - install it like this:\n"
+                   "1. Open https://www.opendesign.com/guestfiles/oda_file_converter in your browser.\n"
+                   "2. Download the Windows version (Windows 10 or later, 64-bit).\n"
+                   "3. Run the downloaded installer and accept the defaults.\n"
+                   "4. Restart AI-Prowler - this line turns green and shows where the converter was found."},
         {"tool": "Tesseract OCR (reads scanned plans)", "ok": bool(tess),
          "detail": f"Found at {tess}." if tess else
                    "Not installed, so scanned plans and photos cannot be text-read (OCR)."},

@@ -4,7 +4,7 @@ Nov 5, 2026 · Jamie Vavro · **Spec version 1.0 (pre-implementation)**
 
 > **Living document.** This spec is updated as the Estimator is built and tested, as part of every sprint and phase gate (see *AI-Prowler Estimator Implementation Plan.md → Keeping the spec up to date*). Every change is recorded in the **Change log** at the end.
 
-> **Where the build is (2026-11-09, evening).** Coder 2 (David): Sprints 1–18 are built and pushed (17: revision overlay; Reports, Settings and full Price Book screens; 18: guided tours, help panel, contextual help and empty states). Coder 1 (Jamie): Sprints 1–29 of the Coder 1 track are done, including plan answers into measurements (`takeoff/from_plans.py`), plan revision comparison, the processing-PC queue, the installer, the full setup wizard and the Estimator chapter of the User Guide (see the Implementation Plan's progress log). All Estimator tests: 1456 pass (both tracks merged, through Jamie's Sprint 31; Sprint 18 adds 25). Status by sprint: *Implementation Plan → Tracking → Coder 2 sprint status*.
+> **Where the build is (2026-11-09, evening).** Coder 2 (David): Sprints 1–18 are built and pushed (17: revision overlay; Reports, Settings and full Price Book screens; 18: guided tours, help panel, contextual help and empty states). Coder 1 (Jamie): Sprints 1–29 of the Coder 1 track are done, including plan answers into measurements (`takeoff/from_plans.py`), plan revision comparison, the processing-PC queue, the installer, the full setup wizard and the Estimator chapter of the User Guide (see the Implementation Plan's progress log). All Estimator tests: 1457 pass (both tracks merged, through Jamie's Sprint 31; Sprint 18 adds 25). Status by sprint: *Implementation Plan → Tracking → Coder 2 sprint status*.
 
 ## Overview
 
@@ -1202,7 +1202,7 @@ flowchart LR
     classDef todo fill:#eceff1,stroke:#90a4ae,color:#37474f
 ```
 
-**Score so far:** Coder 1 has all 14 blocks done (Sprints 1-29). Coder 2 has 13 of 13 blocks done and pushed (his Sprints 1-18, with the Estimator tab built by Coder 1 in Sprint 16): B11 is done — scans and photos and DWG (Sprint 16) plus its revision overlay, Reports, Settings and full Price Book screens (Sprint 17) — and B12 (guided tours and help panel) is done (Sprint 18); his M-series manual checks are still open. The build has 108 Estimator MCP tools and the unified Estimator suite passes 1,456 tests on David's PC.
+**Score so far:** Coder 1 has all 14 blocks done (Sprints 1-29). Coder 2 has 13 of 13 blocks done and pushed (his Sprints 1-18, with the Estimator tab built by Coder 1 in Sprint 16): B11 is done — scans and photos and DWG (Sprint 16) plus its revision overlay, Reports, Settings and full Price Book screens (Sprint 17) — and B12 (guided tours and help panel) is done (Sprint 18); his M-series manual checks are still open. The build has 108 Estimator MCP tools and the unified Estimator suite passes 1,457 tests on David's PC.
 
 **How the two halves connect.** Coder 2's pieces plug into Coder 1's at three points, so either side can be built and tested without waiting for the other:
 

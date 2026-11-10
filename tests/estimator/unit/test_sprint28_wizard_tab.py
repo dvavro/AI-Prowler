@@ -51,6 +51,13 @@ def test_tools_missing_gives_guidance():  # S28-T02
     assert "ODA" in dwg["detail"] and "free" in dwg["detail"].lower()
 
 
+def test_dwg_missing_gives_install_steps():  # S28-T04
+    tools = model.tool_status(which=lambda name: None, find_spec=lambda name: None)
+    dwg = next(t for t in tools if "DWG" in t["tool"])
+    assert not dwg["ok"]
+    assert "opendesign.com/guestfiles/oda_file_converter" in dwg["detail"]
+    assert "Download the Windows version" in dwg["detail"]
+    assert "Restart AI-Prowler" in dwg["detail"]
 def test_web_app_access(monkeypatch):  # S28-T03
     monkeypatch.delenv("ESTIMATOR_WEB_PORT", raising=False)
     a = model.web_app_access()
