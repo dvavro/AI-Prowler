@@ -2,6 +2,8 @@
 section + refreshed Phone and web app content (S28-W.., S28-T..)."""
 import pytest
 
+from pathlib import Path
+
 from estimator.context import personal_context
 from estimator.director import settings as director_settings
 from estimator.errors import InvalidInput
@@ -58,6 +60,8 @@ def test_dwg_missing_gives_install_steps():  # S28-T04
     assert "opendesign.com/guestfiles/oda_file_converter" in dwg["detail"]
     assert "Download the Windows version" in dwg["detail"]
     assert "Restart AI-Prowler" in dwg["detail"]
+
+
 def test_web_app_access(monkeypatch):  # S28-T03
     monkeypatch.delenv("ESTIMATOR_WEB_PORT", raising=False)
     a = model.web_app_access()
@@ -66,3 +70,10 @@ def test_web_app_access(monkeypatch):  # S28-T03
     assert "Estimating scope" in text and "field crew" in text
     monkeypatch.setenv("ESTIMATOR_WEB_PORT", "9999")
     assert model.web_app_access()["url"] == "http://localhost:9999/estimator/"
+
+
+def test_phone_section_has_open_estimator_button():  # S28-T05
+    src = (Path(__file__).resolve().parents[3] / "estimator" / "ui" / "gui_tab.py").read_text(encoding="utf-8")
+    phone = src.split("def _phone_section")[1].split("def _cad_section")[0]
+    assert "Open Estimator in browser" in phone
+    assert '_open_folder(model.web_app_access()["url"])' in phone

@@ -439,9 +439,12 @@ class EstimatorTab:
     # ------------------------------------------------------------ 📱 phone
 
     def _phone_section(self):
+        ttk = self.ttk
         box = self._box("📱 Phone and web app", "phone")
         for line in model.web_app_access()["lines"]:
             self._note(box, line, "#444")
+        ttk.Button(box, text="🌐 Open Estimator in browser",
+                   command=lambda: _open_folder(model.web_app_access()["url"])).pack(anchor="w", pady=(6, 0))
 
     # ------------------------------------------------------------ 🔧 CAD and tools
 
