@@ -213,7 +213,10 @@ function route() {
   const main = $("main");
   main.replaceChildren(el("p", { class: "muted" }, "Loading…"));
   const render = state.page ? (m => PAGES[state.page](m, state.pageArg)) : (SCREENS[screen.id] || renderComing);
-  Promise.resolve(render(main, screen)).catch(e => {
+  Promise.resolve(render(main, screen)).then(() => {
+    // Sprint 18: a tour auto-starts on first open (tour.js). Guarded so a failed tour.js never breaks routing.
+    if (typeof maybeStartTour === "function") { const p = maybeStartTour(); if (p && p.catch) p.catch(() => {}); }
+  }).catch(e => {
     if (e.status === 401) return;
     main.replaceChildren(el("h2", {}, state.page ? "Estimator" : screen.label), errorBox(e),
       el("p", {}, el("a", { href: "#/dashboard" }, "Back to the dashboard")));
@@ -227,7 +230,8 @@ async function renderDashboard(main, screen) {
   const head = el("div", { class: "page-head" }, el("h2", {}, screen.label),
     el("div", { class: "row" },
       el("a", { class: "button", href: "#/jobs", id: "dash-jobs" }, "📋 Jobs board"),
-      d.can_quick ? el("a", { class: "primary button", href: "#/quick", id: "dash-quick" }, "⚡ Quick estimate") : null));
+      d.can_quick ? el("a", { class: "primary button", href: "#/quick", id: "dash-quick" }, "⚡ Quick estimate") : null,
+      helpLink("dashboard")));
   const tiles = el("div", { class: "tiles" },
     el("div", { class: "card tile" }, el("div", { class: "num" }, d.total), el("div", { class: "lbl" }, "estimates")),
     ...Object.entries(d.counts).map(([k, v]) =>
@@ -271,7 +275,8 @@ async function renderProjects(main, screen) {
   const status = STATUSES.includes(q.get("status")) ? q.get("status") : "";
   const list = await api("GET", "/estimates?limit=500" + (status ? "&status=" + status : ""));
   const parts = [el("div", { class: "page-head" }, el("h2", {}, screen.label),
-    can("quick_estimate") ? el("a", { class: "button", href: "#/quick" }, "⚡ Quick estimate") : null)];
+    can("quick_estimate") ? el("a", { class: "button", href: "#/quick" }, "⚡ Quick estimate") : null,
+    helpLink("projects"))];
 
   if (can("create_estimate")) {
     const title = el("input", { id: "new-title", placeholder: "e.g. Miller – 123 Main St", maxlength: 200, required: true });
@@ -332,7 +337,7 @@ async function renderProject(main, id) {
   const parts = [
     el("p", {}, el("a", { href: "#/projects" }, "← Projects")),
     el("div", { class: "page-head" }, el("h2", {}, est.title || "Estimate " + est.id),
-      el("span", { class: "status big" }, words(est.status))),
+      el("span", { class: "status big" }, words(est.status)), helpLink("project")),
   ];
   if (est.practice) parts.push(el("p", { class: "note" }, "🎓 Practice project — not a real job."));
   if (est.editing_warning) parts.push(el("p", { class: "note warn" }, est.editing_warning));
@@ -356,7 +361,9 @@ async function renderProject(main, id) {
         el("tbody", {}, st.trades.map(t => el("tr", {},
           el("td", {}, t.name), el("td", {}, el("ul", { class: "plain" }, t.headline.map(h => el("li", {}, h)))),
           el("td", { class: "money" }, money(t.subtotal_cents))))))
-    : el("div", { class: "card empty" }, "No trades priced yet.");
+    : el("div", { class: "card empty" }, "No trades priced yet. ",
+      el("a", { href: "#/estimates/" + est.id }, "Open the estimate"),
+      " and price a trade, or ", el("a", { href: "#/quick/" + est.id }, "start a quick estimate"), ".");
   const tradeHead = el("div", { class: "page-head" }, el("h3", {}, "Trades"),
     p.can_quick && p.editable ? el("a", { class: "button", href: "#/quick/" + est.id, id: "add-quick" }, "⚡ Add a quick estimate") : null);
   parts.push(tradeHead, trades);
@@ -648,7 +655,9 @@ async function renderPriceBook(main, screen) {
     el("label", {}, "Find", find), el("label", { class: "check" }, onlySamples, " Samples only")));
 
   if (!book.prices.length) {
-    parts.push(el("div", { class: "card empty" }, "No prices here."));
+    parts.push(el("div", { class: "card empty" }, "No prices here. ",
+      el("a", { href: "#/help/set_up_your_price_book" }, "See how to add prices"),
+      " or paste a supplier's list below."));
   } else {
     const tbody = el("tbody", {}, book.prices.map(p => {
       const input = el("input", { type: "text", inputmode: "decimal", class: "cost", "data-key": p.price_key,
@@ -876,7 +885,8 @@ async function renderPlanSet(main, id) {
           s.needs_scale ? el("span", { class: "status sample" }, " needs a scale") : null),
         el("td", {}, s.revision || ""))))));
   } else if (ps.status === "processed") {
-    parts.push(el("div", { class: "card empty" }, "No sheets were found in this file."));
+    parts.push(el("div", { class: "card empty" }, "No sheets were found in this file. "
+      + "Upload a different file (a PDF, a photo, or a DXF/DWG) from the project page."));
   }
   if (ps.status === "processed" && r.sheets.length) {
     const tables = el("div", { id: "plan-tables" });
@@ -1048,7 +1058,8 @@ function foundSummary(found) {
 }
 
 function viewportTable(r, s, stage, img, msg) {
-  if (!r.viewports.length) return el("div", { class: "card empty" }, "No views were found on this sheet.");
+  if (!r.viewports.length) return el("div", { class: "card empty" }, "No views were found on this sheet. "
+    + "The plan engine couldn't find a scaled view - try re-reading the plan set, or upload a clearer copy.");
   const paper = s.units === "paper_in";
   return el("table", { class: "list", id: "viewports" },
     el("thead", {}, el("tr", {}, el("th", {}, "View"), el("th", {}, "Scale"), el("th", {}, "How it was found"),
@@ -1115,8 +1126,11 @@ function startCalibration(v, s, stage, img, msg) {
 
 // ------------------------------------------------------------------ Help link ("?" on each screen, Sprint 4)
 function helpLink(screenId) {
-  return el("a", { class: "button help-link", href: "#/help?screen=" + screenId, title: "How-to guides for this screen",
-                   "aria-label": "Help for this screen" }, "?");
+  // Sprint 18: "?" opens the help panel (guides for this screen + Replay tour) without leaving
+  // the screen. If tour.js failed to load, fall back to the full Help screen.
+  return el("button", { class: "button help-link", type: "button", title: "How-to guides for this screen",
+    "aria-label": "Help for this screen",
+    onclick: () => { if (typeof openHelpPanel === "function") openHelpPanel(screenId); else go("#/help?screen=" + screenId); } }, "?");
 }
 
 // ------------------------------------------------------------------ Jobs board (Sprint 4, quick lane)
@@ -1500,6 +1514,18 @@ async function renderHelp(main, screen) {
     ? el("ul", { class: "guides", id: "help-list" }, r.guides.map(g => el("li", {}, el("a", { href: "#/help/" + g.id }, g.title),
         g.steps ? el("span", { class: "muted small" }, " · " + g.steps + " steps") : null)))
     : el("div", { class: "card empty" }, "No guide matches that yet. Try fewer words, or ask your AI."));
+  if (typeof TOUR_IDS !== "undefined" && typeof tourReplayBtn === "function") {
+    // Sprint 18: replay any guided tour, with its done/skipped state.
+    const prog = typeof tourLoadProgress === "function" ? await tourLoadProgress() : {};
+    parts.push(el("h3", {}, "Guided tours"));
+    parts.push(el("p", { class: "muted" }, "A short walkthrough of each screen, pointing at the real controls. "
+      + "A tour runs the first time you open its screen; replay any of them here."));
+    parts.push(el("ul", { class: "guides", id: "help-tours" }, TOUR_IDS.map(id =>
+      el("li", {}, TOUR_BY_ID[id] ? TOUR_BY_ID[id].title : id,
+        prog[id] === "completed" ? el("span", { class: "muted small" }, " - done") : null,
+        prog[id] === "skipped" ? el("span", { class: "muted small" }, " - skipped") : null,
+        " ", tourReplayBtn(id)))));
+  }
   main.replaceChildren(...parts);
 }
 

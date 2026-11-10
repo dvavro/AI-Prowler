@@ -450,6 +450,7 @@ Source: "estimator\api\server.py"; DestDir: "{app}\estimator\api"; Flags: ignore
 Source: "estimator\api\staging.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\symbols_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\takeoff_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
+Source: "estimator\api\tours_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\bids\__init__.py"; DestDir: "{app}\estimator\bids"; Flags: ignoreversion
 Source: "estimator\bids\render.py"; DestDir: "{app}\estimator\bids"; Flags: ignoreversion
 Source: "estimator\bids\service.py"; DestDir: "{app}\estimator\bids"; Flags: ignoreversion
@@ -639,6 +640,8 @@ Source: "estimator\ui\help\guides\use_the_jobs_board.md"; DestDir: "{app}\estima
 Source: "estimator\ui\help\guides\use_reports.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\compare_plan_revisions.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\change_your_settings.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
+Source: "estimator\ui\help\guides\manage_your_projects.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
+Source: "estimator\ui\help\guides\use_the_dashboard.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\model.py"; DestDir: "{app}\estimator\ui"; Flags: ignoreversion
 Source: "estimator\ui\setup_flow.py"; DestDir: "{app}\estimator\ui"; Flags: ignoreversion
 Source: "estimator\ui\web\app.css"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
@@ -651,6 +654,7 @@ Source: "estimator\ui\web\mobile.js"; DestDir: "{app}\estimator\ui\web"; Flags: 
 Source: "estimator\ui\web\quantities.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
 Source: "estimator\ui\web\reports.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
 Source: "estimator\ui\web\settings.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
+Source: "estimator\ui\web\tour.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
 Source: "estimator\ui\web\review.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
 Source: "estimator\ui\web\verify.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
 

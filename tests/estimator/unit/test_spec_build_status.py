@@ -48,8 +48,8 @@ def test_s30_g03_coder2_blocks_match_the_plan_log():
     # Sprints 16-18 work: Sprint 16 built scans, photos and DWG (B11 wip),
     # Sprint 17 finished the revision overlay, Reports, Settings and the
     # full Price Book screens, so B11 is done. B12 (guided tours and help)
-    # is his Sprint 18 and stays to-do until he ships it.
-    assert _node_line(lines, "B12").endswith(":::todo")
+    # was his Sprint 18 and is done now too.
+    assert _node_line(lines, "B12").endswith(":::done")
 
 
 def test_s30_g04_score_line_is_current():
@@ -57,7 +57,7 @@ def test_s30_g04_score_line_is_current():
     score = [ln for ln in text.splitlines() if ln.startswith("**Score so far:**")]
     assert len(score) == 1
     assert "all 14 blocks done" in score[0]
-    assert "12 of 13 blocks" in score[0]
+    assert "13 of 13 blocks" in score[0]
 
 
 def test_s30_g05_stale_not_started_claims_are_gone():

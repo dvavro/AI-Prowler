@@ -57,7 +57,7 @@ async function renderTakeoffs(main, screen) {
   const parts = [el("div", { class: "page-head" }, el("h2", {}, screen.label), helpLink("takeoffs")),
     el("p", { class: "muted" }, "Measurements by project. Open one to check the plans, measure, and approve what gets priced.")];
   if (!r.projects.length) {
-    parts.push(el("div", { class: "card empty", id: "takeoffs-empty" }, "No plans or measurements yet — upload plans on a project and read them first."));
+    parts.push(el("div", { class: "card empty", id: "takeoffs-empty" }, "No plans or measurements yet. ", el("a", { href: "#/projects" }, "Open Projects"), " and upload plans, then read them first."));
   } else {
     parts.push(el("table", { class: "list clickable", id: "takeoff-projects" },
       el("thead", {}, el("tr", {}, el("th", {}, "Project"), el("th", {}, "Plans read"), el("th", {}, "To review"),

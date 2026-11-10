@@ -84,6 +84,7 @@ Sprint 17 (Coder 2): Reports and the plan revision overlay - see estimator/api/r
   GET /reports/revisions/<id>); Settings (owner) - see estimator/api/settings_api.py (GET /settings, POST
   /settings/<section>, POST /settings/backup, GET /settings/audit); the full Price Book: POST /price-book/import/preview
   (columns and the guessed mapping), GET /price-book/history/<key>, GET /price-book/markups.
+  Sprint 18 (Coder 2): guided tours - see estimator/api/tours_api.py (GET|POST /help/tours/progress, GET /help/practice).
 Sprint 8 (Coder 2): Estimates screen - see estimator/api/estimate_api.py: GET /estimates/<id>/detail|validate|history,
   POST /estimates/<id>/options[/choose], /lines, /calculate, /revision, /use-measurements; links in estimator/api/links.py
 Static: /estimator and /estimator/<file> from estimator/ui/web/.
@@ -467,6 +468,11 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
         return reports_api.route(m, sub, req, ctx, conn)
     if settings_api.handles(sub):
         return settings_api.route(m, sub, req, ctx, conn)
+
+    # ---------------------------------------------------------- Sprint 18: guided tours (help progress)
+    from estimator.api import tours_api
+    if tours_api.handles(sub):
+        return tours_api.route(m, sub, req, ctx, conn)
 
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
 

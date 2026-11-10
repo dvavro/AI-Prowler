@@ -778,6 +778,16 @@ CREATE INDEX ix_assembly_uses_section ON assembly_uses (trade_section_id);
 ALTER TABLE line_items ADD COLUMN override_reason TEXT;
 ALTER TABLE line_items ADD COLUMN override_at TEXT
 """),
+    (18, "guided tours: help progress per user", """
+CREATE TABLE help_progress (
+    user_id     TEXT NOT NULL,
+    tour_id     TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT not_started,
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (user_id, tour_id)
+);
+CREATE INDEX ix_help_progress_user ON help_progress (user_id)
+"""),
 ]
 
 

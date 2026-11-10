@@ -299,3 +299,18 @@ label.field textarea { margin-top: 4px; font-family: inherit; }
 .form-grid > .field:has(textarea) { grid-column: 1 / -1; }
 #pb-markups { gap: 14px; flex-wrap: wrap; align-items: baseline; }
 tr.pb-history > td { background: #f8fafc; }
+
+/* Sprint 18: guided tours and the help panel */
+.tour-pop { position: fixed; z-index: 60; width: 340px; max-width: calc(100vw - 16px); background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 28px rgba(15, 23, 42, .25); padding: 12px 14px; }
+.tour-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.tour-head strong { font-size: 15px; }
+.tour-pop p { margin: 8px 0 12px; }
+.tour-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.tour-btns { display: flex; gap: 6px; align-items: center; }
+.tour-mark { outline: 3px solid var(--brand); outline-offset: 3px; border-radius: 6px; }
+.help-panel { position: fixed; top: 0; right: 0; bottom: 0; z-index: 55; width: 360px; max-width: 92vw; background: #fff; border-left: 1px solid var(--line); box-shadow: -6px 0 24px rgba(15, 23, 42, .18); padding: 14px; overflow-y: auto; }
+.help-panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.help-panel-head strong { font-size: 16px; }
+.help-panel input[type="search"] { width: 100%; margin: 10px 0; }
+.help-panel-replay { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+@media (max-width: 700px) { .tour-pop { width: calc(100vw - 16px); } }

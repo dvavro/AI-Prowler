@@ -126,7 +126,8 @@ async function reportTakeoff(body, estimate) {
   r.notes.forEach(n => parts.push(el("p", { class: "note" }, n)));
   parts.push(el("p", {}, el("a", { href: "#/takeoffs/" + r.estimate_id }, "📏 Open in Blueprint Review"), " · ",
     el("a", { href: "#/estimates/" + r.estimate_id }, "🧮 Open the estimate")));
-  if (!r.trades.length) parts.push(el("div", { class: "card empty" }, "No measurements on this project yet."));
+  if (!r.trades.length) parts.push(el("div", { class: "card empty" }, "No measurements on this project yet. ",
+    el("a", { href: "#/takeoffs/" + r.estimate_id }, "Open Blueprint Review"), " and measure the plans."));
   for (const tr of r.trades) {
     parts.push(el("div", { class: "card section", "data-trade": tr.module_id },
       el("h3", {}, words(tr.module_id) + " — " + tr.approved + " approved, " + tr.waiting + " waiting"),
@@ -258,7 +259,7 @@ async function renderRevision(main, id) {
       tile(t.changed || 0, "Changed", "rev-changed"), tile(t.moved || 0, "Moved", "rev-moved"), tile(t.unchanged || 0, "Unchanged"),
       tile((r.flagged || []).length, "To re-measure", (r.flagged || []).length ? "warn" : ""))];
   if (!sheets.length) {
-    parts.push(el("div", { class: "card empty" }, "No sheets of the two sets could be matched."));
+    parts.push(el("div", { class: "card empty" }, "No sheets of the two sets could be matched. The two plan sets have no sheets in common, so there is nothing to compare - compare a different revision pair from the plan set page."));
   } else {
     const s = sheets[n];
     const pick = el("select", { id: "rev-sheet", "aria-label": "Sheet" }, sheets.map((x, i) =>

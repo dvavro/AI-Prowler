@@ -103,7 +103,8 @@ async function renderSymbolReview(main, planSetId) {
   if (canReview && list.length) parts.push(bulkBar(list, selected, cards, showCount, msg, detail, types));
   else if (!canReview) parts.push(el("p", { class: "note" }, "You can look at the symbols here; an owner, estimator or reviewer approves them."));
   parts.push(countLine, msg, detail,
-    list.length ? grid : el("div", { class: "card empty", id: "symrev-empty" }, "Nothing matches these filters."));
+    list.length ? grid : el("div", { class: "card empty", id: "symrev-empty" }, "Nothing matches these filters. ",
+      el("a", { href: location.hash.split("?")[0] }, "Clear the filters"), " and try again."));
   if (canReview) parts.push(addMissedForm(sheets, msg));
   main.replaceChildren(...parts);
 }
@@ -281,14 +282,16 @@ async function renderAgents(main, screen) {
     el("p", { class: "muted" }, "Each trade has a takeoff agent. Turn trades off, set how sure an agent must be before its quantities can go through, and watch the takeoff runs."),
     msg];
   if (!r.can_configure) parts.push(el("p", { class: "note" }, "Only the owner changes these settings."));
-  parts.push(el("table", { class: "list", id: "agents-list" },
+  parts.push(r.agents.length ? el("table", { class: "list", id: "agents-list" },
     el("thead", {}, el("tr", {}, el("th", {}, "Trade"), el("th", {}, "On"), el("th", {}, "Sure enough at"), el("th", {}, "Approve by itself"), el("th", {}, "Reads sheets"), el("th", {}, ""))),
-    el("tbody", {}, r.agents.map(a => agentRow(a, r.can_configure, msg)))));
+    el("tbody", {}, r.agents.map(a => agentRow(a, r.can_configure, msg))))
+    : el("div", { class: "card empty", id: "agents-empty" }, "No takeoff agents yet. Ask your AI to set up the trades - each trade gets an agent."));
 
   // Runs.
   parts.push(el("h3", {}, "Takeoff runs"));
   parts.push(r.runs.length ? el("div", { id: "runs-list" }, r.runs.map(run => runCard(run, r.can_start, msg)))
-    : el("div", { class: "card empty", id: "runs-empty" }, "No takeoff runs yet. The Director starts one for each plan job, or start one from a project's estimate."));
+    : el("div", { class: "card empty", id: "runs-empty" }, "No takeoff runs yet. The Director starts one for each plan job, or start one from ",
+      el("a", { href: "#/projects" }, "a project's estimate"), "."));
   main.replaceChildren(...parts);
 }
 

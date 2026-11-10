@@ -29,7 +29,8 @@ async function renderEstimates(main, screen) {
       el("td", {}, el("span", { class: "status" }, words(e.status))),
       el("td", { class: "money" }, e.total_cents !== undefined && e.total_cents !== null ? money(e.total_cents) : "—"),
       el("td", {}, when(e.updated_at))))))
-    : el("div", { class: "card empty", id: "estimates-empty" }, "No estimates" + (status ? " that are " + words(status) : "") + " yet."));
+    : el("div", { class: "card empty", id: "estimates-empty" }, "No estimates" + (status ? " that are " + words(status) : "") + " yet. ",
+      status ? el("a", { href: "#/estimates" }, "Show all estimates") : el("a", { href: "#/projects" }, "Create one from Projects"), "."));
   main.replaceChildren(...parts);
 }
 
@@ -58,7 +59,12 @@ async function renderEstimate(main, id) {
     parts.push(sectionBlock(d, sec, tr, lineLinks, meas, focusLine, msg));
   }
   for (const tr of tradesWithoutLines) parts.push(sectionBlock(d, { id: null, module_id: tr.module_id, lines: [], subtotal_cents: 0 }, tr, lineLinks, meas, focusLine, msg));
-  if (!est.sections.length && !tradesWithoutLines.length) parts.push(el("div", { class: "card empty", id: "estimate-empty" }, "No trades priced yet."));
+  if (!est.sections.length && !tradesWithoutLines.length) {
+    const next = d.can_edit
+      ? ["Measure the plans in ", el("a", { href: "#/takeoffs/" + est.id }, "Blueprint Review"), " and Recalculate, or add a line below."]
+      : ["Ask an estimator to price it."];
+    parts.push(el("div", { class: "card empty", id: "estimate-empty" }, "No trades priced yet. ", ...next));
+  }
   if (d.can_edit) parts.push(addLineForm(d, msg));
   main.replaceChildren(...parts);
   if (focusLine) {

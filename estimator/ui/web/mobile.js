@@ -10,6 +10,20 @@
 
 const MREV_SWIPE_PX = 80;
 
+// Sprint 18: the short phone tour. tour.js (loaded after this file) picks it up and
+// adds it to TOURS. The first step navigates to #/m/reviews so replaying it from the
+// Help screen lands on the phone screen first.
+const MREV_TOUR = { id: "mobile", title: "Reviews on your phone", steps: [
+  { sel: "#mrev-kinds", go: "#/m/reviews", title: "What to check",
+    body: "Symbols or measurements - the least sure ones come first." },
+  { sel: "#mrev-card", title: "One item at a time",
+    body: "Its picture in place on the sheet, outlined in red, and what the plan engine thinks it is." },
+  { sel: "#mrev-approve", title: "Approve or take out",
+    body: "Approve keeps it; Take out drops it. Every change asks first, the same as on the desktop." },
+  { sel: "#mrev-skip", title: "Not sure? Skip it",
+    body: "Skip leaves it for later. Swipe right to approve, left to take out." },
+]};
+
 function mrevHash(changes) {
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
   for (const [k, v] of Object.entries(changes)) { if (v === "" || v === null || v === undefined) q.delete(k); else q.set(k, v); }
