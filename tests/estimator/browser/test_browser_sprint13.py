@@ -8,6 +8,7 @@ import json
 import pytest
 
 from browser_helpers import HUMAN, answer_yes
+from e2e_helpers import dismiss_tour
 from estimator.context import personal_context
 from estimator.drawing_model import engine, store
 from estimator.estimating import service
@@ -48,9 +49,24 @@ def job(db, tmp_path):
     return {"jones": jones["id"], "smith": smith["id"], "room_m": m["proposed"][0]["id"]}
 
 
+@pytest.fixture(autouse=True)
+def _skip_mobile_tour(db):
+    """Pre-skip the mobile tour for the owner and field users, so its pop-up can never cover a phone control.
+
+    Same row the tour Skip button writes; the tour itself is covered by S18. tour.js also preserves a
+    same-path ?kind= filter when a tour step navigates, so the filter survives even if the tour runs."""
+    for user_id in ("owner", "field"):
+        db.execute("INSERT INTO help_progress (user_id, tour_id, status, updated_at)"
+                   " VALUES (?, 'mobile', 'skipped', '2026-11-09T00:00:00+00:00')"
+                   " ON CONFLICT (user_id, tour_id) DO UPDATE SET status = 'skipped'",
+                   (user_id,))
+    db.commit()
+
+
 def open_reviews(pg, query=""):
     pg.goto(pg.base + "?embed=1#/m/reviews" + query)
     pg.wait_for_selector("#mrev-card")
+    dismiss_tour(pg)
 
 
 def picture_loaded(pg):

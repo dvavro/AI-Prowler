@@ -6,6 +6,7 @@ Blueprint Review's Symbols tab and ?symbol= links, the Symbol Library and Agents
 import pytest
 
 from browser_helpers import HUMAN, answer_yes, type_in
+from e2e_helpers import dismiss_tour
 from estimator.context import personal_context
 from estimator.drawing_model import engine, store
 from estimator.estimating import service
@@ -65,6 +66,7 @@ def test_check_symbols_approve_and_relabel(page, job):                          
     cards.nth(0).click()
     cards.nth(1).click()
     assert page.inner_text("#symrev-count") == "3 matches, 2 selected"
+    dismiss_tour(page)  # the symbol-review tour autostarts on first open; its pop-up covers Approve
     page.click("#symrev-approve")
     answer_yes(page, "symrev")
     page.wait_for_function("() => document.querySelectorAll('#symrev-grid .sym-card[data-status=approved]').length === 2")

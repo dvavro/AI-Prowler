@@ -362,11 +362,16 @@ def _oda_glob() -> str:
     return ""
 
 
+DWG_DOWNLOAD_URL = "https://www.opendesign.com/guestfiles/oda_file_converter"
+
+
 def tool_status(which=None, find_spec=None) -> list[dict]:
     """CAD and file tools the Estimator can use on this PC, for the CAD and tools section of the tab.
 
-    Each entry is {"tool", "ok", "detail"}. Tests pass their own `which` / `find_spec` to fake the
-    whole environment; with the real ones, the ODA converter is also looked for in its install folders.
+    Each entry is {"tool", "ok", "detail"}; the DWG entry also carries "download_url" while the
+    converter is missing, so the tab can show a copy button for it. Tests pass their own `which` /
+    `find_spec` to fake the whole environment; with the real ones, the ODA converter is also looked
+    for in its install folders.
     """
     import importlib.util
     import shutil
@@ -379,19 +384,22 @@ def tool_status(which=None, find_spec=None) -> list[dict]:
     conv = dwg.find_converter(which=which, search_installs=real_which)
     oda = conv["path"] if conv else ""
     tess = which("tesseract") or ""
+    dwg_entry = {"tool": "DWG converter (ODA File Converter)", "ok": bool(oda),
+                 "detail": f"{conv['name']} found at {oda}; DWG plan files are converted to DXF with it." if oda else
+                           "Not installed, so DWG plan files cannot be opened. It is a free download from the"
+                           " Open Design Alliance (ODA File Converter) - install it like this:\n"
+                           f"1. Open {DWG_DOWNLOAD_URL} in your browser.\n"
+                           "2. Download the Windows version (Windows 10 or later, 64-bit).\n"
+                           "3. Run the downloaded installer and accept the defaults.\n"
+                           "4. Restart AI-Prowler - this line turns green and shows where the converter was found."}
+    if not oda:
+        dwg_entry["download_url"] = DWG_DOWNLOAD_URL
     return [
         {"tool": "DXF drawings", "ok": dxf,
          "detail": "ezdxf is installed, so DXF plan files can be read directly." if dxf else
                    "ezdxf is missing, so DXF plan files cannot be read. It ships in requirements.txt;"
                    " reinstalling AI-Prowler restores it."},
-        {"tool": "DWG converter (ODA File Converter)", "ok": bool(oda),
-         "detail": f"{conv['name']} found at {oda}; DWG plan files are converted to DXF with it." if oda else
-                   "Not installed, so DWG plan files cannot be opened. It is a free download from the"
-                   " Open Design Alliance (ODA File Converter) - install it like this:\n"
-                   "1. Open https://www.opendesign.com/guestfiles/oda_file_converter in your browser.\n"
-                   "2. Download the Windows version (Windows 10 or later, 64-bit).\n"
-                   "3. Run the downloaded installer and accept the defaults.\n"
-                   "4. Restart AI-Prowler - this line turns green and shows where the converter was found."},
+        dwg_entry,
         {"tool": "Tesseract OCR (reads scanned plans)", "ok": bool(tess),
          "detail": f"Found at {tess}." if tess else
                    "Not installed, so scanned plans and photos cannot be text-read (OCR)."},

@@ -805,13 +805,29 @@ function importBox() {
     staged = null;
     sheet.hidden = true;
     sheet.replaceChildren();
-    const ext = (f.name.split(".").pop() || "").toLowerCase();
-    if (ext === "csv" || ext === "txt") { text.value = await f.text(); return; }
+      const ext = (f.name.split(".").pop() || "").toLowerCase();
+      // Check size and type before uploading: the server answers 413/400 before
+      // reading the body, so the browser sees a dropped connection instead of
+      // the message - and any 4xx response fails the E2E console guard.
+      // Worded to match the server stage errors (router.py _stage_price_list).
+      if (f.size > 5 * 1024 * 1024) {
+        msg.replaceChildren(errorBox({ message: f.name + " is " + Math.floor(f.size / 1048576) +
+          " MB; the limit is 5 MB. Split the list or save just the columns you need" }));
+        return;
+      }
+      if (!["csv", "txt", "xlsx", "xlsm"].includes(ext)) {
+        msg.replaceChildren(errorBox({ message: "." + ext +
+          " cannot be used; price lists can be CSV or Excel (.csv, .txt, .xlsx, .xlsm)" }));
+        return;
+      }
+      if (ext === "csv" || ext === "txt") { text.value = await f.text(); return; }
     try {
       const r = await uploadPriceList(f);
       staged = r;
       if ((r.sheets || []).length > 1) {
-        sheet.replaceChildren(r.sheets.map(s => el("option", { value: s }, s)));
+        // NB: replaceChildren takes nodes, not an array — without the spread
+        // the array stringifies to a text node and the select gets 0 options.
+        sheet.replaceChildren(...r.sheets.map(s => el("option", { value: s }, s)));
         sheet.hidden = false;
       }
       msg.replaceChildren(el("p", { class: "muted" }, f.name + ": " + r.row_count + " row(s), " + r.columns.length + " column(s)."));
@@ -1180,7 +1196,7 @@ function startCalibration(v, s, stage, img, msg) {
 function helpLink(screenId) {
   // Sprint 18: "?" opens the help panel (guides for this screen + Replay tour) without leaving
   // the screen. If tour.js failed to load, fall back to the full Help screen.
-  return el("button", { class: "button help-link", type: "button", title: "How-to guides for this screen",
+  return el("button", { class: "button help-link", type: "button", id: "help-link", title: "How-to guides for this screen",
     "aria-label": "Help for this screen",
     onclick: () => { if (typeof openHelpPanel === "function") openHelpPanel(screenId); else go("#/help?screen=" + screenId); } }, "?");
 }

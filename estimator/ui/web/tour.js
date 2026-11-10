@@ -325,8 +325,17 @@ function tourShow(i) {
   if (i >= steps.length) { tourFinish(); return; }
   const step = steps[i];
   cur.step = i;
-  const go = step.go ? step.go.replace("{practice}", String(cur.practiceId || "")) : null;
-  if (go && location.hash !== go) {
+    let go = step.go ? step.go.replace("{practice}", String(cur.practiceId || "")) : null;
+    if (go && !go.includes("?")) {
+      // Keep this screen’s filter: a step that goes to #/m/reviews while the
+      // user is on #/m/reviews?kind=symbol must not drop ?kind=symbol (the
+      // phone queue would show every waiting item, not the filtered kind).
+      // Only the same path keeps its query — a step moving to another screen
+      // must not carry this screen’s query with it.
+      const qAt = location.hash.indexOf("?");
+      if (qAt >= 0 && location.hash.slice(0, qAt) === go) go += location.hash.slice(qAt);
+    }
+    if (go && location.hash !== go) {
     tourPopHide();
     tourClearMark();
     location.hash = go;
@@ -507,7 +516,9 @@ async function helpPanelFill(screenId) {
   const list = $("help-panel-list");
   list.replaceChildren(el("li", { class: "muted" }, "Loading the guides…"));
   let guides = [];
-  try { guides = await api("GET", "/help/guides?screen=" + encodeURIComponent(screenId)); } catch (e) { guides = []; }
+  // The endpoint returns {guides: [...]} (see renderHelp); assigning the
+  // whole response made helpPanelGuides.filter throw on every panel open.
+  try { guides = (await api("GET", "/help/guides?screen=" + encodeURIComponent(screenId))).guides || []; } catch (e) { guides = []; }
   helpPanelGuides = guides;
   helpPanelFilter();
 }
@@ -525,5 +536,6 @@ function helpPanelFilter() {
         : "Nothing matches that search — try fewer words."));
     return;
   }
-  for (const g of shown) list.append(el("li", el("a", { href: "#/help/" + g.id }, g.title)));
+  // NB: el(tag, attrs, ...kids) — the <a> is a child, not the attrs object.
+  for (const g of shown) list.append(el("li", {}, el("a", { href: "#/help/" + g.id }, g.title)));
 }

@@ -132,7 +132,7 @@ input.scale-note { width: 13em; }
 .bp-tool.active { background: #e8f0fe; border-color: var(--brand); color: var(--brand); font-weight: 600; }
 .bp-split { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; align-items: start; }
 .bp-viewer { position: relative; height: 72vh; min-height: 420px; overflow: hidden; background: #e9ecef;
-             border: 1px solid var(--line); border-radius: 8px; touch-action: none; cursor: grab; outline: none; }
+             border: 1px solid var(--line); border-radius: 8px; touch-action: none; user-select: none; cursor: grab; outline: none; }
 .bp-viewer:focus-visible { box-shadow: 0 0 0 3px #c9dafc; }
 .bp-viewer.drawing { cursor: crosshair; }
 .bp-viewer:fullscreen { height: 100vh; border-radius: 0; }
@@ -162,6 +162,7 @@ polygon.bp-m { fill: #d9480f; fill-opacity: .12; }
 polygon.bp-m.approved { fill: #2b8a3e; }
 .bp-m .bp-dot { stroke: inherit; }
 .bp-draft-shape { fill: #1c7ed6; fill-opacity: .1; stroke: #1c7ed6; stroke-width: 2px; stroke-dasharray: 4 3; pointer-events: none; }
+.bp-zoombox { fill: #1c7ed6; fill-opacity: .08; stroke: #1c7ed6; stroke-width: 2px; stroke-dasharray: 4 3; pointer-events: none; }
 .bp-dot.draft { stroke: #1c7ed6; pointer-events: none; }
 .bp-snap { fill: none; stroke: #e03131; stroke-opacity: .55; stroke-width: 16px; stroke-linecap: round; pointer-events: none; }
 

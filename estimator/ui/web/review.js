@@ -19,6 +19,7 @@ const REAL_FT = { in: 1 / 12, ft: 1, mm: 1 / 304.8, cm: 1 / 30.48, m: 3.28084 };
 const TOOLS = [
   ["select", "↖", "Select", "Click a room, wall or symbol to select it (Shift-click for more). Drag to move around."],
   ["pan", "✋", "Pan", "Drag to move around the sheet."],
+  ["zoomwin", "🔍", "Zoom window", "Drag a box to zoom into it. Click to zoom in one step."],
   ["length", "📏", "Length", "Click along the line; double-click (or Enter) to finish."],
   ["area", "⬠", "Area", "Click the corners; click the first point, double-click or press Enter to finish."],
   ["rect", "▭", "Rectangle", "Click two opposite corners."],
@@ -329,6 +330,7 @@ function setTool(id, msg) {
   RV.tool = id;
   RV.draft = [];
   if (RV.viewer) RV.viewer.drawDraft();
+  if (RV.viewer) RV.viewer.clearZoomBox();
   for (const b of document.querySelectorAll(".bp-tool")) b.classList.toggle("active", b.dataset.tool === id);
   const t = TOOLS.find(x => x[0] === id);
   if ($("bp-tool-help")) $("bp-tool-help").textContent = t ? t[3] : "";
@@ -375,12 +377,13 @@ class Viewer {
     this.overlay = svg("svg", { class: "bp-overlay", "aria-hidden": "true" });
     this.stage.append(this.tilesLayer, this.overlay);
     box.replaceChildren(this.stage);
-    this.z = 1; this.tx = 0; this.ty = 0; this.level = -1; this.tileEls = new Map(); this.pointers = new Map();
+    this.z = 1; this.tx = 0; this.ty = 0; this.level = -1; this.tileEls = new Map(); this.pointers = new Map(); this.zoomBox = null;
     box.addEventListener("wheel", ev => { ev.preventDefault(); this.zoomAt(ev.deltaY < 0 ? 1.2 : 1 / 1.2, ev.clientX, ev.clientY); }, { passive: false });
     box.addEventListener("pointerdown", ev => this.down(ev));
     box.addEventListener("pointermove", ev => this.move(ev));
     box.addEventListener("pointerup", ev => this.up(ev));
-    box.addEventListener("pointercancel", ev => this.pointers.delete(ev.pointerId));
+    box.addEventListener("pointercancel", ev => this.cancel(ev));
+    box.addEventListener("dragstart", ev => ev.preventDefault());
     box.addEventListener("dblclick", ev => { ev.preventDefault(); finishDraft(this.msg); });
     box.addEventListener("keydown", ev => this.key(ev));
   }
@@ -392,6 +395,7 @@ class Viewer {
     this.backdrop = null;
     for (const n of this.box.querySelectorAll(".bp-empty")) n.remove();
     this.overlay.setAttribute("viewBox", "0 0 " + this.W + " " + this.H);
+    this.clearZoomBox();
     drawOverlay(this.overlay);
     const saved = RV.view[RV.sheetId];
     if (saved) { this.z = saved.z; this.tx = saved.tx; this.ty = saved.ty; this.render(); } else this.fit();
@@ -408,13 +412,20 @@ class Viewer {
     const r = this.box.getBoundingClientRect();
     const [ux, uy] = this.toSheet(cx, cy);
     const fitZ = Math.min(r.width / this.W, r.height / this.H);
-    this.z = Math.min(Math.max(this.z * f, fitZ / 4), fitZ * 40);      // past ~40x the tiles only get bigger
+    // Wheel zoom has no working cap: pro viewers let it run until the detail
+    // fills the screen. The old fitZ * 40 cap stopped a plan that is a small
+    // part of its sheet at ~40 px wide. The raster tiles blur past that, but
+    // the vector overlay stays sharp; 4000x fit is a sanity bound only.
+    this.z = Math.min(Math.max(this.z * f, fitZ / 4), fitZ * 4000);
     this.tx = cx - r.left - ux * this.z; this.ty = cy - r.top - uy * this.z;
     this.render();
   }
   zoomToBox(b) {
     const r = this.box.getBoundingClientRect();
-    const w = Math.max(b[2] - b[0], this.W / 200), h = Math.max(b[3] - b[1], this.H / 200);
+    // Floor is a small absolute size, not a fraction of the sheet: zoom to
+    // selection must fit the selected thing, and W/200 is ~1,100 units on a
+    // sheet whose plan is only 300 units wide.
+    const w = Math.max(b[2] - b[0], 10), h = Math.max(b[3] - b[1], 10);
     this.z = Math.min((r.width * 0.8) / w, (r.height * 0.8) / h);
     this.tx = r.width / 2 - (b[0] + w / 2) * this.z; this.ty = r.height / 2 - (b[1] + h / 2) * this.z;
     this.render();
@@ -432,6 +443,15 @@ class Viewer {
     const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
     this.zoomToBox([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
   }
+  drawZoomBox() {
+    let r = this.overlay.querySelector("#bp-zoombox");
+    if (!this.zoomBox) { if (r) r.remove(); return; }
+    const [x0, y0, x1, y1] = this.zoomBox;
+    if (!r) { r = svg("rect", { id: "bp-zoombox", class: "bp-zoombox" }); this.overlay.append(r); }
+    r.setAttribute("x", x0); r.setAttribute("y", y0);
+    r.setAttribute("width", Math.max(0, x1 - x0)); r.setAttribute("height", Math.max(0, y1 - y0));
+  }
+  clearZoomBox() { this.zoomBox = null; this.drawZoomBox(); }
   toSheet(cx, cy) {
     const r = this.box.getBoundingClientRect();
     return [(cx - r.left - this.tx) / this.z, (cy - r.top - this.ty) / this.z];
@@ -516,6 +536,11 @@ class Viewer {
     s.moved = true;
     if (["select", "pan"].includes(RV.tool) || ev.buttons === 4) {
       this.tx = s.tx + dx; this.ty = s.ty + dy; this.render();
+    } else if (RV.tool === "zoomwin") {
+      const [x0, y0] = this.toSheet(s.x, s.y);
+      const [x1, y1] = this.toSheet(ev.clientX, ev.clientY);
+      this.zoomBox = [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
+      this.drawZoomBox();
     }
   }
   up(ev) {
@@ -523,12 +548,31 @@ class Viewer {
     if (this.pointers.size < 2) this.pinch = null;
     const s = this.start;
     this.start = null;
+    if (RV.tool === "zoomwin") {
+      if (this.pointers.size > 0) { this.clearZoomBox(); return; }
+      if (s && s.moved && Math.hypot(ev.clientX - s.x, ev.clientY - s.y) >= 8) {
+        const [x0, y0] = this.toSheet(s.x, s.y);
+        const [x1, y1] = this.toSheet(ev.clientX, ev.clientY);
+        this.clearZoomBox();
+        this.zoomToBox([Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)]);
+      } else if (s) {
+        this.clearZoomBox();
+        this.zoomAt(1.5, ev.clientX, ev.clientY);
+      }
+      return;
+    }
     if (!s || s.moved) return;
     if (RV.tool === "select") { pickAt(s.target, s.shift, this.msg); return; }
     if (RV.tool === "pan") return;
     const p = this.place(ev);
     if (RV.tool === "symbol") { addSymbolForm([round3(p[0]), round3(p[1])], this.msg); return; }
     addDraftPoint([round3(p[0]), round3(p[1])], this.msg);
+  }
+  cancel(ev) {
+    this.pointers.delete(ev.pointerId);
+    if (this.pointers.size < 2) this.pinch = null;
+    if (!this.pointers.size) this.start = null;
+    this.clearZoomBox();
   }
   // Sprint 8 polish: snap to the drawing's corners (within 10 px; hold Alt to place freely), and Shift keeps the new
   // segment straight across or straight down.
@@ -546,11 +590,11 @@ class Viewer {
     return [ux, uy];
   }
   hover(ev) {
-    if (["select", "pan"].includes(RV.tool)) return;
+    if (["select", "pan", "zoomwin"].includes(RV.tool)) return;
     this.drawDraft(this.place(ev));
   }
   key(ev) {
-    if (ev.key === "Escape") { RV.draft = []; this.drawDraft(); }
+    if (ev.key === "Escape") { RV.draft = []; this.drawDraft(); this.clearZoomBox(); this.start = null; }
     else if ((ev.key === "Backspace" || ev.key === "Delete") && RV.draft.length) { RV.draft.pop(); this.drawDraft(); }
     else if (ev.key === "Enter") finishDraft(this.msg);
     else if (ev.key === "+" || ev.key === "=") this.zoomBy(1.5);

@@ -453,6 +453,20 @@ class EstimatorTab:
         for tool in model.tool_status():
             mark = "✅" if tool["ok"] else "❌"
             self._note(box, mark + " " + tool["tool"] + ": " + tool["detail"], GREEN if tool["ok"] else RED)
+            url = tool.get("download_url")
+            if url:
+                btn = self.ttk.Button(box, text="📋 Copy download link")
+                btn.config(command=lambda b=btn, u=url: self._copy_link(b, u))
+                btn.pack(anchor="w", pady=(4, 0))
+
+    def _copy_link(self, button, url):
+        """Copy a download link to the clipboard; the button itself says so."""
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(url)
+            button.config(text="✅ Copied — paste it in your browser")
+        except Exception:  # noqa: BLE001 - clipboard unavailable (remote desktop, etc.)
+            button.config(text="❌ Couldn't copy the link")
 
     # ------------------------------------------------------------ ❓ help
 

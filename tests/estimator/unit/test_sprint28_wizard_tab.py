@@ -77,3 +77,57 @@ def test_phone_section_has_open_estimator_button():  # S28-T05
     phone = src.split("def _phone_section")[1].split("def _cad_section")[0]
     assert "Open Estimator in browser" in phone
     assert '_open_folder(model.web_app_access()["url"])' in phone
+
+
+def test_dwg_missing_carries_download_url():  # S28-T06
+    tools = model.tool_status(which=lambda name: None, find_spec=lambda name: None)
+    dwg = next(t for t in tools if "DWG" in t["tool"])
+    assert not dwg["ok"]
+    assert dwg.get("download_url") == "https://www.opendesign.com/guestfiles/oda_file_converter"
+    assert dwg["download_url"] in dwg["detail"]
+
+
+def test_dwg_found_carries_no_download_url():  # S28-T07
+    tools = model.tool_status(which=lambda name: "C:\\tools\\" + name + ".exe",
+                              find_spec=lambda name: object())
+    dwg = next(t for t in tools if "DWG" in t["tool"])
+    assert dwg["ok"] and "download_url" not in dwg
+
+
+def test_cad_section_has_copy_download_link_button():  # S28-T08
+    src = (Path(__file__).resolve().parents[3] / "estimator" / "ui" / "gui_tab.py").read_text(encoding="utf-8")
+    cad = src.split("def _cad_section")[1].split("def _copy_link")[0]
+    assert "Copy download link" in cad
+    assert 'tool.get("download_url")' in cad
+    copy_fn = src.split("def _copy_link")[1].split("def _help_section")[0]
+    assert "clipboard_clear" in copy_fn and "clipboard_append" in copy_fn
+    assert "Copied" in copy_fn
+
+
+def test_modules_match_screenshot():  # S28-T09
+    mods = model.modules()
+    assert [(m["name"], m["category"], m["how"], m["version"]) for m in mods] == [
+        ("Concrete", "construction", "quick or plans", "0.1.0"),
+        ("Demolition", "construction", "quick or plans", "0.1.0"),
+        ("Drywall", "construction", "quick or plans", "0.1.0"),
+        ("Electrical", "construction", "quick or plans", "0.1.0"),
+        ("Fencing", "construction", "quick or plans", "0.1.0"),
+        ("Flooring", "construction", "quick or plans", "0.1.0"),
+        ("Framing", "construction", "quick or plans", "0.1.0"),
+        ("HVAC", "construction", "quick or plans", "0.1.0"),
+        ("Insulation", "construction", "quick or plans", "0.1.0"),
+        ("Landscaping", "construction", "quick or plans", "0.1.0"),
+        ("Painting", "construction", "quick or plans", "0.1.0"),
+        ("Plumbing", "construction", "quick or plans", "0.1.0"),
+        ("Roofing", "construction", "quick or plans", "0.1.0"),
+        ("Siding", "construction", "quick or plans", "0.1.0"),
+        ("Windows and Doors", "construction", "quick or plans", "0.1.0"),
+        ("General Service Job", "service", "quick quote", "0.1.0"),
+        ("House Cleaning", "service", "quick quote", "0.1.0"),
+        ("Junk Removal", "service", "quick quote", "0.1.0"),
+        ("Landscaping Maintenance", "service", "quick quote", "0.1.0"),
+        ("Pest Control", "service", "quick quote", "0.1.0"),
+        ("Pool Service", "service", "quick quote", "0.1.0"),
+        ("Pressure Washing", "service", "quick quote", "0.1.0"),
+        ("Window Cleaning", "service", "quick quote", "0.1.0"),
+    ]
