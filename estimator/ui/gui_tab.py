@@ -6,6 +6,7 @@ to, so keep the first words stable):
 
     🧭 Estimator setup        on/off, what's installed, the setup checklist
     🏢 Company and pricing    name, phone, license, sales tax, overhead, profit, minimum charge
+    💰 Labor rates            what your crew's time costs, per hour or per unit
     🏗 Trades                 which construction trades the Estimator runs takeoffs for
     🤖 AI agents and budget   which AI runs each agent, its backup, the daily and monthly budget
     🧑‍💼 Director              review limit, quick-send limit, follow-ups, daily briefing, watcher
@@ -51,9 +52,14 @@ class EstimatorTab:
         self.app, self.tk, self.ttk, self.parent = app, tk, ttk, parent
         self.root = parent.winfo_toplevel()
         self.sections = {}
+        self._section_box = {}
+        self._section_title = {}
+        self._section_header = {}
+        self._section_collapsed = {}
         self._setup_section()
-        for build in (self._company_section, self._trades_section, self._agents_section, self._director_section,
-                      self._modules_section, self._data_section, self._cad_section, self._phone_section, self._help_section):
+        for build in (self._company_section, self._labor_section, self._trades_section, self._agents_section,
+                      self._director_section, self._modules_section, self._data_section, self._cad_section,
+                      self._phone_section, self._help_section):
             try:
                 build()
             except Exception as exc:  # noqa: BLE001 - one broken section doesn't take the rest down
@@ -64,10 +70,35 @@ class EstimatorTab:
     # ------------------------------------------------------------ helpers
 
     def _box(self, title: str, key: str):
-        box = self.ttk.LabelFrame(self.parent, text=title, padding=(12, 8))
+        """A section whose title collapses/expands it when selected. A plain Frame is
+        used, not a LabelFrame: a LabelFrame keeps its expanded height even after its
+        content is unpacked, so a collapsed section would leave a big empty box.
+        The body keeps a grooved border so the grouped look stays."""
+        box = self.ttk.Frame(self.parent)
         box.pack(fill="x", padx=16, pady=(10, 4))
-        self.sections[key] = box
-        return box
+        header = self.ttk.Label(box, text="▼ " + title, font=("Arial", 9, "bold"), cursor="hand2")
+        header.pack(anchor="w")
+        body = self.ttk.Frame(box, relief="groove", borderwidth=1, padding=(12, 8))
+        body.pack(fill="x")
+        self.sections[key] = body
+        self._section_box[key] = box
+        self._section_title[key] = title
+        self._section_header[key] = header
+        self._section_collapsed[key] = False
+        header.bind("<Button-1>", lambda e, k=key: self._toggle_section(k))
+        return body
+
+    def _toggle_section(self, key: str):
+        """Collapse or expand a section (from its title)."""
+        collapsed = not self._section_collapsed.get(key, False)
+        self._section_collapsed[key] = collapsed
+        title = self._section_title[key]
+        if collapsed:
+            self.sections[key].pack_forget()
+            self._section_header[key].config(text="▶ " + title)
+        else:
+            self.sections[key].pack(fill="x")
+            self._section_header[key].config(text="▼ " + title)
 
     def _note(self, parent, text, color="#333", size=9):
         lbl = self.ttk.Label(parent, text=text, wraplength=WRAP, justify="left", foreground=color,
@@ -171,26 +202,61 @@ class EstimatorTab:
                   font=("Arial", 9, "bold")).pack(anchor="w")
         icons = {"done": "✅", "skipped": "⏭", "not_started": "⬜"}
         quick = {"company_profile": "🏢 Company and pricing", "tax": "🏢 Company and pricing",
-                 "markups": "🏢 Company and pricing", "services": "🏗 Trades", "team_approvals": "🧑‍💼 Director", "ai_check": "🤖 AI agents and budget"}
+                 "markups": "🏢 Company and pricing", "services": "🏗 Trades", "team_approvals": "🧑‍💼 Director",
+                 "ai_check": "🤖 AI agents and budget", "labor_rates": "💰 Labor rates"}
+        # Steps with no section in this tab: the Price Book and the bid template live in the web app,
+        # and a sample quote is the practice project.
+        actions = {"price_book_review": lambda: self._open_web("#/price_book"),
+                   "bid_template": lambda: self._open_web("#/settings"),
+                   "sample_quote": self._sample_quote_setup}
         rows = ttk.Frame(self.check_frame)
         rows.pack(fill="x")
+        rows.columnconfigure(1, weight=1)  # the leader line stretches; the buttons stay right
         for i, s in enumerate(st["steps"]):
             ttk.Label(rows, text=f"{icons.get(s['status'], '⬜')}  {s['label']}").grid(row=i, column=0, sticky="w",
                                                                                       padx=(0, 24), pady=1)
+            self._checklist_leader(rows, i)
+            # The button that opens the step's setup — "Set up" while it is not done,
+            # "Change" once it is done, so a finished step can still be edited.
+            if s["step"] in quick:
+                open_cmd = lambda t=quick[s["step"]]: self._scroll_to(t)
+            elif s["step"] in actions:
+                open_cmd = actions[s["step"]]
+            else:
+                open_cmd = None
+            if open_cmd is not None:
+                ttk.Button(rows, text="Change" if s["status"] == "done" else "Set up", width=8,
+                           command=open_cmd).grid(row=i, column=2)
             if s["status"] == "done":
                 continue
-            if s["step"] in quick:
-                ttk.Button(rows, text="Set up", width=8,
-                           command=lambda t=quick[s["step"]]: self._scroll_to(t)).grid(row=i, column=1)
             ttk.Button(rows, text="Done", width=6,
-                       command=lambda k=s["step"]: self._step(k, "done")).grid(row=i, column=2, padx=2)
+                       command=lambda k=s["step"]: self._step(k, "done")).grid(row=i, column=3, padx=2)
             if s["status"] != "skipped":
                 ttk.Button(rows, text="Skip", width=6,
-                           command=lambda k=s["step"]: self._step(k, "skipped")).grid(row=i, column=3)
+                           command=lambda k=s["step"]: self._step(k, "skipped")).grid(row=i, column=4)
         if st["sample_prices_in_use"]:
             self._note(self.check_frame, f"⚠ {st['sample_prices_in_use']} sample prices are still in use. Ask your AI "
                                          "\"show my price book\" to set your own before sending real bids.",
                        "#b45309")
+
+    def _checklist_leader(self, rows, i):
+        """A dashed line from a checklist item's text to its buttons, as in the
+        Setup AI-Prowler home page (setup_wizard.SetupCenterPanel._leader).
+        Gridded in the stretch column, so it fills exactly the gap between them."""
+        try:
+            bg = self.ttk.Style().lookup("TFrame", "background") or rows.winfo_toplevel().cget("bg")
+        except Exception:  # noqa: BLE001 - fall back to the default canvas background
+            bg = ""
+        line = self.tk.Canvas(rows, width=20, height=3, highlightthickness=0, bd=0,
+                              **({"bg": bg} if bg else {}))
+        line.leader = True  # for tests
+
+        def draw(e=None):
+            line.delete("all")
+            line.create_line(0, 2, line.winfo_width(), 2, dash=(3, 4), fill="#8a8a8a")
+        line.bind("<Configure>", draw)
+        line.grid(row=i, column=1, sticky="ew", padx=(8, 8))
+        draw()  # the line exists even before the first Configure event (e.g. tests)
 
     def _step(self, step, status):
         ok, msg = model.mark_step(step, status)
@@ -198,10 +264,37 @@ class EstimatorTab:
             self._say(self.switch_msg, (ok, msg))
         self.refresh_setup()
 
-    def _scroll_to(self, title_start: str):
-        box = next((b for b in self.sections.values() if str(b.cget("text")).startswith(title_start)), None)
-        if box is None:
+    def _open_user_guide(self):
+        """Open the same User Guide popup as Help \u2192 User Guide, jumped to the Estimator chapter."""
+        show = getattr(self.app, "show_user_guide", None)
+        if callable(show):
+            show(section="29. Estimator")
             return
+        from pathlib import Path
+        guide = Path(__file__).resolve().parents[2] / "COMPLETE_USER_GUIDE.md"
+        if guide.exists():
+            _open_folder(guide)
+
+    def _open_web(self, path: str):
+        """Open a page of the Estimator web app in the browser (Price Book, Settings, ...)."""
+        _open_folder(model.web_app_access()["url"] + path)
+
+    def _sample_quote_setup(self):
+        """Make the practice project (the sample quote) if there isn't one, then mark the step done."""
+        if not model.practice_id():
+            ok, msg = model.practice_create()
+            self._say(self.switch_msg, (ok, msg))
+            if not ok:
+                return
+        self._step("sample_quote", "done")
+
+    def _scroll_to(self, title_start: str):
+        key = next((k for k, t in self._section_title.items() if t.startswith(title_start)), None)
+        if key is None:
+            return
+        if self._section_collapsed.get(key):
+            self._toggle_section(key)  # scrolling to a section opens it so its content is seen
+        box = self._section_box[key]
         try:
             canvas = box.master.master
             canvas.update_idletasks()
@@ -217,6 +310,10 @@ class EstimatorTab:
         ttk = self.ttk
         box = self._box("🏢 Company and pricing", "company")
         self._note(box, "Goes on every bid. Percentages are plain numbers: 8.6 means 8.6%.", GREY, 8)
+        self._note(box, "Overhead % is the slice added to every bid to cover running the business \u2014 rent, "
+                        "insurance, vehicle, office and phone \u2014 the costs that aren't tied to one job. It's "
+                        "charged as a % of the job's direct cost (materials + labor + equipment + subs). Profit % "
+                        "is then charged on top of cost + overhead, not on cost alone.", GREY, 8)
         p = model.profile()
         grid = ttk.Frame(box)
         grid.pack(fill="x", pady=(6, 0))
@@ -240,6 +337,51 @@ class EstimatorTab:
         ttk.Button(b, text="💾 Save company and pricing", command=save).pack(side="left")
         msg = self._note(box, "")
 
+    # ------------------------------------------------------------ 💰 labor rates
+
+    def _labor_section(self):
+        ttk = self.ttk
+        box = self._box("💰 Labor rates", "labor")
+        self._note(box, "What your crew's time costs. These rates price the labor lines in every estimate. "
+                        "Sample rates are placeholders \u2014 set your own before sending real bids.", GREY, 8)
+        grid = ttk.Frame(box)
+        grid.pack(fill="x", pady=(6, 0))
+        msg = None
+        self.labor_vars = {}
+        rates = model.labor_rates()
+        by_mod = {}
+        for r in rates:
+            by_mod.setdefault(r.get("module_id") or "other", []).append(r)
+        row = 0
+        for mod_id in sorted(by_mod):
+            ttk.Label(grid, text=mod_id.replace("_", " ").title(), font=("Arial", 9, "bold")
+                      ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(6, 1))
+            row += 1
+            for r in by_mod[mod_id]:
+                # The description already ends in " (sample)" for sample rates, and the
+                # flag would add it a second time — show neither. The section note
+                # already says sample rates are placeholders.
+                desc = r["description"]
+                if desc.lower().endswith(" (sample)"):
+                    desc = desc[: -len(" (sample)")].rstrip()
+                label = f"{desc}  (per {r['unit']})"
+                ttk.Label(grid, text=label).grid(row=row, column=0, sticky="w", padx=(0, 6), pady=1)
+                var = self.tk.StringVar(value=f"{r['cost_cents'] / 100:.2f}")
+                ttk.Entry(grid, textvariable=var, width=10).grid(row=row, column=1, sticky="w", pady=1)
+                self.labor_vars[r["price_key"]] = var
+                row += 1
+        if not rates:
+            self._note(box, "No labor rates yet.", GREY, 8)
+        b = ttk.Frame(box)
+        b.pack(fill="x", pady=(6, 0))
+
+        def save():
+            prices = {k: v.get().strip() for k, v in self.labor_vars.items() if v.get().strip()}
+            if self._say(msg, model.save_labor_rates(prices)):
+                self.refresh_setup()
+        ttk.Button(b, text="💾 Save labor rates", command=save).pack(side="left")
+        msg = self._note(box, "")
+
     # ------------------------------------------------------------ 🏗 trades
 
     def _trades_section(self):
@@ -258,6 +400,15 @@ class EstimatorTab:
             ttk.Checkbutton(grid, text=t["name"], variable=var,
                             command=lambda m=t["module_id"], v=var: self._say(msg, model.set_trade(m, v.get()))
                             ).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 16), pady=1)
+        svc = ttk.Frame(box)
+        svc.pack(fill="x", pady=(10, 0))
+        ttk.Label(svc, text="Services (always available for estimation \u2014 quick quotes, no plans needed)",
+                  font=("Arial", 9, "bold")).pack(anchor="w")
+        sgrid = ttk.Frame(svc)
+        sgrid.pack(fill="x", pady=(4, 0))
+        for i, m in enumerate(model.services()):
+            ttk.Label(sgrid, text=f"\u2705  {m['name']}  ({m['how']})", font=("Arial", 9)
+                      ).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 16), pady=1)
         msg = self._note(box, "")
 
     # ------------------------------------------------------------ 🤖 agents
@@ -478,11 +629,8 @@ class EstimatorTab:
             self._note(box, f"   •  \"{p}\"", "#333")
         self._note(box, "Ask \"how do I use the Estimator?\" and your AI will read the Estimator's own instructions "
                         "(how_to_estimate).", GREY, 8)
-        from pathlib import Path
-        guide = Path(__file__).resolve().parents[2] / "COMPLETE_USER_GUIDE.md"
-        if guide.exists():
-            ttk.Button(box, text="📖 Open the User Guide (Estimator is chapter 29)",
-                       command=lambda: _open_folder(guide)).pack(anchor="w", pady=(6, 0))
+        ttk.Button(box, text="📖 Open the User Guide (Estimator is chapter 29)",
+                   command=self._open_user_guide).pack(anchor="w", pady=(6, 0))
 
 
 def _open_folder(path) -> None:

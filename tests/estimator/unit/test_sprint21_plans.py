@@ -176,7 +176,10 @@ def test_upload_refusals(db, tmp_path, monkeypatch):  # S21-U02
     assert db.execute("SELECT COUNT(*) FROM plan_sets").fetchone()[0] == 0
 
 
-def test_upload_kinds_revisions_and_roles(db, tmp_path):  # S21-U03
+def test_upload_kinds_revisions_and_roles(db, tmp_path, monkeypatch):  # S21-U03
+    # The DWG warning only appears when no converter is installed; David installed the ODA
+    # File Converter on 2026-11-10, so force the no-converter path or the warning is empty.
+    monkeypatch.setenv("ESTIMATOR_DWG_CONVERTER", "off")
     est = _estimate(db)
     dxf = tmp_path / "site.dxf"
     dxf.write_text("  0\nSECTION\n  2\nHEADER\n  0\nENDSEC\n  0\nEOF\n")

@@ -1830,9 +1830,9 @@ class RAGGui:
         help_menu.add_separator()
         help_menu.add_command(label="ℹ️ About AI Prowler", command=self.show_about)
     
-    def show_user_guide(self):
-        """Show user guide in new window"""
-        self.show_help_window("User Guide", self.get_user_guide_content())
+    def show_user_guide(self, section=None):
+        """Show user guide in new window (optionally jumped to a section, e.g. "29. Estimator")."""
+        self.show_help_window("User Guide", self.get_user_guide_content(), section=section)
     
     def show_quick_start(self):
         """Show quick start guide"""
@@ -2696,14 +2696,16 @@ class RAGGui:
             extra_buttons=extra_buttons,
             width=860, height=680)
 
-    def show_help_window(self, title, content):
+    def show_help_window(self, title, content, section=None):
         """Show help content in a navigable window with a clickable Table of
         Contents sidebar and section-jump capability.
 
         The TOC is built by scanning for lines that start with '## ' (top-level
         sections).  Clicking a TOC entry scrolls the main text pane to that
         heading.  Markdown headings are rendered bold/larger; code blocks get a
-        monospace font. The raw markdown escape sequences used in the .md file
+        monospace font. If section is given (e.g. "29. Estimator"), the window opens
+        jumped to the first Contents entry whose label contains it.
+        The raw markdown escape sequences used in the .md file
         (\\--- , \\*, \\[, etc.) are stripped for readability.
         """
         import re as _re
@@ -3022,6 +3024,26 @@ class RAGGui:
         toc_list.bind('<<ListboxSelect>>', _on_toc_select)
         toc_list.bind('<Double-Button-1>', _on_toc_select)
 
+        def _jump_to_section(query):
+            """Select the first Contents entry whose label contains query and scroll to it."""
+            q = (query or "").strip().lower()
+            if not q:
+                return
+            for idx, (label, mark) in enumerate(toc_entries):
+                if q in label.lower():
+                    toc_list.selection_clear(0, tk.END)
+                    toc_list.selection_set(idx)
+                    toc_list.see(idx)
+                    try:
+                        mark_index = txt.index(mark)
+                        txt.see(mark_index)
+                        txt.update_idletasks()
+                        txt.yview_scroll(-5, 'units')
+                        txt.see(mark_index)
+                    except Exception:
+                        pass
+                    return
+
         # ── Highlight tag for search matches ──────────────────────────────────
         txt.tag_configure('find_match',
                           background='#ffee00', foreground='#000000')
@@ -3163,6 +3185,9 @@ class RAGGui:
         ttk.Button(btn_row, text="Close",
                    command=win.destroy,
                    width=8).pack(side='right')
+
+        if section:
+            win.after(100, lambda: _jump_to_section(section))
 
     def show_job_tracker_guide(self):
         """Show the job-data explainer — what AI-Prowler's database does for
@@ -3917,21 +3942,18 @@ or from the Help menu."""
         win_id = canvas.create_window((0, 0), window=inner, anchor='nw')
         canvas.configure(yscrollcommand=vsb.set)
 
-        # Keep inner frame width locked to canvas width (fill='x' widgets expand),
-        # and height to max(content, canvas) so expand=True widgets fill the
-        # window when content is shorter than the visible area.
+        # Keep inner frame width locked to canvas width (fill='x' widgets expand).
+        # The height is NOT forced: the window follows its requested height, so the
+        # scrollregion always tracks the content when it grows or shrinks. Forcing
+        # the height to max(content, canvas) went stale — collapsing all sections
+        # then expanding one left the window and the scrollregion at the old height,
+        # so the scrollbar could not reach the sections further down.
         def _sync_canvas(e, wid=win_id):
-            content_h = inner.winfo_reqheight()
-            new_h     = max(content_h, e.height)
-            canvas.itemconfig(wid, width=e.width, height=new_h)
+            canvas.itemconfig(wid, width=e.width)
             canvas.configure(scrollregion=canvas.bbox('all'))
 
         # Update scrollregion whenever child content changes height.
         def _sync_scrollregion(e):
-            content_h  = inner.winfo_reqheight()
-            canvas_h   = canvas.winfo_height()
-            new_h      = max(content_h, canvas_h)
-            canvas.itemconfig(win_id, height=new_h)
             canvas.configure(scrollregion=canvas.bbox('all'))
 
         canvas.bind('<Configure>', _sync_canvas)

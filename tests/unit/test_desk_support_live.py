@@ -12,6 +12,7 @@ fake clock, so a 15-second poll takes no time. (The live two-browser version
 is tests/e2e/desk/test_desk_customer_cycle_e2e.py::test_S9_..., run with
 tests\\run_desk_e2e.py.)
 """
+import base64
 import copy
 import json
 import re
@@ -24,6 +25,14 @@ ROOT = Path(__file__).resolve().parents[2]
 HTML = (ROOT / "desk" / "support.html").read_text(encoding="utf-8")
 TOKEN = "LiveTok_" + "a" * 24
 BASE = "http://desk.test"
+
+AGENT = {"enabled": True, "name": "AI-Prowler", "label": "AI assistant",
+         "display": "AI-Prowler · AI assistant",
+         "photo_url": "/support-api/agent/photo?v=1", "ask_who": "anyone"}
+ANSWER = "The Server has 16GB of memory."
+# 1x1 transparent PNG, so the agent photo img actually loads in the mock.
+PHOTO_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAwMCAO+ip1sAAAAASUVORK5CYII=")
 
 pw_sync = pytest.importorskip("playwright.sync_api")
 
@@ -64,10 +73,18 @@ class Api:
         path = re.sub(r"^https?://[^/]+", "", req.url).split("?")[0]
         if path.startswith("/support/t/"):
             return route.fulfill(status=200, content_type="text/html; charset=utf-8", body=HTML)
+        if path == "/support/new":
+            return route.fulfill(status=200, content_type="text/html; charset=utf-8", body=HTML)
+        if path == "/support-api/agent":
+            return route.fulfill(status=200, content_type="application/json",
+                                 body=json.dumps({"ok": True, **AGENT}))
+        if path == "/support-api/agent/photo":
+            return route.fulfill(status=200, content_type="image/png", body=PHOTO_PNG)
         if path == "/support-api/info":
             return route.fulfill(status=200, content_type="application/json",
                                  body=json.dumps({"ok": True, "business": "Vavro Field Services",
-                                                  "portal_enabled": True, "sms": True}))
+                                                  "portal_enabled": True, "sms": True, "paths": ["book", "buy", "new", "problem"],
+                                                  "welcome": "Welcome to AI-Prowler LLC", "services": [], "products": []}))
         if path == f"/support-api/t/{TOKEN}" and req.method == "GET":
             self.gets += 1
             if self.fail:
@@ -76,12 +93,20 @@ class Api:
             return route.fulfill(status=200, content_type="application/json",
                                  body=json.dumps({"ok": True, "ticket": copy.deepcopy(self.ticket),
                                                   "business": "Vavro Field Services"}))
+        if req.method == "POST" and path == "/support-api/ask":
+            body = json.loads(req.post_data or "{}")
+            self.posts.append(("ask", body))
+            return route.fulfill(status=200, content_type="application/json",
+                                 body=json.dumps({"ok": True, "answer": ANSWER}))
         if req.method == "POST" and path.startswith(f"/support-api/t/{TOKEN}/"):
             body = json.loads(req.post_data or "{}")
             self.posts.append((path.rsplit("/", 1)[1], body))
             if path.endswith("/reply"):
                 self.ticket["messages"].append({"author_kind": "customer", "at": "2026-10-28T14:30:00Z",
                                                 "body": body["body"]})
+            if path.endswith("/ask"):
+                return route.fulfill(status=200, content_type="application/json",
+                                     body=json.dumps({"ok": True, "answer": ANSWER}))
             return route.fulfill(status=201, content_type="application/json", body='{"ok": true}')
         return route.fulfill(status=404, body="")
 
@@ -113,6 +138,22 @@ def page_api(browser):
     page.route("**/*", api.handle)
     page.goto(f"{BASE}/support/t/{TOKEN}")
     page.locator("#h1", has_text="Request T-0007").wait_for()
+    yield page, api
+    ctx.close()
+
+
+@pytest.fixture
+def page_landing(browser):
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.set_default_timeout(5000)
+    api = Api()
+    page.add_init_script(VIS)
+    page.clock.install(time=1_800_000_000_000)
+    page.clock.pause_at(1_800_000_001_000)
+    page.route("**/*", api.handle)
+    page.goto(f"{BASE}/support/new")
+    page.locator("#h1", has_text="How can we help?").wait_for()
     yield page, api
     ctx.close()
 
@@ -229,3 +270,38 @@ def test_sending_a_reply_clears_only_that_draft(page_api):
     settle(page)
     assert page.locator("#reply").input_value() == ""
     assert api.posts[-1] == ("reply", {"body": "See you then"})
+
+def test_ask_card_shows_agent_photo_and_enter_submits(page_api):
+    """Ask card: the agent photo sits by the title, and Enter asks (2026-11-11)."""
+    page, api = page_api
+    pic = page.locator("img.askpic")
+    assert pic.count() == 1
+    assert "/support-api/agent/photo" in (pic.get_attribute("src") or "")
+    assert page.evaluate("document.querySelector('img.askpic').naturalWidth") > 0
+    page.locator("#askQ").fill("How much memory does the Server have?")
+    page.locator("#askQ").press("Shift+Enter")
+    settle(page)
+    assert not any(p[0] == "ask" for p in api.posts)   # Shift+Enter is a newline, not a send
+    assert "\n" in page.locator("#askQ").input_value()
+    page.locator("#askQ").press("Enter")
+    settle(page)
+    assert any(p[0] == "ask" and p[1]["question"].startswith("How much memory")
+               for p in api.posts)
+    page.get_by_text("16GB of memory").wait_for()
+    assert page.locator("#askQ").input_value() == ""
+
+
+def test_landing_ask_card_shows_agent_photo_and_enter_submits(page_landing):
+    """Landing page Ask card: same photo by the title, same Enter to ask."""
+    page, api = page_landing
+    pic = page.locator("#askCard img.askpic")
+    assert pic.count() == 1
+    assert "/support-api/agent/photo" in (pic.get_attribute("src") or "")
+    assert page.evaluate("document.querySelector('#askCard img.askpic').naturalWidth") > 0
+    page.locator("#askQNew").fill("How much memory does the Server have?")
+    page.locator("#askQNew").press("Enter")
+    settle(page)
+    assert any(p[0] == "ask" and p[1]["question"].startswith("How much memory")
+               for p in api.posts)
+    page.get_by_text("16GB of memory").wait_for()
+    assert page.locator("#askQNew").input_value() == ""

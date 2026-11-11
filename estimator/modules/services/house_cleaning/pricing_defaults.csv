@@ -1,5 +1,5 @@
 price_key,description,kind,unit,cost
-hc_labor_hr,Cleaning labor per hour (sample),other,hr,50.00
+hc_labor_hr,Cleaning labor per hour (sample),labor,hr,50.00
 hc_oven_ea,Inside oven (sample),other,ea,35.00
 hc_fridge_ea,Inside fridge (sample),other,ea,35.00
 hc_window_ea,Interior window (sample),other,ea,6.00

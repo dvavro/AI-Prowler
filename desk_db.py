@@ -305,7 +305,27 @@ CREATE INDEX IF NOT EXISTS ix_portal_hits ON portal_hits(key, at);
 """
 
 # Ordered migrations: (to_version, [sql, ...]). Version 1 is SCHEMA_SQL itself.
-MIGRATIONS: list[tuple[int, list[str]]] = []
+MIGRATIONS: list[tuple[int, list[str]]] = [
+    # 2 (2026-11-10): the public chat's verify-first flow. ask_codes holds the
+    # 6-digit code a visitor gets before asking (separate from verify_codes,
+    # so asking never invalidates a code for filing a request, and vice
+    # versa); ask_tokens holds the 24-hour token a verified visitor asks with.
+    (2, [
+        """CREATE TABLE IF NOT EXISTS ask_codes (
+            contact_id TEXT PRIMARY KEY,
+            code_hash  TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            attempts   INTEGER NOT NULL DEFAULT 0,
+            sent_at    TEXT NOT NULL
+        );""",
+        """CREATE TABLE IF NOT EXISTS ask_tokens (
+            token_hash TEXT PRIMARY KEY,
+            contact_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        );""",
+    ]),
+]
 
 
 def apply_schema(conn: sqlite3.Connection) -> None:

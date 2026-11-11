@@ -1334,6 +1334,16 @@ async function renderAgentSection() {
     <label title="${esc(o.signoff_help)}">Signature ending — words after the assistant's name</label>
     <input id="agSignoff" maxlength="80" value="${esc(s.agent_reply_signoff)}" placeholder="blank = your business name">
     <p ${small}>${esc(o.signoff_help)}</p>
+    <h3 style="margin:14px 0 4px">Customer chat — who may ask, and what it answers</h3>
+    <p class="muted" style="font-size:12px;margin:0 0 4px">The "Ask the AI assistant" box on the main page and on each request form. It answers to the page it sits on: booking is about services, shopping is about products, a quote is about services, a problem can be about either. The ticket page always answers about that ticket.</p>
+    <label title="${esc(o.ask_who_help)}">Who can ask</label>${sel('agent_ask_who', o.ask_who, o.ask_who_help)}
+    <p ${small}>${esc(o.ask_who_help)}</p>
+    <div class="tog"><input type="checkbox" data-agb="agent_ask_services" ${s.agent_ask_services ? 'checked' : ''}><span>The chat may answer about services</span></div>
+    <div class="tog"><input type="checkbox" data-agb="agent_ask_products" ${s.agent_ask_products ? 'checked' : ''}><span>The chat may answer about products</span></div>
+    <div class="row"><div><label>Questions per visitor per hour (0 = no limit)</label><input id="agAskPerHour" type="number" min="0" max="1000" value="${esc(s.agent_ask_per_hour)}"></div></div>
+    <div class="row"><div><label>AI context file (optional)</label><input id="agAskContextFile" value="${esc(s.agent_ask_context_file)}" placeholder="e.g. C:\\AI-Prowler\\ask-context.txt"></div>
+    <button class="b ghost" id="agAskContextClear" type="button">Clear</button></div>
+    <p class="muted" style="font-size:12px;margin:4px 0 0">A .txt or .md file on this PC that the Ask chat reads for extra business information (FAQs, policies, service details). Type or paste the full path — a browser can't pick a file on the server. Blank = none.</p>
     <h3 style="margin:14px 0 4px">Timing</h3>
     <p class="muted" style="font-size:12px;margin:0 0 4px">Replies go out as soon as they're approved. Hours 0 to 24 = any time.</p>
     <div class="row"><div><label>Works from (hour)</label><input id="agH0" type="number" min="0" max="23" value="${esc(s.agent_hours[0])}"></div>
@@ -1458,6 +1468,7 @@ async function renderAgentSection() {
   // unless the person is in it or has changed it without saving; their edit stays and Save writes it.
   const AG_BOXES = { agName: x => x.agent_name, agSignoff: x => x.agent_reply_signoff, agH0: x => x.agent_hours[0],
     agH1: x => x.agent_hours[1], agBudget: x => x.agent_monthly_budget_usd, agWait: x => x.agent_wait_hours,
+    agAskContextFile: x => x.agent_ask_context_file,
     bkPerDay: x => x.agent_bk_confirm_per_day, bkCheckHour: x => x.agent_bk_check_hour, jbMax: x => x.agent_jb_invoice_max,
     jbPerDay: x => x.agent_jb_invoices_per_day, jbQuote: x => x.agent_jb_quote_days,
     jbRemind: x => (x.agent_jb_remind_days || []).join(', '), jbHour: x => x.agent_jb_prep_hour, rtHour: x => x.agent_jb_route_send_hour };
@@ -1522,6 +1533,7 @@ async function renderAgentSection() {
     try { await api('POST', '/desk-api/agent/photo/delete', {}); toast('Photo removed.'); refresh(); }
     catch (e) { toast(e.message); }
   });
+  $('#agAskContextClear').addEventListener('click', () => { $('#agAskContextFile').value = ''; });
   $('#agSave').addEventListener('click', async () => {
     // 2026-11-03 (F-1, F-2, F-6): a box that isn't a whole number in range is refused, not quietly turned
     // into $0 or 4, and the card is saved in one request — all of it or, if anything is refused, none of it.
@@ -1533,8 +1545,11 @@ async function renderAgentSection() {
     if (budget === null) { toast('Monthly AI budget must be whole dollars between 0 and 10000.'); return; }
     const wait = whole('#agWait', 1, 168);
     if (wait === null) { toast('Nudge after must be whole hours between 1 and 168.'); return; }
+    const askPerHour = whole('#agAskPerHour', 0, 1000);
+    if (askPerHour === null) { toast('Questions per visitor per hour must be a whole number between 0 and 1000 (0 = no limit).'); return; }
     const vals = { agent_name: $('#agName').value.trim(), agent_reply_signoff: $('#agSignoff').value.trim(),
-      agent_hours: [h0, h1], agent_monthly_budget_usd: budget, agent_wait_hours: wait };
+      agent_hours: [h0, h1], agent_monthly_budget_usd: budget, agent_wait_hours: wait, agent_ask_per_hour: askPerHour,
+      agent_ask_context_file: $('#agAskContextFile').value.trim() };
     try { await api('POST', '/desk-api/settings', { values: vals }); toast('Saved.'); refresh(); }
     catch (e) { toast(e.message); }
   });

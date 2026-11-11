@@ -92,6 +92,18 @@ STAGE_MODE_LABELS = {"off": "Off", "suggest": "Suggest (a person approves)", "au
 # Always shown with the name. Fixed list on purpose: customers must be able to
 # tell they're talking to an assistant, not a person (see the module docstring).
 LABELS = ("Virtual assistant", "AI assistant", "Digital assistant")
+
+# Who may ask the assistant a question on the public pages (2026-11-10, David:
+# "limiting questions and answer topics" + "verify user first"). "anyone" is
+# today's behaviour; "verified" asks for a 6-digit code first; "ticket" turns
+# the chat off everywhere except a ticket's own status page.
+ASK_WHO = (("anyone", "Anyone - no check"),
+           ("verified", "Verified visitors - code first"),
+           ("ticket", "Ticket holders only"))
+ASK_WHO_HELP = ("Who may ask the assistant on the public pages. Anyone: no check. "
+                "Verified visitors: they get a 6-digit code by text or email first, "
+                "then can ask for a day. Ticket holders only: the chat shows only on "
+                "a ticket's own status page, never on the main or form pages.")
 DEFAULT_LABEL = LABELS[0]
 
 PHOTO_REL = "agent/avatar.jpg"
@@ -116,11 +128,17 @@ DEFAULTS = {
     "agent_wait_hours": 4,
     "agent_reply_signoff": "",            # blank = the business name
     "agent_include_service_link": False,
+    "agent_ask_who": "anyone",              # who may ask on the public pages
+    "agent_ask_services": True,           # the chat may answer about services
+    "agent_ask_products": True,           # the chat may answer about products
+    "agent_ask_per_hour": 10,             # questions per visitor per hour (0 = no limit)
+    "agent_ask_context_file": "",         # path to a .txt/.md file the Ask chat reads for extra business info
 }
 
 CHOICES = {
     "agent_provider": tuple(p for p, _ in PROVIDERS),
     "agent_label": LABELS,
+    "agent_ask_who": tuple(w for w, _ in ASK_WHO),
     "agent_photo": ("", PHOTO_REL),
     **{f"agent_stage_{k}": STAGE_MODES for k, _ in STAGES},
 }
@@ -131,6 +149,7 @@ RANGES = {
     "agent_batch_seconds": (0, 3600),
     "agent_max_items": (1, 50),
     "agent_wait_hours": (1, 168),
+    "agent_ask_per_hour": (0, 1000),
 }
 
 _NAME_RE = re.compile(r"^[A-Za-z][A-Za-z .'\-]*$")
@@ -159,6 +178,8 @@ def validate(key: str, value, edition: str | None = None) -> None:
             raise ValueError("the agent's name can use letters, spaces, . ' and - only")
     if key == "agent_reply_signoff" and len(value.strip()) > SIGNOFF_MAX:
         raise ValueError(f"the sign-off can be at most {SIGNOFF_MAX} characters")
+    if key == "agent_ask_context_file" and len(value.strip()) > 500:
+        raise ValueError("the AI context file path can be at most 500 characters")
     if key.startswith("agent_jb_"):
         validate_jb(key, value)
     if key.startswith("agent_hr_"):
@@ -280,7 +301,45 @@ def public_profile(db_path: str, business: str = "") -> dict:
     has = p["photo"] and photo_path(_root(db_path)).exists()
     ver = int(photo_path(_root(db_path)).stat().st_mtime) if has else 0
     return {"enabled": bool(s.get("agent_enabled")), "name": p["name"], "label": p["label"],
-            "display": p["display"], "photo_url": f"/support-api/agent/photo?v={ver}" if has else ""}
+            "display": p["display"], "photo_url": f"/support-api/agent/photo?v={ver}" if has else "",
+            "ask_who": s.get("agent_ask_who") or "anyone"}
+
+
+# ── The Ask chat's extra business info ───────────────────────────────────────
+# A plain-text file the owner points the Ask chat at (2026-11-11, David): FAQs,
+# policies, service details — anything the assistant should refer to when it
+# answers a question, beyond the services/products facts.
+
+ASK_CONTEXT_MAX_CHARS = 20000
+ASK_CONTEXT_EXTS = (".txt", ".md")
+
+
+def ask_context_text(db_path: str, max_chars: int = ASK_CONTEXT_MAX_CHARS) -> str:
+    """The AI context file's text, or "" when there is nothing usable.
+
+    "" when the setting is blank, the file is missing or unreadable, the file is
+    not a .txt/.md text file, or it is binary — the ask never fails because of
+    this file. Capped at max_chars so a huge file can't blow up the prompt.
+    """
+    import desk_db
+    path = (desk_db.get_settings(db_path).get("agent_ask_context_file") or "").strip()
+    if not path:
+        return ""
+    p = Path(path)
+    if p.suffix.lower() not in ASK_CONTEXT_EXTS:
+        return ""
+    try:
+        with p.open("rb") as f:
+            raw = f.read(max_chars * 4 + 16)
+    except Exception:  # noqa: BLE001 - missing, unreadable, a folder: skip silently
+        return ""
+    if b"\x00" in raw:
+        return ""  # binary, not a text file
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+    return text[:max_chars]
 
 
 def providers_for(edition: str | None) -> list:
@@ -311,7 +370,8 @@ def ui_options(edition: str | None = None) -> dict:
     return {"providers": [list(p) for p in providers_for(edition)], "stages": [list(s) for s in STAGES],
             "stage_modes": [[m, STAGE_MODE_LABELS[m]] for m in STAGE_MODES],
             "stage_help": STAGE_HELP, "mode_help": MODE_HELP, "practice_help": PRACTICE_HELP,
-            "signoff_help": SIGNOFF_HELP, "labels": list(LABELS), "name_max": NAME_MAX}
+            "signoff_help": SIGNOFF_HELP, "labels": list(LABELS), "name_max": NAME_MAX,
+            "ask_who": [list(w) for w in ASK_WHO], "ask_who_help": ASK_WHO_HELP}
 
 
 # ── The ticket-flow diagram (David 2026-10-30) ───────────────────────────────

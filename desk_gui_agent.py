@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import desk_agent_settings as das
 
-INT_KEYS = ("agent_monthly_budget_usd", "agent_wait_hours", "agent_bk_confirm_per_day", "agent_bk_check_hour")
-STR_KEYS = ("agent_name", "agent_reply_signoff")
-CHOICE_KEYS = (("agent_provider", "agent_label") + tuple(f"agent_stage_{k}" for k, _ in das.STAGES)
+INT_KEYS = ("agent_monthly_budget_usd", "agent_wait_hours", "agent_bk_confirm_per_day", "agent_bk_check_hour",
+            "agent_ask_per_hour")
+STR_KEYS = ("agent_name", "agent_reply_signoff", "agent_ask_context_file")
+CHOICE_KEYS = (("agent_provider", "agent_label", "agent_ask_who") + tuple(f"agent_stage_{k}" for k, _ in das.STAGES)
                + tuple(f"agent_bk_stage_{k}" for k, _ in das.BK_STAGES))
-BOOL_KEYS = ("agent_enabled", "agent_shadow", "agent_include_service_link",
+BOOL_KEYS = ("agent_enabled", "agent_shadow", "agent_include_service_link", "agent_ask_services", "agent_ask_products",
              "agent_bk_enabled", "agent_bk_shadow", "agent_bk_can_confirm", "agent_bk_weather")
 
 
@@ -840,6 +841,7 @@ def build_agent_settings(app, parent, on_saved=None) -> dict:
     _cur = das.effective_provider(s, edition)
     v["agent_provider"] = tk.StringVar(value=_label_for(providers, _cur) if any(p == _cur for p, _ in providers) else "")
     v["agent_label"] = tk.StringVar(value=s["agent_label"])
+    v["agent_ask_who"] = tk.StringVar(value=_label_for(das.ASK_WHO, s["agent_ask_who"]))
     modes = [(m, das.STAGE_MODE_LABELS[m]) for m in das.STAGE_MODES]
     for k, _ in das.STAGES:
         v[f"agent_stage_{k}"] = tk.StringVar(value=_label_for(modes, s[f"agent_stage_{k}"]))
@@ -979,11 +981,49 @@ def build_agent_settings(app, parent, on_saved=None) -> dict:
     ttk.Checkbutton(tim, text='Add the "request service" link to first replies',
                     variable=v["agent_include_service_link"]).pack(anchor="w", pady=(2, 0))
 
+    # ── customer chat (2026-11-10, David: who may ask, what it answers, rate limit)
+    chat = ttk.LabelFrame(parent, text="Customer chat \u2014 who may ask, and what it answers", padding=(6, 4))
+    chat.pack(fill="x", pady=(6, 0))
+    ttk.Label(chat, text="The \u201cAsk the AI assistant\u201d box on the main page and on each request form. "
+                         "It answers to the page it sits on.", font=small, wraplength=520,
+              justify="left").pack(anchor="w")
+    row = ttk.Frame(chat); row.pack(fill="x", pady=(4, 0))
+    ttk.Label(row, text="Who can ask", width=16, font=small).pack(side="left")
+    cb = calm(ttk.Combobox(row, textvariable=v["agent_ask_who"], state="readonly", width=40,
+                            values=[lab for _, lab in das.ASK_WHO]))
+    cb.pack(side="left")
+    _tooltip(cb, das.ASK_WHO_HELP)
+    ttk.Checkbutton(chat, text="The chat may answer about services",
+                    variable=v["agent_ask_services"]).pack(anchor="w", pady=(2, 0))
+    ttk.Checkbutton(chat, text="The chat may answer about products",
+                    variable=v["agent_ask_products"]).pack(anchor="w")
+    row = ttk.Frame(chat); row.pack(fill="x", pady=(2, 0))
+    ttk.Label(row, text="Questions per visitor per hour (0 = no limit)", font=small).pack(side="left")
+    spin(row, v["agent_ask_per_hour"], 0, 1000, 6).pack(side="left", padx=(4, 0))
+    row = ttk.Frame(chat); row.pack(fill="x", pady=(2, 0))
+    ttk.Label(row, text="AI context file (optional)", font=small).pack(side="left")
+    ent = ttk.Entry(row, textvariable=v["agent_ask_context_file"], width=40, state="readonly")
+    ent.pack(side="left", padx=(4, 0), fill="x", expand=True)
+
+    def choose_context():
+        path = filedialog.askopenfilename(title="AI context file", filetypes=[
+            ("Text files", "*.txt *.md"), ("All files", "*.*")])
+        if path:
+            v["agent_ask_context_file"].set(path)
+
+    ttk.Button(row, text="Choose file\u2026", command=choose_context).pack(side="left", padx=(4, 0))
+    ttk.Button(row, text="Clear",
+               command=lambda: v["agent_ask_context_file"].set("")).pack(side="left")
+    ttk.Label(chat, text="A .txt or .md file on this PC the Ask chat reads for extra business "
+              "information (FAQs, policies, service details). Blank = none.",
+              font=small, foreground="gray", wraplength=520, justify="left").pack(anchor="w")
+
     def current_form(src: dict | None = None) -> dict:
         get = (lambda k: src[k]) if src is not None else (lambda k: v[k].get())
         form = {k: get(k) for k in BOOL_KEYS + STR_KEYS + INT_KEYS}
         form["agent_provider"] = _value_for(providers, get("agent_provider"))
         form["agent_label"] = get("agent_label")
+        form["agent_ask_who"] = _value_for(das.ASK_WHO, get("agent_ask_who"))
         for k, _ in das.STAGES:
             form[f"agent_stage_{k}"] = _value_for(modes, get(f"agent_stage_{k}"))
         for k, _ in das.BK_STAGES:
@@ -999,6 +1039,7 @@ def build_agent_settings(app, parent, on_saved=None) -> dict:
         cur = das.effective_provider(x, edition)
         out["agent_provider"] = _label_for(providers, cur) if any(p == cur for p, _ in providers) else ""
         out["agent_label"] = x["agent_label"]
+        out["agent_ask_who"] = _label_for(das.ASK_WHO, x["agent_ask_who"])
         for k, _ in das.STAGES:
             out[f"agent_stage_{k}"] = _label_for(modes, x[f"agent_stage_{k}"])
         for k, _ in das.BK_STAGES:

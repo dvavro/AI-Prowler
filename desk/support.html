@@ -30,6 +30,7 @@ button.bad{background:var(--bad)}
 .msg.me{border-color:var(--acc)}
 .msg .h{font-size:12px;color:var(--mute)}
 .msg .h img.agpic{width:24px;height:24px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:6px}
+  .askpic{width:40px;height:40px;border-radius:50%;object-fit:cover;flex:none}
 .thumbs{display:flex;flex-wrap:wrap;gap:8px}
 .thumbs a{width:84px;height:84px;border:1px solid var(--line);border-radius:8px;overflow:hidden;display:block;font-size:11px;color:var(--mute);text-decoration:none;padding:4px}
 .thumbs img{width:100%;height:100%;object-fit:cover;margin:-4px}
@@ -186,13 +187,142 @@ const PATHS = {
   problem: { icon: '🛠', label: 'Report a problem', h: 'Report a problem',
              sub: 'Something not right after a visit, or with something you bought from us.' },
 };
+// The "Ask the AI assistant" chat on the "How can we help?" page (2026-11-10):
+// the visitor's questions and the assistant's answers, kept here so going to a
+// form and back does not lose them.
+const NA = [];
+function askLogNewHtml() {
+  const a = P.agent || {};
+  return NA.map(x => `<div class="msg me"><div class="h">You</div>${esc(x.q)}</div><div class="msg"><div class="h">${a.photo_url ? `<img class="agpic" alt="" src="${esc(a.photo_url)}">` : ''}${esc(a.display || a.name || 'AI assistant')}</div>${esc(x.a)}</div>`).join('');
+}
+
+// The public chat on every page (2026-11-10): who may ask, what it answers,
+// and the verify-first flow. The ask token lives in localStorage for a day,
+// so a verified visitor asks on every page without verifying again. FA holds
+// each form page's log, so going to another form and back keeps the answers.
+const FA = {};
+const ASK_TOKEN_KEY = 'ap_ask_token';
+const askToken = () => { try { return localStorage.getItem(ASK_TOKEN_KEY) || ''; } catch (_) { return ''; } };
+const setAskToken = t => { try { localStorage.setItem(ASK_TOKEN_KEY, t); } catch (_) {} };
+const clearAskToken = () => { try { localStorage.removeItem(ASK_TOKEN_KEY); } catch (_) {} };
+const askNeedsVerify = () => (P.agent || {}).ask_who === 'verified' && !askToken();
+const askShown = () => (P.agent || {}).enabled && (P.agent || {}).ask_who !== 'ticket';
+const ASK_PURPOSE = {
+  landing: 'Not sure where to start? {d} can answer questions about what we do \u2014 ask away.',
+  book: 'Questions about booking? {d} can answer \u2014 it knows the services and open times.',
+  buy: 'Questions about a product? {d} can answer \u2014 it knows what we sell, the price and shipping.',
+  new: 'Not sure what you need? {d} can answer questions about the services and how a quote works.',
+  problem: 'Questions about reporting a problem? {d} can answer \u2014 it knows what happens next.',
+};
+function askLogHtmlFor(log) {
+  const a = P.agent || {};
+  return (log || []).map(x => `<div class="msg me"><div class="h">You</div>${esc(x.q)}</div><div class="msg"><div class="h">${a.photo_url ? `<img class="agpic" alt="" src="${esc(a.photo_url)}">` : ''}${esc(a.display || a.name || 'AI assistant')}</div>${esc(x.a)}</div>`).join('');
+}
+function askVerifyHtml(p) {
+  // p = id prefix ('New' on the main page, 'Form' on a form page)
+  return `<p class="muted" style="margin:6px 0">To ask a question, verify it\u2019s you first \u2014 we\u2019ll text or email you a code.</p>
+    <label>Phone number</label><input id="askVPhone${p}" type="tel" autocomplete="tel" placeholder="e.g. 386-555-0100">
+    <label>Email${P.sms ? ' (optional if we text your code)' : ''}</label><input id="askVEmail${p}" type="email" autocomplete="email">
+    ${P.sms ? `<label>Send my code by</label><div class="row"><label style="margin:0;color:var(--ink)"><input type="radio" name="askby${p}" value="sms" checked style="width:auto"> Text</label><label style="margin:0;color:var(--ink)"><input type="radio" name="askby${p}" value="email" style="width:auto"> Email</label></div>` : ''}
+    <p id="askVErr${p}" class="err"></p>
+    <div class="row" style="margin-top:8px"><button id="askVSend${p}">Send me a code</button></div>
+    <div id="askVCodeBox${p}" class="hide" style="margin-top:8px">
+      <label>Enter the 6-digit code we sent you</label>
+      <input id="askVCode${p}" inputmode="numeric" autocomplete="one-time-code" maxlength="6">
+      <div class="row" style="margin-top:8px"><button id="askVVerify${p}">Verify</button><button class="ghost" id="askVResend${p}">Send a new code</button></div></div>`;
+}
+function askCardHtml(page, log) {
+  // The Ask card for a page, or '' when the chat is off there. page is
+  // 'landing' or a form path (book/buy/new/problem).
+  if (!askShown()) return '';
+  const a = P.agent || {};
+  const d = a.display || a.name || 'The AI assistant';
+  const line = (ASK_PURPOSE[page] || ASK_PURPOSE.landing).replace('{d}', esc(d));
+  const p = page === 'landing' ? 'New' : 'Form';
+  const head = `<div style="display:flex;align-items:center;gap:8px">${a.photo_url ? `<img class="askpic" alt="" src="${esc(a.photo_url)}">` : ''}<b>Ask the AI assistant</b></div>`;
+  if (askNeedsVerify()) {
+    return `${head}${askVerifyHtml(p)}`;
+  }
+  return `${head}
+    <p class="muted" style="margin:6px 0">${line}</p>
+    <div id="askLog${p}">${askLogHtmlFor(log)}</div>
+    <textarea id="askQ${p}" placeholder="Ask a question\u2026"></textarea>
+    <div class="row" style="margin-top:8px"><button id="askGo${p}">Ask</button></div>
+    <p id="askErr${p}" class="err"></p>`;
+}
+function refreshAsk(p, page, log, fallback) {
+  // After verifying (or when the token expires): swap just the Ask card in
+  // place, so a half-filled form is never lost. Falls back to a full
+  // re-render only when the card is not on the page.
+  const card = $('#askCard');
+  const html = askCardHtml(page, log);
+  if (card && html) {
+    card.innerHTML = html;
+    bindAsk(p, page, log, fallback);
+  } else if (fallback) {
+    fallback();
+  }
+}
+function bindAsk(p, page, log, fallback) {
+  // Wire the Ask card's buttons: the question box, or the verify form.
+  const go = $('#askGo' + p);
+  if (go) go.addEventListener('click', () => act(async () => {
+    const q = $('#askQ' + p).value.trim(); if (!q) return;
+    go.disabled = true; go.textContent = 'Asking\u2026';
+    try {
+      const d = await call('POST', '/ask', { question: q, page, ask_token: askToken() });
+      log.push({ q, a: d.answer });
+      $('#askQ' + p).value = '';
+      const el = $('#askLog' + p); if (el) el.innerHTML = askLogHtmlFor(log);
+    } catch (e) {
+      if (/verify/i.test(e.message || '')) { clearAskToken(); refreshAsk(p, page, log, fallback); return; }
+      note('#askErr' + p, e.message);
+    } finally { go.disabled = false; go.textContent = 'Ask'; }
+  }));
+  // Enter asks (Shift+Enter still makes a new line) — the Ask button is not the only way in.
+  const box = $('#askQ' + p);
+  if (box && go) box.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go.click(); }
+  });
+  const send = $('#askVSend' + p), verify = $('#askVVerify' + p), resend = $('#askVResend' + p);
+  const sendCode = async () => {
+    const phone = $('#askVPhone' + p).value.trim();
+    const email = $('#askVEmail' + p).value.trim();
+    const by = (document.querySelector(`input[name="askby${p}"]:checked`) || {}).value || '';
+    if (send) { send.disabled = true; send.textContent = 'Sending\u2026'; }
+    try {
+      const d = await call('POST', '/ask/start', { phone, email, send_by: by });
+      if (send) send.dataset.contact = d.contact_id;
+      const box = $('#askVCodeBox' + p); if (box) box.classList.remove('hide');
+      note('#askVErr' + p, '');
+    } catch (e) { note('#askVErr' + p, e.message); }
+    finally { if (send) { send.disabled = false; send.textContent = 'Send me a code'; } }
+  };
+  if (send) send.addEventListener('click', () => act(sendCode));
+  if (resend) resend.addEventListener('click', () => act(sendCode));
+  if (verify) verify.addEventListener('click', () => act(async () => {
+    const contact = (send && send.dataset.contact) || '';
+    const code = $('#askVCode' + p).value.trim();
+    if (!contact || !code) { note('#askVErr' + p, 'Enter the code we sent you.'); return; }
+    verify.disabled = true; verify.textContent = 'Verifying\u2026';
+    try {
+      const d = await call('POST', '/ask/verify', { contact_id: contact, code });
+      setAskToken(d.ask_token);
+      refreshAsk(p, page, log, fallback);
+    } catch (e) { note('#askVErr' + p, e.message); }
+    finally { verify.disabled = false; verify.textContent = 'Verify'; }
+  }));
+}
+
 function showChoices() {
   $('#h1').textContent = 'How can we help?';
   app.innerHTML = `${P.welcome ? `<div class="card" id="welcome">${esc(P.welcome)}</div>` : ''}
+    ${askCardHtml('landing', NA) ? `<div class="card" id="askCard">${askCardHtml('landing', NA)}</div>` : ''}
     <div class="card" id="choices">${P.paths.map(p => `<button class="ghost choice" data-path="${p}">
       <span class="ic">${PATHS[p].icon}</span><span><span class="lbl">${esc(PATHS[p].label)}</span>
       <small>${esc(PATHS[p].sub)}</small></span></button>`).join('')}</div>`;
   app.querySelectorAll('[data-path]').forEach(b => b.addEventListener('click', () => showForm(b.dataset.path)));
+  bindAsk('New', 'landing', NA, showChoices);
 }
 
 // Services only in Book / Get a quote while the Shop is on — products live in the Shop. With the
@@ -268,6 +398,7 @@ function showForm(path, opts) {
     <label>Anything we should know? (optional)</label><textarea id="fDesc"></textarea>` : `
     <label>${many ? "What's wrong?" : 'What do you need?'}</label><input id="fTitle" maxlength="200" placeholder="${many ? 'e.g. Streaks left on the front windows' : 'e.g. Streaks on the front windows'}">
     <label>Details (optional)</label><textarea id="fDesc"></textarea>`;
+  const ask = askCardHtml(path, FA[path] || (FA[path] = []));
   app.innerHTML = `${P.welcome && !many ? `<div class="card" id="welcome">${esc(P.welcome)}</div>` : ''}<div class="card">
     ${many ? '<p style="margin-top:0"><a href="#" id="back">← Back</a></p>' : ''}
     ${svcPick}
@@ -282,6 +413,7 @@ function showForm(path, opts) {
     <div class="hp" aria-hidden="true"><label>Website</label><input id="fWeb" tabindex="-1" autocomplete="off"></div>
     <p id="fErr" class="err"></p>
     <button id="fSend" style="width:100%">Send me a code</button></div></div>
+  ${ask ? `<div class="card" id="askCard">${ask}</div>` : ''}
   <div class="card hide" id="codeCard">
     <label>Enter the 6-digit code we sent you</label>
     <input id="fCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6">
@@ -320,6 +452,7 @@ function showForm(path, opts) {
   $('#fSend').addEventListener('click', sendCode);
   $('#fResend').addEventListener('click', sendCode);
   $('#fVerify').addEventListener('click', verify);
+  bindAsk('Form', path, FA[path], () => showForm(path, opts));
 }
 // ── Buy a product (2026-11-02): price × how many + shipping & handling + tax ───
 // The same math the server uses for the invoice; the server's numbers are the ones charged.
@@ -494,7 +627,7 @@ async function verify() {
 // comment, and shows "Updated just now" for a moment.
 const POLL_MS = 15000;
 const L = { timer: 0, inFlight: false, busy: 0, seq: 0, shown: 0, sig: '', flash: 0,
-            on: false, reply: '', note: '', stars: 0, focus: null };
+            on: false, reply: '', note: '', stars: 0, focus: null, ask: [], askQ: '' };
 
 function sigOf(d) {           // everything the page shows, nothing else
   const t = d.ticket || {};
@@ -505,19 +638,21 @@ function sigOf(d) {           // everything the page shows, nothing else
     (t.attachments || []).map(a => [a.attachment_id, a.kind, a.filename, !!a.thumb_path])]);
 }
 function captureDrafts() {
-  const r = $('#reply'), n = $('#rateNote'), a = document.activeElement;
+  const r = $('#reply'), n = $('#rateNote'), q = $('#askQ'), a = document.activeElement;
   if (r) L.reply = r.value;
   if (n) L.note = n.value;
-  L.focus = a && (a.id === 'reply' || a.id === 'rateNote') ? [a.id, a.selectionStart, a.selectionEnd] : null;
+  if (q) L.askQ = q.value;
+  L.focus = a && (a.id === 'reply' || a.id === 'rateNote' || a.id === 'askQ') ? [a.id, a.selectionStart, a.selectionEnd] : null;
 }
 function setStars(n) {
   L.stars = n;
   document.querySelectorAll('[data-star]').forEach(x => { x.textContent = +x.dataset.star <= n ? '★' : '☆'; });
 }
 function restoreDrafts() {
-  const r = $('#reply'), n = $('#rateNote');
+  const r = $('#reply'), n = $('#rateNote'), q = $('#askQ');
   if (r) r.value = L.reply;
   if (n) n.value = L.note;
+  if (q) q.value = L.askQ;
   if ($('#stars')) setStars(L.stars);
   if (L.focus) {
     const e = $('#' + L.focus[0]);
@@ -575,6 +710,14 @@ async function act(fn) {
   try { await fn(); } catch (e) { note('#sErr', e.message); } finally { L.busy--; }
 }
 
+// The "Ask the AI assistant" chat on the status page (2026-11-10): the customer's
+// questions and the assistant's answers, kept in L.ask so a background redraw
+// (polling) never loses them.
+function askLogHtml() {
+  const a = P.agent || {};
+  return (L.ask || []).map(x => `<div class="msg me"><div class="h">You</div>${esc(x.q)}</div><div class="msg"><div class="h">${a.photo_url ? `<img class="agpic" alt="" src="${esc(a.photo_url)}">` : ''}${esc(a.display || a.name || 'AI assistant')}</div>${esc(x.a)}</div>`).join('');
+}
+
 function render(d) {
   captureDrafts();
   const t = d.ticket; if (d.business) $('#biz').textContent = d.business;
@@ -600,6 +743,12 @@ function render(d) {
     ${t.state !== 'Closed' ? `<textarea id="reply" placeholder="Write a reply…"></textarea>
     <div class="row" style="margin-top:8px"><button id="send">Send</button>
       <label class="ghost" style="margin:0;text-align:center;border:1px solid var(--acc);border-radius:10px;padding:12px;color:var(--acc)">📷 Add photo<input type="file" accept="image/*,.pdf" multiple class="hide" id="up"></label></div>` : ''}</div>
+  ${P.agent && P.agent.enabled ? `<div class="card"><div style="display:flex;align-items:center;gap:8px">${P.agent.photo_url ? `<img class="askpic" alt="" src="${esc(P.agent.photo_url)}">` : ''}<b>Ask the AI assistant</b></div>
+      <p class="muted" style="margin:6px 0">Questions about this request? ${esc(P.agent.display || 'The AI assistant')} can answer — it knows what's on this page.</p>
+      <div id="askLog">${askLogHtml()}</div>
+      <textarea id="askQ" placeholder="Ask a question…"></textarea>
+      <div class="row" style="margin-top:8px"><button id="askGo">Ask</button></div>
+      <p id="askErr" class="err"></p></div>` : ''}
   ${(t.attachments || []).length ? `<div class="card"><b>Photos & files</b><div class="thumbs">${t.attachments.map(a =>
     `<a href="#" data-att="${esc(a.attachment_id)}" data-thumb="${a.thumb_path ? 1 : 0}">${a.kind === 'photo' ? '' : esc(a.filename)}</a>`).join('')}</div></div>` : ''}
   ${!sub && P.portalOn ? `<div class="card" id="another" style="text-align:center"><a href="/support/new" style="font-weight:600">➕ Make another request</a></div>` : ''}`;
@@ -620,6 +769,22 @@ function render(d) {
     L.reply = ''; $('#reply').value = '';          // sent — this draft is done
     await refresh(false);
   }));
+  on('#askGo', () => act(async () => {
+    const q = $('#askQ').value.trim(); if (!q) return;
+    const btn = $('#askGo'); btn.disabled = true; btn.textContent = 'Asking…';
+    try {
+      const d = await call('POST', `/t/${P.token}/ask`, { question: q });
+      (L.ask = L.ask || []).push({ q, a: d.answer });
+      L.askQ = ''; $('#askQ').value = '';
+      const log = $('#askLog'); if (log) log.innerHTML = askLogHtml();
+    } catch (e) { note('#askErr', e.message); }
+    finally { btn.disabled = false; btn.textContent = 'Ask'; }
+  }));
+  // Enter asks here too (Shift+Enter still makes a new line).
+  const askBox = $('#askQ');
+  if (askBox) askBox.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); const b = $('#askGo'); if (b) b.click(); }
+  });
   const up = $('#up');
   if (up) up.addEventListener('change', () => act(async () => {
     const fd = new FormData(); for (const f of up.files) fd.append('file', f, f.name);

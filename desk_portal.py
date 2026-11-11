@@ -33,7 +33,7 @@ from db_access import utcnow_iso
 LINK_DAYS_AFTER_CLOSE = 30
 CODE_TTL_MINUTES = 10
 CODE_MAX_ATTEMPTS = 5
-RATE_LIMITS = {"code": (5, 3600), "ticket": (5, 3600)}
+RATE_LIMITS = {"code": (5, 3600), "ticket": (5, 3600), "ask": (10, 3600)}
 JSON = b"application/json"
 
 # Injected by ai_prowler_mcp.py through desk_alerts (fn(channel, to, subject, text) -> bool)
@@ -159,16 +159,101 @@ def resolve_link(db_path: str, token: str, now=None) -> tuple[dict, dict, dict]:
     return t, c, actor_for(c)
 
 
+# ── public chat: ask tokens + page purposes (2026-11-10) ───────────────────
+# A verified visitor asks with a 24-hour token (same shape as a status link:
+# random token, only its hash is stored). The token is the credential, so the
+# visitor verifies once and can ask on every page for a day.
+ASK_TOKEN_TTL_HOURS = 24
+
+# What the visitor is doing on each page the chat appears on (David 2026-11-10:
+# "when the chat is visible in a page, it should answer questions to the page
+# purpose"). The assistant is told this, and only gets the facts for that page.
+ASK_PAGE_PURPOSE = {
+    "landing": "choosing what they need on the 'How can we help?' page",
+    "book": "booking a service",
+    "buy": "shopping for products",
+    "new": "asking for a quote",
+    "problem": "reporting a problem",
+}
+
+
+def issue_ask_token(db_path: str, contact_id: str) -> str:
+    token = secrets.token_urlsafe(32)
+    now = _now()
+    conn = desk_db.get_connection(db_path)
+    try:
+        conn.execute("INSERT INTO ask_tokens (token_hash, contact_id, created_at, expires_at) "
+                     "VALUES (?, ?, ?, ?)",
+                     (_h(token), contact_id, _iso(now),
+                      _iso(now + datetime.timedelta(hours=ASK_TOKEN_TTL_HOURS))))
+        conn.commit()
+    finally:
+        conn.close()
+    return token
+
+
+def resolve_ask_token(db_path: str, token: str, now=None) -> dict:
+    """The contact for a valid ask token, else NotFoundError (one answer for
+    unknown and expired, so tokens can't be probed)."""
+    nf = desk_db.NotFoundError("that verification has expired - please verify again")
+    if not token or len(token) > 200:
+        raise nf
+    conn = desk_db.get_connection(db_path)
+    try:
+        r = conn.execute("SELECT * FROM ask_tokens WHERE token_hash = ?", (_h(token),)).fetchone()
+        if r is None:
+            raise nf
+        c = conn.execute("SELECT * FROM customer_contacts WHERE contact_id = ?",
+                         (r["contact_id"],)).fetchone()
+    finally:
+        conn.close()
+    if c is None:
+        raise nf
+    exp = datetime.datetime.fromisoformat(r["expires_at"].replace("Z", "+00:00"))
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=datetime.timezone.utc)
+    if _now(now) > exp:
+        raise nf
+    return dict(c)
+
+
+def _ask_rate_ok(db_path: str, s: dict, ip: str, now) -> None:
+    """Count this question against the per-visitor hourly limit (2026-11-10,
+    David: rate limit). Raises DeskError when the limit is hit. 0 = no limit.
+    Only questions that reach the model count, so this runs after the other
+    gates and before the model call."""
+    per_hour = s.get("agent_ask_per_hour")
+    if per_hour is None:
+        per_hour = 10
+    if not per_hour:
+        return
+    now = _now(now)
+    conn = desk_db.get_connection(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        ok = _rate_ok(conn, "ask", [f"ip:{ip}"], now, limit=int(per_hour))
+        conn.execute("COMMIT" if ok else "ROLLBACK")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+    if not ok:
+        raise desk_db.DeskError("you've asked a lot of questions - please try again in an hour")
+
+
 # ── rate limits ──────────────────────────────────────────────────────────────
 
-def _rate_ok(conn, kind: str, keys: list, now: datetime.datetime) -> bool:
-    limit, window = RATE_LIMITS[kind]
+def _rate_ok(conn, kind: str, keys: list, now: datetime.datetime, limit: int | None = None) -> bool:
+    _limit, window = RATE_LIMITS[kind]
+    if limit is not None:
+        _limit = limit
     since = _iso(now - datetime.timedelta(seconds=window))
     conn.execute("DELETE FROM portal_hits WHERE at < ?", (_iso(now - datetime.timedelta(days=1)),))
     for k in keys:
         n = conn.execute("SELECT COUNT(*) FROM portal_hits WHERE key = ? AND at >= ?",
                          (f"{kind}:{k}", since)).fetchone()[0]
-        if n >= limit:
+        if n >= _limit:
             return False
     for k in keys:
         conn.execute("INSERT INTO portal_hits (key, at) VALUES (?, ?)", (f"{kind}:{k}", _iso(now)))
@@ -560,6 +645,410 @@ def status_view(db_path: str, token: str, *, edition: str, now=None) -> dict:
     return detail
 
 
+def ask_assistant(db_path: str, token: str, question: str, *, edition: str, business: str = "",
+                  ip: str = "", now=None) -> dict:
+    """The customer's question to the AI assistant on their status page (2026-11-10).
+
+    The assistant answers from this ticket and the business's facts only. It never
+    changes, books, cancels or promises anything. The answer is labelled with the
+    assistant's name and "AI assistant" label, and it says it's an assistant if asked.
+    It works when the agent is on and a key is saved, practice mode or not: the
+    customer asked the question themselves, so answering it is a reply, not the agent
+    acting on its own. Every answer is charged to the shared monthly AI budget and
+    recorded as an agent run, so the Agent tab's spend meter counts it.
+    """
+    t, c, actor = resolve_link(db_path, token, now)
+    q = (question or "").strip()
+    if not q:
+        raise desk_db.DeskError("write your question first")
+    if len(q) > 500:
+        raise desk_db.DeskError("keep your question under 500 characters")
+    import desk_agent_settings as das
+    import desk_agent_providers as prov
+    import desk_agent
+    s = desk_db.get_settings(db_path)
+    if not s.get("agent_enabled"):
+        raise desk_db.DeskError("the AI assistant is off - please call or text us instead")
+    provider = das.effective_provider(s, edition)
+    ok, why = prov.ready(provider)
+    if not ok:
+        raise desk_db.DeskError(why + " - please call or text us instead")
+    spent = desk_agent.spend(db_path, s, now)
+    if spent["budget_usd"] and spent["spent_usd"] >= spent["budget_usd"]:
+        raise desk_db.DeskError("the AI assistant has used its monthly budget - please call or text us instead")
+    _ask_rate_ok(db_path, s, ip, now)
+    detail = desk_db.get_ticket_detail(db_path, t["ticket_id"], actor=actor, edition=edition)
+    prof = das.public_profile(db_path, business)
+    name = prof.get("display") or prof.get("name") or "Virtual assistant"
+    biz = business or ""
+    msgs = detail.get("messages") or []
+    recent = "\n".join(
+        f"- {'You' if m.get('author_kind') == c.get('contact_type') else (biz or 'Us')}: "
+        f"{(m.get('body') or '')[:400]}"
+        for m in msgs[-8:])
+    bk = _booking_view(t, c, s)
+    bk_line = ""
+    if bk:
+        bits = [x for x in (bk.get("service"), bk.get("confirmed") or bk.get("status")) if x]
+        if bits:
+            bk_line = "\nBooking: " + " - ".join(str(x) for x in bits)
+    # the booked service/product's full specs, so the assistant can answer
+    # detail questions about what the customer ordered (2026-11-10)
+    spec_line = ""
+    if bk and bk.get("service"):
+        try:
+            _svcs, _prods = _public_offerings(db_path, s)
+            for _x in list(_svcs) + list(_prods):
+                if _x.get("name") == bk.get("service") and _x.get("specs"):
+                    spec_line = f"\nBooked item specs: {_x['specs']}"
+                    break
+        except Exception:  # noqa: BLE001
+            spec_line = ""
+    # the ticket's own facts, so the assistant can answer "what happened",
+    # "when was it fixed" and "why did it close" from the record, not just the title
+    _facts = []
+    _kind = " / ".join(x for x in (detail.get("kind"), detail.get("type")) if x)
+    if _kind:
+        _facts.append(f"Kind: {_kind}")
+    if detail.get("priority"):
+        _facts.append(f"Priority: {detail['priority']}")
+    if detail.get("created_at"):
+        _facts.append(f"Filed: {detail['created_at']}")
+    if detail.get("fixed_at"):
+        _facts.append(f"Fixed: {detail['fixed_at']}")
+    if detail.get("closed_at"):
+        _facts.append(f"Closed: {detail['closed_at']}")
+    if detail.get("resolution"):
+        _facts.append(f"Resolution: {detail['resolution']}")
+    if detail.get("close_reason"):
+        _facts.append(f"Close reason: {detail['close_reason']}")
+    fact_lines = ("\n" + "\n".join(_facts)) if _facts else ""
+    system = (f"You are {name}, the AI assistant for {biz or 'this business'}. You answer a customer's "
+              f"question about their own service request. You are an AI assistant - never pretend to be a "
+              f"person, and say so if asked. Answer from the request details below only. If the answer "
+              f"isn't in those facts, say you don't know and that someone from {biz or 'the business'} "
+              f"will follow up. Never change, book, cancel or promise anything - only answer the "
+              f"question. Keep it short, a few sentences.")
+    try:
+        context = das.ask_context_text(db_path)
+    except Exception:  # noqa: BLE001 - the ask never fails because of the context file
+        context = ""
+    context_block = f"\nAdditional business information:\n{context}" if context else ""
+    user = (f"Request: {t.get('ticket_id')} - {detail.get('title') or ''}\n"
+            f"Status: {detail.get('state') or ''}{fact_lines}\n"
+            f"Details: {detail.get('description') or ''}"
+            f"{bk_line}{spec_line}{context_block}\n"
+            f"Recent messages:\n{recent or '(none)'}\n\n"
+            f"Customer's question: {q}")
+    model = prov.model_for(provider)
+    conn = desk_agent._conn(db_path)
+    try:
+        run_id = conn.execute(
+            "INSERT INTO agent_runs (provider, model, started_at, items, ok) VALUES (?, ?, ?, 0, 0)",
+            (provider, model, utcnow_iso())).lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        text, usage = prov.ask(provider, system, user, model=model)
+    except prov.ProviderError as e:
+        raise desk_db.DeskError(str(e) + " - please call or text us instead") from None
+    cost = prov.cost(model, usage)
+    conn = desk_agent._conn(db_path)
+    try:
+        conn.execute(
+            "UPDATE agent_runs SET ended_at = ?, items = ?, ok = ?, input_tokens = ?, output_tokens = ?, "
+            "cost_usd = ?, summary = ?, model = ? WHERE run_id = ?",
+            (utcnow_iso(), 1, 1, int(usage.get("input", 0)), int(usage.get("output", 0)), cost,
+             "customer ask", model, run_id))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "answer": (text or "").strip(),
+            "name": prof.get("display") or name, "photo_url": prof.get("photo_url") or ""}
+
+
+def _public_offerings(db_path: str, s: dict) -> tuple:
+    """The services and products the public pages show (same source and gating as /info).
+
+    The full record is kept (2026-11-10): the assistant answers from these facts,
+    so the specs, shipping and duration travel with the name and price. Dropping
+    them is why the assistant could not answer "how much RAM does the server have"
+    even though the specs were in the database and on the page.
+    """
+    services, products = [], []
+    if not _jobs_db():
+        return services, products
+    paths = set(page_paths(s))
+    try:
+        import booking_db
+        if {"new", "book"} & paths:
+            services = [{"code": x["code"], "name": x["name"], "description": x["description"],
+                         "price": x["price"], "specs": x.get("specs") or "",
+                         "minutes": x.get("minutes") or 0}
+                        for x in booking_db.list_services(_jobs_db(), online_only=True)]
+        if "buy" in paths:
+            products = [{"code": x["code"], "name": x["name"], "description": x["description"],
+                         "unit_price": x["unit_price"], "specs": x.get("specs") or "",
+                         "shipping": x.get("shipping")}
+                        for x in booking_db.list_services(_jobs_db(), online_only=True)
+                        if x["mode"] == "request"]
+    except Exception:  # noqa: BLE001
+        services, products = [], []
+    return services, products
+
+
+def _fmt_price(v) -> str:
+    """A price for the assistant's fact list. Service prices are often text
+    like 'from $500', not a number — formatting one with :,.2f raised
+    ValueError and the whole /ask call 500'd (2026-11-10, live /support/new).
+    Numbers render as ($X.XX); text renders as-is; blank or zero renders
+    as nothing."""
+    if v is None or v == "" or v == 0:
+        return ""
+    if isinstance(v, (int, float)):
+        return f" (${v:,.2f})"
+    return f" ({v})"
+
+
+def _offering_block(x: dict, price_key: str) -> str:
+    """One service/product as the assistant sees it: name, description and price,
+    then the full specs and the shipping / duration on their own lines, so the
+    model can answer detail questions ("how much RAM?", "is shipping free?",
+    "how long does it take?") instead of only what the tile shows."""
+    lines = ["- " + x["name"] + (": " + x["description"] if x.get("description") else "") +
+             _fmt_price(x.get(price_key))]
+    if x.get("specs"):
+        lines.append("  Specs: " + str(x["specs"]))
+    if price_key == "unit_price" and x.get("shipping") is not None:
+        try:
+            ship = float(x["shipping"])
+        except (TypeError, ValueError):
+            ship = None
+        if ship is not None:
+            lines.append("  Shipping: free" if ship == 0 else f"  Shipping: ${ship:,.2f}")
+    if price_key == "price" and x.get("minutes"):
+        try:
+            mins = int(x["minutes"])
+        except (TypeError, ValueError):
+            mins = 0
+        if mins:
+            lines.append(f"  Takes about {mins} minutes")
+    return "\n".join(lines)
+
+
+def ask_general(db_path: str, question: str, *, edition: str, business: str = "",
+                page: str = "landing", ask_token: str = "", ip: str = "",
+                now=None) -> dict:
+    """A visitor's question on the public pages (2026-11-10, extended 2026-11-10).
+
+    The chat is on the main page and on each of the four form pages, and it
+    answers to the page's purpose (David: "when the chat is visible in a page,
+    it should answer questions to the page purpose"). There is no ticket yet,
+    so the assistant answers from the business's public facts only, filtered
+    to the page: booking is about services, shopping is about products, a quote
+    is about services, a problem can be about either, and the main page covers
+    both. The services / products toggles in the Agent settings turn those
+    sources off entirely.
+
+    Who may ask is set in the Agent settings: anyone, verified visitors (a
+    6-digit code first, then a 24-hour token), or ticket holders only (the
+    chat is off here - only a ticket's own page answers). Questions are
+    limited per visitor per hour. It never changes, books, cancels or promises
+    anything. It works in practice mode too: the visitor asked, so answering
+    is a reply, not the agent acting on its own. Every answer is charged to
+    the shared monthly AI budget and recorded as an agent run.
+    """
+    q = (question or "").strip()
+    if not q:
+        raise desk_db.DeskError("write your question first")
+    if len(q) > 500:
+        raise desk_db.DeskError("keep your question under 500 characters")
+    import desk_agent_settings as das
+    import desk_agent_providers as prov
+    import desk_agent
+    s = desk_db.get_settings(db_path)
+    if not s.get("agent_enabled"):
+        raise desk_db.DeskError("the AI assistant is off - please call or text us instead")
+    who = s.get("agent_ask_who") or "anyone"
+    if who == "ticket":
+        raise desk_db.DeskError("the AI assistant only answers questions on a service request - file a request first")
+    if who == "verified":
+        try:
+            resolve_ask_token(db_path, ask_token, now)
+        except desk_db.NotFoundError:
+            raise desk_db.DeskError("please verify first - enter your phone number and we'll text or email you a code") from None
+    provider = das.effective_provider(s, edition)
+    ok, why = prov.ready(provider)
+    if not ok:
+        raise desk_db.DeskError(why + " - please call or text us instead")
+    spent = desk_agent.spend(db_path, s, now)
+    if spent["budget_usd"] and spent["spent_usd"] >= spent["budget_usd"]:
+        raise desk_db.DeskError("the AI assistant has used its monthly budget - please call or text us instead")
+    _ask_rate_ok(db_path, s, ip, now)
+    prof = das.public_profile(db_path, business)
+    name = prof.get("display") or prof.get("name") or "Virtual assistant"
+    biz = business or ""
+    page = (page or "landing").strip().lower()
+    if page not in ASK_PAGE_PURPOSE:
+        page = "landing"
+    services, products = _public_offerings(db_path, s)
+    if not s.get("agent_ask_services", True):
+        services = []
+    if not s.get("agent_ask_products", True):
+        products = []
+    if page == "book":
+        products = []
+    elif page == "buy":
+        services = []
+    elif page == "new":
+        products = []
+    svc_lines = "\n".join(_offering_block(x, "price") for x in services) or "(none listed)"
+    prod_lines = "\n".join(_offering_block(x, "unit_price") for x in products) or "(none listed)"
+    purpose = ASK_PAGE_PURPOSE[page]
+    system = (f"You are {name}, the AI assistant for {biz or 'this business'}. You answer a visitor's "
+              f"question while they are {purpose}. You are an AI assistant - never pretend to be a person, "
+              f"and say so if asked. Answer from the facts below only, and keep to what this page is about: "
+              f"if the question is about something else, say you don't know and point them to the page "
+              f"where that belongs (book a service, shop products, get a quote, report a problem) or to "
+              f"call or text us. Never change, book, cancel or promise anything - only answer the question. "
+              f"Keep it short, a few sentences.")
+    try:
+        context = das.ask_context_text(db_path)
+    except Exception:  # noqa: BLE001 - the ask never fails because of the context file
+        context = ""
+    context_block = f"Additional business information:\n{context}\n" if context else ""
+    user = (f"Business: {biz or ''}\n"
+            f"Welcome: {s.get('booking_welcome') or ''}\n"
+            f"The visitor is {purpose}.\n"
+            f"Services offered:\n{svc_lines}\n"
+            f"Products for sale:\n{prod_lines}\n"
+            f"{context_block}\n"
+            f"Visitor's question: {q}")
+    model = prov.model_for(provider)
+    conn = desk_agent._conn(db_path)
+    try:
+        run_id = conn.execute(
+            "INSERT INTO agent_runs (provider, model, started_at, items, ok) VALUES (?, ?, ?, 0, 0)",
+            (provider, model, utcnow_iso())).lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        text, usage = prov.ask(provider, system, user, model=model)
+    except prov.ProviderError as e:
+        raise desk_db.DeskError(str(e) + " - please call or text us instead") from None
+    cost = prov.cost(model, usage)
+    conn = desk_agent._conn(db_path)
+    try:
+        conn.execute(
+            "UPDATE agent_runs SET ended_at = ?, items = ?, ok = ?, input_tokens = ?, output_tokens = ?, "
+            "cost_usd = ?, summary = ?, model = ? WHERE run_id = ?",
+            (utcnow_iso(), 1, 1, int(usage.get("input", 0)), int(usage.get("output", 0)), cost,
+             "visitor ask", model, run_id))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "answer": (text or "").strip(),
+            "name": prof.get("display") or name, "photo_url": prof.get("photo_url") or ""}
+
+
+def start_ask_code(db_path: str, *, phone: str = "", email: str = "", send_by: str = "",
+                   ip: str = "", now=None) -> dict:
+    """Step 1 of verify-first asking (2026-11-10): send a 6-digit code so a
+    visitor can ask questions. Same shape as start_request, but the code goes
+    in ask_codes (not verify_codes), so asking never invalidates a code for
+    filing a request, and the message says verification, not service request.
+    The phone is always required; the code goes by text or email."""
+    s = desk_db.get_settings(db_path)
+    ch = channels()
+    if not ch["email"]:
+        raise desk_db.DeskError("asking isn't available right now - please call or text us")
+    phone = clean_phone(phone)
+    email = (email or "").strip()
+    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise desk_db.DeskError("that email address doesn't look right - like name@example.com")
+    want = (send_by or "").strip().lower() or ("sms" if ch["sms"] else "email")
+    if want not in ("sms", "email") or (want == "sms" and not ch["sms"]):
+        want = "email"
+    if want == "email" and not email:
+        raise desk_db.DeskError("enter your email address so we can send your code"
+                                + (" - or choose to get it by text" if ch["sms"] else ""))
+    c = desk_db.upsert_contact(db_path, name="", phone=phone,
+                               email=email or None, contact_type="customer",
+                               actor={"id": "portal", "role": "customer"})
+    now = _now(now)
+    conn = desk_db.get_connection(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if not _rate_ok(conn, "code", [f"ip:{ip}", f"c:{c['contact_id']}"], now):
+            conn.execute("ROLLBACK")
+            raise desk_db.DeskError("too many codes requested - please try again in an hour")
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        conn.execute(
+            "INSERT INTO ask_codes (contact_id, code_hash, expires_at, attempts, sent_at) "
+            "VALUES (?, ?, ?, 0, ?) ON CONFLICT(contact_id) DO UPDATE SET code_hash = excluded.code_hash, "
+            "expires_at = excluded.expires_at, attempts = 0, sent_at = excluded.sent_at",
+            (c["contact_id"], _h(f"{c['contact_id']}:{code}"),
+             _iso(now + datetime.timedelta(minutes=CODE_TTL_MINUTES)), _iso(now)))
+        conn.execute("COMMIT")
+    except desk_db.DeskError:
+        raise
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+    routes = [("sms", c["phone"])] if want == "sms" else []
+    if email and c.get("email"):
+        routes.append(("email", c["email"]))
+    text = f"Your verification code is {code}. It expires in {CODE_TTL_MINUTES} minutes."
+    for channel, to in routes:
+        if _send(channel, to, "Your verification code", text):
+            return {"ok": True, "contact_id": c["contact_id"], "sent_via": channel}
+    if [ch_ for ch_, _ in routes] == ["sms"]:
+        raise desk_db.DeskError("we couldn't text a code to that number - enter your email "
+                                "address and we'll send it there instead")
+    raise desk_db.DeskError("we couldn't send a code - please call or text us")
+
+
+def verify_ask_code(db_path: str, *, contact_id: str, code: str, ip: str = "",
+                    now=None) -> dict:
+    """Step 2 of verify-first asking (2026-11-10): check the 6-digit code.
+    Same shape as the request form's code check: a wrong try counts, an
+    expired code is cleared, and the code is single-use. On success the
+    visitor gets a 24-hour ask token to ask with."""
+    now = _now(now)
+    bad = desk_db.DeskError("that code is not right - check it or ask for a new one")
+    refused = None
+    conn = desk_db.get_connection(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        r = conn.execute("SELECT * FROM ask_codes WHERE contact_id = ?", (contact_id,)).fetchone()
+        if r is None:
+            refused = bad
+        elif r["attempts"] >= CODE_MAX_ATTEMPTS or r["expires_at"] < _iso(now):
+            conn.execute("DELETE FROM ask_codes WHERE contact_id = ?", (contact_id,))
+            refused = desk_db.DeskError("that code has expired - ask for a new one")
+        elif not secrets.compare_digest(r["code_hash"], _h(f"{contact_id}:{(code or '').strip()}")):
+            conn.execute("UPDATE ask_codes SET attempts = attempts + 1 WHERE contact_id = ?",
+                         (contact_id,))
+            refused = bad
+        else:
+            conn.execute("DELETE FROM ask_codes WHERE contact_id = ?", (contact_id,))
+            conn.execute("UPDATE customer_contacts SET verified_at = ? WHERE contact_id = ?",
+                         (_iso(now), contact_id))
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+    if refused is not None:
+        raise refused
+    return {"ok": True, "ask_token": issue_ask_token(db_path, contact_id)}
+
+
 def _order_view(t: dict, c: dict) -> dict | None:
     """The order behind this ticket ("Buy a product"), as the customer sees it, or None."""
     if c.get("contact_type") != "customer" or not t.get("job_id") or not _jobs_db():
@@ -849,6 +1338,20 @@ def _route(method, sub, q, raw, ctype, ip, db, edition, base_url, business, now)
                               qty=b.get("qty", 1))
         return _j(201, out)
 
+    if sub == "/ask" and method == "POST":
+        b = _body(raw)
+        return _j(200, ask_general(db, b.get("question", ""), edition=edition,
+                                   business=business, page=b.get("page", "landing"),
+                                   ask_token=b.get("ask_token", ""), ip=ip, now=now))
+    if sub == "/ask/start" and method == "POST":
+        b = _body(raw)
+        return _j(200, start_ask_code(db, phone=b.get("phone", ""), email=b.get("email", ""),
+                                      send_by=b.get("send_by", ""), ip=ip, now=now))
+    if sub == "/ask/verify" and method == "POST":
+        b = _body(raw)
+        return _j(200, verify_ask_code(db, contact_id=b.get("contact_id", ""),
+                                       code=b.get("code", ""), ip=ip, now=now))
+
     m = re.fullmatch(r"/t/([A-Za-z0-9_-]{20,100})(/.*)?", sub)
     if not m:
         return _j(404, {"ok": False, "error": "unknown_route", "message": "not found"})
@@ -885,6 +1388,10 @@ def _route(method, sub, q, raw, ctype, ip, db, edition, base_url, business, now)
         desk_db.add_message(db, tid, b.get("body", ""), actor=actor, edition=edition,
                             visibility="public", channel="portal")
         return _j(201, {"ok": True})
+    if rest == "/ask" and method == "POST":
+        b = _body(raw)
+        return _j(200, ask_assistant(db, token, b.get("question", ""), edition=edition,
+                                     business=business, ip=ip, now=now))
     if rest == "/state" and method == "POST":
         b = _body(raw)
         desk_db.change_state(db, tid, b.get("to_state", ""), actor=actor, edition=edition,
