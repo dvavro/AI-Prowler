@@ -10,10 +10,12 @@ the flooring type) and its line rules make the components (materials, labor, was
 - replaces the trade's lines and records what was used (assembly_uses), so every line traces back to its inputs.
 It asks first, showing every answer with where it came from and the lines it makes.
 
-Line edits (est_update_line_item) are overrides: the new quantity, cost, waste or description is kept with who
-changed it, when and why, and the original values, so it can be put back (revert). Re-applying the assembly keeps
-cost, waste and description overrides on lines made by the same rule; quantity overrides are dropped, because the
-quantity comes from the measurements. Either way it says which.
+Line edits (est_update_line_item) are overrides: the new quantity, cost, waste, description or price book item is
+kept with who changed it, when and why, and the original values, so it can be put back (revert). Re-applying the
+assembly keeps cost, waste and description overrides on lines made by the same rule; quantity overrides are dropped,
+because the quantity comes from the measurements. A price book item the user picked stays on the line when the trade
+is priced again (quick.answer carries it forward by the line's rule); price_default puts the trade's own item back.
+Either way it says which.
 """
 from __future__ import annotations
 
@@ -25,7 +27,7 @@ from estimator.context import RequestContext
 from estimator.errors import ConfirmationRequired, InvalidInput, NotFound
 from estimator.estimating import quick, service
 
-EDIT_FIELDS = ("quantity", "unit_cost_cents", "waste_pct", "description")
+EDIT_FIELDS = ("quantity", "unit_cost_cents", "waste_pct", "description", "price_key")
 KEPT_ON_REAPPLY = ("unit_cost_cents", "waste_pct", "description")
 
 
@@ -258,30 +260,77 @@ def _write_override(conn, ctx, li: dict, changes: dict, reason: str | None, now:
     calc = json.loads(li["calc_json"] or "{}")
     ov = calc.get("override") or {"original": {k: li[k] for k in EDIT_FIELDS}, "changed": {}}
     for k, v in changes.items():
+        if k not in ov["original"]:
+            ov["original"][k] = li[k]
         ov["changed"][k] = {"from": ov["original"][k], "to": v}
-    ov.update(by=ctx.actor, at=now, reason=reason)
-    calc["override"] = ov
+    # A change that ends up back where it started is no change at all (e.g. a price book pick cleared back to the
+    # trade's own item): drop it, and the whole override record when nothing hand-changed is left.
+    for k in [k for k, c in ov["changed"].items() if str(c["to"]) == str(ov["original"].get(k))]:
+        del ov["changed"][k]
+    if ov["changed"]:
+        ov.update(by=ctx.actor, at=now, reason=reason)
+        calc["override"] = ov
+        ob_by, ob_reason, ob_at = ctx.actor, reason, now
+    else:
+        calc.pop("override", None)
+        ob_by = ob_reason = ob_at = None
     sets = {**changes}
-    conn.execute("UPDATE line_items SET quantity = ?, unit_cost_cents = ?, waste_pct = ?, description = ?, calc_json = ?,"
-                 " override_by = ?, override_reason = ?, override_at = ?, updated_at = ? WHERE id = ?",
+    conn.execute("UPDATE line_items SET quantity = ?, unit_cost_cents = ?, waste_pct = ?, description = ?,"
+                 " price_key = ?, calc_json = ?, override_by = ?, override_reason = ?, override_at = ?,"
+                 " updated_at = ? WHERE id = ?",
                  (sets.get("quantity", li["quantity"]), sets.get("unit_cost_cents", li["unit_cost_cents"]),
                   sets.get("waste_pct", li["waste_pct"]), sets.get("description", li["description"]),
-                  json.dumps(calc), ctx.actor, reason, now, now, li["id"]))
+                  sets.get("price_key", li["price_key"]),
+                  json.dumps(calc), ob_by, ob_reason, ob_at, now, li["id"]))
+
+
+def _module_default(conn, ctx, li: dict, calc: dict):
+    """The trade's own price book item for a priced line: (rule, cost_cents).
+
+    The rule is the line's calc_json.rule (the module manifest's line id); the cost is the book's current cost for
+    the rule's key, or the module's sample cost when the company has no price saved for it yet.
+    """
+    from estimator.pricing.price_book import get_price
+    if li["module_id"] == service.CUSTOM_MODULE or not calc.get("rule"):
+        raise InvalidInput("this line wasn't priced from a trade, so it has no module default item",
+                           field="price_default")
+    reg = _registry()
+    mod = _module(reg, li["module_id"])
+    rule = next((r for r in mod.lines if r.id == calc["rule"]), None)
+    if rule is None:
+        raise InvalidInput(f"the {mod.name} trade no longer has a '{calc['rule']}' line", field="price_default")
+    price = get_price(conn, ctx.company_id, rule.price_key)
+    if price is None:
+        sp = mod.sample_prices.get(rule.price_key)
+        if sp is None:
+            raise InvalidInput(f"no price '{rule.price_key}' in the price book", field="price_default")
+        return rule, sp.cost_cents
+    if price.unit != li["unit"]:
+        raise InvalidInput(f"your price '{rule.price_key}' is per {price.unit} but this line is per"
+                           f" {li['unit']}; fix the price book", field="price_default")
+    return rule, price.cost_cents
 
 
 def update_line_item(conn, ctx: RequestContext, estimate_id: int, rev: int, line_id: int, *, quantity=None,
-                     unit_cost_cents=None, waste_pct=None, description: str | None = None, reason: str | None = None,
+                     unit_cost_cents=None, waste_pct=None, description: str | None = None,
+                     price_key: str | None = None, price_default: bool = False, reason: str | None = None,
                      revert: bool = False, remove: bool = False, confirm: bool = False) -> dict:
     """Change one line (an override, kept with who, when and why), put it back (revert), or take it off (remove).
-    Asks first, showing the change and the trade's new subtotal."""
+    Asks first, showing the change and the trade's new subtotal. price_key swaps the line to another price book
+    item (same unit; the cost comes from the book unless unit_cost_cents is given too) and the picked item stays
+    on the line when the trade is priced again; price_default puts the trade's own item back."""
     est = service._check_writable(conn, ctx, int(estimate_id), rev)
     li = _load_line(conn, ctx, est["id"], line_id)
     calc = json.loads(li["calc_json"] or "{}")
     from_assembly = li["module_id"] != service.CUSTOM_MODULE
     reason = " ".join(str(reason or "").split())[:300] or None
-    editing = any(v not in (None, "") for v in (quantity, unit_cost_cents, waste_pct, description))
+    editing = any(v not in (None, "") for v in (quantity, unit_cost_cents, waste_pct, description, price_key)) \
+        or price_default
     if [bool(revert), bool(remove), editing].count(True) > 1:
         raise InvalidInput("change a line, revert it or remove it: one at a time")
+    if price_key not in (None, "") and price_default:
+        raise InvalidInput("pick a price book item or go back to the trade's own item, not both",
+                           field="price_key")
     if remove:
         if from_assembly and not reason:
             raise InvalidInput("say why this priced line comes off (reason); the trade's assembly made it",
@@ -310,9 +359,10 @@ def update_line_item(conn, ctx: RequestContext, estimate_id: int, rev: int, line
         calc.pop("override", None)
         with service.transaction(conn):
             conn.execute("UPDATE line_items SET quantity = ?, unit_cost_cents = ?, waste_pct = ?, description = ?,"
-                         " calc_json = ?, override_by = NULL, override_reason = NULL, override_at = NULL,"
+                         " price_key = ?, calc_json = ?, override_by = NULL, override_reason = NULL, override_at = NULL,"
                          " updated_at = ? WHERE id = ?", (orig["quantity"], orig["unit_cost_cents"],
-                                                          orig["waste_pct"], orig["description"], json.dumps(calc),
+                                                          orig["waste_pct"], orig["description"],
+                                                          orig.get("price_key", li["price_key"]), json.dumps(calc),
                                                           now, li["id"]))
             service._log(conn, ctx, est["id"], "line_override_reverted", {"line_id": li["id"], **orig},
                          before={k: li[k] for k in EDIT_FIELDS})
@@ -342,18 +392,43 @@ def update_line_item(conn, ctx: RequestContext, estimate_id: int, rev: int, line
         if not d:
             raise InvalidInput("the description can't be empty", field="description")
         changes["description"] = d
+    if price_key not in (None, ""):
+        key = " ".join(str(price_key).split())
+        if key != (li["price_key"] or ""):
+            from estimator.pricing.price_book import get_price
+            price = get_price(conn, ctx.company_id, key)
+            if price is None:
+                raise InvalidInput(f"no price '{key}' in the price book", field="price_key")
+            if price.unit != li["unit"]:
+                raise InvalidInput(f"price '{key}' is per {price.unit}, not per {li['unit']}", field="price_key")
+            changes["price_key"] = key
+            if "unit_cost_cents" not in changes:
+                changes["unit_cost_cents"] = price.cost_cents
+    if price_default:
+        rule, cost = _module_default(conn, ctx, li, calc)
+        changes["price_key"] = rule.price_key
+        changes.setdefault("unit_cost_cents", cost)
+        changes.setdefault("description", rule.description)
     changes = {k: v for k, v in changes.items() if str(v) != str(li[k])}
     if not changes:
-        raise InvalidInput("nothing to change: give quantity, unit_cost_cents, waste_pct or description with a new "
-                           "value (or revert / remove)")
+        raise InvalidInput("nothing to change: give quantity, unit_cost_cents, waste_pct, description or price_key"
+                           " with a new value, or price_default to go back to the trade's item (or revert / remove)")
     if from_assembly and not reason:
         raise InvalidInput("say why (reason): this line was priced from the trade's answers, so a hand change is "
                            "an override and is kept with its reason", field="reason")
+    note = ""
+    if from_assembly:
+        if price_default:
+            note = f" (back to the {li['module_id']} trade's own price book item)"
+        else:
+            note = (f" (an override of the {li['module_id']} assembly; re-applying it keeps cost, waste and "
+                    "description changes but not quantity")
+            if "price_key" in changes:
+                note += "; re-pricing this trade keeps the price book item you picked"
+            note += ")"
     _confirm(confirm, f"Change line {li['id']} ({li['description']}): " + ", ".join(
-        f"{k} {li[k]} → {v}" for k, v in changes.items())
-             + (f" (an override of the {li['module_id']} assembly; re-applying it keeps cost, waste and description "
-                "changes but not quantity)" if from_assembly else "") + "?",
-             line_id=li["id"], changes=changes, override=from_assembly)
+        f"{k} {li[k]} → {v}" for k, v in changes.items()) + note + "?",
+        line_id=li["id"], changes=changes, override=from_assembly)
     with service.transaction(conn):
         _write_override(conn, ctx, li, changes, reason, now)
         service._log(conn, ctx, est["id"], "line_overridden" if from_assembly else "line_updated",

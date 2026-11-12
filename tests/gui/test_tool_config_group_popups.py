@@ -348,3 +348,45 @@ def test_setup_center_change_shows_here_and_save_keeps_it(state_dir, gui, monkey
     gui.pump()
     _buttons(panel, "💾 Save and restart")[0].invoke()
     assert tcs.group_enabled(mode, "service_desk") is False
+
+
+def test_estimator_group_row_popup_and_save(state_dir, gui, dialogs, monkeypatch):
+    """2026-11-12 (David): the Estimator group shows in the panel with all
+    108 tools, one tool can be switched off from its popup, and Save writes
+    exactly that tool to tool_config.json (merge: nothing else touched)."""
+    dialogs.set_response("askyesno", True)   # accept any live-feature warning
+    panel = _panel(gui)
+    mode = _mode(panel)
+    tools = [n for n in tc.tools_in_category("estimator") if mode in tc.modes_of(n)]
+    assert len(tools) == 108
+    cat = next(c for c, _t in _categories(mode) if c.key == "estimator")
+    cb, count, btn = _row_widgets(panel, cat.label)
+    assert btn.cget("text") == "Configure\u2026"
+    assert count.cget("text") == "108 of 108 enabled"
+    assert not cb.instate(["alternate"])
+
+    pop = _open_popup(gui, btn)
+    pop_cbs = {w.cget("text"): w for w in _walk(pop) if isinstance(w, ttk.Checkbutton)}
+    assert set(pop_cbs) == {tc.TOOL_CATALOG[n].label for n in tools}
+
+    target = tc.TOOL_CATALOG[tools[0]].label
+    pop_cbs[target].invoke()   # one Estimator tool off
+    gui.pump()
+    assert count.cget("text") == "107 of 108 enabled"
+    assert cb.instate(["alternate"]), "partly-on group should show the dash"
+    _buttons(pop, "Close")[0].invoke()
+    gui.pump()
+
+    import rag_gui
+    restarts = []
+    monkeypatch.setattr(rag_gui.messagebox, "askyesno", lambda *a, **k: True)
+    monkeypatch.setattr(rag_gui.RAGGui, "_on_window_close", lambda self, relaunch=None: restarts.append(relaunch))
+    _buttons(panel, "\U0001f4be Save and restart")[0].invoke()
+    assert len(restarts) == 1 and "RAG_RUN.bat" in restarts[0]
+    data = json.loads((state_dir / "tool_config.json").read_text(encoding="utf-8"))
+    assert set(data[mode]["disabled_tools"]) == {tools[0]}
+
+    # Group checkbox on the page re-enables the whole group
+    cb.invoke()
+    gui.pump()
+    assert count.cget("text") == "108 of 108 enabled"

@@ -5,6 +5,7 @@ cc_form_lf,Forms and layout per linear ft (sample),labor,lf,3.50
 cc_footing_lf,Footing excavation per linear ft (sample),labor,lf,6.00
 cc_mesh_sqft,Wire mesh per sq ft (sample),material,sqft,0.35
 cc_rebar_lf,#4 rebar placed per linear ft (sample),material,lf,0.85
+cc_rebar_lf_5,#5 rebar placed per linear ft (sample),material,lf,1.25
 cc_concrete_cy,Ready-mix concrete per cubic yard (sample),material,cuyd,165.00
 cc_finish_sqft,Place and finish labor per sq ft (sample),labor,sqft,2.25
 cc_stamp_sqft,Stamped finish extra per sq ft (sample),labor,sqft,4.50

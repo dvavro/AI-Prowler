@@ -788,6 +788,67 @@ CREATE TABLE help_progress (
 );
 CREATE INDEX ix_help_progress_user ON help_progress (user_id)
 """),
+    (19, "price book rows carry their trade", """
+ALTER TABLE price_book ADD COLUMN module_id TEXT
+"""),
+    (20, "concrete agent auto-runs", """
+CREATE TABLE auto_runs (
+    id                   INTEGER PRIMARY KEY,
+    company_id           TEXT NOT NULL,
+    estimate_id          INTEGER NOT NULL,
+    sheet_id             INTEGER NOT NULL,
+    viewport_id          INTEGER NOT NULL,
+    module_id            TEXT NOT NULL,
+    status               TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'done', 'failed')),
+    step                 TEXT NOT NULL DEFAULT 'starting',
+    error                TEXT,
+    candidate_id         TEXT,
+    candidates_json      TEXT NOT NULL DEFAULT '[]',
+    measurement_ids_json TEXT NOT NULL DEFAULT '[]',
+    created_by           TEXT NOT NULL,
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL
+)
+"""),
+    (21, "per-trade sheet activation for takeoff", """
+CREATE TABLE sheet_trade_active (
+    company_id  TEXT NOT NULL,
+    sheet_id    INTEGER NOT NULL,
+    module_id   TEXT NOT NULL,
+    active      INTEGER NOT NULL CHECK (active IN (0, 1)),
+    updated_by  TEXT,
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (company_id, sheet_id, module_id)
+);
+CREATE INDEX ix_sheet_trade_active_sheet ON sheet_trade_active (company_id, sheet_id)
+"""),
+    (22, "AI log: every LLM call, what was sent and what came back", """
+CREATE TABLE ai_log (
+    id               INTEGER PRIMARY KEY,
+    company_id       TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    provider         TEXT NOT NULL,
+    model            TEXT NOT NULL,
+    role             TEXT NOT NULL,
+    purpose          TEXT NOT NULL,
+    auto_run_id      INTEGER,
+    task_id          INTEGER,
+    estimate_id      INTEGER,
+    system_prompt    TEXT NOT NULL,
+    user_prompt      TEXT NOT NULL,
+    images_json      TEXT NOT NULL DEFAULT [],
+    response_text    TEXT,
+    parsed_json      TEXT,
+    input_tokens     INTEGER NOT NULL DEFAULT 0,
+    output_tokens    INTEGER NOT NULL DEFAULT 0,
+    cost_micros      INTEGER NOT NULL DEFAULT 0,
+    duration_ms      INTEGER,
+    ok               INTEGER NOT NULL,
+    error            TEXT
+);
+CREATE INDEX ix_ai_log_company ON ai_log (company_id, created_at);
+CREATE INDEX ix_ai_log_run ON ai_log (company_id, auto_run_id)
+"""),
 ]
 
 

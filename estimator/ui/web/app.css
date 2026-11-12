@@ -316,3 +316,8 @@ tr.pb-history > td { background: #f8fafc; }
 .help-panel input[type="search"] { width: 100%; margin: 10px 0; }
 .help-panel-replay { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 @media (max-width: 700px) { .tour-pop { width: calc(100vw - 16px); } }
+
+/* AI Log: the prompt and the reply wrap and scroll instead of running off the card; sent plan images fit the card. */
+.ai-log-text { white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; max-height: 24rem; overflow: auto; font-size: 13px; }
+.ai-log-img { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; }
+.ai-log-figure { margin: 12px 0; }

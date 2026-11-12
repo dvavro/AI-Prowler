@@ -198,6 +198,8 @@ function parseHash() {
   if (parts[0] === "m" && parts[1] === "reviews") return { screen: "reviews", page: "mobile_reviews", arg: null };
   // Sprint 17: one plan revision report drawn over the sheets (reports.js); ?sheet=<n>&old=1.
   if (parts[0] === "revisions" && /^\d+$/.test(parts[1] || "")) return { screen: "reports", page: "revision", arg: +parts[1] };
+  // AI Log (from the Agents screen, verify.js): what the AI was sent and what it returned; ?auto_run_id=<id> shows one run's calls.
+  if (parts[0] === "agents" && parts[1] === "ai-log") return { screen: "agents", page: "ai_log", arg: null };
   return { screen: parts[0] || "dashboard", page: null, arg: null };
 }
 
@@ -680,30 +682,36 @@ async function renderPriceBook(main, screen) {
       el("a", { href: "#/help/set_up_your_price_book" }, "See how to add prices"),
       " or paste a supplier's list below."));
   } else {
+    const tradeName = Object.fromEntries((mods.modules || []).map(m => [m.id, m.name]));
     const tbody = el("tbody", {}, book.prices.map(p => {
       const input = el("input", { type: "text", inputmode: "decimal", class: "cost", "data-key": p.price_key,
                                   "data-old": dollars(p.cost_cents), value: dollars(p.cost_cents), "aria-label": "Cost for " + p.description });
       input.addEventListener("input", () => input.classList.toggle("changed", input.value.trim() !== input.dataset.old));
+      const edit = el("button", { class: "link-btn", type: "button", "data-edit": p.price_key, title: "Change the description, kind, unit, or trade" }, "✏️ Edit");
+      const remove = el("button", { class: "link-btn", type: "button", "data-remove": p.price_key, title: "Remove this price" }, "🗑️ Remove");
       const hist = el("button", { class: "link-btn", type: "button", "data-history": p.price_key, title: "Price history and job costs" }, "📈 History");
       const row = el("tr", { "data-key": p.price_key, "data-kind": p.kind },
         el("td", {}, p.description, el("div", { class: "muted small" }, p.price_key)),
         el("td", {}, p.kind), el("td", {}, p.unit),
+        el("td", { "data-trade": p.module_id || "" }, p.module_id ? (tradeName[p.module_id] || p.module_id) : "—"),
         el("td", { class: "money" }, "$", input),
         el("td", {}, el("span", { class: "status" + (p.sample ? " sample" : "") }, p.sample ? "sample" : "yours"),
           p.effective_date ? el("div", { class: "muted small" }, "from " + p.effective_date) : null),
-        el("td", {}, hist));
+        el("td", {}, edit, " ", remove, " ", hist));
+      edit.addEventListener("click", () => priceEdit(row, p, mods.modules));
+      remove.addEventListener("click", () => priceRemove(row, p, remove));
       hist.addEventListener("click", () => priceHistory(row, p));
       return row;
     }));
     const table = el("table", { class: "list", id: "prices" },
       el("thead", {}, el("tr", {}, el("th", {}, "Item"), el("th", {}, "Kind"), el("th", {}, "Unit"),
-        el("th", {}, "Cost per unit"), el("th", {}, "Source"), el("th", {}, ""))), tbody);
+        el("th", {}, "Trade"), el("th", {}, "Cost per unit"), el("th", {}, "Source"), el("th", {}, ""))), tbody);
     const narrow = () => {
       const t = find.value.trim().toLowerCase(), k = pickKind.value;
       for (const tr of tbody.querySelectorAll("tr[data-key]")) {
         tr.hidden = (!!t && !tr.textContent.toLowerCase().includes(t)) || (!!k && tr.dataset.kind !== k);
         const next = tr.nextElementSibling;
-        if (next && next.classList.contains("pb-history")) next.hidden = tr.hidden;
+        if (next && (next.classList.contains("pb-history") || next.classList.contains("pb-edit"))) next.hidden = tr.hidden;
       }
     };
     find.addEventListener("input", narrow);
@@ -722,7 +730,7 @@ async function renderPriceBook(main, screen) {
     });
     parts.push(table, el("div", { class: "card section row" }, el("label", {}, "Takes effect (optional)", eff), save), msg);
   }
-  parts.push(importBox());
+  parts.push(addPriceForm(mods.modules, moduleId), importBox(mods.modules, moduleId));
   main.replaceChildren(...parts);
 }
 
@@ -732,7 +740,14 @@ async function askThenSave(msg, btn, path, body, doneText) {
   state.busy = true;
   try {
     const r = await api("POST", path, body);
-    if (!r.needs_confirmation) { msg.replaceChildren(el("p", {}, r.message || "Nothing to change.")); return; }
+    if (!r.needs_confirmation) {
+      // Fix 5: when nothing saved, say why — e.g. the Add form's code already
+      // exists with a different unit, so the import skipped the row.
+      const skipped = (r.skipped_rows || []).map(s => el("li", {}, "Row " + s.row + (s.item ? " (" + s.item + ")" : "") + ": " + s.reason));
+      msg.replaceChildren(el("p", {}, r.message || "Nothing to change."),
+        skipped.length ? el("ul", {}, skipped) : null);
+      return;
+    }
     const yes = el("button", { class: "primary", type: "button", id: "pb-confirm" }, "Yes, save");
     const no = el("button", { class: "button", type: "button", id: "pb-cancel" }, "Cancel");
     const lines = (r.changes || []).map(c => typeof c === "string" ? el("li", {}, c) : el("li", {}, (c.description || c.price_key) + ": " +
@@ -768,7 +783,8 @@ async function askThenSave(msg, btn, path, body, doneText) {
 async function priceHistory(row, p) {
   const next = row.nextElementSibling;
   if (next && next.classList.contains("pb-history")) { next.remove(); return; }
-  const cell = el("td", { colspan: 6 }, el("p", { class: "muted" }, "Loading…"));
+  if (next && next.classList.contains("pb-edit")) next.remove();
+  const cell = el("td", { colspan: 7 }, el("p", { class: "muted" }, "Loading…"));
   row.after(el("tr", { class: "pb-history", "data-history-for": p.price_key }, cell));
   try {
     const h = await api("GET", "/price-book/history/" + encodeURIComponent(p.price_key));
@@ -786,9 +802,112 @@ async function priceHistory(row, p) {
   } catch (e) { if (e.status !== 401) cell.replaceChildren(errorBox(e)); }
 }
 
-function importBox() {
+// One price's details — description, kind, unit, trade — edited under its row.
+// The code (price_key) is the identifier and never changes; the cost stays
+// inline-editable in the table. Saving asks first, like every money change.
+function priceEdit(row, p, modules) {
+  const next = row.nextElementSibling;
+  if (next && next.classList.contains("pb-edit")) { next.remove(); return; }
+  if (next && next.classList.contains("pb-history")) next.remove();
+  const desc = el("input", { type: "text", id: "pb-edit-desc", value: p.description, "aria-label": "Description" });
+  const kind = el("select", { id: "pb-edit-kind", "aria-label": "Kind" },
+    ["material", "labor", "equipment", "sub", "other"].map(k => el("option", { value: k, selected: k === p.kind }, words(k))));
+  const unit = el("input", { type: "text", id: "pb-edit-unit", value: p.unit, "aria-label": "Unit" });
+  const trade = tradeSelect("pb-edit-trade", modules, p.module_id || "");
+  const save = el("button", { class: "primary", type: "button", id: "pb-edit-save" }, "Save…");
+  const cancel = el("button", { class: "button", type: "button", id: "pb-edit-cancel" }, "Cancel");
+  const msg = el("div", { id: "pb-edit-message", role: "status" });
+  const cell = el("td", { colspan: 7 },
+    el("div", { class: "row filters" },
+      el("label", {}, "Item", el("span", { class: "muted" }, p.price_key)),
+      el("label", {}, "Description", desc),
+      el("label", {}, "Kind", kind),
+      el("label", {}, "Unit", unit),
+      el("label", {}, "Trade", trade),
+      el("span", {}, save, " ", cancel)),
+    msg);
+  row.after(el("tr", { class: "pb-edit", "data-edit-for": p.price_key }, cell));
+  cancel.addEventListener("click", () => cell.closest("tr").remove());
+  save.addEventListener("click", async () => {
+    msg.replaceChildren();
+    const d = desc.value.trim(), u = unit.value.trim();
+    if (!d) { msg.replaceChildren(errorBox({ message: "Give the item a description." })); return; }
+    if (!u) { msg.replaceChildren(errorBox({ message: "Give the item a unit, e.g. sqft." })); return; }
+    cancel.disabled = true;
+    await askThenSave(msg, save, "/price-book/" + encodeURIComponent(p.price_key) + "/edit",
+      { description: d, kind: kind.value, unit: u, module_id: trade.value || null },
+      () => "Price updated.");
+    cancel.disabled = false;
+  });
+}
+
+// Remove one price, asking first. A module key goes back to its sample price;
+// a price added by hand is gone from the Price Book entirely.
+function priceRemove(row, p, btn) {
+  const next = row.nextElementSibling;
+  if (next && next.classList.contains("pb-edit")) { next.remove(); return; }
+  if (next && next.classList.contains("pb-history")) next.remove();
+  const msg = el("div", { id: "pb-remove-message", role: "status" });
+  row.after(el("tr", { class: "pb-edit", "data-remove-for": p.price_key }, el("td", { colspan: 7 }, msg)));
+  askThenSave(msg, btn, "/price-book/" + encodeURIComponent(p.price_key) + "/remove", {},
+    () => "Price removed.");
+}
+
+// Fix 5: add one price by hand. The table only edits prices that already exist,
+// and the import box was the only way a new price got in. This sends one CSV row
+// to /price-book/import with add_new, through the same ask-then-save confirm as
+// the table and the import box — POST /price-book itself refuses unknown keys
+// (price_book.py update_prices: no price called '<key>'), so it cannot add items.
+// The trade a new price belongs to: it shows under that trade's filter in the Price Book.
+// Blank (No trade) means the price only shows under All trades.
+function tradeSelect(id, modules, currentModule) {
+  return el("select", { id, "aria-label": "Trade" }, el("option", { value: "" }, "No trade"),
+    (modules || []).map(m => el("option", { value: m.id, selected: m.id === currentModule }, m.name)));
+}
+
+function addPriceForm(modules, currentModule) {
+  const key = el("input", { type: "text", id: "pb-add-key", placeholder: "e.g. cc_fibermesh_sqft", "aria-label": "Item code" });
+  const desc = el("input", { type: "text", id: "pb-add-desc", placeholder: "Description", "aria-label": "Description" });
+  const kind = el("select", { id: "pb-add-kind", "aria-label": "Kind" },
+    ["material", "labor", "equipment", "sub", "other"].map(k => el("option", { value: k }, words(k))));
+  const unit = el("input", { type: "text", id: "pb-add-unit", placeholder: "Unit, e.g. sqft", "aria-label": "Unit" });
+  const cost = el("input", { type: "text", inputmode: "decimal", id: "pb-add-cost", placeholder: "Cost per unit", "aria-label": "Cost per unit" });
+  const trade = tradeSelect("pb-add-trade", modules, currentModule);
+  const add = el("button", { class: "primary", type: "button", id: "pb-add" }, "Add item");
+  const msg = el("div", { id: "pb-add-message", role: "status" });
+  const cell = v => { v = String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  add.addEventListener("click", async () => {
+    msg.replaceChildren();
+    const k = key.value.trim(), d = desc.value.trim(), u = unit.value.trim(), c = cost.value.trim().replace(/^\$/, "");
+    if (!/^[A-Za-z0-9_.-]{1,64}$/.test(k)) {
+      msg.replaceChildren(errorBox({ message: "Give the item a code using letters, numbers, _ . or - (up to 64 characters)." }));
+      return;
+    }
+    if (!d) { msg.replaceChildren(errorBox({ message: "Give the item a description." })); return; }
+    if (!u) { msg.replaceChildren(errorBox({ message: "Give the item a unit, e.g. sqft." })); return; }
+    if (c === "" || isNaN(Number(c)) || Number(c) < 0) {
+      msg.replaceChildren(errorBox({ message: "Give the cost as dollars, e.g. 0.18." }));
+      return;
+    }
+    const csv = "Item code,Description,Unit,Cost,Kind\n" + [k, d, u, c, kind.value].map(cell).join(",") + "\n";
+    await askThenSave(msg, add, "/price-book/import",
+      { csv_text: csv, mapping: { price_key: "Item code", description: "Description", unit: "Unit", cost: "Cost", kind: "Kind" },
+        add_new: true, module_id: trade.value || null },
+      r => (r.saved || 0) + " price(s) saved.");
+  });
+  return el("details", { class: "card section", id: "pb-add-box", open: true }, el("summary", {}, "Add an item"),
+    el("p", { class: "muted" }, "One price, by hand. If the item code already exists, saving updates that price instead — " +
+      "you'll be asked to confirm the old cost → new cost first, and a different unit is skipped, never converted. Pick a trade and the price shows under that trade's filter; leave it on No trade and it only shows under All trades."),
+    el("div", { class: "row filters" },
+      el("label", {}, "Item code", key), el("label", {}, "Description", desc), el("label", {}, "Kind", kind),
+      el("label", {}, "Trade", trade), el("label", {}, "Unit", unit), el("label", {}, "Cost per unit", cost), add),
+    msg);
+}
+
+function importBox(modules, currentModule) {
   const text = el("textarea", { id: "pb-csv", rows: 6, placeholder: "Item,Unit,Unit Price\nDriveway cleaning,sqft,0.18" });
   const addNew = el("input", { type: "checkbox", id: "pb-addnew" });
+  const trade = tradeSelect("pb-import-trade", modules, currentModule);
   const eff = el("input", { type: "date", id: "pb-import-effective", "aria-label": "Effective date" });
   const check = el("button", { class: "button", type: "button", id: "pb-columns" }, "1. Check the columns…");
   const go = el("button", { class: "primary", type: "button", id: "pb-import" }, "2. Check the list…");
@@ -861,7 +980,7 @@ function importBox() {
     const mapping = {};
     for (const [f, s] of Object.entries(pickers)) if (s.value) mapping[f] = s.value;
     const body = { add_new: addNew.checked, effective_date: eff.value || null,
-      mapping: Object.keys(mapping).length ? mapping : null };
+      mapping: Object.keys(mapping).length ? mapping : null, module_id: trade.value || null };
     if (staged) { body.file_path = staged.stage_id; if (!sheet.hidden) body.sheet = sheet.value; }
     else body.csv_text = text.value;
     await askThenSave(msg, go, "/price-book/import", body,
@@ -874,6 +993,7 @@ function importBox() {
     el("div", { class: "row" }, el("label", {}, "Or choose a file: ", file), sheet),
     text, el("div", { class: "row" }, check), cols,
     el("label", { class: "check" }, addNew, " Add rows that don't match a price as new prices"),
+    el("label", {}, "Trade for new prices", trade),
     el("label", {}, "Takes effect (optional)", eff), go, msg);
 }
 
@@ -903,10 +1023,17 @@ async function renderPlans(main, screen) {
   main.replaceChildren(...parts);
 }
 
+// Per-trade sheet activation: the trade the plan-set sheet list shows takeoff switches for.
+// Concrete first — it is the trade with the takeoff agent — and it stays put while the page is open.
+let planTradeId = "concrete";
 let planPoll = null;
 async function renderPlanSet(main, id) {
   clearTimeout(planPoll);
-  const r = await api("GET", "/plan-sets/" + id);
+  const [r, mods] = await Promise.all([api("GET", "/plan-sets/" + id + "?module_id=" + encodeURIComponent(planTradeId)),
+    api("GET", "/modules")]);
+  const tradeMods = (mods.modules || []).filter(m => m.path === "plan_takeoff" || m.path === "both");
+  const trade = tradeMods.find(m => m.id === planTradeId) || tradeMods[0];
+  const tradeId = trade ? trade.id : planTradeId, tradeName = trade ? trade.name : words(planTradeId);
   const ps = r.plan_set;
   const msg = el("div", { id: "plan-message", role: "status" });
   const parts = [el("p", {}, el("a", { href: "#/projects/" + r.estimate.id }, "← " + r.estimate.title)),
@@ -933,6 +1060,14 @@ async function renderPlanSet(main, id) {
       parts.push(row);
     }
   }
+  if (r.can_edit && ps.status !== "processing") {
+    // Removing a plan set asks first and lists everything that goes with it; once it is gone the page
+    // goes back to the Plans list (this set no longer exists to show).
+    const del = el("button", { class: "button danger", type: "button", id: "plan-remove" }, "🗑️ Remove this plan set…");
+    del.addEventListener("click", () => askConfirm(msg, del, "/plan-sets/" + id + "/remove", {},
+      done => { toast(done.summary || "Plan set removed."); go("#/plans"); }, "plan-remove"));
+    parts.push(el("div", { class: "row" }, del));
+  }
   parts.push(msg);
   if (ps.status === "processing") {
     parts.push(el("p", { class: "note", id: "plan-processing" }, "⏳ The plan engine is reading the sheets. This page updates by itself."));
@@ -941,9 +1076,51 @@ async function renderPlanSet(main, id) {
   if (r.sheets.length) {
     const need = r.sheets.filter(s => s.needs_scale).length;
     if (need) parts.push(el("p", { class: "note warn", id: "plan-need-scale" }, need + " sheet(s) need a scale before anything on them can be measured — open the sheet to set or calibrate it."));
+    // Per-trade sheet activation: pick the trade, then switch sheets on or off for its takeoff.
+    // A sheet switched off is skipped by that trade's agent — it stays openable and measurable by hand.
+    const pickTrade = el("select", { id: "plan-trade", "aria-label": "Trade" },
+      tradeMods.map(m => el("option", { value: m.id, selected: m.id === tradeId }, m.name)));
+    pickTrade.addEventListener("change", () => { planTradeId = pickTrade.value; route(); });
+    parts.push(el("div", { class: "row filters", id: "plan-trade-row" },
+      el("label", {}, "Takeoff for ", pickTrade),
+      el("span", { class: "muted small" }, "Sheets switched off are skipped by the " + tradeName + " takeoff — you can still open and measure them by hand.")));
+    const toggleCell = s => {
+      const on = s.active_for_trade !== false;
+      if (!r.can_edit) return el("td", {}, on ? "" : el("span", { class: "status sample" }, "off for " + tradeName));
+      const off = el("span", { class: "status sample", hidden: on }, " off");
+      const box = el("input", { type: "checkbox", class: "sheet-trade-toggle", "data-sheet": s.id, checked: on,
+        "aria-label": "Use this sheet for " + tradeName,
+        title: on ? "This sheet counts for " + tradeName : "Switched off for " + tradeName + " — the agent skips it" });
+      box.addEventListener("click", ev => ev.stopPropagation());
+      box.addEventListener("change", async () => {
+        const want = box.checked;
+        box.disabled = true;
+        try {
+          await api("POST", "/sheets/" + s.id + "/trade-active", { module_id: tradeId, active: want });
+          off.hidden = want;
+          box.title = want ? "This sheet counts for " + tradeName : "Switched off for " + tradeName + " — the agent skips it";
+          toast(want ? "Sheet switched on for " + tradeName + "." : "Sheet switched off for " + tradeName + " — the takeoff agent will skip it.");
+        } catch (e) { box.checked = !want; toast(e.message); }
+        box.disabled = false;
+      });
+      return el("td", {}, box, off);
+    };
+    // Removing a sheet asks first and lists everything measured on it; the plan set stays.
+    const delCell = s => {
+      if (!r.can_edit) return el("td", {});
+      const del = el("button", { class: "button small", type: "button", "data-remove-sheet": s.id,
+        "aria-label": "Remove sheet " + (s.sheet_no || ("page " + s.page_no)),
+        title: "Remove this sheet and everything measured on it" }, "🗑️");
+      del.addEventListener("click", ev => {
+        ev.stopPropagation();                       // the row itself opens the sheet
+        askConfirm(msg, del, "/sheets/" + s.id + "/remove", {},
+          done => { toast(done.summary || "Sheet removed."); route(); }, "sheet-remove");
+      });
+      return el("td", {}, del);
+    };
     parts.push(el("table", { class: "list clickable", id: "sheets" },
       el("thead", {}, el("tr", {}, el("th", {}, "Page"), el("th", {}, "Sheet"), el("th", {}, "Title"), el("th", {}, "Discipline"),
-        el("th", {}, "Scales"), el("th", {}, "Rev"))),
+        el("th", {}, "Scales"), el("th", {}, "Rev"), el("th", {}, "Takeoff"), el("th", {}, ""))),
       el("tbody", {}, r.sheets.map(s => el("tr", { "data-id": s.id, onclick: () => go("#/sheets/" + s.id) },
         el("td", {}, s.page_no),
         el("td", {}, el("a", { href: "#/sheets/" + s.id }, s.sheet_no || "page " + s.page_no)),
@@ -951,7 +1128,7 @@ async function renderPlanSet(main, id) {
         el("td", {}, (DISCIPLINE_ICON[s.discipline] || "") + " " + words(s.discipline)),
         el("td", {}, s.viewports.map(v => v.is_nts ? "NTS" : (v.scale_note || (v.measurable ? "1:" + v.scale_ratio : "—"))).join(" · "),
           s.needs_scale ? el("span", { class: "status sample" }, " needs a scale") : null),
-        el("td", {}, s.revision || ""))))));
+        el("td", {}, s.revision || ""), toggleCell(s), delCell(s))))));
   } else if (ps.status === "processed") {
     parts.push(el("div", { class: "card empty" }, "No sheets were found in this file. "
       + "Upload a different file (a PDF, a photo, or a DXF/DWG) from the project page."));

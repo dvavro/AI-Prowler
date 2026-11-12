@@ -30,6 +30,11 @@ ROLES = {
     "takeoff": {"label": "Takeoff agents", "works_now": False,
                 "does": "Measures each trade from the plans for the Estimate Runner. Starts when the Plan Engine is "
                         "installed; until then trades are measured by a person or from chat."},
+    "llm_takeoff": {"label": "LLM takeoff", "works_now": True,
+                    "does": "When the concrete auto-run finds no slab outline in the drawing, reads the foundation "
+                            "sheet with the AI instead (uses the API key, costs tokens, counts against the budget "
+                            "below). It only reads dimensions - the app does the maths - and every measurement it "
+                            "proposes still needs a person to approve it. Concrete only for now."},
 }
 CONFIG_ROLES = ("owner",)
 DEFAULT_BUDGET = {"daily_cents": 200, "monthly_cents": 2000}

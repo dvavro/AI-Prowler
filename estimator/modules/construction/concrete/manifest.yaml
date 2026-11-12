@@ -50,6 +50,14 @@ questions:
   - {id: base, label: "Gravel base (4 in ABC)?", type: boolean, default: true}
   - {id: remove_existing, label: "Remove existing concrete?", type: boolean, default: false}
   - {id: footing_lf, label: "Thickened edge / footing (12 x 12 in)", type: number, unit: lf, default: 0, min: 0, max: 5000}
+  - id: footing_rebar_size
+    label: "Footing rebar size"
+    type: choice
+    default: "4"
+    help: "Bar size for the 2 continuous footing bars."
+    choices:
+      - {value: "4", label: "#4 bar", factor: "4"}
+      - {value: "5", label: "#5 bar", factor: "5"}
   - {id: pump, label: "Pump truck needed?", type: boolean, default: false,
      help: "When the truck can't reach the pour."}
 
@@ -66,8 +74,10 @@ lines:
      price_key: cc_mesh_sqft, when: "reinforcement == 1"}
   - {id: rebar, description: "#4 rebar grid at 18 in, placed", kind: material, unit: lf,
      quantity: "area_sqft * 2 * 12 / 18", waste: "0.10", price_key: cc_rebar_lf, when: "reinforcement == 2"}
-  - {id: footing_rebar, description: "Footing rebar, 2 continuous #4 bars", kind: material, unit: lf,
-     quantity: "footing_lf * 2", waste: "0.10", price_key: cc_rebar_lf, when: "footing_lf > 0"}
+  - {id: footing_rebar_4, description: "Footing rebar, 2 continuous #4 bars", kind: material, unit: lf,
+     quantity: "footing_lf * 2", waste: "0.10", price_key: cc_rebar_lf, when: "footing_lf > 0 and footing_rebar_size == 4"}
+  - {id: footing_rebar_5, description: "Footing rebar, 2 continuous #5 bars", kind: material, unit: lf,
+     quantity: "footing_lf * 2", waste: "0.10", price_key: cc_rebar_lf_5, when: "footing_lf > 0 and footing_rebar_size == 5"}
   # cubic yards = sq ft x thickness in / 12 / 27, plus 12 x 12 in footing = lf / 27
   - {id: concrete, description: "Ready-mix concrete", kind: material, unit: cuyd,
      quantity: "area_sqft * thickness_in / 12 / 27 + footing_lf / 27", waste: "0.05", price_key: cc_concrete_cy}

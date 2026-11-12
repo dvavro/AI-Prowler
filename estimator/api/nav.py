@@ -105,6 +105,10 @@ PAGES = (
     # Sprint 17: one plan revision report drawn over the sheets (red removed, green added, orange changed or moved).
     {"id": "revision", "label": "Plan revision", "from": "reports", "sprint": 17,
      "tools": ["plan_compare_revisions", "plan_get_sheet_image", "takeoff_detail"]},
+    # The AI Log: every LLM call, what was sent and what came back - opened from the Agents screen.
+    # No MCP tool yet: the log is web-only for now, so the tools list stays empty (the parity tests
+    # check listed tools exist; an empty list lists nothing).
+    {"id": "ai_log", "label": "AI Log", "from": "agents", "sprint": 19, "tools": []},
 )
 
 # What each role may do, sent to the browser so it can hide buttons. The server

@@ -27,7 +27,8 @@ class ProviderError(RuntimeError):
 
 
 def set_provider(fake) -> None:
-    """Tests: an object with ask(provider, system, user, model) -> (text, usage), ready(provider) -> (ok, why),
+    """Tests: an object with ask(provider, system, user, model) -> (text, usage),
+    ask_vision(provider, system, user, images, model) -> (text, usage), ready(provider) -> (ok, why),
     model_for(provider) -> str, cost(model, usage) -> float. None goes back to AI-Prowler's."""
     _OVERRIDE.clear()
     if fake is not None:
@@ -80,6 +81,23 @@ def ask(provider: str, system: str, user: str, model: str = "") -> tuple[str, di
         raise ProviderError("AI-Prowler's agent providers aren't available here")
     try:
         return h.ask(provider, system, user, model=model)
+    except Exception as exc:  # noqa: BLE001 - desk_agent_providers.ProviderError and friends
+        raise ProviderError(str(exc)[:400]) from None
+
+
+def ask_vision(provider: str, system: str, user: str, images: list, model: str = "") -> tuple[str, dict]:
+    """(text, {input, output}) with images [{media_type, data (base64)}] - the LLM takeoff
+    reads plan sheets this way. ProviderError when the host can't show the AI pictures."""
+    if provider not in API_PROVIDERS:
+        raise ProviderError(f"{provider} doesn't run on its own")
+    h = _host()
+    if h is None:
+        raise ProviderError("AI-Prowler's agent providers aren't available here")
+    fn = getattr(h, "ask_vision", None)
+    if fn is None:
+        raise ProviderError("this AI-Prowler can't show the AI plan images yet (ask_vision is missing)")
+    try:
+        return fn(provider, system, user, images, model=model)
     except Exception as exc:  # noqa: BLE001 - desk_agent_providers.ProviderError and friends
         raise ProviderError(str(exc)[:400]) from None
 

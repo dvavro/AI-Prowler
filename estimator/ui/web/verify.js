@@ -292,6 +292,11 @@ async function renderAgents(main, screen) {
   parts.push(r.runs.length ? el("div", { id: "runs-list" }, r.runs.map(run => runCard(run, r.can_start, msg)))
     : el("div", { class: "card empty", id: "runs-empty" }, "No takeoff runs yet. The Director starts one for each plan job, or start one from ",
       el("a", { href: "#/projects" }, "a project's estimate"), "."));
+
+  // AI Log: every call the Estimator made to the AI, and what came back.
+  parts.push(el("h3", {}, "AI Log"));
+  parts.push(el("p", {}, el("a", { href: "#/agents/ai-log", id: "agents-ai-log-link" }, "📋 What was sent to the AI and what came back"),
+    " — every LLM call (the LLM takeoff reading a plan, the Reviewer, Bid Writer and Follow-up agents), newest first, with the prompt, the plan images, the reply and the cost."));
   main.replaceChildren(...parts);
 }
 
@@ -342,7 +347,103 @@ function runCard(run, canStart, msg) {
   return card;
 }
 
+// ------------------------------------------------------------------ AI Log: what was sent to the AI and what came back
+// One card per LLM call (the LLM takeoff reading a plan, the Reviewer, Bid Writer and Follow-up agents),
+// newest first. Expanding a card loads the full call: the prompt, the plan images the AI was shown,
+// the raw reply and the parsed result, tokens and cost. ?auto_run_id=<id> shows one auto-run's calls -
+// a run with no entries here never reached the AI.
+async function renderAiLog(main) {
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  const runId = q.get("auto_run_id") || "";
+  const role = q.get("role") || "";
+  const filter = new URLSearchParams();
+  if (runId) filter.set("auto_run_id", runId);
+  if (role) filter.set("role", role);
+  const qs = filter.toString();
+  const parts = [el("p", {}, el("a", { href: "#/agents" }, "← Agents")),
+    el("div", { class: "page-head" }, el("h2", {}, "📋 AI Log")),
+    el("p", { class: "muted" }, "Every call the Estimator made to the AI, newest first — what was sent (the prompt and the plan images), what came back, and what it cost. A run with no entries here never reached the AI.")];
+  if (runId) parts.push(el("p", { class: "note", id: "ai-log-run" }, "Calls for auto-run " + runId + ". ",
+    el("a", { href: "#/agents/ai-log" }, "Show all calls")));
+  const list = el("div", { id: "ai-log-list" });
+  const more = el("button", { class: "button", type: "button", id: "ai-log-more" }, "Load more…");
+  let offset = 0, total = 0;
+  async function load() {
+    more.disabled = true;
+    const r = await api("GET", "/ai-log?limit=25&offset=" + offset + (qs ? "&" + qs : ""));
+    total = r.total;
+    if (!r.entries.length && offset === 0) {
+      list.replaceChildren(el("div", { class: "card empty", id: "ai-log-empty" },
+        runId ? "No AI calls for this run — the AI never ran (the agent measured from the drawing, or LLM takeoff is off)."
+              : "No AI calls yet — nothing has been sent to the AI."));
+    } else {
+      for (const e of r.entries) list.append(aiLogCard(e));
+    }
+    offset += r.entries.length;
+    more.hidden = offset >= total;
+    more.disabled = false;
+  }
+  more.addEventListener("click", () => load().catch(e => { if (e.status !== 401) list.append(errorBox(e)); }));
+  parts.push(list, more);
+  main.replaceChildren(...parts);
+  try { await load(); } catch (e) { if (e.status !== 401) list.replaceChildren(errorBox(e)); }
+}
+
+function aiLogCost(micros) { return "$" + (Number(micros || 0) / 1000000).toFixed(4); }
+
+function aiLogCard(e) {
+  const body = el("div", { class: "ai-log-detail" });
+  const card = el("details", { class: "card section", id: "ai-log-" + e.id, "data-entry": e.id },
+    el("summary", {}, el("strong", {}, e.purpose), " · ", e.provider + " / " + (e.model || "?"), " · ",
+      el("span", { class: "status " + (e.ok ? "" : "sample") }, e.ok ? "✓ answered" : "✗ failed"), " · ",
+      (e.input_tokens + e.output_tokens) + " tokens · " + aiLogCost(e.cost_micros),
+      (e.duration_ms !== null && e.duration_ms !== undefined) ? " · " + (e.duration_ms / 1000).toFixed(1) + "s" : "",
+      " · " + when(e.created_at), e.image_count ? " · " + e.image_count + " image" + (e.image_count === 1 ? "" : "s") : ""),
+    body);
+  card.addEventListener("toggle", async () => {
+    if (!card.open || body.childElementCount) return;
+    body.replaceChildren(el("p", { class: "muted" }, "Loading…"));
+    try {
+      const d = await api("GET", "/ai-log/" + e.id);
+      body.replaceChildren(aiLogDetail(d.entry));
+    } catch (err) { if (err.status !== 401) body.replaceChildren(errorBox(err)); }
+  });
+  return card;
+}
+
+function aiLogDetail(e) {
+  const out = el("div", {});
+  if (!e.ok && e.error) out.append(el("p", { class: "error", id: "ai-log-error" }, "Failed — " + e.error));
+  out.append(el("p", { class: "small muted" }, (e.input_tokens || 0) + " tokens in · " + (e.output_tokens || 0) + " out · "
+    + aiLogCost(e.cost_micros) + (e.auto_run_id ? " · auto-run " + e.auto_run_id : "")
+    + (e.task_id ? " · agent task " + e.task_id : "")));
+  out.append(el("h4", {}, "What was sent"));
+  out.append(el("p", { class: "small muted" }, "System"), el("pre", { class: "ai-log-text" }, e.system_prompt || "—"));
+  out.append(el("p", { class: "small muted" }, "Prompt"), el("pre", { class: "ai-log-text" }, e.user_prompt || "—"));
+  if (e.images && e.images.length) {
+    out.append(el("h4", {}, "Images sent (" + e.images.length + ")"));
+    for (const [i, img] of e.images.entries()) {
+      const pic = el("img", { alt: "Image " + (i + 1) + " sent to the AI" + (img.sheet_no ? " (sheet " + img.sheet_no + ")" : ""), loading: "lazy", class: "ai-log-img" });
+      pic.addEventListener("error", () => { pic.replaceWith(el("div", { class: "muted small" }, "This image is no longer on this PC.")); }, { once: true });
+      apiImage(pic, "/estimator-api" + img.image_url);
+      out.append(el("figure", { class: "ai-log-figure" }, pic,
+        el("figcaption", { class: "small muted" }, (img.sheet_no ? "Sheet " + img.sheet_no : "Sheet " + (img.sheet_id || "?"))
+          + " · " + words(img.kind) + " · " + img.width_px + "×" + img.height_px + " px"
+          + (img.sent_max_px ? " · sent as a " + img.sent_max_px + " px thumbnail" : "")
+          + " · AI send log #" + img.ai_send_log_id)));
+    }
+  }
+  out.append(el("h4", {}, "What came back"));
+  out.append(el("pre", { class: "ai-log-text" }, e.response_text === null || e.response_text === undefined ? "(no reply — the call failed)" : e.response_text));
+  if (e.parsed !== null && e.parsed !== undefined) {
+    out.append(el("h4", {}, "Parsed result"));
+    out.append(el("pre", { class: "ai-log-text" }, JSON.stringify(e.parsed, null, 2)));
+  }
+  return out;
+}
+
 SCREENS.reviews = renderReviews;
 SCREENS.symbol_library = renderSymbolLibrary;
 SCREENS.agents = renderAgents;
 PAGES.symbol_review = renderSymbolReview;
+PAGES.ai_log = renderAiLog;

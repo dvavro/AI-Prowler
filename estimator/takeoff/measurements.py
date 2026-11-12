@@ -108,6 +108,9 @@ def _out(m: dict) -> dict:
             "status": m["status"], "locked": bool(m["locked"]), "method": m["method"],
             "confidence": m["confidence"], "sheet_id": m["sheet_id"], "viewport_id": m["viewport_id"],
             "source_object_ids": json.loads(m["source_object_ids"] or "[]"),
+            "calc": json.loads(m["calc_json"] or "{}"),   # the calculation, incl. the auto-run's
+                                                              # auto_run_id/candidate_id, so list rows
+                                                              # can name the outline like the detail view
             "suggested_qty": m["suggested_qty"], "suggested_reason": m["suggested_reason"],
             "needs_remeasure": bool(m["needs_remeasure"]), "reject_reason": m["reject_reason"],
             "proposed_by": m["proposed_by"], "approved_by": m["approved_by"], "approved_at": m["approved_at"]}
