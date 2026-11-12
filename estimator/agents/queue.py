@@ -191,6 +191,10 @@ def _check_actions(role: str, actions, pack: dict) -> list[dict]:
             v = a.get(f)
             if v is None:
                 continue
+            # AI models often send inclusions and exclusions as a list of points: one point per line (2026-11-12,
+            # David: the Bid Writer gave up after 3 tries on "draft_bid.inclusions must be text").
+            if isinstance(v, (list, tuple)) and all(isinstance(x, str) for x in v):
+                v = "\n".join("- " + x.strip().lstrip("-• ").strip() for x in v if x.strip())
             if not isinstance(v, str):
                 raise InvalidInput(f"{name}.{f} must be text", field=f)
             v = v.strip()[:limit]

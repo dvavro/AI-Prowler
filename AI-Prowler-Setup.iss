@@ -485,6 +485,7 @@ Source: "estimator\director\jobs.py"; DestDir: "{app}\estimator\director"; Flags
 Source: "estimator\director\overrides.py"; DestDir: "{app}\estimator\director"; Flags: ignoreversion
 Source: "estimator\director\playbooks.py"; DestDir: "{app}\estimator\director"; Flags: ignoreversion
 Source: "estimator\director\playbooks\full_takeoff.yaml"; DestDir: "{app}\estimator\director\playbooks"; Flags: ignoreversion
+Source: "estimator\director\playbooks\project.yaml"; DestDir: "{app}\estimator\director\playbooks"; Flags: ignoreversion
 Source: "estimator\director\playbooks\quick_quote.yaml"; DestDir: "{app}\estimator\director\playbooks"; Flags: ignoreversion
 Source: "estimator\director\playbooks\standard_estimate.yaml"; DestDir: "{app}\estimator\director\playbooks"; Flags: ignoreversion
 Source: "estimator\director\settings.py"; DestDir: "{app}\estimator\director"; Flags: ignoreversion
@@ -643,6 +644,7 @@ Source: "estimator\ui\help\guides\quote_a_service_job.md"; DestDir: "{app}\estim
 Source: "estimator\ui\help\guides\review_on_phone.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\send_and_follow_up_a_quote.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\set_up_your_price_book.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
+Source: "estimator\ui\help\guides\start_with_the_director.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\turn_a_won_quote_into_a_job.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\upload_plans_and_check_the_scale.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\use_the_jobs_board.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion

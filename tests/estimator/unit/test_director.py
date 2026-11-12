@@ -23,7 +23,8 @@ REVIEWER = RequestContext(role="reviewer", user_id="rita", mode="server")
 
 def test_shipped_playbooks_load_and_cover_every_lane():  # S3-D01
     books = load_playbooks()
-    assert {pb.lane for pb in books.values()} == {"quick_quote", "standard_estimate", "full_takeoff"}
+    # 2026-11-12: the project lane - every project made on the Projects screen gets a Director job.
+    assert {pb.lane for pb in books.values()} == {"quick_quote", "standard_estimate", "full_takeoff", "project"}
     assert all(pb.available for pb in books.values())        # the full takeoff lane works from Sprint 14
     for pb in books.values():
         assert any(s.action == "approve" and s.checkpoint for s in pb.stages)

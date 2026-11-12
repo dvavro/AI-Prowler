@@ -98,7 +98,7 @@ def test_director_settings_and_playbook_tools():  # S3-T02
     assert r["settings"]["quick_send_limit_cents"] == 20000
     assert j(t.est_director_settings_update({"nope": 1}))["error"] == "invalid_input"
     books = j(t.est_playbook_list())["playbooks"]
-    assert {b["lane"] for b in books} == {"quick_quote", "standard_estimate", "full_takeoff"}
+    assert {b["lane"] for b in books} == {"quick_quote", "standard_estimate", "full_takeoff", "project"}
 
 
 def test_setup_tools():  # S3-T03

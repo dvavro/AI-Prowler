@@ -90,9 +90,16 @@ def est_list_modules(category: str = "") -> str:
 
 
 def est_create_estimate(title: str = "", customer_id: str = "", address: str = "", due_date: str = "") -> str:
-    """Create a new draft estimate. Returns the estimate with its id and rev (needed for later changes)."""
-    return _run(lambda c: service.create_estimate(c, _ctx(), title, customer_id=customer_id or None,
-                                                  address=address or None, due_date=due_date or None))
+    """Create a new draft estimate (a project). Returns the estimate with its id and rev (needed for later changes),
+    and director_job_id: every project gets a Director job that says what to do next, through to sending the quote."""
+    def go(c):
+        ctx = _ctx()
+        est = service.create_estimate(c, ctx, title, customer_id=customer_id or None, address=address or None,
+                                      due_date=due_date or None)
+        job = director.adopt(c, ctx, est["id"])
+        return {**est, "director_job_id": job["job"]["id"] if job else None,
+                "director_next_step": job["next_step"] if job else None}
+    return _run(go)
 
 
 def est_get_estimate(estimate_id: int) -> str:
@@ -263,7 +270,7 @@ def est_director_next(job_id: int, answers: dict | str | None = None, module_id:
                       revise: bool = False, change_summary: str = "", reprice: bool = False,
                       reviewed: bool = False, scenarios: bool = False, choose_scenario: str = "",
                       scenario_module: str = "", checklist_done: bool = False,
-                      trades: list | str | None = None, confirm: bool = False) -> str:
+                      trades: list | str | None = None, confirm: bool = False, ready: bool = False) -> str:
     """Continue a Director job with what it asked for:
     answers / module_id; approve=true at the approval checkpoint (only when the user clearly said yes;
     confirm_sample_prices=true only if they knowingly accept sample prices); customer={name, email, ...};
@@ -278,7 +285,9 @@ def est_director_next(job_id: int, answers: dict | str | None = None, module_id:
     approve=true). scenarios=true prices good/better/best options (they go on the bid); choose_scenario=<id> switches
     the quote to that option (scenario_module when several trades have options). checklist_done=true when the
     person confirms the company's approval checklist. trades=["framing", "drywall", ...] says which trades are in a
-    plan takeoff job (full_takeoff lane). Returns the next step.
+    plan takeoff job (full_takeoff lane). ready=true on a project job (project lane: every project gets one) when the
+    person says the estimate they built on the screens is complete: the Director then checks, approves and quotes it.
+    Returns the next step.
     """
     def go(c):
         return director.next_step(c, _ctx(), int(job_id), answers=_opt_obj(answers, "answers"),
@@ -291,7 +300,7 @@ def est_director_next(job_id: int, answers: dict | str | None = None, module_id:
                                   reviewed=bool(reviewed), scenarios=bool(scenarios),
                                   choose_scenario=choose_scenario or None, scenario_module=scenario_module or None,
                                   checklist_done=bool(checklist_done), trades=_list(trades, "trades"),
-                                  confirm=bool(confirm))
+                                  confirm=bool(confirm), ready=bool(ready))
     return _run(go)
 
 

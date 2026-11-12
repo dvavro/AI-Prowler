@@ -152,7 +152,7 @@ def test_v1_database_upgrades_to_v2(tmp_path):  # S3-B02
     conn = connect(tmp_path / "old.db")
     mig.migrate(conn, target=1)
     conn.execute("INSERT INTO estimates (company_id, title, created_at, updated_at) VALUES ('default', 'old', 'now', 'now')")
-    assert mig.migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]   # 14-15: symbols (Coder 2 Sprints 10-11), 16: revisions and the processing-PC queue, 17: design firm, assembly uses, line overrides, 18: help progress (guided tours, Coder 2 Sprint 18), 19: price book rows carry their trade, 20: concrete agent auto-runs, 21: per-trade sheet activation, 22: AI log (every LLM call, what was sent and what came back)
+    assert mig.migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]   # 23: project lane for Director jobs (2026-11-12), 14-15: symbols (Coder 2 Sprints 10-11), 16: revisions and the processing-PC queue, 17: design firm, assembly uses, line overrides, 18: help progress (guided tours, Coder 2 Sprint 18), 19: price book rows carry their trade, 20: concrete agent auto-runs, 21: per-trade sheet activation, 22: AI log (every LLM call, what was sent and what came back)
     assert conn.execute("SELECT title FROM estimates").fetchone()[0] == "old"
     conn.close()
 

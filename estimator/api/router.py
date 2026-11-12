@@ -46,6 +46,10 @@ Sprint 4 (Coder 2):
                         send?, send_to?, outcome?, convert?, service_date?, rev?, confirm?}   (est_director_next;
                         send and convert ask first: they need confirm=true)
   POST /quick (no estimate_id) now starts a quick-quote Director job, so the quote shows on the Jobs board
+  POST /director/intake {request, has_plans?, customer?, address?, due_date?, module_id?, preview?}
+                                    the Dashboard's "Start a new quote or estimate": starts the right job, returns route
+  POST /estimates/<id>/director     the project's Director job (made the first time; project lane) and its next step
+                                    (2026-11-12: every project gets one; POST /estimates makes it straight away)
   Bids (owner, estimator, office, field - the bid_send roles): GET /bids?status=&estimate_id=, GET /bids/<id> (bid_preview),
        GET /bids/<id>/file?kind=html|pdf, POST /bids/<id>/send {to?, message?, confirm?} (asks first),
        POST /bids/<id>/status {status}, POST /bids/<id>/convert {customer?, service_date?, confirm?} (asks first)
@@ -286,6 +290,7 @@ def _api(req: Request, open_db) -> Response:
 
 _EST = re.compile(r"^/estimates/(\d+)$")
 _EST_EVENTS = re.compile(r"^/estimates/(\d+)/events$")
+_EST_DIRECTOR = re.compile(r"^/estimates/(\d+)/director$")
 _PROJECT = re.compile(r"^/estimates/(\d+)/project$")
 _PLANS = re.compile(r"^/estimates/(\d+)/plans$")
 _STAGE = re.compile(r"^/estimates/(\d+)/plans/stage$")
@@ -349,7 +354,43 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
             raise _Refuse(400, "invalid_input", "the project name is too long (200 characters at most)")
         est = service.create_estimate(conn, ctx, title, customer_id=_opt(b, "customer_id"),
                                       address=_opt(b, "address"), due_date=_opt(b, "due_date"))
-        return _json(201, redact(est, see))
+        # Every new project gets a Director job that guides it through to sending the quote (2026-11-12, David).
+        from estimator.director import engine as director
+        job = director.adopt(conn, ctx, est["id"])
+        return _json(201, {**redact(est, see), "director_job_id": job["job"]["id"] if job else None})
+
+    if sub == "/director/intake" and m == "POST":
+        # The Dashboard's "Start a new quote or estimate": what's the job, who's it for, are there plans; then the right
+        # job is started and the page says where to go next (2026-11-12, David).
+        from estimator.director import engine as director
+        if ctx.role not in service.QUICK_ROLES:
+            raise _Refuse(403, "permission_denied", f"only {', '.join(service.QUICK_ROLES)} can start a quote or estimate")
+        b = _body(req)
+        for f in ("has_plans", "preview"):
+            if f in b and b[f] is not None and not isinstance(b[f], bool):
+                raise _Refuse(400, "invalid_input", f"{f} must be true or false")
+        cust = b.get("customer")
+        if cust not in (None, {}) and not isinstance(cust, dict):
+            raise _Refuse(400, "invalid_input", "customer must be an object with name, email, phone, address")
+        cust = {str(k): ("" if v is None else str(v).strip())[:200] for k, v in (cust or {}).items()}
+        out = director.intake(conn, ctx, _opt(b, "request") or "", has_plans=b.get("has_plans"), customer=cust or None,
+                              address=_opt(b, "address"), due_date=_opt(b, "due_date"), module_id=_opt(b, "module_id"),
+                              preview=b.get("preview") is True)
+        return _json(200 if b.get("preview") is True else 201, _no_paths(redact(out, see)))
+
+    mm = _EST_DIRECTOR.match(sub)
+    if mm and m == "POST":
+        # The Director panel on the project and estimate pages: the project's job (made the first time) and its next
+        # step, worked out again from where the project stands now.
+        from estimator.bids import service as bids
+        from estimator.director import engine as director
+        eid = int(mm.group(1))
+        out = director.adopt(conn, ctx, eid)
+        if out is None:
+            return _ok(job=None, next_step=None)
+        bid = bids.latest_for_estimate(conn, ctx, out["job"]["estimate_id"])
+        return _json(200, _no_paths(redact({**out, "bid": bids._public(bid) if bid else None,
+                                            "can_open_bids": nav.can_open(ctx.role, "bids")}, see)))
 
     mm = _EST.match(sub)
     if mm and m == "GET":
@@ -697,7 +738,7 @@ _BID = re.compile(r"^/bids/(\d+)$")
 _BID_ACT = re.compile(r"^/bids/(\d+)/(send|status|convert|file)$")
 _GUIDE = re.compile(r"^/help/guides/([a-z0-9_]{1,64})$")
 # What the page may hand est_director_next. Flags must be literal true/false (never "yes" or 1).
-NEXT_FLAGS = ("approve", "confirm_sample_prices", "checklist_done", "reviewed", "send", "convert")
+NEXT_FLAGS = ("approve", "confirm_sample_prices", "checklist_done", "reviewed", "send", "convert", "ready")
 NEXT_TEXT = ("module_id", "send_to", "outcome", "service_date")
 NEXT_KEYS = set(NEXT_FLAGS) | set(NEXT_TEXT) | {"answers", "customer", "rev", "confirm"}
 # Where the bid files live on the PC or server: the browser gets them through /bids/<id>/file, never the path.

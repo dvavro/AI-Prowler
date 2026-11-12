@@ -47,6 +47,10 @@ questions:
       - {value: broom, label: "Broom finish", factor: "1"}
       - {value: stamped, label: "Stamped and coloured", factor: "2"}
       - {value: exposed, label: "Exposed aggregate", factor: "3"}
+  - {id: fill_loads, label: "Fill dirt, truck loads delivered", type: number, unit: ea, default: 0, min: 0, max: 500,
+     help: "Site work before the slab. A dump truck load is about 15 to 18 cu yd. Leave 0 if no fill is needed."}
+  - {id: grade_pad, label: "Spread, level and compact the pad?", type: boolean, default: false,
+     help: "Grading of the slab area before forms go in, priced per sq ft of slab."}
   - {id: base, label: "Gravel base (4 in ABC)?", type: boolean, default: true}
   - {id: remove_existing, label: "Remove existing concrete?", type: boolean, default: false}
   - {id: footing_lf, label: "Thickened edge / footing (12 x 12 in)", type: number, unit: lf, default: 0, min: 0, max: 5000}
@@ -64,6 +68,11 @@ questions:
 lines:
   - {id: removal, description: "Break out and haul away existing concrete", kind: labor, unit: sqft,
      quantity: "area_sqft", price_key: cc_demo_sqft, when: "remove_existing"}
+  # Site work: fill dirt by the truck load, then level and compact the pad.
+  - {id: fill, description: "Fill dirt, delivered (truck loads)", kind: material, unit: ea, quantity: "fill_loads",
+     price_key: cc_fill_load, when: "fill_loads > 0"}
+  - {id: grade, description: "Spread, level and compact pad", kind: labor, unit: sqft, quantity: "area_sqft",
+     price_key: cc_grade_sqft, when: "grade_pad"}
   - {id: base, description: "Gravel base, 4 in, compacted", kind: material, unit: sqft, quantity: "area_sqft",
      price_key: cc_base_sqft, when: "base"}
   - {id: forms, description: "Forms and layout", kind: labor, unit: lf,

@@ -54,6 +54,8 @@ async function renderEstimate(main, id) {
   parts.push(el("div", { class: "tiles" }, tile(money(t.total_cents || 0), "total"),
     d.see_margins && t.margin_pct !== undefined ? tile(Math.round(parseFloat(t.margin_pct) * 1000) / 10 + "%", "margin") : null,
     tile(est.sections.length, "trades"), tile(links.measurements.filter(m => m.status === "approved").length, "approved measurements")));
+  // The project's Director: what to do next and why, and the Approve / Send buttons (2026-11-12, David).
+  if (!est.practice && typeof directorPanel === "function") parts.push(directorPanel(est.id));
   parts.push(estimateActions(d, msg), msg);
   // Where each trade's quantities come from (measured / differs / typed / waiting), then its lines.
   const tradesWithoutLines = links.trades.filter(tr => !est.sections.some(s => s.module_id === tr.module_id));

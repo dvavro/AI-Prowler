@@ -269,6 +269,7 @@ async function tourLoadProgress() {
   try {
     const r = await api("GET", "/help/tours/progress");
     tourProgress = r.tours || {};
+    tourAuto = r.auto !== false;          // 2026-11-12: the user can turn the automatic tours off
   } catch (e) { tourProgress = {}; }
   tourProgressReady = true;
   return tourProgress;
@@ -289,6 +290,7 @@ async function maybeStartTour() {
   const id = tourIdForPage();
   if (!id || !TOUR_BY_ID[id] || tourCurrent) return;
   const prog = await tourLoadProgress();
+  if (!tourAuto) return;                      // turned off (Settings > Guided tours, or "Don't show tours")
   if (prog[id]) return;                       // finished or skipped already
   if (tourIdForPage() !== id) return;          // the user moved on while we fetched
   startTour(id);
@@ -389,6 +391,18 @@ function tourFinish() {
   tourClose();
   if (mark) tourSaveProgress(id, "completed");
 }
+// "Don't show tours": stop tours starting on their own for this user (they can still be replayed from Help, and turned
+// back on in Settings > Guided tours).
+let tourAuto = true;
+async function setToursAuto(enabled) {
+  tourAuto = !!enabled;
+  await api("POST", "/help/tours/auto", { enabled: !!enabled });
+}
+function tourStopAll() {
+  tourClose();
+  setToursAuto(false).then(() => toast("Tours won't start on their own any more. Replay one from Help, or turn them back on in Settings."),
+                            () => {});
+}
 function tourClose() {   // X: close without saving anything
   tourPopHide();
   tourClearMark();
@@ -407,8 +421,10 @@ function tourPopEl() {
       el("span", { class: "tour-btns" },
         el("button", { class: "button", type: "button", id: "tour-back" }, "← Back"),
         el("button", { class: "primary", type: "button", id: "tour-next" }, "Next"),
-        el("button", { class: "link-btn", type: "button", id: "tour-skip" }, "Skip tour"))));
+        el("button", { class: "link-btn", type: "button", id: "tour-skip" }, "Skip tour"),
+        el("button", { class: "link-btn", type: "button", id: "tour-stop-all" }, "Don't show tours"))));
   document.body.append(tourPop);
+  $("tour-stop-all").addEventListener("click", tourStopAll);
   $("tour-back").addEventListener("click", tourBack);
   $("tour-next").addEventListener("click", tourNext);
   $("tour-skip").addEventListener("click", tourSkip);

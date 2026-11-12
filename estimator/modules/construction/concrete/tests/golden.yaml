@@ -21,6 +21,12 @@
   expected_lines: {removal: 120000, base: 45000, forms: 38500, footing: 24000, rebar: 74800, footing_rebar_5: 11000,
                    concrete: 186083, place_finish: 135000, stamped: 270000, joints: 9000, pump: 65000}
   expected_total_cents: 978383
+- name: 400 sq ft patio with 10 loads of fill dirt and pad grading
+  answers: {area_sqft: 400, fill_loads: 10, grade_pad: true}
+  # same as the first case plus fill 10 x $250 = $2,500 and grading 400 x $0.30 = $120
+  expected_lines: {fill: 250000, grade: 12000, base: 30000, forms: 28000, mesh: 15400, concrete: 85556,
+                   place_finish: 90000, joints: 6000}
+  expected_total_cents: 516956
 - name: Small 40 sq ft pad comes to the $1,200 minimum
   answers: {area_sqft: 40, base: false, reinforcement: none}
   expected_total_cents: 120000

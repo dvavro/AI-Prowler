@@ -70,6 +70,9 @@ PAGES = (
     {"id": "quick", "label": "Quick estimate", "from": "dashboard", "sprint": 2,
      "tools": ["est_list_modules", "est_quick_questions", "est_quick_answer", "est_create_estimate",
                "est_director_start"]},
+    # 2026-11-12: the Director's "Start a new quote or estimate" - what's the job, plans or not, who's it for.
+    {"id": "start", "label": "Start a quote or estimate", "from": "dashboard", "sprint": 20,
+     "tools": ["est_director_start", "est_create_estimate", "est_director_next"]},
     # Sprint 4: the Director's Jobs board (quick lane first) and one job's next step.
     {"id": "jobs", "label": "Jobs board", "from": "dashboard", "sprint": 4, "tools": ["est_jobs_board"]},
     {"id": "job", "label": "Job", "from": "jobs", "sprint": 4,

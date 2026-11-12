@@ -58,7 +58,10 @@ def test_quick_answers_on_an_existing_project_stay_off_the_board(call):
     r = call("POST", f"{API}/quick", {"estimate_id": e["id"], "rev": e["rev"], "module_id": "pressure_washing",
                                        "answers": {"driveway_sqft": 500}})
     assert r.status == 200 and r.json()["created"] is False and "job" not in r.json()
-    assert call("GET", f"{API}/jobs").json()["count"] == 0
+    # 2026-11-12: the project has its own Director job (project lane) from the start; the quick answers don't add a
+    # quick-quote job beside it.
+    board = call("GET", f"{API}/jobs").json()
+    assert board["count"] == 1 and set(board["by_lane"]) == {"project"} and e["director_job_id"] == board["jobs"][0]["id"]
 
 
 def test_start_a_job_from_words(call):

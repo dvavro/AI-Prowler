@@ -66,7 +66,8 @@ def _steps():
 
 
 def test_progress_starts_empty(call):                                     # C2S18-W01
-    assert call("GET", f"{API}/help/tours/progress").json() == {"ok": True, "tours": {}}
+    # 2026-11-12: "auto" says whether tours start on their own (on until the user turns them off).
+    assert call("GET", f"{API}/help/tours/progress").json() == {"ok": True, "tours": {}, "auto": True}
 
 
 def test_help_progress_table_exists(db):                                  # C2S18-W02
@@ -238,7 +239,7 @@ def test_new_guides_cover_dashboard_and_projects():                      # C2S18
 
 def test_new_guides_are_served_for_their_screens(call):                 # C2S18-W19
     dash = call("GET", f"{API}/help/guides?screen=dashboard").json()["guides"]
-    assert {g["id"] for g in dash} == {"use_the_dashboard"}
+    assert {g["id"] for g in dash} == {"use_the_dashboard", "start_with_the_director"}   # 2026-11-12: the Director
     proj = call("GET", f"{API}/help/guides?screen=projects").json()["guides"]
     assert {g["id"] for g in proj} == {"manage_your_projects"}
     one = call("GET", f"{API}/help/guides/use_the_dashboard").json()["guide"]

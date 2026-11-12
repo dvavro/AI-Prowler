@@ -12,3 +12,5 @@ cc_stamp_sqft,Stamped finish extra per sq ft (sample),labor,sqft,4.50
 cc_exposed_sqft,Exposed aggregate extra per sq ft (sample),labor,sqft,2.50
 cc_joint_sqft,Control joints per sq ft (sample),labor,sqft,0.15
 cc_pump_ea,Pump truck (sample),equipment,ea,650.00
+cc_fill_load,Fill dirt delivered per truck load (sample),material,ea,250.00
+cc_grade_sqft,Spread level and compact pad per sq ft (sample),labor,sqft,0.30

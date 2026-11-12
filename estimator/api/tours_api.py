@@ -3,6 +3,7 @@
   GET  /help/tours/progress                  the tours this user has completed or skipped
   POST /help/tours/progress {tour_id, status}  mark one tour completed, skipped, or not_started (reset)
   GET  /help/practice                       the practice project ("Practice: Garcia house") if it exists
+  GET|POST /help/tours/auto {enabled}       whether tours start on a screen's first open, for this user (default on)
 
 Progress is per user (ctx.user_id): every role reads and writes only its own
 rows, and nobody sees another user's. A tour the user has never touched is
@@ -23,6 +24,7 @@ TOUR_IDS = (
     "jobs", "job", "quick", "help", "practice", "mobile",
 )
 STATUSES = ("not_started", "completed", "skipped")
+AUTO_ID = "_auto_tours"          # not a tour: whether tours start on their own (GET|POST /help/tours/auto)
 _TOUR_ID = re.compile(r"^[a-z0-9_]{1,64}$")
 
 
@@ -46,7 +48,8 @@ def route(m: str, sub: str, req, ctx, conn):
         rows = conn.execute(
             "SELECT tour_id, status FROM help_progress WHERE user_id = ?", (ctx.user_id,)
         ).fetchall()
-        return _ok(tours={r["tour_id"]: r["status"] for r in rows})
+        auto = next((r["status"] for r in rows if r["tour_id"] == AUTO_ID), "on")
+        return _ok(tours={r["tour_id"]: r["status"] for r in rows if r["tour_id"] != AUTO_ID}, auto=auto != "off")
 
     if sub == "/help/tours/progress" and m == "POST":
         b = _body(req)
@@ -64,6 +67,25 @@ def route(m: str, sub: str, req, ctx, conn):
         )
         conn.commit()
         return _ok(tour_id=tour_id, status=status)
+
+    # 2026-11-12, David: once someone knows the Estimator, the tours that pop up on each screen's first open get in the
+    # way. Each user can turn the automatic tours off (Settings > Guided tours, or "Don't show tours" on a tour); the
+    # tours can still be replayed from Help. Kept as a row in help_progress (tour_id AUTO_ID: 'off' or 'on').
+    if sub == "/help/tours/auto" and m == "GET":
+        row = conn.execute("SELECT status FROM help_progress WHERE user_id = ? AND tour_id = ?",
+                           (ctx.user_id, AUTO_ID)).fetchone()
+        return _ok(enabled=not (row and row["status"] == "off"))
+
+    if sub == "/help/tours/auto" and m == "POST":
+        b = _body(req)
+        if not isinstance(b.get("enabled"), bool):
+            raise _refuse("enabled must be true or false")
+        conn.execute(
+            "INSERT INTO help_progress (user_id, tour_id, status, updated_at) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT (user_id, tour_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at",
+            (ctx.user_id, AUTO_ID, "on" if b["enabled"] else "off", _now()))
+        conn.commit()
+        return _ok(enabled=b["enabled"])
 
     if sub == "/help/practice" and m == "GET":
         row = conn.execute(

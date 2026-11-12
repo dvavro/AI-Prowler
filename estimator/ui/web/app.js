@@ -179,6 +179,8 @@ function parseHash() {
   const parts = location.hash.replace(/^#\/?/, "").split("?")[0].split("/").filter(Boolean);
   if (parts[0] === "projects" && /^\d+$/.test(parts[1] || "")) return { screen: "projects", page: "project", arg: +parts[1] };
   if (parts[0] === "quick") return { screen: "dashboard", page: "quick", arg: /^\d+$/.test(parts[1] || "") ? +parts[1] : null };
+  // 2026-11-12: the Director's "Start a new quote or estimate" (renderStart).
+  if (parts[0] === "start") return { screen: "dashboard", page: "start", arg: null };
   // Sprint 4: Jobs board and job pages hang off the Dashboard; a bid page off Bids; a guide off Help.
   if (parts[0] === "jobs") return { screen: "dashboard", page: /^\d+$/.test(parts[1] || "") ? "job" : "jobs", arg: +parts[1] || null };
   if (parts[0] === "bids" && /^\d+$/.test(parts[1] || "")) return { screen: "bids", page: "bid", arg: +parts[1] };
@@ -231,8 +233,9 @@ async function renderDashboard(main, screen) {
   const d = await api("GET", "/dashboard");
   const head = el("div", { class: "page-head" }, el("h2", {}, screen.label),
     el("div", { class: "row" },
+      d.can_quick ? el("a", { class: "primary button", href: "#/start", id: "dash-start" }, "🧭 AI Director Agent — get estimate started") : null,
       el("a", { class: "button", href: "#/jobs", id: "dash-jobs" }, "📋 Jobs board"),
-      d.can_quick ? el("a", { class: "primary button", href: "#/quick", id: "dash-quick" }, "⚡ Quick estimate") : null,
+      d.can_quick ? el("a", { class: "button", href: "#/quick", id: "dash-quick" }, "⚡ Quick estimate") : null,
       helpLink("dashboard")));
   const tiles = el("div", { class: "tiles" },
     el("div", { class: "card tile" }, el("div", { class: "num" }, d.total), el("div", { class: "lbl" }, "estimates")),
@@ -252,7 +255,9 @@ async function renderDashboard(main, screen) {
         " — assigned to you" + (e.due_date ? ", due " + e.due_date : "")));
     }
     for (const n of mine.notices) {
-      attention.push(el("li", {}, n.estimate_id ? el("a", { href: "#/projects/" + n.estimate_id }, n.message) : n.message));
+      // A notice about a Director job opens the job, where its Approve / Send buttons are (2026-11-12, David).
+      const href = n.job_id ? "#/jobs/" + n.job_id : n.estimate_id ? "#/projects/" + n.estimate_id : null;
+      attention.push(el("li", {}, href ? el("a", { href }, n.message) : n.message));
     }
   }
   parts.push(el("div", { class: "card section", id: "attention" }, el("strong", {}, "Needs attention"),
@@ -277,6 +282,7 @@ async function renderProjects(main, screen) {
   const status = STATUSES.includes(q.get("status")) ? q.get("status") : "";
   const list = await api("GET", "/estimates?limit=500" + (status ? "&status=" + status : ""));
   const parts = [el("div", { class: "page-head" }, el("h2", {}, screen.label),
+    can("quick_estimate") ? el("a", { class: "primary button", href: "#/start", id: "projects-start" }, "🧭 AI Director Agent — get estimate started") : null,
     can("quick_estimate") ? el("a", { class: "button", href: "#/quick" }, "⚡ Quick estimate") : null,
     helpLink("projects"))];
 
@@ -349,6 +355,7 @@ async function renderProject(main, id) {
     tile(p.plan_sets.length, "plan sets"),
     tile(est.due_date || "—", "due"),
     est.address ? tile(est.address, "address", "wide") : null));
+  if (!est.practice) parts.push(directorPanel(est.id));
   const go2 = el("p", { class: "row" });
   if (canOpen("estimates")) go2.append(el("a", { class: "button", id: "project-estimate", href: "#/estimates/" + est.id }, "🧮 Open the estimate"));
   if (canOpen("takeoffs") && p.plan_sets.length) {
@@ -529,6 +536,82 @@ function showConfirm(msg, estimateId, staged, replaces, done) {
     (d.warnings && d.warnings.length) ? el("ul", { class: "warn" }, d.warnings.map(w => el("li", {}, "⚠ " + w))) : null,
     el("div", { class: "row" }, yes, no)));
   yes.focus();
+}
+
+// ------------------------------------------------------------------ Start a new quote or estimate (2026-11-12, David)
+// The Director asks, one question at a time: what's the job, are there plans, who's it for. Then it starts the right
+// job (a quick quote, or a project with its own Director job) and goes to the next page.
+async function renderStart(main) {
+  const parts = [el("p", {}, el("a", { href: "#/dashboard" }, "← Dashboard")),
+    el("div", { class: "page-head" }, el("h2", {}, "🧭 Start a new quote or estimate"), helpLink("dashboard"))];
+  if (!can("quick_estimate")) {
+    main.replaceChildren(...parts, el("p", { class: "error" }, "Your role can't start quotes or estimates."));
+    return;
+  }
+  const talk = el("div", { class: "card section director-panel", id: "start-talk" });
+  const msg = el("div", { id: "start-message", role: "status" });
+  parts.push(talk, msg);
+  main.replaceChildren(...parts);
+  const said = [];
+  const st = { request: "", preview: null, has_plans: null };
+  const director = text => said.push(el("p", { class: "start-director" }, el("strong", {}, "🧭 Director: "), text));
+  const you = text => said.push(el("p", { class: "start-you muted" }, "You: " + text));
+  const show = (...controls) => talk.replaceChildren(...said, ...controls);
+
+  // 1. What's the job?
+  director("Hi! What's the job? Describe it the way the customer did, e.g. \"pour a 30 x 70 ft shed slab with fill\", " +
+           "\"wash a driveway and the house\", or \"bid the framing and drywall from the plans\".");
+  const job = el("textarea", { id: "start-request", rows: 3, maxlength: 2000, "aria-label": "What's the job?" });
+  const next1 = el("button", { class: "primary", type: "button", id: "start-next" }, "Next →");
+  next1.addEventListener("click", async () => {
+    const text = job.value.trim();
+    if (!text) { msg.replaceChildren(el("p", { class: "error" }, "Tell me what the job is first.")); job.focus(); return; }
+    next1.disabled = true; msg.replaceChildren();
+    try {
+      st.request = text;
+      st.preview = await api("POST", "/director/intake", { request: text, preview: true });
+      you(text);
+      director(st.preview.say);
+      st.preview.ask_plans ? askPlans() : askCustomer();
+    } catch (e) { next1.disabled = false; if (e.status !== 401) msg.replaceChildren(errorBox(e)); }
+  });
+  show(el("label", {}, "The job", job), el("div", { class: "row" }, next1));
+  job.focus();
+
+  // 2. Do you have plans?
+  function askPlans() {
+    const yes = el("button", { class: "primary", type: "button", id: "start-plans-yes" }, "📐 Yes, I have plans to upload");
+    const no = el("button", { class: "button", type: "button", id: "start-plans-no" }, "✏ No, I'll type the measurements");
+    yes.addEventListener("click", () => { st.has_plans = true; you("Yes, I have plans."); director("Good — after this I'll take you to the project page to upload them (PDF, DWG or photos)."); askCustomer(); });
+    no.addEventListener("click", () => { st.has_plans = false; you("No plans."); director("No problem — I'll take you to the form to type the measurements."); askCustomer(); });
+    show(el("div", { class: "row", id: "start-plans" }, yes, no));
+  }
+
+  // 3. Who's it for?
+  function askCustomer() {
+    director("Who's it for? I need their email to send the quote later. You can skip this and add it later.");
+    const name = el("input", { id: "start-cust-name", maxlength: 200, placeholder: "Customer name" });
+    const email = el("input", { id: "start-cust-email", type: "email", maxlength: 200, placeholder: "customer@example.com" });
+    const phone = el("input", { id: "start-cust-phone", maxlength: 40, placeholder: "Phone" });
+    const addr = el("input", { id: "start-address", maxlength: 500, placeholder: "Job address" });
+    const due = el("input", { id: "start-due", type: "date" });
+    const go1 = el("button", { class: "primary", type: "button", id: "start-go" }, "Start →");
+    go1.addEventListener("click", async () => {
+      go1.disabled = true; msg.replaceChildren(el("p", { class: "muted" }, "Starting…"));
+      const customer = { name: name.value.trim(), email: email.value.trim(), phone: phone.value.trim(), address: addr.value.trim() };
+      try {
+        const r = await api("POST", "/director/intake", { request: st.request, has_plans: st.has_plans === true,
+          customer, address: addr.value.trim() || null, due_date: due.value || null });
+        toast(r.say);
+        go(r.route);
+      } catch (e) { go1.disabled = false; if (e.status !== 401) msg.replaceChildren(errorBox(e)); }
+    });
+    show(el("div", { class: "row", id: "start-customer" }, el("label", {}, "Customer", name), el("label", {}, "Email", email),
+           el("label", {}, "Phone", phone)),
+         el("div", { class: "row" }, el("label", {}, "Job address", addr), el("label", {}, "Due date (optional)", due)),
+         el("div", { class: "row" }, go1));
+    name.focus();
+  }
 }
 
 // ------------------------------------------------------------------ Quick estimate (Sprint 2)
@@ -1375,12 +1458,12 @@ function helpLink(screenId) {
   // the screen. If tour.js failed to load, fall back to the full Help screen.
   return el("button", { class: "button help-link", type: "button", id: "help-link", title: "How-to guides for this screen",
     "aria-label": "Help for this screen",
-    onclick: () => { if (typeof openHelpPanel === "function") openHelpPanel(screenId); else go("#/help?screen=" + screenId); } }, "?");
+    onclick: () => { if (typeof openHelpPanel === "function") openHelpPanel(screenId); else go("#/help?screen=" + screenId); } }, "❓ Help");   // 2026-11-12: a word, not just "?"
 }
 
 // ------------------------------------------------------------------ Jobs board (Sprint 4, quick lane)
-const LANES = [["needs_triage", "Needs a decision"], ["quick_quote", "Quick quotes"], ["standard_estimate", "Standard estimates"],
-               ["full_takeoff", "Plan takeoffs"]];
+const LANES = [["needs_triage", "Needs a decision"], ["project", "Projects"], ["quick_quote", "Quick quotes"],
+               ["standard_estimate", "Standard estimates"], ["full_takeoff", "Plan takeoffs"]];
 const WAITING = { user: "you", approver: "an approver", staff: "office staff", customer: "the customer", feature: "a later feature" };
 
 async function renderJobs(main) {
@@ -1412,7 +1495,7 @@ async function renderJobs(main) {
   for (const [lane, label] of LANES) {
     const rows = (b.by_lane || {})[lane];
     if (!rows || !rows.length) continue;
-    const plansLane = lane === "full_takeoff" || lane === "standard_estimate";
+    const plansLane = lane === "full_takeoff" || lane === "standard_estimate" || lane === "project";
     parts.push(el("h3", {}, label + " (" + rows.length + ")"), el("table", { class: "list clickable", "data-lane": lane },
       el("thead", {}, el("tr", {}, el("th", {}, "#"), el("th", {}, "Job"), el("th", {}, "Step"), el("th", {}, "Waiting on"),
         plansLane ? el("th", {}, "Progress") : null, el("th", {}, "Updated"))),
@@ -1469,8 +1552,11 @@ async function renderJob(main, id) {
       (est ? " · estimate #" + est.id + " (" + words(est.status) + ")" : ""))];
   if (est && est.totals) parts.push(el("div", { class: "big-money", id: "job-total" }, money(est.totals.total_cents)));
   const box = el("div", { class: "card section", id: "job-next" });
-  parts.push(box);
-  nextStepBox(box, j, ns);
+  if (j.job.lane === "project" && est) parts.push(directorPanel(est.id));   // a project job: the same panel as the project page
+  else {
+    parts.push(box);
+    nextStepBox(box, j, ns);
+  }
   if (j.bid) {
     parts.push(el("div", { class: "card section", id: "job-bid" }, el("strong", {}, "Quote " + j.bid.number),
       " · " + words(j.bid.status) + " · " + money(j.bid.total_cents) + (j.bid.sent_to ? " · sent to " + j.bid.sent_to : ""),
@@ -1596,7 +1682,8 @@ async function step(j, body, msg, confirmed) {
       return;
     }
     state.busy = false;
-    await renderJobKeepNotes(j.job.id, r.notes || []);
+    if (j.after) await j.after(r.notes || []);           // the Director panel on a project or estimate page
+    else await renderJobKeepNotes(j.job.id, r.notes || []);
   } catch (e) {
     state.busy = false;
     if (e.status === 401) return;
@@ -1609,6 +1696,66 @@ async function renderJobKeepNotes(id, notes) {
   await renderJob($("main"), id);
   const box = $("job-next");
   if (box && notes.length) box.insertBefore(el("div", { id: "job-notes" }, notes.map(n => el("p", { class: "note warn" }, n))), box.children[1] || null);
+}
+
+// ------------------------------------------------------------------ Director panel (2026-11-12, David)
+// Every project has a Director job. The panel on the project and estimate pages says what to do next and why, ticks
+// off the steps done, and carries the buttons through to approving, sending the quote and the customer's answer.
+function directorPanel(eid) {
+  const card = el("div", { class: "card section director-panel", id: "director-panel" },
+    el("p", { class: "muted" }, "🧭 Director: looking at where this project stands…"));
+  loadDirectorPanel(card, eid, []);
+  return card;
+}
+
+async function loadDirectorPanel(card, eid, notes) {
+  let d;
+  try { d = await api("POST", "/estimates/" + eid + "/director", {}); }
+  catch (e) {
+    if (e.status === 401) return;
+    card.replaceChildren(el("strong", {}, "🧭 Director"), errorBox(e));
+    return;
+  }
+  if (!d.job) { card.replaceChildren(el("strong", {}, "🧭 Director"), el("p", { class: "muted" }, "This project is finished.")); return; }
+  const j = { ...d, after: n => loadDirectorPanel(card, eid, n) };
+  const ns = d.next_step || {};
+  const done = d.job.state === "done" || d.job.state === "cancelled";
+  const kids = [el("div", { class: "page-head" }, el("strong", {}, "🧭 Director — " + (done ? "finished" : "next step")),
+    el("a", { href: "#/jobs/" + d.job.id, id: "director-job-link", class: "small" }, "Job " + d.job.id + " · all steps →"))];
+  for (const n of notes || []) kids.push(el("p", { class: "note warn" }, n));
+  if (ns.say) kids.push(el("p", { id: "director-say" }, el("strong", {}, ns.say)));
+  if (ns.why) kids.push(el("p", { class: "muted small", id: "director-why" }, "Why: " + ns.why + "."));
+  if (ns.error) kids.push(el("p", { class: "error" }, "The last step didn't work (" + words(ns.error) + ")."));
+  if (Array.isArray(ns.todo) && ns.todo.length) {
+    kids.push(el("ul", { class: "checklist", id: "director-todo" }, ns.todo.map(t => el("li", { "data-key": t.key, class: t.done ? "done" : "" },
+      (t.done ? "✅ " : "⬜ ") , t.link && !t.done ? el("a", { href: t.link }, t.text) : t.text))));
+  }
+  const msg = el("div", { id: "director-message", role: "status" });
+  if (!done && ns.stage === "build") {
+    if (ns.needs_customer) {
+      const name = el("input", { id: "director-cust-name", maxlength: 200, placeholder: "Customer name", "aria-label": "Customer name" });
+      const email = el("input", { id: "director-cust-email", type: "email", maxlength: 200, placeholder: "customer@example.com",
+                                  "aria-label": "Customer email" });
+      const save = el("button", { class: "button", type: "button", id: "director-cust-save" }, "Save the customer");
+      save.addEventListener("click", () => {
+        const c = { name: name.value.trim(), email: email.value.trim() };
+        if (!c.name && !c.email) { msg.replaceChildren(el("p", { class: "error" }, "Enter a name or an email.")); return; }
+        step(j, { customer: c }, msg);
+      });
+      kids.push(el("div", { class: "row", id: "director-customer" }, el("label", {}, "Customer", name), el("label", {}, "Email", email), save));
+    }
+    const ready = el("button", { class: "primary", type: "button", id: "director-ready", disabled: !ns.ready_ok,
+                                 title: ns.ready_ok ? null : "Price something on the estimate first" },
+      "✓ The estimate is ready — check it and get it approved");
+    ready.addEventListener("click", () => step(j, { ready: true }, msg));
+    kids.push(el("div", { class: "row" }, ready));
+  } else if (!done) {
+    kids.push(...nextControls(j, ns, msg));
+  }
+  if (d.bid && d.can_open_bids) kids.push(el("p", {}, el("a", { href: "#/bids/" + d.bid.id, id: "director-open-bid" },
+    "Quote " + d.bid.number + " · " + words(d.bid.status) + " · " + money(d.bid.total_cents))));
+  kids.push(msg);
+  card.replaceChildren(...kids);
 }
 
 // ------------------------------------------------------------------ Bids (Sprint 4)
@@ -1814,7 +1961,7 @@ function renderComing(main, screen) {
 
 const SCREENS = { dashboard: renderDashboard, projects: renderProjects, plans: renderPlans, price_book: renderPriceBook,
                   bids: renderBids, help: renderHelp };
-const PAGES = { project: renderProject, quick: renderQuick, jobs: renderJobs, job: renderJob, bid: renderBid, guide: renderGuide,
+const PAGES = { project: renderProject, quick: renderQuick, start: renderStart, jobs: renderJobs, job: renderJob, bid: renderBid, guide: renderGuide,
                 plan_set: renderPlanSet, sheet: renderSheet };
 
 // ------------------------------------------------------------------ live updates

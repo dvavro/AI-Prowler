@@ -11,6 +11,7 @@ The dashboard is home: what needs your attention, your estimate numbers, and the
 
 ## Good to know
 
+- Not sure where to start? **🧭 AI Director Agent — get estimate started** asks what the job is, whether you have plans and who it's for, then takes you to the right page and guides every step to sending the quote.
 - The dashboard shows numbers, not actions: nothing here changes an estimate.
 - If a tile is empty, the list it opens is empty too — start from **⚡ Quick estimate** or **Create project** on Projects.
 - Ask your AI: "what needs my attention?", "how many estimates are out?", "show me the Miller estimate".
