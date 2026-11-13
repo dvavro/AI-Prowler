@@ -427,7 +427,10 @@ class EstimatorTab:
                    ).pack(side="left", padx=10)
         self._note(box, "Agents start Off, so nothing runs or costs money until you choose. \"From chat only\" waits "
                         "for your AI in chat; Claude or Grok runs on its own with the key above, within the budget. "
-                        "Agents only write notes and drafts: they never approve, change prices or send anything.",
+                        "Agents only write notes and drafts: they never approve, change prices or send anything. "
+                        "LLM takeoff is the exception: when the concrete auto-run finds no slab outline, it reads "
+                        "the foundation sheet with the AI (uses the key above, counts against the budget) and "
+                        "proposes measurements for a person to approve.",
                    GREY, 8)
         grid = ttk.Frame(box)
         grid.pack(fill="x", pady=(6, 0))

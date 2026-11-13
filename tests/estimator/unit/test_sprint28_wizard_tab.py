@@ -125,7 +125,7 @@ def test_modules_match_screenshot():  # S28-T09
         ("General Service Job", "service", "quick quote", "0.1.0"),
         ("House Cleaning", "service", "quick quote", "0.1.0"),
         ("Junk Removal", "service", "quick quote", "0.1.0"),
-        ("Landscaping Maintenance", "service", "quick quote", "0.1.0"),
+        ("Landscaping Maintenance", "service", "quick quote", "0.2.0"),
         ("Pest Control", "service", "quick quote", "0.1.0"),
         ("Pool Service", "service", "quick quote", "0.1.0"),
         ("Pressure Washing", "service", "quick quote", "0.1.0"),

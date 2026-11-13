@@ -28,8 +28,8 @@ const TOOLS = [
   ["symbol", "✳", "Add symbol", "Click a symbol the plan engine missed, then say what it is."],
 ];
 const RV = { estimateId: null, data: null, sheetId: null, sheet: null, viewports: [], tiles: null, objects: [],
-             groups: [], byId: new Map(), selected: new Set(), measurementId: null, tool: "select", draft: [],
-             draftTool: null, view: {}, viewer: null };
+             inactiveTrades: [], groups: [], byId: new Map(), selected: new Set(), measurementId: null,
+             tool: "select", draft: [], draftTool: null, view: {}, viewer: null };
 
 function svg(tag, attrs) {
   const n = document.createElementNS(SVG_NS, tag);
@@ -127,8 +127,8 @@ async function renderReview(main, estimateId) {
   main.replaceChildren(...head,
     el("div", { class: "row bp-bar" }, prev, sheetPick, next, toolPalette(msg), viewButtons()),
     el("p", { class: "muted small", id: "bp-tool-help" }, TOOLS.find(t => t[0] === RV.tool)[3]),
-    el("div", { id: "bp-readout-slot" }), el("div", { id: "bp-notes" }),
-    msg, el("div", { class: "bp-split" }, viewerBox, side));
+    el("div", { id: "bp-guide-slot" }), el("div", { id: "bp-readout-slot" }), el("div", { id: "bp-notes" }),
+    msg, el("div", { id: "bp-auto-slot" }), el("div", { class: "bp-split" }, viewerBox, side));
   RV.viewer = new Viewer(viewerBox, msg);
   $("bp-pane-list").replaceChildren(measurementPanel(msg));
   await openSheet(firstSheet.id, msg);
@@ -324,6 +324,19 @@ function toolPalette(msg) {
     b.addEventListener("click", () => setTool(id, msg));
     box.append(b);
   }
+  // Phase 1: the Concrete agent measures the slab on its own (a measuring action, so it sits with the measure
+  // tools and is hidden from reviewers). Without the Concrete trade on the estimate it stays, disabled, with
+  // the reason — the agent only measures concrete slabs.
+  if (RV.data.can_measure) {
+    const hasConcrete = hasConcreteTrade();
+    const run = el("button", { class: "button", type: "button", id: "bp-auto-run",
+      disabled: !hasConcrete,
+      title: hasConcrete ? "Let the Concrete agent measure the slab on this sheet, then review what it proposes."
+        : "Add the Concrete trade to this estimate first — the agent only measures concrete slabs." },
+      "🤖 Agent auto-run");
+    run.addEventListener("click", () => startAutoRun());
+    box.append(run);
+  }
   return box;
 }
 function setTool(id, msg) {
@@ -357,6 +370,7 @@ async function openSheet(sheetId, msg) {
   RV.symbolList = []; RV.symbolPos = -1; RV.symbolType = null;      // the Symbols tab starts again on each sheet
   const [s, o] = await Promise.all([api("GET", "/sheets/" + sheetId), api("GET", "/sheets/" + sheetId + "/objects")]);
   RV.sheet = s.sheet; RV.viewports = s.viewports; RV.tiles = s.tiles;
+  RV.inactiveTrades = s.inactive_trades || [];      // trades this sheet is switched off for (Plans screen)
   RV.objects = o.objects; RV.groups = o.layers;
   RV.byId = new Map(o.objects.map(x => [x.id, x]));
   const sel = $("bp-selection");
@@ -370,6 +384,7 @@ async function openSheet(sheetId, msg) {
   drawSymbolsPanel(msg);
   drawLinesPanel();
   refreshList(msg);
+  loadAutoCandidates();      // what the agent found on this sheet, in the background (never blocks the sheet)
 }
 
 // ------------------------------------------------------------------ the viewer: tiles + SVG overlay
@@ -1096,6 +1111,343 @@ async function refreshData() {
   drawLinesPanel();
 }
 
+// ------------------------------------------------------------------ Phase 1: Concrete agent auto-run
+// The agent measures the slab on its own — first from the drawing's own lines (no LLM, no cost), and when
+// no outline is found, from the AI reading the foundation sheet (LLM takeoff, only when the owner turned it
+// on in 🤖 AI agents). The button starts a run (POST /auto-run), the page polls GET /auto-run/<id> every 2 s until the
+// run is done, failed, or 10 minutes pass, and the agent's measurements land as proposals to review like any
+// other. Its outline can be shown on the plan and changed to another candidate rectangle (POST retarget,
+// ask-first like every other change). The backend owns the runs; this page only starts, watches and corrects
+// them. Every call here fails soft: with no backend yet (or no candidates) the page just shows nothing extra.
+const AUTO_POLL_MS = 2000;                  // poll the run every 2 s
+const AUTO_TIMEOUT_MS = 10 * 60 * 1000;     // give up after 10 minutes
+const AGENT = "concrete-agent";             // proposed_by of the agent's measurements
+const LLM_AGENT = "llm-takeoff";            // proposed_by of the LLM fallback's measurements
+const AUTO = { runId: null, estimateId: null, sheetId: null, viewportId: null, timer: null, startedAt: 0,
+               status: null, step: "", error: null, measurementIds: [],
+               candidates: new Map(), candidatesLoading: new Set(), llmTakeoff: new Map(),
+               source: "geometry" };
+
+function hasConcreteTrade() { return !!(RV.data && RV.data.trades.some(t => t.module_id === "concrete")); }
+
+// The view the agent measures: the first scaled view on the sheet (a sheet's plan is usually one view; a
+// second view is a detail or an elevation). Unscaled views can't be measured, so they don't count — unless
+// the sheet has nothing scaled, in which case the first view is returned and the server says why it can't run.
+function autoRunViewport() {
+  const vps = RV.viewports || [];
+  return vps.find(v => v.measurable && !v.is_nts) || vps.find(v => !v.is_nts) || vps[0] || null;
+}
+
+function ftIn(ft) {
+  const v = parseFloat(ft);
+  if (isNaN(v)) return "—";
+  let feet = Math.floor(v), inches = Math.round((v - feet) * 12);
+  if (inches === 12) { feet += 1; inches = 0; }
+  return feet + "'-" + inches + '"';
+}
+
+function candidateLabel(c) {
+  if (!c) return "—";
+  const size = (c.width_ft !== undefined && c.width_ft !== null && c.height_ft !== undefined && c.height_ft !== null)
+    ? ftIn(c.width_ft) + " × " + ftIn(c.height_ft) : null;
+  const area = (c.area_sqft !== undefined && c.area_sqft !== null) ? num(c.area_sqft, 0) + " sq ft" : null;
+  if (size && area) return size + " — " + area;
+  if (size) return size;
+  if (c.label) return c.label;
+  return "outline " + (c.id || "");
+}
+
+function agentMeasurementsOnSheet() {
+  if (!RV.data) return [];
+  return RV.data.takeoff.measurements.filter(m => m.sheet_id === RV.sheetId
+    && (m.proposed_by === AGENT || m.proposed_by === LLM_AGENT));
+}
+
+// What an agent measurement came from. The list doesn't carry the calc (see _out in takeoff/measurements.py),
+// so a row can only say whose outline it is and how many drawing objects it uses; the detail panel, which has
+// the calc, names the outline itself. If the list ever carries calc_json, the row uses it too.
+function agentSourceText(m) {
+  if (m.proposed_by === LLM_AGENT) return "🤖 read from the plan by the AI — check the dimensions before approving";
+  let from = "from the agent's outline";
+  try {
+    const calc = m.calc_json ? (typeof m.calc_json === "string" ? JSON.parse(m.calc_json) : m.calc_json) : null;
+    const list = calc && calc.candidate_id && AUTO.candidates.get(m.viewport_id);
+    const c = list && list.find(x => x.id === calc.candidate_id);
+    if (c) from = "from outline: " + candidateLabel(c);
+  } catch (e) { /* the fallback stands */ }
+  const n = (m.source_object_ids || []).length;
+  return "🤖 " + from + (n ? " — " + n + " drawing object(s)" : "");
+}
+
+// Show exactly which lines the agent used: select its drawing objects and zoom to them. With no objects (the
+// agent drew the outline itself) the zoom falls to the measurement's own shape — zoomToSelection already
+// includes the current measurement's geometry.
+async function showAgentOutline(m) {
+  if (m.sheet_id && m.sheet_id !== RV.sheetId && $("review-sheet") && RV.data.sheets.some(s => s.id === m.sheet_id)) {
+    $("review-sheet").value = m.sheet_id;
+    await openSheet(m.sheet_id, $("review-message"));
+  }
+  RV.measurementId = m.id;
+  RV.selected = new Set(m.source_object_ids || []);
+  drawMeasurements();
+  refreshList($("review-message"));
+  if (RV.viewer) RV.viewer.zoomToSelection();
+}
+
+// The candidate slab rectangles for a view, cached per view (the status line and the retarget form share it).
+// Throws when the call fails — the status line swallows that (nothing to show yet), the retarget form shows it.
+async function getCandidates(vpId) {
+  if (AUTO.candidates.has(vpId)) return AUTO.candidates.get(vpId);
+  const r = await api("GET", "/viewports/" + vpId + "/slab-candidates");
+  const list = r.candidates || [];
+  AUTO.candidates.set(vpId, list);
+  AUTO.llmTakeoff.set(vpId, r.llm_takeoff || null);
+  return list;
+}
+
+// What the agent found on this sheet, before anyone runs it — loaded once per sheet, in the background, so
+// opening a sheet never waits on it. A missing backend (or a sheet with no candidates) just leaves the line out.
+async function loadAutoCandidates() {
+  if (!hasConcreteTrade() || !RV.data.can_measure) return;
+  const vp = autoRunViewport();
+  if (!vp || AUTO.candidates.has(vp.id) || AUTO.candidatesLoading.has(vp.id)) return;
+  AUTO.candidatesLoading.add(vp.id);
+  try { await getCandidates(vp.id); } catch (e) { /* no backend yet, or no outline — stay silent */ }
+  AUTO.candidatesLoading.delete(vp.id);
+  drawAutoRunStatus();
+}
+
+function rerunButton() {
+  const b = el("button", { class: "button", type: "button", id: "bp-auto-rerun" }, "↻ Re-run agent");
+  b.addEventListener("click", () => rerunAutoRun(b));
+  return el("div", { class: "row" }, b);
+}
+
+// The status area under the message line: the run's progress or result, what the agent found on this sheet,
+// and the re-run button. A run's progress shows on its own sheet — a run on another sheet keeps polling, and
+// its result shows when that sheet is opened again (the toast on finish reaches the user wherever they are).
+// It lives in its own slot, not #review-message: that line is wiped by every save and confirm flow.
+function drawAutoRunStatus() {
+  const slot = $("bp-auto-slot");
+  if (!slot || !RV.data) return;
+  const runBtn = $("bp-auto-run");
+  // A sheet switched off for Concrete can't run the agent — the button stays, disabled, with the reason.
+  const offForConcrete = (RV.inactiveTrades || []).includes("concrete");
+  if (runBtn) {
+    runBtn.disabled = !hasConcreteTrade() || AUTO.status === "running" || offForConcrete;
+    runBtn.title = offForConcrete
+      ? "This sheet is switched off for Concrete — switch it back on from the Plans screen to run the agent."
+      : (hasConcreteTrade() ? "Let the Concrete agent measure the slab on this sheet, then review what it proposes."
+        : "Add the Concrete trade to this estimate first — the agent only measures concrete slabs.");
+  }
+  const runHere = !!(AUTO.status && AUTO.sheetId === RV.sheetId);
+  const parts = [];
+  if (offForConcrete && hasConcreteTrade()) {
+    const psId = RV.sheet && RV.sheet.plan_set_id;
+    parts.push(el("p", { class: "note warn", id: "bp-auto-off" }, "This sheet is switched off for Concrete — the agent skips it. ",
+      psId ? el("a", { href: "#/plan-sets/" + psId }, "Switch it back on from the Plans screen") : "Switch it back on from the Plans screen", "."));
+  }
+  if (runHere && AUTO.status === "running") {
+    parts.push(el("p", { class: "note", id: "bp-auto-status", role: "status" },
+      "🤖 Agent running" + (AUTO.step ? " — " + AUTO.step : "…")));
+  } else if (runHere && AUTO.status === "done") {
+    const n = (AUTO.measurementIds || []).length;
+    const src = AUTO.source === "llm" ? " read from the plan by the AI" : "";
+    parts.push(el("p", { class: "note", id: "bp-auto-status", role: "status" }, n
+      ? "Agent finished: " + n + " proposed measurement(s)" + src + " — review and approve them below."
+      : "Agent finished: no measurements proposed on this sheet."));
+  } else if (runHere && AUTO.status === "failed") {
+    parts.push(el("p", { class: "error", id: "bp-auto-status", role: "alert" },
+      "Agent run failed — " + (AUTO.error || "unknown error")));
+  } else if (runHere && AUTO.status === "timeout") {
+    parts.push(el("p", { class: "error", id: "bp-auto-status", role: "alert" },
+      "Agent run timed out after 10 minutes — try re-running it."));
+  }
+  const vp = autoRunViewport();
+  if (vp && hasConcreteTrade() && AUTO.candidates.has(vp.id)) {
+    const list = AUTO.candidates.get(vp.id);
+    let text = "Agent found no slab outline on this sheet — measure it manually or re-run after the plan is processed.";
+    const llm = AUTO.llmTakeoff.get(vp.id);
+    if (!list.length && llm && llm.enabled) {
+      text = llm.ready
+        ? "Agent found no slab outline on this sheet — the AI will read the plan instead when you run it (LLM takeoff is on)."
+        : "Agent found no slab outline on this sheet — LLM takeoff is on, but the AI isn't ready (no API key saved?) — check 🤖 AI agents in Setup.";
+    }
+    if (list.length) {
+      const big = list.reduce((a, b) => parseFloat(b.area_sqft || 0) > parseFloat(a.area_sqft || 0) ? b : a, list[0]);
+      text = "Agent found " + list.length + " possible slab outline(s) — the largest is " + candidateLabel(big) + ".";
+    }
+    // LLM takeoff off: the AI won't run at all — say so and point at the switch, instead of only
+    // suggesting manual measuring (off is the default, so this is the line most people see).
+    if (!list.length && llm && !llm.enabled) {
+      parts.push(el("p", { class: "muted small", id: "bp-auto-candidates" },
+        "Agent found no slab outline on this sheet — the AI didn't run because LLM takeoff is off. ",
+        el("a", { href: "#/agents" }, "Turn it on in 🤖 AI agents"), " to let the AI read the plan, or measure it manually."));
+    } else {
+      parts.push(el("p", { class: "muted small", id: "bp-auto-candidates" }, text));
+    }
+  }
+  const agentHere = agentMeasurementsOnSheet().length > 0;
+  const runKnownHere = !!(AUTO.runId && AUTO.sheetId === RV.sheetId);
+  // AI Log: what the AI was given and what it returned for this run (nothing there means the AI never ran).
+  if (runKnownHere) parts.push(el("p", { class: "muted small", id: "bp-auto-ai-log" },
+    el("a", { href: "#/agents/ai-log?auto_run_id=" + AUTO.runId }, "📋 AI Log — what the AI was given and what it returned for this run")));
+  if (AUTO.status !== "running" && (runKnownHere || agentHere) && RV.data.can_measure) parts.push(rerunButton());
+  slot.replaceChildren(...parts);
+}
+
+function stopAutoPoll() { if (AUTO.timer) { clearTimeout(AUTO.timer); AUTO.timer = null; } }
+
+// Watch a run that was just started (or re-run): poll every 2 s until it is done, failed, or 10 minutes pass.
+// The timer stops itself when the page goes away (the status slot is gone) or a newer run takes over.
+function trackAutoRun(runId, vp) {
+  stopAutoPoll();
+  AUTO.runId = runId;
+  AUTO.estimateId = RV.estimateId;
+  AUTO.sheetId = RV.sheetId;
+  AUTO.viewportId = vp ? vp.id : null;
+  AUTO.status = "running";
+  AUTO.step = "";
+  AUTO.error = null;
+  AUTO.measurementIds = [];
+  AUTO.source = "geometry";
+  AUTO.startedAt = Date.now();
+  drawAutoRunStatus();
+  pollAutoRun();
+}
+
+function pollAutoRun() {
+  stopAutoPoll();
+  AUTO.timer = setTimeout(async () => {
+    AUTO.timer = null;
+    if (!$("bp-auto-slot") || !$("bp-auto-slot").isConnected) return;   // left the review page
+    if (Date.now() - AUTO.startedAt > AUTO_TIMEOUT_MS) { AUTO.status = "timeout"; drawAutoRunStatus(); return; }
+    const runId = AUTO.runId;
+    let r;
+    try { r = await api("GET", "/auto-run/" + runId); }
+    catch (e) {
+      if (e.status === 401) { AUTO.status = null; AUTO.step = ""; drawAutoRunStatus(); }   // signed out: the run is forgotten, start it again
+      else { AUTO.status = "failed"; AUTO.error = e.message; drawAutoRunStatus(); }
+      return;
+    }
+    if (AUTO.runId !== runId) return;                                    // a newer run took over meanwhile
+    const run = r.run || {};
+    AUTO.step = run.step || "";
+    AUTO.source = run.source || "geometry";
+    if (run.status === "done") {
+      AUTO.status = "done";
+      AUTO.measurementIds = run.measurement_ids || [];
+      const n = AUTO.measurementIds.length;
+      const src = AUTO.source === "llm" ? " (read from the plan by the AI)" : "";
+      toast(n ? "Agent finished: " + n + " proposed measurement(s)" + src + " to review." : "Agent finished: nothing proposed.");
+      drawAutoRunStatus();
+      await refreshData();
+    } else if (run.status === "failed") {
+      AUTO.status = "failed";
+      AUTO.error = run.error || "The agent run failed.";
+      drawAutoRunStatus();
+    } else {
+      drawAutoRunStatus();
+      pollAutoRun();
+    }
+  }, AUTO_POLL_MS);
+}
+
+async function startAutoRun() {
+  if (AUTO.status === "running") return;
+  const vp = autoRunViewport();
+  if (!vp) {
+    AUTO.status = "failed";
+    AUTO.sheetId = RV.sheetId;
+    AUTO.error = "This sheet has no view to measure — read the plans first.";
+    drawAutoRunStatus();
+    return;
+  }
+  // Running from the click, not from the answer: a second click while the start is in flight is ignored.
+  AUTO.status = "running";
+  AUTO.sheetId = RV.sheetId;
+  AUTO.estimateId = RV.estimateId;
+  AUTO.viewportId = vp.id;
+  AUTO.step = "Starting…";
+  AUTO.error = null;
+  drawAutoRunStatus();
+  try {
+    const r = await api("POST", "/auto-run", { estimate_id: RV.estimateId, sheet_id: RV.sheetId,
+                                               viewport_id: vp.id, module_id: "concrete" });
+    if (!r.run_id) throw new Error("the agent didn't start (no run id)");
+    trackAutoRun(r.run_id, vp);
+  } catch (e) {
+    if (e.status === 401) { AUTO.status = null; AUTO.step = ""; drawAutoRunStatus(); }
+    else { AUTO.status = "failed"; AUTO.error = e.message; drawAutoRunStatus(); }
+  }
+}
+
+// The latest run on this sheet: the one started here, or the one behind an agent measurement on the sheet
+// (its calc names the run). Nothing found means the agent never ran here — the button then says so.
+async function resolveRunIdForSheet() {
+  if (AUTO.runId && AUTO.sheetId === RV.sheetId) return AUTO.runId;
+  const ms = agentMeasurementsOnSheet();
+  const first = ms.find(m => m.status === "proposed") || ms[0];
+  if (!first) return null;
+  try {
+    const d = await api("GET", "/measurements/" + first.id);
+    const calc = d.calc || {};
+    if (calc.auto_run_id) {
+      AUTO.runId = calc.auto_run_id;
+      AUTO.sheetId = RV.sheetId;
+      return calc.auto_run_id;
+    }
+  } catch (e) { /* fall through: no run to re-run */ }
+  return null;
+}
+
+async function rerunAutoRun(btn) {
+  if (btn) btn.disabled = true;
+  AUTO.status = "running";
+  AUTO.sheetId = RV.sheetId;
+  AUTO.step = "Re-running…";
+  drawAutoRunStatus();
+  const id = await resolveRunIdForSheet();
+  if (!id) {
+    AUTO.status = "failed";
+    AUTO.error = "No agent run to re-run on this sheet yet — use 🤖 Agent auto-run first.";
+    drawAutoRunStatus();
+    return;
+  }
+  try {
+    const r = await api("POST", "/auto-run/" + id + "/rerun", {});
+    if (!r.run_id) throw new Error("the agent didn't re-run (no run id)");
+    trackAutoRun(r.run_id, autoRunViewport());
+  } catch (e) {
+    if (e.status === 401) { AUTO.status = null; AUTO.step = ""; drawAutoRunStatus(); }
+    else { AUTO.status = "failed"; AUTO.error = e.message; drawAutoRunStatus(); }
+  }
+}
+
+// Change an agent measurement's outline to another candidate rectangle (ask-first, like every other change).
+// Only for proposed agent measurements — approved ones are locked.
+async function retargetForm(x, out, calc) {
+  const vpId = x.viewport_id || (autoRunViewport() || {}).id;
+  out.replaceChildren(el("p", { class: "muted" }, "Loading outlines…"));
+  let list;
+  try { list = vpId ? await getCandidates(vpId) : []; }
+  catch (e) { out.replaceChildren(errorBox(e)); return; }
+  if (!list.length) {
+    out.replaceChildren(el("p", { class: "muted" }, "No slab outlines found on this view — measure it manually."));
+    return;
+  }
+  const sel = el("select", { id: "bp-retarget-select", "aria-label": "Slab outline" },
+    list.map(c => el("option", { value: c.id, selected: calc && calc.candidate_id === c.id }, candidateLabel(c))));
+  const go2 = el("button", { class: "primary", type: "button", id: "bp-retarget-go" }, "Retarget…");
+  const ask = el("div", {});
+  out.replaceChildren(el("div", { class: "card section" },
+    el("p", { class: "muted small" }, "Pick the outline the slab really is — the measurement is re-measured from it."),
+    el("div", { class: "row" }, el("label", {}, "Outline", sel), go2), ask));
+  go2.addEventListener("click", () => reviewAsk(ask, go2, "/measurements/" + x.id + "/retarget",
+    { candidate_id: sel.value },
+    r => "Outline changed — now " + num(r.measurement.qty) + " " + r.measurement.unit, "bp-retarget"));
+}
+
 // ------------------------------------------------------------------ the measurement list (by trade and room)
 const LIST_FILTER = { status: "open", sheetOnly: false, queue: false };
 
@@ -1169,6 +1521,123 @@ function refreshList(msg) {
     parts.push(list);
   }
   box.replaceChildren(...parts);
+  drawTakeoffGuide();
+  drawAutoRunStatus();
+}
+
+// ------------------------------------------------------------------ guided takeoff: what to measure, with which tool
+// A persistent panel above the plan (not a one-off tour): for every measurement-backed question
+// of each trade on this project, the quantity, the tool that measures it, and why — plus whether
+// it is measured yet. David's first live takeoff (NSB shed slab) had no such list: he used
+// Rectangle on the footing, which gives an area, not the linear feet the footing is priced by.
+// The list comes from the questions the takeoff call already returns (RV.data.trades — number and
+// integer questions only, see _trade in estimator/api/takeoff_api.py), so no new endpoint.
+const GUIDE_TOOLS = {
+  area: { tool: "rect", label: "▭ Rectangle or ⬠ Area" },
+  length: { tool: "length", label: "📏 Length" },
+  count: { tool: "count", label: "✚ Count" },
+};
+// Why this quantity needs that tool. The concrete lines are the ones David tripped over;
+// everything else falls back to the unit: sqft is priced by the square foot, lf by the foot.
+const GUIDE_WHY = {
+  "concrete.area_sqft": "the slab's area — it sets the concrete, gravel, mesh, and finish, all priced by the square foot",
+  "concrete.perimeter_lf": "forms are the boards around the slab edge that hold wet concrete in place, priced per foot — if left at 0 the app guesses a square slab's perimeter, badly wrong for a long narrow slab",
+  "concrete.footing_lf": "the thickened edge under the slab's rim — its length sets the digging, forms, and rebar, priced by the linear foot; click all four corners AND back to the start to close the loop",
+};
+function guideToolFor(q) {
+  const u = (q.unit || "").toLowerCase();
+  if (/sq|sf/.test(u)) return "area";
+  if (/lf|ft|feet/.test(u)) return "length";
+  return "count";                    // no unit: a count of things (outlets, doors, windows…)
+}
+function guideWhyFor(mod, q) {
+  const key = mod + "." + q.id;
+  if (GUIDE_WHY[key]) return GUIDE_WHY[key];
+  const kind = guideToolFor(q);
+  if (kind === "area") return "priced by the square foot — Rectangle for a straight-sided shape, Area for an odd one";
+  if (kind === "length") return "priced by the linear foot — click along it";
+  return "priced each — click every one";
+}
+// [state, text]: approved (from approved_answers, already in the question's unit), to review
+// (a proposed measurement feeds it), or not yet measured.
+function guideStatusFor(mod, q) {
+  const t = RV.data.takeoff, approved = ((t.approved_answers || {})[mod] || {})[q.id];
+  if (approved !== undefined && approved !== null) {
+    return ["approved", "✓ approved — " + num(approved) + (q.unit ? " " + q.unit : "")];
+  }
+  const waiting = t.measurements.filter(m => m.module_id === mod && m.feeds === q.id && m.status === "proposed");
+  if (waiting.length) {
+    const same = waiting.filter(m => m.unit === q.unit);
+    const total = same.reduce((a, m) => a + parseFloat(m.qty || 0), 0);
+    const text = same.length ? num(total) + (q.unit ? " " + q.unit : "") : waiting.length + " measurement(s)";
+    const remeasure = waiting.some(m => m.needs_remeasure) ? " · ⚠ re-measure" : "";
+    return ["proposed", "to review — " + text + remeasure];
+  }
+  return ["missing", "not yet measured"];
+}
+// Calibration is the first step: until a view has a scale, nothing measured on
+// it has real feet. Uses the viewport state the sheet already carries — no new
+// endpoint. NTS views cannot be calibrated, so they do not count.
+function guideCalibration() {
+  const views = (RV.viewports || []).filter(v => !v.is_nts);
+  if (!views.length) return ["missing", "not to scale — nothing to calibrate"];
+  if (views.some(v => !v.measurable)) return ["missing", "not calibrated — calibrate before measuring"];
+  const scaled = views.find(v => parseFloat(v.scale_ratio));
+  return ["approved", "✓ calibrated" + (scaled ? " — 1″ = " + scaled.scale_ratio + "″" : "")];
+}
+
+function drawTakeoffGuide() {
+  const slot = $("bp-guide-slot");
+  if (!slot || !RV.data) return;
+  const trades = RV.data.trades || [];
+  const head = el("summary", {}, "📋 What to measure — and which tool");
+  if (!trades.length) {
+    slot.replaceChildren(el("details", { class: "card section", id: "bp-guide", open: true }, head,
+      el("p", { class: "muted small" }, "No trade on this project needs a measurement yet.")));
+    return;
+  }
+  const parts = [head];
+  const [calState, calText] = guideCalibration();
+  const calRow = el("li", { class: "bp-row", "data-calibration": "1",
+    tabindex: RV.data.can_measure ? "0" : null,
+    title: RV.data.can_measure ? "Use the Calibrate tool" : null },
+    el("span", { class: "bp-row-name" }, "Calibrate the scale", el("br", {}),
+      el("span", { class: "muted small" }, "the plan is a picture — until the scale is set, nothing you measure has real feet")),
+    el("span", { class: "bp-row-qty" }, "📐 Calibrate"),
+    el("span", { class: "status" + (calState === "approved" ? "" : " sample") }, calText));
+  if (RV.data.can_measure) {
+    const pickCal = () => setTool("calibrate", $("review-message"));
+    calRow.addEventListener("click", pickCal);
+    calRow.addEventListener("keydown", ev => { if (ev.key === "Enter") pickCal(); });
+  }
+  parts.push(el("ul", { class: "bp-rows", id: "bp-guide-calibration" }, calRow));
+  for (const tr of trades) {
+    parts.push(el("h4", {}, tr.name));
+    // A sheet switched off for this trade: the guide stays (measuring by hand still works), with the note.
+    if ((RV.inactiveTrades || []).includes(tr.module_id)) {
+      parts.push(el("p", { class: "note warn small", id: "bp-guide-off-" + tr.module_id },
+        "This sheet is switched off for " + tr.name + " — the agent skips it, but you can still measure by hand."));
+    }
+    const rows = tr.questions.map(q => {
+      const kind = guideToolFor(q), tool = GUIDE_TOOLS[kind];
+      const [state, text] = guideStatusFor(tr.module_id, q);
+      const li = el("li", { class: "bp-row", "data-module": tr.module_id, "data-question": q.id,
+        tabindex: RV.data.can_measure ? "0" : null,
+        title: RV.data.can_measure ? "Use the " + tool.label + " tool" : null },
+        el("span", { class: "bp-row-name" }, q.label, el("br", {}),
+          el("span", { class: "muted small" }, guideWhyFor(tr.module_id, q))),
+        el("span", { class: "bp-row-qty" }, tool.label),
+        el("span", { class: "status" + (state === "approved" ? "" : " sample") }, text));
+      if (RV.data.can_measure) {
+        const pick = () => setTool(tool.tool, $("review-message"));
+        li.addEventListener("click", pick);
+        li.addEventListener("keydown", ev => { if (ev.key === "Enter") pick(); });
+      }
+      return li;
+    });
+    parts.push(el("ul", { class: "bp-rows", id: "bp-guide-" + tr.module_id }, rows));
+  }
+  slot.replaceChildren(el("details", { class: "card section", id: "bp-guide", open: true }, ...parts));
 }
 
 function totalsText(ms) {
@@ -1180,11 +1649,18 @@ function totalsText(ms) {
 
 function measurementRow(m, msg) {
   const flags = [m.locked ? "🔒" : "", m.suggested_qty !== null && m.suggested_qty !== undefined ? "✎ suggestion" : "", m.needs_remeasure ? "⚠ re-measure" : ""].filter(Boolean).join(" ");
+  const agent = m.proposed_by === AGENT || m.proposed_by === LLM_AGENT;
+  const llm = m.proposed_by === LLM_AGENT;
   const li = el("li", { class: "bp-row " + m.status + (RV.measurementId === m.id ? " active" : ""), "data-mid": m.id, tabindex: "0" },
-    el("span", { class: "bp-row-name" }, measurementName(m)),
+    el("span", { class: "bp-row-name" }, agent ? el("span", { class: "bp-agent", title: llm ? "Read from the plan by the AI (LLM takeoff)" : "Proposed by the Concrete agent" }, "🤖 ") : null, measurementName(m)),
     el("span", { class: "bp-row-qty" }, num(m.qty) + " " + m.unit),
     el("span", { class: "status " + (m.status === "approved" ? "" : "sample") }, m.status === "proposed" ? "to review" : words(m.status)),
-    el("span", { class: "muted small" }, pct(m.confidence) + " · " + words(m.method) + (flags ? " · " + flags : "")));
+    el("span", { class: "muted small" }, pct(m.confidence) + " · " + words(m.method) + (flags ? " · " + flags : "") + (agent ? " · " + agentSourceText(m) : "")));
+  if (m.proposed_by === AGENT) {   // LLM measurements have no outline to show
+    const show = el("button", { class: "button", type: "button", id: "bp-show-outline-" + m.id }, "Show outline");
+    show.addEventListener("click", ev => { ev.stopPropagation(); showAgentOutline(m); });
+    li.append(show);
+  }
   const open = () => showDetail(m.id, msg, true);
   li.addEventListener("click", open);
   li.addEventListener("keydown", ev => { if (ev.key === "Enter") open(); });
@@ -1219,6 +1695,25 @@ async function showDetail(id, msg, zoom) {
   let d;
   try { d = await api("GET", "/measurements/" + id); } catch (e) { pane.replaceChildren(errorBox(e)); return; }
   const x = d.measurement, c = d.calc || {};
+  // Agent measurements say which outline they came from: the run that made them still holds its candidates.
+  let agentOutline = null;
+  if (x.proposed_by === AGENT) {
+    agentOutline = "from the agent's outline";
+    if (c.auto_run_id) {
+      try {
+        const rr = await api("GET", "/auto-run/" + c.auto_run_id);
+        const found = ((rr.run && rr.run.candidates) || []).find(y => y.id === c.candidate_id);
+        if (found) agentOutline = "from outline: " + candidateLabel(found);
+      } catch (e) { /* the run is gone or the backend isn't there — the fallback stands */ }
+    }
+  }
+  // LLM measurements say what the AI read: the dimensions stay in the calc as provenance.
+  let aiReading = null;
+  if (c.source === "llm") {
+    aiReading = "read " + (c.slab_width || "?") + " × " + (c.slab_length || "?") + " from the foundation plan"
+      + (c.footer_size ? ", footer " + c.footer_size : "") + (c.footer_bar ? " " + c.footer_bar : "")
+      + (c.model ? " (" + c.model + ")" : "");
+  }
   const rows = [
     ["Quantity", num(x.qty) + " " + x.unit + (x.suggested_qty !== null && x.suggested_qty !== undefined ? " (suggested: " + num(x.suggested_qty) + " " + x.unit + " — " + (x.suggested_reason || "") + ")" : "")],
     ["Trade", tradeName(x.module_id) + (x.feeds ? " → " + words(x.feeds) : " (not linked to a question)")],
@@ -1227,9 +1722,13 @@ async function showDetail(id, msg, zoom) {
     ["Sheet", d.sheet ? (d.sheet.sheet_no || "page " + d.sheet.page_no) + (d.sheet.title ? " — " + d.sheet.title : "") : "—"],
     ["View and scale", d.viewport ? (d.viewport.label || "view") + " · " + (d.viewport.is_nts ? "NTS" : d.viewport.scale_note || (d.viewport.scale_ratio ? "1:" + d.viewport.scale_ratio : "no scale")) + (d.viewport.scale_method ? " (" + words(d.viewport.scale_method) + ")" : "") : c.scale_ratio ? "1:" + c.scale_ratio : "—"],
     ["Method", words(x.method)], ["Confidence", pct(x.confidence)],
-    ["Proposed by", x.proposed_by || "—"], ["Approved", x.approved_by ? x.approved_by + " · " + when(x.approved_at) : "not yet"],
+    ["Proposed by", x.proposed_by || "—"],
+    agentOutline ? ["Agent outline", agentOutline] : null,
+    aiReading ? ["AI reading", aiReading] : null,
+    aiReading && c.auto_run_id ? ["AI Log", el("a", { href: "#/agents/ai-log?auto_run_id=" + c.auto_run_id, id: "bp-detail-ai-log" }, "What the AI was given and what it returned")] : null,
+    ["Approved", x.approved_by ? x.approved_by + " · " + when(x.approved_at) : "not yet"],
   ];
-  const parts = [el("h3", {}, measurementName(x)), el("table", { class: "kv", id: "bp-detail" }, rows.map(([k, v]) => el("tr", {}, el("th", {}, k), el("td", {}, v))))];
+  const parts = [el("h3", {}, measurementName(x)), el("table", { class: "kv", id: "bp-detail" }, rows.filter(Boolean).map(([k, v]) => el("tr", {}, el("th", {}, k), el("td", {}, v))))];
   if (d.source_objects.length) {
     parts.push(el("h4", {}, "From the drawing (" + d.source_objects.length + ")"),
       el("ul", { class: "small", id: "bp-sources" }, d.source_objects.slice(0, 50).map(o => el("li", {}, objectLabel({ ...o, layer: null }) + " · " + words(o.source) + " " + pct(o.confidence)))));
@@ -1243,7 +1742,7 @@ async function showDetail(id, msg, zoom) {
     : el("p", { class: "muted small", id: "bp-feeds-lines" }, x.feeds
         ? (x.status === "approved" ? "None yet — price " + tradeName(x.module_id) + " on the Estimates screen to use it." : "None until it's approved.")
         : "It isn't linked to a question, so it isn't priced."));
-  parts.push(detailActions(x, msg));
+  parts.push(detailActions(x, msg, c));
   if (d.history.length) {
     parts.push(el("details", { id: "bp-history" }, el("summary", {}, "History (" + d.history.length + ")"),
       el("ul", { class: "small" }, d.history.map(h => el("li", {}, when(h.at) + " · " + h.by + " · " + words(h.action.replace(/^measurement_/, "")))))));
@@ -1251,11 +1750,17 @@ async function showDetail(id, msg, zoom) {
   pane.replaceChildren(...parts);
 }
 
-function detailActions(x, msg) {
+function detailActions(x, msg, calc) {
   const d = RV.data, out = el("div", { id: "bp-act-confirm" }), row = el("div", { class: "row", id: "bp-actions" });
   const btn = (id, text, fn) => { const b = el("button", { class: id === "bp-approve-one" ? "primary" : "button", type: "button", id }, text); b.addEventListener("click", () => fn(b)); row.append(b); };
   if (x.status === "proposed" && d.can_approve) {
     btn("bp-approve-one", "✓ Approve…", b => reviewAsk(out, b, "/measurements/approve", { measurement_ids: [x.id] }, () => "Approved and locked", "bp-approve"));
+  }
+  if (x.proposed_by === AGENT) {
+    btn("bp-show-outline", "Show outline", () => showAgentOutline(x));
+  }
+  if (x.status === "proposed" && x.proposed_by === AGENT && d.can_correct) {
+    btn("bp-retarget", "Change outline…", () => retargetForm(x, out, calc || {}));
   }
   if (x.status === "approved" && x.suggested_qty !== null && x.suggested_qty !== undefined && d.can_approve) {
     btn("bp-accept", "Accept the suggestion…", b => reviewAsk(out, b, "/measurements/approve", { measurement_ids: [x.id], accept_suggestion: true }, () => "Suggestion accepted", "bp-accept"));

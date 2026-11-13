@@ -127,6 +127,104 @@ def test_price_book_screen_is_ready_and_drawn():
     assert next(s for s in nav.SCREENS if s["id"] == "price_book")["status"] == "ready"
     js = (router.WEB_DIR / "app.js").read_text(encoding="utf-8")
     assert "price_book: renderPriceBook" in js and "/price-book/import" in js
+    # Fix 5: the Add item form is drawn on the Price Book page, posting one row
+    # to /price-book/import with add_new through askThenSave.
+    assert "addPriceForm" in js and "pb-add-box" in js and "add_new" in js
+    for field in ("pb-add-key", "pb-add-desc", "pb-add-kind", "pb-add-unit", "pb-add-cost", "pb-add"):
+        assert field in js
+    # A new price gets a trade: the Add form and the import box each carry a Trade
+    # picker, sent as module_id with the import.
+    assert "tradeSelect" in js and "pb-add-trade" in js and "pb-import-trade" in js
+    assert "module_id: trade.value" in js
+    # The table shows each price's trade and lets you edit or remove a row.
+    assert 'el("th", {}, "Trade")' in js and '"data-trade"' in js
+    assert "priceEdit" in js and "priceRemove" in js and "pb-edit" in js
+    assert '"/edit"' in js and '"/remove"' in js
+    for field in ("pb-edit-desc", "pb-edit-kind", "pb-edit-unit", "pb-edit-trade", "pb-edit-save", "pb-remove-message"):
+        assert field in js
+
+
+def test_add_item_form_payload_adds_a_new_price(call):
+    # Fix 5: exactly what the Add item form posts — one CSV row, explicit mapping, add_new.
+    body = {"csv_text": "Item code,Description,Unit,Cost,Kind\nzz_test_add_item,Test widget,ea,12.50,material\n",
+            "mapping": {"price_key": "Item code", "description": "Description", "unit": "Unit", "cost": "Cost", "kind": "Kind"},
+            "add_new": True}
+    ask = call("POST", f"{API}/price-book/import", body).json()
+    assert ask["needs_confirmation"] is True and ask["new"] == 1
+    assert any("zz_test_add_item" in c and "new" in c for c in ask["changes"])
+    book = call("GET", f"{API}/price-book").json()
+    assert not any(p["price_key"] == "zz_test_add_item" for p in book["prices"])   # nothing saved yet
+    done = call("POST", f"{API}/price-book/import", {**body, "confirm": True}).json()
+    assert done["saved"] == 1
+    p = next(p for p in call("GET", f"{API}/price-book").json()["prices"] if p["price_key"] == "zz_test_add_item")
+    assert p["description"] == "Test widget" and p["unit"] == "ea" and p["kind"] == "material" and p["cost_cents"] == 1250
+
+
+def test_add_item_form_payload_for_existing_key_asks_before_overwriting(call):
+    # Fix 5: the same form payload for a code that already exists asks first
+    # (old -> new), never silently overwrites.
+    old = _price(call)["cost_cents"]
+    body = {"csv_text": f"Item code,Description,Unit,Cost,Kind\n{KEY},Driveway,sqft,9.99,material\n",
+            "mapping": {"price_key": "Item code", "description": "Description", "unit": "Unit", "cost": "Cost", "kind": "Kind"},
+            "add_new": True}
+    ask = call("POST", f"{API}/price-book/import", body).json()
+    assert ask["needs_confirmation"] is True and ask["updates"] == 1 and ask["new"] == 0
+    assert _price(call)["cost_cents"] == old                      # nothing saved yet
+    done = call("POST", f"{API}/price-book/import", {**body, "confirm": True}).json()
+    assert done["saved"] == 1 and _price(call)["cost_cents"] == 999
+
+
+def _add_item_body(key, desc, unit, cost, module_id=None):
+    # Exactly what the Add item form posts, plus the Trade picker's module_id.
+    body = {"csv_text": f"Item code,Description,Unit,Cost,Kind\n{key},{desc},{unit},{cost},material\n",
+            "mapping": {"price_key": "Item code", "description": "Description", "unit": "Unit", "cost": "Cost", "kind": "Kind"},
+            "add_new": True}
+    if module_id is not None:
+        body["module_id"] = module_id
+    return body
+
+
+def _keys(call, module_id=None):
+    q = f"?module_id={module_id}" if module_id else ""
+    return {p["price_key"]: p for p in call("GET", f"{API}/price-book{q}").json()["prices"]}
+
+
+def test_new_price_with_trade_shows_under_that_trades_filter(call):
+    # The bug: a price added by hand showed under All trades but never under its trade.
+    body = _add_item_body("zz_trade_concrete", "Fibermesh concrete", "cuyd", "160.00", "concrete")
+    ask = call("POST", f"{API}/price-book/import", body).json()
+    assert ask["needs_confirmation"] is True and ask["new"] == 1
+    assert "zz_trade_concrete" not in _keys(call, "concrete")      # nothing saved yet
+    done = call("POST", f"{API}/price-book/import", {**body, "confirm": True}).json()
+    assert done["saved"] == 1
+    concrete = _keys(call, "concrete")
+    assert "zz_trade_concrete" in concrete and concrete["zz_trade_concrete"]["module_id"] == "concrete"
+    assert concrete["zz_trade_concrete"]["cost_cents"] == 16000
+    assert "zz_trade_concrete" not in _keys(call, "pressure_washing")
+    assert "zz_trade_concrete" in _keys(call)                       # All trades still shows it
+
+
+def test_new_price_without_trade_shows_only_under_all_trades(call):
+    body = _add_item_body("zz_trade_none", "Untraded widget", "ea", "5.00")
+    done = call("POST", f"{API}/price-book/import", {**body, "confirm": True}).json()
+    assert done["saved"] == 1
+    assert "zz_trade_none" in _keys(call)
+    assert "zz_trade_none" not in _keys(call, "concrete")
+    assert "zz_trade_none" not in _keys(call, "pressure_washing")
+
+
+def test_reimporting_a_price_keeps_its_trade(call):
+    # An overwrite keeps the trade the row already has, even when the import names another.
+    body = _add_item_body("zz_trade_keep", "Kept trade item", "ea", "7.00", "concrete")
+    call("POST", f"{API}/price-book/import", {**body, "confirm": True})
+    assert "zz_trade_keep" in _keys(call, "concrete")
+    again = _add_item_body("zz_trade_keep", "Kept trade item", "ea", "8.00", "pressure_washing")
+    done = call("POST", f"{API}/price-book/import", {**again, "confirm": True}).json()
+    assert done["saved"] == 1
+    concrete = _keys(call, "concrete")
+    assert "zz_trade_keep" in concrete and concrete["zz_trade_keep"]["module_id"] == "concrete"
+    assert concrete["zz_trade_keep"]["cost_cents"] == 800
+    assert "zz_trade_keep" not in _keys(call, "pressure_washing")
 
 
 def test_question_strips_the_ai_instructions():
@@ -135,3 +233,86 @@ def test_question_strips_the_ai_instructions():
         "Change these prices? a: $1 → $2."
     assert _question("Import 1 change? Show the user the changes, then call again with confirm=true.") == "Import 1 change?"
     assert json.dumps(_question("Attach x?")) == '"Attach x?"'
+
+
+def test_editing_a_price_updates_its_details(call):
+    # Add a price by hand, then change its description, kind, unit, and trade.
+    body = _add_item_body("zz_edit_me", "Old widget", "ea", "5.00", "concrete")
+    call("POST", f"{API}/price-book/import", {**body, "confirm": True})
+    assert "zz_edit_me" in _keys(call, "concrete")
+    edit = {"description": "New widget", "kind": "labor", "unit": "hr", "module_id": "pressure_washing"}
+    ask = call("POST", f"{API}/price-book/zz_edit_me/edit", edit).json()
+    assert ask["needs_confirmation"] is True
+    assert any("New widget" in c for c in ask["changes"])
+    assert any("Pressure Washing" in c for c in ask["changes"])
+    assert "zz_edit_me" in _keys(call, "concrete")                      # nothing saved yet
+    done = call("POST", f"{API}/price-book/zz_edit_me/edit", {**edit, "confirm": True}).json()
+    assert done["ok"] is True
+    p = _keys(call)["zz_edit_me"]
+    assert p["description"] == "New widget" and p["kind"] == "labor" and p["unit"] == "hr"
+    assert p["module_id"] == "pressure_washing" and p["cost_cents"] == 500   # cost unchanged
+    assert "zz_edit_me" in _keys(call, "pressure_washing")
+    assert "zz_edit_me" not in _keys(call, "concrete")
+
+
+def test_editing_a_price_can_take_its_trade_off(call):
+    body = _add_item_body("zz_edit_clear", "Traded widget", "ea", "5.00", "concrete")
+    call("POST", f"{API}/price-book/import", {**body, "confirm": True})
+    assert "zz_edit_clear" in _keys(call, "concrete")
+    done = call("POST", f"{API}/price-book/zz_edit_clear/edit", {"module_id": None, "confirm": True}).json()
+    assert done["ok"] is True
+    assert "zz_edit_clear" in _keys(call)                               # All trades still shows it
+    assert "zz_edit_clear" not in _keys(call, "concrete")
+    assert _keys(call)["zz_edit_clear"]["module_id"] is None
+
+
+def test_bad_price_edits(call):
+    r = call("POST", f"{API}/price-book/no_such_price/edit", {"description": "x", "confirm": True})
+    assert r.status == 404 and "no price called" in r.json()["message"]
+    body = _add_item_body("zz_edit_bad", "Bad widget", "ea", "5.00")
+    call("POST", f"{API}/price-book/import", {**body, "confirm": True})
+    for payload, words in (
+        ({"description": ""}, "description"),
+        ({"kind": "magic"}, "kind"),
+        ({"unit": ""}, "unit"),
+    ):
+        r = call("POST", f"{API}/price-book/zz_edit_bad/edit", payload)
+        assert r.status == 400 and words in r.json()["message"], (payload, r.body)
+    # Editing with the same values changes nothing and asks nothing.
+    r = call("POST", f"{API}/price-book/zz_edit_bad/edit",
+             {"description": "Bad widget", "kind": "material", "unit": "ea"}).json()
+    assert r["ok"] is True and r["message"] == "Nothing to change."
+
+
+def test_removing_a_hand_added_price_deletes_it(call):
+    body = _add_item_body("zz_remove_me", "Doomed widget", "ea", "5.00", "concrete")
+    call("POST", f"{API}/price-book/import", {**body, "confirm": True})
+    assert "zz_remove_me" in _keys(call)
+    ask = call("POST", f"{API}/price-book/zz_remove_me/remove", {}).json()
+    assert ask["needs_confirmation"] is True
+    assert any("entirely" in c for c in ask["changes"])
+    assert "gone" in ask["question"]
+    assert "zz_remove_me" in _keys(call)                               # nothing saved yet
+    done = call("POST", f"{API}/price-book/zz_remove_me/remove", {"confirm": True}).json()
+    assert done["ok"] is True and done["removed"] == "zz_remove_me" and done["reverts_to_sample"] is False
+    assert "zz_remove_me" not in _keys(call)
+    assert call("GET", f"{API}/price-book/history/zz_remove_me").status == 404
+
+
+def test_removing_a_module_price_goes_back_to_the_sample(call):
+    # Set your own price for a module key, then remove it: the sample comes back.
+    call("POST", f"{API}/price-book", {"prices": {KEY: "0.21"}, "confirm": True})
+    assert _price(call)["sample"] is False
+    ask = call("POST", f"{API}/price-book/{KEY}/remove", {}).json()
+    assert ask["needs_confirmation"] is True
+    assert any("sample" in c for c in ask["changes"])
+    done = call("POST", f"{API}/price-book/{KEY}/remove", {"confirm": True}).json()
+    assert done["ok"] is True and done["reverts_to_sample"] is True
+    p = _price(call)
+    assert p["sample"] is True and p["cost_cents"] > 0
+
+
+def test_removing_a_price_that_is_only_a_sample_is_a_404(call):
+    # No company row exists for this key yet — there is nothing to remove.
+    r = call("POST", f"{API}/price-book/{KEY}/remove", {"confirm": True})
+    assert r.status == 404 and "no saved price" in r.json()["message"]

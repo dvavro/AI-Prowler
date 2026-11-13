@@ -74,7 +74,8 @@ def say(*actions, summary="ok"):
 
 def test_roles_start_off(db):  # S15-R01
     ov = roles.overview(db, "default")
-    assert {r["role"] for r in ov["roles"]} == {"reviewer", "bid_writer", "follow_up", "plan_reader", "takeoff"}
+    assert {r["role"] for r in ov["roles"]} == {"reviewer", "bid_writer", "follow_up", "plan_reader", "takeoff",
+                                                 "llm_takeoff"}
     assert all(r["provider"] == "off" for r in ov["roles"])
     assert ov["budget"] == {"daily_cents": 200, "monthly_cents": 2000} and ov["spent"]["today"]["calls"] == 0
     assert "Small Business" in ov["where_keys_go"]
@@ -302,7 +303,7 @@ def test_agent_tools(db, fake):  # S15-T01
     assert "est_director_start" in out["instructions"] and "reviewer" in out["roles"]
     assert "Takeoff" in j(t.how_to_estimate("takeoff"))["instructions"]
     assert j(t.how_to_estimate("nope"))["error"] == "not_found"
-    assert len(j(t.agent_roles_get())["roles"]) == 5
+    assert len(j(t.agent_roles_get())["roles"]) == 6
     assert j(t.agent_roles_update("reviewer", '{"provider": "chat_only"}', confirm=True))["role"]["provider"] == \
         "chat_only"
     assert j(t.agent_budget_update({"monthly_cents": 3000}, confirm=True))["budget"]["monthly_cents"] == 3000

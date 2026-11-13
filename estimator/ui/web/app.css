@@ -60,6 +60,13 @@ td.money { text-align: right; font-variant-numeric: tabular-nums; }
 .row label { flex: 1; min-width: 180px; margin: 0; }
 .section { margin: 18px 0; }
 .checklist li { margin: 4px 0; }
+/* Delete project (2026-11-12) */
+.danger { color: var(--bad); border-color: var(--bad); }
+.primary.danger { background: var(--bad); color: #fff; }
+/* The Director panel on the project, estimate and job pages (2026-11-12) */
+.director-panel { border-left: 4px solid var(--accent, #2563eb); }
+.director-panel .checklist { list-style: none; padding-left: 0; }
+.director-panel .checklist li.done { color: var(--muted, #6b7280); }
 .coming-page ul { columns: 2; }
 code { background: #eef1f4; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 
@@ -68,7 +75,9 @@ code { background: #eef1f4; padding: 1px 5px; border-radius: 4px; font-size: 13p
 .page-head h2, .page-head h3 { margin: 0 0 12px; }
 a.button, button.button { display: inline-block; text-decoration: none; border: 1px solid var(--line); background: var(--card);
                           color: var(--ink); border-radius: 6px; padding: 8px 14px; }
-a.primary.button { color: var(--brand-ink); border: 0; }
+/* 2026-11-12: a link styled as a primary button keeps the brand background (a.button set it to the card colour, so the
+   white text vanished on the Dashboard's AI Director button). */
+a.primary.button { color: var(--brand-ink); background: var(--brand); border: 0; }
 a.tile { text-decoration: none; color: inherit; }
 a.tile:hover, table.clickable tbody tr:hover { background: #f0f4ff; }
 table.clickable tbody tr { cursor: pointer; }
@@ -101,7 +110,7 @@ body.embedded .brand, body.embedded .search, body.embedded .user, body.embedded 
 body.embedded { --top-h: 44px; }
 
 /* Sprint 4: Jobs board, job page, Bids, Help */
-.help-link { min-width: 34px; text-align: center; font-weight: 700; border-radius: 50%; }
+.help-link { min-width: 34px; text-align: center; font-weight: 600; border-radius: 6px; white-space: nowrap; }
 .page-head .row { margin: 0; }
 #job-next .row, #bid-actions .row { margin-top: 10px; align-items: flex-end; }
 #job-choices button { text-transform: capitalize; }
@@ -316,3 +325,8 @@ tr.pb-history > td { background: #f8fafc; }
 .help-panel input[type="search"] { width: 100%; margin: 10px 0; }
 .help-panel-replay { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 @media (max-width: 700px) { .tour-pop { width: calc(100vw - 16px); } }
+
+/* AI Log: the prompt and the reply wrap and scroll instead of running off the card; sent plan images fit the card. */
+.ai-log-text { white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; max-height: 24rem; overflow: auto; font-size: 13px; }
+.ai-log-img { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; }
+.ai-log-figure { margin: 12px 0; }

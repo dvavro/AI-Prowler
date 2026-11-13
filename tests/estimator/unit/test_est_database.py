@@ -55,6 +55,35 @@ def test_failed_migration_rolls_back(tmp_path, monkeypatch):
     assert "ok_table" not in names and mig.current_version(conn) == 0
 
 
+def test_v19_price_book_module_id(db):  # price book rows carry their trade (v19)
+    cols = {r[1] for r in db.execute("PRAGMA table_info(price_book)")}
+    assert "module_id" in cols
+
+
+def test_v20_auto_runs_table(db):  # concrete agent auto-runs (v20)
+    cols = {r[1] for r in db.execute("PRAGMA table_info(auto_runs)")}
+    assert {"company_id", "estimate_id", "sheet_id", "viewport_id", "module_id", "status", "step",
+            "error", "candidate_id", "candidates_json", "measurement_ids_json", "created_by",
+            "created_at", "updated_at"} <= cols
+    with pytest.raises(sqlite3.IntegrityError):
+        db.execute("INSERT INTO auto_runs (company_id, estimate_id, sheet_id, viewport_id, module_id,"
+                   " status, created_by, created_at, updated_at) VALUES ('default', 1, 1, 1, 'concrete',"
+                   " 'bogus', 'owner', ?, ?)", (NOW, NOW))
+
+
+def test_v21_sheet_trade_active_table(db):  # per-trade sheet activation for takeoff (v21)
+    cols = {r[1] for r in db.execute("PRAGMA table_info(sheet_trade_active)")}
+    assert {"company_id", "sheet_id", "module_id", "active", "updated_by", "updated_at"} <= cols
+    db.execute("INSERT INTO sheet_trade_active (company_id, sheet_id, module_id, active, updated_at)"
+               " VALUES (?, 1, ?, 0, ?)", ("default", "concrete", NOW))
+    with pytest.raises(sqlite3.IntegrityError):          # active is 0 or 1 only
+        db.execute("INSERT INTO sheet_trade_active (company_id, sheet_id, module_id, active, updated_at)"
+                   " VALUES (?, 2, ?, 2, ?)", ("default", "concrete", NOW))
+    with pytest.raises(sqlite3.IntegrityError):          # one row per company/sheet/trade
+        db.execute("INSERT INTO sheet_trade_active (company_id, sheet_id, module_id, active, updated_at)"
+                   " VALUES (?, 1, ?, 1, ?)", ("default", "concrete", NOW))
+
+
 def test_every_business_table_has_company_or_parent(db):
     for table in ("estimates", "price_book", "markups", "estimate_events", "company_profile", "setup_progress"):
         cols = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
@@ -123,7 +152,7 @@ def test_v1_database_upgrades_to_v2(tmp_path):  # S3-B02
     conn = connect(tmp_path / "old.db")
     mig.migrate(conn, target=1)
     conn.execute("INSERT INTO estimates (company_id, title, created_at, updated_at) VALUES ('default', 'old', 'now', 'now')")
-    assert mig.migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]   # 14-15: symbols (Coder 2 Sprints 10-11), 16: revisions and the processing-PC queue, 17: design firm, assembly uses, line overrides, 18: help progress (guided tours, Coder 2 Sprint 18)
+    assert mig.migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]   # 23: project lane for Director jobs (2026-11-12), 14-15: symbols (Coder 2 Sprints 10-11), 16: revisions and the processing-PC queue, 17: design firm, assembly uses, line overrides, 18: help progress (guided tours, Coder 2 Sprint 18), 19: price book rows carry their trade, 20: concrete agent auto-runs, 21: per-trade sheet activation, 22: AI log (every LLM call, what was sent and what came back)
     assert conn.execute("SELECT title FROM estimates").fetchone()[0] == "old"
     conn.close()
 

@@ -9,7 +9,7 @@
 
 const SETTINGS_SECTIONS = [["company", "🏢 Company"], ["money", "💲 Tax, markups and labor"], ["bids", "📨 Bid template"],
                            ["approvals", "✅ Approval rules"], ["ai", "🤖 AI and privacy"], ["people", "👥 Users and roles"],
-                           ["data", "💾 Data and backups"], ["audit", "📜 Audit log"]];
+                           ["data", "💾 Data and backups"], ["tours", "🎓 Guided tours"], ["audit", "📜 Audit log"]];
 
 function field(label, input, hint) {
   return el("label", { class: "field" }, label, input, hint ? el("span", { class: "muted small" }, hint) : null);
@@ -53,6 +53,7 @@ async function renderSettings(main, screen) {
   main.replaceChildren(el("div", { class: "page-head" }, el("h2", {}, screen.label), helpLink("settings")), tabs, body);
   try {
     if (section === "audit") { await settingsAudit(body); return; }
+    if (section === "tours") { await settingsTours(body); return; }
     const s = await api("GET", "/settings");
     const draw = { company: settingsCompany, money: settingsMoney, bids: settingsBids, approvals: settingsApprovals,
                    ai: settingsAi, people: settingsPeople, data: settingsData }[section];
@@ -204,6 +205,28 @@ async function settingsAudit(body) {
         el("td", {}, e.estimate_id ? el("a", { href: "#/projects/" + e.estimate_id }, e.estimate_title || "#" + e.estimate_id) : ""),
         el("td", { class: "small muted" }, e.detail || ""))))) : el("p", { class: "muted" }, "Nothing logged yet."),
     el("p", { class: "muted small" }, "The newest 200. Every change by a person or an agent is logged and can't be edited."));
+}
+
+// Guided tours (2026-11-12, David): once you know the Estimator, the tour that pops up on each screen's first open
+// gets in the way. This is for the person signed in only; tours can still be replayed from Help.
+async function settingsTours(body) {
+  const r = await api("GET", "/help/tours/auto");
+  const box = el("input", { type: "checkbox", id: "set-tours-auto", checked: r.enabled });
+  const msg = el("div", { role: "status", id: "set-tours-message" });
+  box.addEventListener("change", async () => {
+    box.disabled = true;
+    try {
+      if (typeof setToursAuto === "function") await setToursAuto(box.checked);
+      else await api("POST", "/help/tours/auto", { enabled: box.checked });
+      toast(box.checked ? "Guided tours are on." : "Guided tours are off.");
+      msg.replaceChildren();
+    } catch (e) { box.checked = !box.checked; if (e.status !== 401) msg.replaceChildren(errorBox(e)); }
+    finally { box.disabled = false; }
+  });
+  body.replaceChildren(el("div", { class: "card section", id: "set-tours" }, el("h3", {}, "Guided tours"),
+    el("label", { class: "check" }, box, " Show the guided tour the first time I open each screen"),
+    el("p", { class: "muted small" }, "Turn this off once you know your way around. You can still replay any tour from " +
+      "Help (or the Help button on each screen). This setting is just for you."), msg));
 }
 
 SCREENS.settings = renderSettings;

@@ -1,0 +1,16 @@
+# Project lane: every project made on the Projects screen gets a Director job (2026-11-12, David).
+# The person builds the estimate (plans, takeoff, trades, hand lines); the Director says what to do next and why,
+# then runs the checks, the approval, the quote, sending it and the follow-up.
+id: project
+name: Project
+version: 0.1.0
+lane: project
+available: true
+available_from: "Sprint 20"
+description: A project built on the Projects, Plans and Estimates screens. The Director guides each step (plans, measurements, pricing the trades), then checks, approves, writes and sends the quote, and follows up.
+stages:
+  - {id: build, agent: director, action: guide_build, label: "Build the estimate (plans, measurements, trades)"}
+  - {id: review, agent: reviewer, action: review, label: "Reviewer checks", checkpoint: true}
+  - {id: approve, agent: director, action: approve, label: "Approve the estimate", checkpoint: true}
+  - {id: write_bid, agent: bid_writer, action: write_bid, label: "Write and send the quote"}
+  - {id: follow_up, agent: follow_up, action: follow_up, label: "Follow up and convert to a job"}

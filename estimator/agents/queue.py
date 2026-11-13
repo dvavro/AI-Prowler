@@ -14,16 +14,18 @@ A draft that mentions a dollar amount that isn't in the context pack is refused:
 
 Providers: chat_only tasks wait as "waiting_for_ai" until someone runs them from chat (next_task / submit). API
 tasks run within the daily and monthly budget (paused when it's used up), try the backup provider if the first
-one fails, and give up after 3 tries with a notice. Every call's tokens and cost are logged.
+one fails, and give up after 3 tries with a notice. Every call's tokens and cost are logged, and every call is
+written to the AI Log (agents/ai_log.py) with its prompt, reply and parsed actions.
 """
 from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from estimator.agents import providers, roles
+from estimator.agents import ai_log, providers, roles
 from estimator.context import RequestContext
 from estimator.core.units.money import format_cents
 from estimator.errors import EstimatorError, InvalidInput, NotEditable, NotFound, PermissionDenied
@@ -189,6 +191,10 @@ def _check_actions(role: str, actions, pack: dict) -> list[dict]:
             v = a.get(f)
             if v is None:
                 continue
+            # AI models often send inclusions and exclusions as a list of points: one point per line (2026-11-12,
+            # David: the Bid Writer gave up after 3 tries on "draft_bid.inclusions must be text").
+            if isinstance(v, (list, tuple)) and all(isinstance(x, str) for x in v):
+                v = "\n".join("- " + x.strip().lstrip("-• ").strip() for x in v if x.strip())
             if not isinstance(v, str):
                 raise InvalidInput(f"{name}.{f} must be text", field=f)
             v = v.strip()[:limit]
@@ -275,6 +281,7 @@ def _run_one(conn, ctx, task: dict, cfg: dict, reg) -> dict:
         return _public(_load(conn, ctx, task["id"]))
     system = prompt(task["role"]) + "\n\n" + headless_rules(task["role"])
     user = json.dumps(pack, default=str)
+    purpose = f"{roles.ROLES[task['role']]['label']} agent, task {task['id']}"
     errors = []
     for which in [p for p in (cfg["provider"], cfg.get("fallback_provider")) if p]:
         ok, why = providers.ready(which)
@@ -282,23 +289,37 @@ def _run_one(conn, ctx, task: dict, cfg: dict, reg) -> dict:
             errors.append(f"{which}: {why}")
             continue
         model = providers.model_for(which, cfg["model"] if which == cfg["provider"] else None)
+        started = time.monotonic()
         try:
             text, usage = providers.ask(which, system, user, model)
         except providers.ProviderError as exc:
             with service.transaction(conn):
                 roles.record_usage(conn, ctx, task_id=task["id"], role=task["role"], provider=which, model=model,
                                    usage=None, ok=False, error=str(exc))
+            # The AI Log row is written outside the transaction, so it stays even
+            # when the run that made it fails afterwards (autocommit connection).
+            ai_log.record(conn, ctx, provider=which, model=model, role=task["role"], purpose=purpose,
+                          system_prompt=system, user_prompt=user, task_id=task["id"],
+                          estimate_id=task["estimate_id"],
+                          duration_ms=int((time.monotonic() - started) * 1000),
+                          ok=False, error=str(exc))
             errors.append(f"{which}: {exc}")
             continue
         with service.transaction(conn):
             roles.record_usage(conn, ctx, task_id=task["id"], role=task["role"], provider=which, model=model,
                                usage=usage, ok=True)
+        log_id = ai_log.record(conn, ctx, provider=which, model=model, role=task["role"], purpose=purpose,
+                               system_prompt=system, user_prompt=user, task_id=task["id"],
+                               estimate_id=task["estimate_id"], response_text=text, usage=usage,
+                               duration_ms=int((time.monotonic() - started) * 1000))
         try:
             from_ai = _parse(text)
             actions = _check_actions(task["role"], from_ai["actions"], pack)
         except (InvalidInput, providers.ProviderError) as exc:
+            ai_log.set_error(conn, ctx.company_id, log_id, getattr(exc, 'message', str(exc)))
             errors.append(f"{which}: {getattr(exc, 'message', str(exc))}")
             continue
+        ai_log.set_parsed(conn, ctx.company_id, log_id, from_ai)
         task.update(provider_used=which, model_used=model)
         with service.transaction(conn):
             conn.execute("UPDATE agent_tasks SET provider_used = ?, model_used = ?, attempts = attempts + 1"

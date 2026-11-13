@@ -32,7 +32,7 @@ from estimator.runner import runner
 FULL_APPROVE_ROLES = ("owner", "reviewer")
 REVIEW_ROLES = ("owner", "reviewer")
 LANE_NAMES = {"quick_quote": "quick quote", "standard_estimate": "standard estimate",
-              "full_takeoff": "full plan takeoff"}
+              "full_takeoff": "full plan takeoff", "project": "project"}
 CUSTOMER_FACING_ROLES = ("office", "field")
 
 
@@ -104,7 +104,7 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
               revise: bool = False, change_summary: str | None = None, reprice: bool = False,
               reviewed: bool = False, scenarios: bool = False, choose_scenario: str | None = None,
               scenario_module: str | None = None, checklist_done: bool = False, trades=None,
-              confirm: bool = False, registry=None) -> dict:
+              confirm: bool = False, ready: bool = False, registry=None) -> dict:
     """Give the Director what it asked for (answers, a module choice, the trades in a plan takeoff, an approval, a
     send, the customer's answer) and get the next step. send=true and convert=true reach outside the Estimator
     (an email to the customer; a customer, quote and job in AI-Prowler), so they ask first: without confirm=true
@@ -150,6 +150,10 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
         _tx(conn, lambda: (jobstore.log_step(conn, ctx, job["id"], "trades", "director", "done",
                                              "trades: " + ", ".join(order), {"trades": order}),
                            jobstore.save_job(conn, ctx, job)))
+
+    if job["lane"] == "project" and (module_id or answers):
+        raise InvalidInput("a project is built on the Estimates screen (add a trade, Edit answers…); tell me when it's "
+                           "ready with ready=true", job_id=job["id"], estimate_id=job["estimate_id"])
 
     if (job["lane"] is None or job["module_id"] is None) and (module_id or answers):
         if not module_id:
@@ -220,7 +224,7 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
                            jobstore.save_job(conn, ctx, job)))
 
     inputs = {"approve": approve, "confirm_sample_prices": confirm_sample_prices, "send": send, "reviewed": reviewed,
-              "checklist_done": checklist_done,
+              "checklist_done": checklist_done, "ready": ready,
               "send_to": send_to, "outcome": outcome, "convert": convert, "service_date": service_date}
     out = _run(conn, ctx, job["id"], reg, inputs=inputs)
     if scenarios:
@@ -492,8 +496,18 @@ def _run(conn, ctx, job_id: int, reg, inputs: dict | None = None, triage_info: d
     return out
 
 
+_SAVED = ("lane", "module_id", "playbook_id", "playbook_version", "stage", "state", "waiting_on", "estimate_id", "answers",
+          "open_questions", "next_step", "customer", "trades")
+
+
 def _wait(conn, ctx, job, state, waiting_on, next_step, open_questions=None):
     job.update(state=state, waiting_on=waiting_on, next_step=next_step, open_questions=open_questions)
+    # Nothing new to say: don't write. A project page asks the Director for its next step each time it opens, and an
+    # unchanged step must not bump the job's rev or show as an update on other screens.
+    fresh = jobstore.load_job(conn, ctx, job["id"])
+    if all(fresh.get(k) == job.get(k) for k in _SAVED):
+        job["rev"] = fresh["rev"]
+        return
     _tx(conn, lambda: jobstore.save_job(conn, ctx, job))
 
 
@@ -635,7 +649,9 @@ def _approve(conn, ctx, job, reg, stage, notes, inputs, **_):
     settings = overrides.effective_settings(conn, ctx.company_id, job["playbook_id"])
     limit = settings["quick_send_limit_cents"]
     one_tap = job["lane"] == "quick_quote" and limit > 0 and total <= limit
-    checklist = overrides.checklist_for(conn, ctx.company_id, job["playbook_id"], [job["module_id"], *job["trades"]])
+    mods = ([s["module_id"] for s in est["sections"] if s["module_id"] != service.CUSTOM_MODULE]
+            if job["lane"] == "project" else [job["module_id"], *job["trades"]])
+    checklist = overrides.checklist_for(conn, ctx.company_id, job["playbook_id"], mods)
     roles = service.QUICK_ROLES if one_tap else FULL_APPROVE_ROLES
     samples = _uses_samples(est)
     money = format_cents(total)
@@ -650,7 +666,12 @@ def _approve(conn, ctx, job, reg, stage, notes, inputs, **_):
             else:
                 msg = f"an owner or reviewer must approve this {money} estimate"
             raise PermissionDenied(msg, role=ctx.role)
-        if checklist and not inputs.get("checklist_done"):
+        qa = validate.validate(conn, ctx, est["id"], registry=reg) if job["lane"] == "project" else None
+        if qa is not None and not qa["passed"]:
+            # A project stays editable on the Estimates screen after its check, so check it again before approving.
+            notes.append("Not approved: the estimate changed since it was checked and now has errors: "
+                         + " ".join(f["message"] for f in qa["findings"] if f["level"] == "error"))
+        elif checklist and not inputs.get("checklist_done"):
             notes.append("Not approved yet: confirm the checklist first (checklist_done=true): " + "; ".join(checklist) + ".")
         elif samples and not confirm_sample_prices:
             notes.append("Not approved: it still uses sample prices (" + ", ".join(sorted(set(samples)))
@@ -675,7 +696,7 @@ def _approve(conn, ctx, job, reg, stage, notes, inputs, **_):
         say = f"The {money} estimate is checked and ready. An owner or reviewer approves it (approve=true)."
     if checklist:
         say += " Before approving, confirm: " + "; ".join(checklist) + " (checklist_done=true)."
-    mods_with_options = [m for m in [job["module_id"], *job["trades"]] if m in reg.modules and reg.modules[m].scenarios]
+    mods_with_options = [m for m in mods if m in reg.modules and reg.modules[m].scenarios]
     if mods_with_options and not _scenarios.list_options(conn, ctx, est["id"]):
         say += " Want good/better/best options on the bid? (scenarios=true)"
     if samples:
@@ -957,7 +978,236 @@ def _follow_up(conn, ctx, job, reg, stage, notes, inputs, **_):
     return False
 
 
+# ------------------------------------------------------------------ project lane (2026-11-12, David)
+# Every project made on the Projects screen gets a Director job. The person builds the estimate on the screens
+# (plans, Blueprint Review, trades, hand lines); the Director looks at where the project stands, says what to do next
+# and why, and when the person says it's ready, runs the checks, the approval, the quote and the follow-up.
+
+ADOPT_STATUSES = ("draft", "in_review", "approved", "sent")
+
+
+def project_job_for(conn, ctx: RequestContext, estimate_id: int) -> dict | None:
+    """The Director job that runs this estimate, if any (the newest one)."""
+    row = conn.execute("SELECT id FROM director_jobs WHERE company_id = ? AND estimate_id = ? ORDER BY id DESC LIMIT 1",
+                       (ctx.company_id, int(estimate_id))).fetchone()
+    return jobstore.load_job(conn, ctx, int(row["id"])) if row else None
+
+
+def adopt(conn, ctx: RequestContext, estimate_id: int, registry=None) -> dict | None:
+    """Give a project its Director job (made once, then reused) and return the Director's next step for it.
+
+    A revision made outside the Director moves the earlier revision's job onto the new estimate. Practice projects
+    and estimates already won, lost, expired or archived get no new job (None)."""
+    reg = _registry(registry)
+    est = service.get_estimate(conn, ctx, int(estimate_id))
+    job = project_job_for(conn, ctx, est["id"])
+    if job is None and est.get("parent_estimate_id"):
+        parent = est["parent_estimate_id"]
+        seen = set()
+        while parent and parent not in seen and job is None:
+            seen.add(parent)
+            job = project_job_for(conn, ctx, parent)
+            if job is None:
+                row = conn.execute("SELECT parent_estimate_id FROM estimates WHERE id = ?", (parent,)).fetchone()
+                parent = row["parent_estimate_id"] if row else None
+        if job is not None and job["state"] not in ("done", "cancelled"):
+            old = job["estimate_id"]
+            first = get_playbooks()[job["playbook_id"]].stages[0].id if job["playbook_id"] else job["stage"]
+            job.update(estimate_id=est["id"], stage=first, state="active")
+            _tx(conn, lambda: (jobstore.save_job(conn, ctx, job),
+                               jobstore.log_step(conn, ctx, job["id"], "revise", "director", "done",
+                                                 f"moved to revision {est.get('revision')} (estimate {est['id']})",
+                                                 {"from": old, "to": est["id"]})))
+        else:
+            job = None
+    if job is not None:
+        if job["state"] in ("done", "cancelled"):
+            return _result(conn, ctx, job, reg)
+        return _run(conn, ctx, job["id"], reg)
+    if est.get("practice") or est["status"] not in ADOPT_STATUSES:
+        return None
+    pb = playbook_for_lane("project")
+    cust = bids.clean_customer({"address": est.get("address") or ""})
+    if est.get("customer_id"):
+        cust["customer_id"] = est["customer_id"]
+
+    def make():
+        jid = jobstore.create_job(conn, ctx, request_text=est["title"] or f"Project {est['id']}", estimate_id=est["id"],
+                                  lane=pb.lane, module_id=None, playbook=pb, stage=pb.stages[0].id,
+                                  due_date=est.get("due_date"), customer=cust)
+        jobstore.log_step(conn, ctx, jid, "start", "director", "done",
+                          f"Director job for project '{est['title']}'", {"estimate_id": est["id"]})
+        service._log(conn, ctx, est["id"], "director_job_started", {"job_id": jid, "lane": pb.lane})
+        return jid
+    job_id = _tx(conn, make)
+    return _run(conn, ctx, job_id, reg)
+
+
+def intake(conn, ctx: RequestContext, request: str, *, has_plans: bool | None = None, customer: dict | None = None,
+           address: str | None = None, due_date: str | None = None, module_id: str | None = None,
+           preview: bool = False, registry=None) -> dict:
+    """The Dashboard's "Start a new quote or estimate": the Director asks what the job is, who it's for and whether
+    there are plans, then starts the right job and says which page to go to next (2026-11-12, David).
+
+    preview=true only reads the request (what kind of job, whether to ask about plans) and changes nothing.
+    A service with no plans is a quick quote (the job page asks its questions); anything else is a project with
+    its own Director job: with plans it goes to the project page to upload them, without plans to the quick
+    estimate form for the trade."""
+    reg = _registry(registry)
+    text = (request or "").strip()
+    if not text and not module_id:
+        raise InvalidInput("tell me what the job is, e.g. \"pour a 30 x 70 ft shed slab\" or \"wash a driveway\"",
+                           field="request")
+    tri = triage(text, reg, module_id=module_id or None)
+    mod = reg.modules.get(tri.module_id) if tri.module_id else None
+    kind = "service" if tri.lane == "quick_quote" else "trade" if mod is not None else "unknown"
+    name = mod.name if mod else None
+    if preview:
+        if kind == "service":
+            say = f"That sounds like a {name} quote. I'll ask a few questions and price it."
+        elif kind == "trade":
+            say = f"That sounds like {name} work. Do you have plans or drawings for it?"
+        else:
+            say = "Do you have plans or drawings for this job? If not, I'll help you pick the trades and type the measurements."
+        return {"ok": True, "kind": kind, "module_id": tri.module_id, "name": name, "ask_plans": kind != "service",
+                "say": say, "candidates": tri.candidates if kind == "unknown" else []}
+    cust = bids.clean_customer(customer) if customer else {}
+    if kind == "service" and not has_plans:
+        out = start(conn, ctx, text, module_id=tri.module_id, address=address, due_date=due_date, customer=cust,
+                    registry=reg)
+        return {**out, "route": f"#/jobs/{out['job']['id']}",
+                "say": f"Started a {name} quote. Answer the questions and I'll price it."}
+    title = text.splitlines()[0][:80] if text else (cust.get("name") or name or "New project")
+    if cust.get("name") and cust["name"].lower() not in title.lower():
+        title = f"{cust['name']} – {title}"[:120]
+    est = service.create_estimate(conn, ctx, title, address=address or cust.get("address") or None,
+                                  due_date=due_date or None)
+    out = adopt(conn, ctx, est["id"], registry=reg)
+    job = jobstore.load_job(conn, ctx, out["job"]["id"])
+    job["customer"].update(cust)
+    job["request_text"] = text or title
+    if mod is not None and mod.category == "construction":
+        job["answers"]["_trade"] = mod.id
+    _tx(conn, lambda: (jobstore.save_job(conn, ctx, job),
+                       conn.execute("UPDATE director_jobs SET request_text = ? WHERE id = ?", (job["request_text"], job["id"])),
+                       jobstore.log_step(conn, ctx, job["id"], "intake", "intake", "done",
+                                         "plans: " + ("yes" if has_plans else "no") + (f", trade: {mod.id}" if mod else ""),
+                                         {"has_plans": bool(has_plans), "module_id": tri.module_id})))
+    out = _run(conn, ctx, job["id"], reg)
+    if has_plans:
+        route = f"#/projects/{est['id']}"
+        say = "Project created. Upload the plans here (PDF, DWG or photos); I'll tell you each next step."
+    elif mod is not None and mod.category == "construction" and mod.path in ("quick_estimate", "both"):
+        route = f"#/quick/{est['id']}?module={mod.id}"
+        say = f"Project created. Type the {name} measurements and I'll price them; then I'll tell you the next step."
+    else:
+        route = f"#/projects/{est['id']}"
+        say = "Project created. Add the trades from the project page (⚡ Add a quick estimate); I'll tell you each next step."
+    return {**out, "route": route, "say": say}
+
+
+def _project_state(conn, ctx, job, est) -> dict:
+    from estimator.api import jobs_board
+    prog = jobs_board.progress(conn, ctx, [{**job, "estimate_id": est["id"]}]).get(job["id"], {})
+    priced = [s for s in est["sections"] if s["module_id"] != service.CUSTOM_MODULE and s["lines"]]
+    hand = [ln for s in est["sections"] if s["module_id"] == service.CUSTOM_MODULE for ln in s["lines"]]
+    return {"plans": prog.get("plans") or {}, "symbols": prog.get("symbols") or {}, "takeoff": prog.get("takeoff") or {},
+            "priced": priced, "hand_lines": hand, "total": (est["totals"] or {}).get("total_cents", 0)}
+
+
+def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
+    """Say what to do next on the project, and why. Moves on only when the person says the estimate is ready."""
+    ready = inputs.pop("ready", False)
+    est = service.get_estimate(conn, ctx, job["estimate_id"])
+    if est["status"] not in service.EDITABLE_STATUSES:
+        return True                                   # approved (or further) on the Estimates screen already
+    st = _project_state(conn, ctx, job, est)
+    eid, total = est["id"], st["total"]
+    plans, sym, tk = st["plans"], st["symbols"], st["takeoff"]
+    have_plans = bool(plans.get("plan_sets"))
+    trades = [s["module_id"] for s in st["priced"]]
+    todo = []
+
+    def item(key, done, text, why, link=None):
+        todo.append({"key": key, "done": bool(done), "text": text, "why": why, "link": link})
+
+    item("plans", have_plans or trades,
+         "Add the plans on the project page" + ("" if have_plans else " (or skip this and price the trades from typed "
+                                                                    "measurements)"),
+         "the quantities come from the plans; without plans, type the measurements into each trade",
+         f"#/projects/{eid}")
+    if plans.get("processing") or plans.get("uploaded"):
+        item("reading", False, "Wait for the plans to be read", "the sheets have to be read before they can be measured",
+             f"#/projects/{eid}")
+    if plans.get("failed"):
+        item("failed", False, f"{plans['failed']} plan set(s) couldn't be read: open the project and upload them again",
+             "a plan set that wasn't read can't be measured", f"#/projects/{eid}")
+    if plans.get("need_scale"):
+        item("scale", False, f"Set the scale on {plans['need_scale']} sheet(s)",
+             "a measurement on a sheet with no scale can't be turned into feet", f"#/projects/{eid}")
+    if sym.get("to_check"):
+        item("symbols", False, f"Check {sym['to_check']} symbol(s) the plans reader wasn't sure of",
+             "only symbols a person approved are counted", "#/reviews")
+    if have_plans or tk:
+        waiting = tk.get("proposed", 0)
+        item("measure", (tk.get("approved") and not waiting) or (trades and not tk),
+             (f"Approve {waiting} measurement(s) in Blueprint Review" if waiting else
+              "Measure the plans in Blueprint Review" if not tk.get("approved") else
+              f"Measurements approved ({tk['approved']})"),
+             "only approved measurements are priced", f"#/takeoffs/{eid}")
+    want = (job.get("answers") or {}).get("_trade")                   # the trade named when the project was started
+    if trades:
+        item("price", True, "Trades priced: " + ", ".join(t.replace("_", " ") for t in trades),
+             "nothing is priced yet, so there's no total to check", f"#/estimates/{eid}")
+    elif tk.get("approved"):
+        item("price", False, "Price the trades from the approved measurements (on the estimate: Price it with the "
+                             "approved measurements)", "nothing is priced yet, so there's no total to check",
+             f"#/estimates/{eid}")
+    else:
+        item("price", False, "Price the " + (want.replace("_", " ") if want else "trades") + ": type the measurements "
+                             "(⚡ Add a quick estimate)", "nothing is priced yet, so there's no total to check",
+             f"#/quick/{eid}" + (f"?module={want}" if want else ""))
+    cust = job.get("customer") or {}
+    has_customer = bool(cust.get("name") or cust.get("email") or cust.get("customer_id"))
+    item("customer", has_customer,
+         ("Customer: " + (cust.get("name") or cust.get("email") or cust.get("customer_id")) if has_customer else
+          "Add the customer's name and email"),
+         "the quote is made out to the customer and sent to their email", None)
+
+    if ready:
+        if total <= 0:
+            notes.append("Not ready yet: nothing on the estimate is priced.")
+        else:
+            left = [t["text"] for t in todo if not t["done"] and t["key"] in ("reading", "scale", "symbols", "measure")]
+            if left:
+                notes.append("Moving on with things still open on the plans: " + "; ".join(left) + ".")
+            _tx(conn, lambda: jobstore.log_step(conn, ctx, job["id"], stage.id, stage.agent, "done",
+                                                f"estimate ready at {format_cents(total)}",
+                                                {"total_cents": total, "trades": trades,
+                                                 "hand_lines": len(st["hand_lines"])}))
+            return True
+
+    first = next((t for t in todo if not t["done"] and t["key"] != "customer"), None)
+    if first is not None:
+        say, why = first["text"] + ".", first["why"]
+    else:
+        say = (f"The estimate is {format_cents(total)}" + (f" across {len(trades)} trade(s)" if trades else "")
+               + (f" plus {len(st['hand_lines'])} line(s) added by hand" if st["hand_lines"] else "")
+               + ". Look it over; when it's complete, tell me it's ready and I'll check it, get it approved and write "
+                 "the quote.")
+        why = "I check and approve only when you say the estimate is complete, so a half-built price never goes out"
+        if not has_customer:
+            say += " Add the customer's name and email too: the quote is sent to them."
+    _wait(conn, ctx, job, "waiting_on_user", "user", {
+        "stage": stage.id, "agent": stage.agent, "say": say, "why": why, "todo": todo, "estimate_id": eid,
+        "total_cents": total, "ready_ok": total > 0, "needs_customer": not has_customer,
+        "tools": ["est_director_next(job_id, ready=true)", "est_director_next(job_id, customer={name, email})",
+                  "est_project_status(estimate_id)"]})
+    return False
+
+
 _HANDLERS = {
+    "guide_build": lambda *a, **k: _guide_build(*a, **k),
     "collect_answers": _collect_answers,
     "price_quick": _price_quick,
     "approve": _approve,

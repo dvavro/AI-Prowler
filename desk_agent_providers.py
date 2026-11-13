@@ -305,6 +305,26 @@ def ask(provider: str, system: str, user: str, *, model: str = "") -> tuple:
     raise ProviderError(f"{provider} doesn't run on its own")
 
 
+def ask_vision(provider: str, system: str, user: str, images, *, model: str = "") -> tuple:
+    """(text, usage{input, output}) with images: [{media_type, data (base64)}].
+
+    The Estimator's LLM takeoff reads plan sheets this way. media_type is
+    "image/png" or "image/jpeg". Raises ProviderError with the provider's own
+    message."""
+    if not images:
+        raise ProviderError("ask_vision needs at least one image")
+    for im in images:
+        if not isinstance(im, dict) or im.get("media_type") not in ("image/png", "image/jpeg") \
+                or not isinstance(im.get("data"), str) or not im["data"]:
+            raise ProviderError("each image is {media_type: 'image/png' or 'image/jpeg', data: base64 text}")
+    model = model or model_for(provider)
+    if provider == "claude_api":
+        return _claude_api(system, user, model, images)
+    if provider == "grok_api":
+        return _grok_api(system, user, model, images)
+    raise ProviderError(f"{provider} doesn't run on its own")
+
+
 def _post(url, body, headers):
     import urllib.error as ue
     import urllib.request as ur
@@ -322,13 +342,19 @@ def _post(url, body, headers):
         raise ProviderError(f"request failed: {e}") from None
 
 
-def _claude_api(system, user, model):
+def _claude_api(system, user, model, images=None):
     key = _key("claude_api")
     if not key:
         raise ProviderError("no Claude API key saved")
+    if images:                                   # vision: image blocks, then the text
+        content = [{"type": "image", "source": {"type": "base64", "media_type": im["media_type"],
+                                                "data": im["data"]}} for im in images]
+        content.append({"type": "text", "text": user})
+    else:
+        content = user                           # text-only calls send exactly what they sent before
     data = _post(CLAUDE_URL, {"model": model, "max_tokens": MAX_TOKENS,
                               "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                              "messages": [{"role": "user", "content": user}]},
+                              "messages": [{"role": "user", "content": content}]},
                  {"Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01"})
     text = "".join(b.get("text", "") for b in data.get("content") or [] if b.get("type") == "text")
     u = data.get("usage") or {}
@@ -337,7 +363,7 @@ def _claude_api(system, user, model):
                   "output": int(u.get("output_tokens", 0))}
 
 
-def _grok_api(system, user, model):
+def _grok_api(system, user, model, images=None):
     key = _key("grok_api")
     if not key:
         raise ProviderError("no Grok API key saved")
@@ -346,8 +372,14 @@ def _grok_api(system, user, model):
         url = tqa.XAI_API_URL
     except Exception:  # noqa: BLE001
         url = "https://api.x.ai/v1/chat/completions"
+    if images:                                   # vision: image_url parts, then the text
+        content = [{"type": "image_url",
+                    "image_url": {"url": f"data:{im['media_type']};base64,{im['data']}"}} for im in images]
+        content.append({"type": "text", "text": user})
+    else:
+        content = user                           # text-only calls send exactly what they sent before
     data = _post(url, {"model": model, "messages": [{"role": "system", "content": system},
-                                                    {"role": "user", "content": user}]},
+                                                    {"role": "user", "content": content}]},
                  {"Content-Type": "application/json", "Authorization": "Bearer " + key})
     ch = (data.get("choices") or [{}])[0].get("message") or {}
     u = data.get("usage") or {}

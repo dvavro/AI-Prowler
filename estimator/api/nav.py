@@ -76,6 +76,9 @@ PAGES = (
     {"id": "quick", "label": "Quick estimate", "from": "dashboard", "sprint": 2,
      "tools": ["est_list_modules", "est_quick_questions", "est_quick_answer", "est_create_estimate",
                "est_director_start"]},
+    # 2026-11-12: the Director's "Start a new quote or estimate" - what's the job, plans or not, who's it for.
+    {"id": "start", "label": "Start a quote or estimate", "from": "dashboard", "sprint": 20,
+     "tools": ["est_director_start", "est_create_estimate", "est_director_next"]},
     # Sprint 4: the Director's Jobs board (quick lane first) and one job's next step. Also a left-menu screen now.
     {"id": "jobs", "label": "Jobs board", "from": "dashboard", "sprint": 4, "tools": ["est_jobs_board"]},
     {"id": "job", "label": "Job", "from": "jobs", "sprint": 4,
@@ -111,6 +114,10 @@ PAGES = (
     # Sprint 17: one plan revision report drawn over the sheets (red removed, green added, orange changed or moved).
     {"id": "revision", "label": "Plan revision", "from": "reports", "sprint": 17,
      "tools": ["plan_compare_revisions", "plan_get_sheet_image", "takeoff_detail"]},
+    # The AI Log: every LLM call, what was sent and what came back - opened from the Agents screen.
+    # No MCP tool yet: the log is web-only for now, so the tools list stays empty (the parity tests
+    # check listed tools exist; an empty list lists nothing).
+    {"id": "ai_log", "label": "AI Log", "from": "agents", "sprint": 19, "tools": []},
 )
 
 # What each role may do, sent to the browser so it can hide buttons. The server

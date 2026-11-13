@@ -10,6 +10,9 @@ est_validate, est_scenarios / est_choose_scenario, est_compare_history, est_crea
   POST /estimates/<id>/options/choose {option_id, module_id?, rev, confirm?}     est_choose_scenario (asks first)
   POST /estimates/<id>/lines {kind, description, quantity, unit, unit_cost_cents | price_key, waste_pct?, rev}
                                                                     est_add_line_item
+  POST /estimates/<id>/lines/<line_id> {quantity?, unit_cost_cents?, waste_pct?, description?, price_key?,
+                                    price_default?, reason?, revert?, remove?, confirm?}
+                                                                    est_update_line_item (change, revert or remove; asks first)
   POST /estimates/<id>/calculate {rev}                              est_calculate
   POST /estimates/<id>/revision {change_summary, confirm?}          est_create_revision (asks first)
   POST /estimates/<id>/use-measurements {module_id, rev, confirm?}  re-price a trade with its approved measurements
@@ -24,10 +27,11 @@ from estimator.api import nav
 
 _DETAIL = re.compile(r"^/estimates/(\d+)/(detail|validate|history)$")
 _ACTION = re.compile(r"^/estimates/(\d+)/(options|options/choose|lines|calculate|revision|use-measurements)$")
+_LINE = re.compile(r"^/estimates/(\d+)/lines/(\d+)$")
 
 
 def handles(sub: str) -> bool:
-    return bool(_DETAIL.match(sub) or _ACTION.match(sub))
+    return bool(_DETAIL.match(sub) or _ACTION.match(sub) or _LINE.match(sub))
 
 
 def _refuse(message: str, status: int = 400, error: str = "invalid_input"):
@@ -71,6 +75,33 @@ def route(m: str, sub: str, req, ctx, conn, see: bool):
 
     if not nav.can_open(ctx.role, "estimates"):
         raise _refuse("your role can't open estimates", 403, "permission_denied")
+    lm = _LINE.match(sub)
+    if lm:
+        if m != "POST":
+            return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
+        from estimator.api.router import _question
+        from estimator.errors import ConfirmationRequired
+        from estimator.estimating import assemblies
+        b = _body(req)
+        eid, line_id = int(lm.group(1)), int(lm.group(2))
+        unit_cost = b.get("unit_cost_cents")
+        if unit_cost is not None and (isinstance(unit_cost, bool) or not isinstance(unit_cost, int)):
+            raise _refuse("unit_cost_cents must be a whole number of cents")
+        try:
+            out = assemblies.update_line_item(conn, ctx, eid, _rev(b), line_id,
+                                              quantity=_text(b, "quantity", 30),
+                                              unit_cost_cents=unit_cost,
+                                              waste_pct=_text(b, "waste_pct", 10),
+                                              description=_text(b, "description"),
+                                              price_key=_text(b, "price_key", 100),
+                                              price_default=b.get("price_default") is True,
+                                              reason=_text(b, "reason", 300),
+                                              revert=b.get("revert") is True,
+                                              remove=b.get("remove") is True,
+                                              confirm=b.get("confirm") is True)
+        except ConfirmationRequired as e:
+            return _asked(_question(e.message), **e.details)
+        return _json(200, redact(out, see))
     mm = _DETAIL.match(sub) or _ACTION.match(sub)
     eid, what = int(mm.group(1)), mm.group(2)
 

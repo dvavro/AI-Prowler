@@ -131,7 +131,10 @@ def test_existing_notes_are_kept(cat):
 
 
 def _registered_tool_names() -> set:
-    """Every @mcp.tool() in ai_prowler_mcp.py, by its registered name."""
+    """Every @mcp.tool() in ai_prowler_mcp.py, by its registered name, plus
+    the Estimator tools (registered via est_tools.register as mcp.tool()(fn),
+    not via a decorator in ai_prowler_mcp.py — the AST scan below cannot
+    see them)."""
     names = set()
     for node in ast.walk(ast.parse(_MCP_SRC)):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -146,6 +149,12 @@ def _registered_tool_names() -> set:
                     if kw.arg == "name" and isinstance(kw.value, ast.Constant):
                         name = kw.value.value
                 names.add(name)
+    # 2026-11-12: the Estimator tools live in est_tools.TOOLS and are
+    # registered programmatically (ai_prowler_mcp.py calls
+    # est_tools.register(mcp) at startup). They are real registered tools
+    # and must count here, or the catalog rows look stale.
+    from estimator.mcp_tools.est_tools import TOOLS
+    names.update(fn.__name__ for fn in TOOLS)
     return names
 
 

@@ -448,6 +448,132 @@ def test_overrides_and_other_pricing_paths(db):                                 
     assert copied and copied[0]["override"]["reason"] == "customer's pick"      # the hand change goes with it
 
 
+def test_swap_a_priced_line_to_another_price_book_item(db):                     # S25-L04
+    eid, lines = priced(db)
+    lvp = lines["lvp"]
+    assert lvp["price_key"] == "fl_lvp_sqft" and lvp["unit_cost_cents"] == 275
+    with pytest.raises(InvalidInput) as e:                                       # a priced line needs a reason
+        assemblies.update_line_item(db, CTX, eid, rev(db, eid), lvp["id"], price_key="fl_tile_sqft")
+    assert "reason" in e.value.message
+    with pytest.raises(ConfirmationRequired) as ask:
+        assemblies.update_line_item(db, CTX, eid, rev(db, eid), lvp["id"], price_key="fl_tile_sqft",
+                                    description="Tile", reason="customer switched to tile")
+    assert "fl_lvp_sqft → fl_tile_sqft" in ask.value.message
+    assert "keeps the price book item you picked" in ask.value.message
+    out = assemblies.update_line_item(db, CTX, eid, rev(db, eid), lvp["id"], price_key="fl_tile_sqft",
+                                      description="Tile", reason="customer switched to tile", confirm=True)
+    line = next(ln for s in out["sections"] for ln in s["lines"] if ln["id"] == lvp["id"])
+    assert line["price_key"] == "fl_tile_sqft" and line["unit_cost_cents"] == 350
+    assert line["description"] == "Tile"
+    assert line["override"]["changed"]["price_key"] == {"from": "fl_lvp_sqft", "to": "fl_tile_sqft"}
+    assert line["override"]["changed"]["unit_cost_cents"] == {"from": 275, "to": 350}
+    # put it back: revert restores the old item and its cost
+    out = assemblies.update_line_item(db, CTX, eid, rev(db, eid), lvp["id"], revert=True, confirm=True)
+    back = next(ln for s in out["sections"] for ln in s["lines"] if ln["id"] == lvp["id"])
+    assert back["price_key"] == "fl_lvp_sqft" and back["unit_cost_cents"] == 275 and back["override"] is None
+
+
+def test_a_line_without_a_key_can_gain_one_and_bad_keys_are_refused(db):        # S25-L05
+    eid, lines = priced(db)
+    service.add_line_item(db, CTX, eid, rev(db, eid), kind="material", description="Spare tile", quantity="10",
+                          unit="sqft", unit_cost_cents=400)
+    hand = next(ln for s in service.get_estimate(db, CTX, eid)["sections"] if s["module_id"] == "custom"
+                for ln in s["lines"])
+    assert hand["price_key"] is None
+    out = assemblies.update_line_item(db, CTX, eid, rev(db, eid), hand["id"], price_key="fl_tile_sqft",
+                                      confirm=True)
+    got = next(ln for s in out["sections"] if s["module_id"] == "custom" for ln in s["lines"])
+    assert got["price_key"] == "fl_tile_sqft" and got["unit_cost_cents"] == 350
+    assert got["description"] == "Spare tile"          # the cost comes from the book; the description stays unless given
+    r = rev(db, eid)
+    with pytest.raises(InvalidInput) as e:                                       # no such price
+        assemblies.update_line_item(db, CTX, eid, r, hand["id"], price_key="no_such_key", confirm=True)
+    assert "no price 'no_such_key'" in e.value.message
+    with pytest.raises(InvalidInput) as e:                                       # priced per another unit
+        assemblies.update_line_item(db, CTX, eid, r, hand["id"], price_key="fl_baseboard_lf", confirm=True)
+    assert "per lf, not per sqft" in e.value.message
+    with pytest.raises(InvalidInput) as e:                                       # the same key again: nothing changes
+        assemblies.update_line_item(db, CTX, eid, r, hand["id"], price_key="fl_tile_sqft", confirm=True)
+    assert "nothing to change" in e.value.message
+    with pytest.raises(InvalidInput):                                            # a hand line has no module default
+        assemblies.update_line_item(db, CTX, eid, r, hand["id"], price_default=True, confirm=True)
+    with pytest.raises(InvalidInput):                                            # pick one or the other, not both
+        assemblies.update_line_item(db, CTX, eid, r, hand["id"], price_key="fl_lvp_sqft", price_default=True,
+                                    confirm=True)
+
+
+def test_editing_without_changing_the_item_keeps_it(db):                        # S25-L06
+    eid, lines = priced(db)
+    lvp = lines["lvp"]
+    out = assemblies.update_line_item(db, CTX, eid, rev(db, eid), lvp["id"], quantity="520",
+                                      reason="measured again", confirm=True)
+    line = next(ln for s in out["sections"] for ln in s["lines"] if ln["id"] == lvp["id"])
+    assert line["price_key"] == "fl_lvp_sqft" and line["unit_cost_cents"] == 275
+    assert Decimal(line["quantity"]) == 520 and "price_key" not in line["override"]["changed"]
+
+
+def test_a_picked_item_survives_a_reprice_and_the_quantity_still_moves(db):    # S25-L07
+    eid, lines = priced(db)
+    lvp = lines["lvp"]
+    assemblies.update_line_item(db, CTX, eid, rev(db, eid), lvp["id"], price_key="fl_tile_sqft",
+                                description="Tile", reason="customer switched to tile", confirm=True)
+    out = quick.answer(db, CTX, eid, "flooring", {"area_sqft": 300, "material": "lvp"}, rev(db, eid))
+    assert any("kept the price book item you picked on 1 line(s)" in w for w in out["warnings"])
+    assert not any("hand change" in w for w in out["warnings"])                  # the pick is not a replaced change
+    line = next(ln for s in out["sections"] for ln in s["lines"] if ln["calc"]["rule"] == "lvp")
+    assert line["price_key"] == "fl_tile_sqft" and line["unit_cost_cents"] == 350
+    assert line["description"] == "Tile" and Decimal(line["quantity"]) == 300   # new measurements, kept item
+    assert line["override"]["changed"]["price_key"] == {"from": "fl_lvp_sqft", "to": "fl_tile_sqft"}
+    assert line["override"]["reason"] == "customer switched to tile"
+
+
+def test_reprice_keeps_the_pick_but_drops_the_quantity_change(db):              # S25-L08
+    eid, lines = priced(db)
+    lvp = lines["lvp"]
+    assemblies.update_line_item(db, CTX, eid, rev(db, eid), lvp["id"], price_key="fl_tile_sqft",
+                                quantity="520", reason="customer switched to tile", confirm=True)
+    out = quick.answer(db, CTX, eid, "flooring", {"area_sqft": 300, "material": "lvp"}, rev(db, eid))
+    assert any("kept the price book item you picked on 1 line(s)" in w for w in out["warnings"])
+    assert any("1 hand change(s)" in w for w in out["warnings"])                # the quantity change was replaced
+    line = next(ln for s in out["sections"] for ln in s["lines"] if ln["calc"]["rule"] == "lvp")
+    assert line["price_key"] == "fl_tile_sqft" and Decimal(line["quantity"]) == 300
+
+
+def test_clearing_the_pick_goes_back_to_the_trade_item(db):                     # S25-L09
+    eid, lines = priced(db)
+    lvp = lines["lvp"]
+    assemblies.update_line_item(db, CTX, eid, rev(db, eid), lvp["id"], price_key="fl_tile_sqft",
+                                description="Tile", reason="customer switched to tile", confirm=True)
+    with pytest.raises(ConfirmationRequired) as ask:
+        assemblies.update_line_item(db, CTX, eid, rev(db, eid), lvp["id"], price_default=True,
+                                    reason="back to vinyl")
+    assert "back to the flooring trade's own price book item" in ask.value.message
+    out = assemblies.update_line_item(db, CTX, eid, rev(db, eid), lvp["id"], price_default=True,
+                                      reason="back to vinyl", confirm=True)
+    line = next(ln for s in out["sections"] for ln in s["lines"] if ln["id"] == lvp["id"])
+    assert line["price_key"] == "fl_lvp_sqft" and line["unit_cost_cents"] == 275
+    assert line["description"] == "Luxury vinyl plank" and line["override"] is None
+    out = quick.answer(db, CTX, eid, "flooring", {"area_sqft": 300, "material": "lvp"}, rev(db, eid))
+    line = next(ln for s in out["sections"] for ln in s["lines"] if ln["calc"]["rule"] == "lvp")
+    assert line["price_key"] == "fl_lvp_sqft" and line["unit_cost_cents"] == 275
+    assert not any("kept the price book item" in w for w in out["warnings"])
+    with pytest.raises(InvalidInput) as e:                                       # already the trade's item
+        assemblies.update_line_item(db, CTX, eid, rev(db, eid), line["id"], price_default=True,
+                                    reason="nothing to clear", confirm=True)
+    assert "nothing to change" in e.value.message
+
+
+def test_a_picked_item_survives_apply_assembly(db):                             # S25-L10
+    eid, lines = priced(db)
+    lvp = lines["lvp"]
+    assemblies.update_line_item(db, CTX, eid, rev(db, eid), lvp["id"], price_key="fl_tile_sqft",
+                                reason="customer switched to tile", confirm=True)
+    out = assemblies.apply_assembly(db, CTX, eid, rev(db, eid), "flooring", confirm=True)
+    line = next(ln for s in out["sections"] for ln in s["lines"] if ln["calc"]["rule"] == "lvp")
+    assert line["price_key"] == "fl_tile_sqft" and line["unit_cost_cents"] == 350
+    assert out["overrides_dropped"] == []
+
+
 # ---------------------------------------------------------------- tools                            S25-T01
 
 def test_tools(db, house):                                                          # S25-T01

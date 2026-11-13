@@ -226,7 +226,9 @@ def test_screen_pages_and_scripts():                                            
     js = (router.WEB_DIR / "estimates.js").read_text(encoding="utf-8")
     for needed in ("SCREENS.estimates = renderEstimates", "PAGES.estimate = renderEstimate", "/detail", "/validate",
                    "/history", "/options", "/options/choose", "/lines", "/calculate", "/revision", "/use-measurements",
-                   "?line=", "?m=", "askThen("):
+                   "?line=", "?m=", "askThen(", "/lines/", "/price-book", "/quick", "edit-answers-", "line-pick",
+                   "line-edit-pick-", "Back to the module default", "stays on this line when this trade is priced again",
+                   "Price book item", "editAnswers", "lineEditRow", "lineDeleteRow"):
         assert needed in js, needed
     for bad in ("innerHTML", "outerHTML", "insertAdjacentHTML", 'style="', "eval(", "document.write"):
         assert bad not in js, bad
@@ -263,3 +265,156 @@ def test_guides_name_buttons_that_exist():                                      
         assert label in js and label in g["text"], label
     rv = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
     assert "Type a number in" in rv and "Type a number in" in guides.get_guide("measure_and_approve_on_the_plans")["text"]
+
+# ---------------------------------------------------------------- edit and remove one line (Fix 1)
+
+
+def _priced_line(call, roof):
+    """One priced (roofing) line and the estimate's current rev."""
+    detail = call("GET", f"{API}/estimates/{roof['id']}/detail").json()
+    sec = next(s for s in detail["estimate"]["sections"] if s["module_id"] == "roofing")
+    return sec["lines"][0], detail["estimate"]["rev"]
+
+
+def test_edit_a_priced_line_asks_first_then_applies(call, roof):                    # C2S8-E08
+    e = roof["id"]
+    line, rev = _priced_line(call, roof)
+    path = f"{API}/estimates/{e}/lines/{line['id']}"
+    ask, done = _yes(call, path, {"rev": rev, "quantity": "2500", "reason": "measured again on site"})
+    assert "2500" in ask["question"] and "override" in ask["question"]
+    after = next(ln for s in done["sections"] if s["module_id"] == "roofing" for ln in s["lines"] if ln["id"] == line["id"])
+    assert float(after["quantity"]) == 2500
+    assert after["calc"]["override"]["reason"] == "measured again on site"
+    assert done["rev"] != rev
+
+
+def test_edit_a_line_needs_a_reason_and_a_change(call, roof):                       # C2S8-E09
+    e = roof["id"]
+    line, rev = _priced_line(call, roof)
+    path = f"{API}/estimates/{e}/lines/{line['id']}"
+    no_reason = call("POST", path, {"rev": rev, "quantity": "2500"})
+    assert no_reason.status == 400 and "reason" in no_reason.json()["message"]
+    nothing = call("POST", path, {"rev": rev, "reason": "no change"})
+    assert nothing.status == 400 and "nothing to change" in nothing.json()["message"]
+
+
+def test_remove_a_priced_line_asks_first_then_removes(call, roof):                  # C2S8-E10
+    e = roof["id"]
+    line, rev = _priced_line(call, roof)
+    path = f"{API}/estimates/{e}/lines/{line['id']}"
+    no_reason = call("POST", path, {"rev": rev, "remove": True})
+    assert no_reason.status == 400 and "reason" in no_reason.json()["message"]
+    ask, done = _yes(call, path, {"rev": rev, "remove": True, "reason": "customer dropped the drip edge"})
+    assert "Take line" in ask["question"] and done["removed_line_id"] == line["id"]
+    detail = call("GET", f"{API}/estimates/{e}/detail").json()
+    sec = next(s for s in detail["estimate"]["sections"] if s["module_id"] == "roofing")
+    assert line["id"] not in [ln["id"] for ln in sec["lines"]]
+
+
+def test_revert_a_hand_changed_line(call, roof):                                    # C2S8-E11
+    e = roof["id"]
+    line, rev = _priced_line(call, roof)
+    path = f"{API}/estimates/{e}/lines/{line['id']}"
+    _, done = _yes(call, path, {"rev": rev, "quantity": "2500", "reason": "measured again"})
+    ask, back = _yes(call, path, {"rev": done["rev"], "revert": True})
+    assert "back to how it was" in ask["question"]
+    after = next(ln for s in back["sections"] if s["module_id"] == "roofing" for ln in s["lines"] if ln["id"] == line["id"])
+    assert float(after["quantity"]) == float(line["quantity"])
+    assert "override" not in (after["calc"] or {})
+
+
+def test_edit_line_refusals(call, roof, session_for):                               # C2S8-E12
+    e = roof["id"]
+    line, rev = _priced_line(call, roof)
+    path = f"{API}/estimates/{e}/lines/{line['id']}"
+    assert call("POST", path, {"rev": rev + 1, "quantity": "1", "reason": "x"}).status == 409
+    assert call("POST", f"{API}/estimates/{e}/lines/999999",
+                {"rev": rev, "quantity": "1", "reason": "x"}).status == 404
+    assert call("GET", path).status == 404
+    assert call("POST", path, {"rev": rev, "unit_cost_cents": 12.5, "reason": "x"}).status == 400
+    field = call("POST", path, {"rev": rev, "quantity": "1", "reason": "x"}, headers=session_for("field"))
+    assert field.status == 403
+
+
+def test_edit_a_hand_added_line_needs_no_reason(call, roof):                        # C2S8-E13
+    e = roof["id"]
+    added = call("POST", f"{API}/estimates/{e}/lines", {"rev": roof["rev"], "kind": "equipment",
+                                                        "description": "Dumpster", "quantity": "1",
+                                                        "unit": "ea", "unit_cost_cents": 45000}).json()
+    custom = next(s for s in added["sections"] if s["module_id"] == "custom")
+    line = custom["lines"][0]
+    path = f"{API}/estimates/{e}/lines/{line['id']}"
+    _, done = _yes(call, path, {"rev": added["rev"], "quantity": "2"})
+    after = next(ln for s in done["sections"] if s["module_id"] == "custom" for ln in s["lines"] if ln["id"] == line["id"])
+    assert float(after["quantity"]) == 2
+
+
+def _arch_line(call, roof):
+    """The roofing estimate's Architectural shingles line (rf_arch_sq) and the current rev."""
+    detail = call("GET", f"{API}/estimates/{roof['id']}/detail").json()
+    sec = next(s for s in detail["estimate"]["sections"] if s["module_id"] == "roofing")
+    line = next(ln for ln in sec["lines"] if ln["price_key"] == "rf_arch_sq")
+    return line, detail["estimate"]["rev"]
+
+
+def test_edit_a_line_swaps_its_price_book_item(call, roof):                     # C2S8-E14
+    e = roof["id"]
+    line, rev = _arch_line(call, roof)
+    path = f"{API}/estimates/{e}/lines/{line['id']}"
+    ask, done = _yes(call, path, {"rev": rev, "price_key": "rf_3tab_sq", "description": "3-tab shingles",
+                                  "reason": "customer picked 3-tab"})
+    assert "rf_arch_sq → rf_3tab_sq" in ask["question"] and "keeps the price book item you picked" in ask["question"]
+    after = next(ln for s in done["sections"] if s["module_id"] == "roofing" for ln in s["lines"] if ln["id"] == line["id"])
+    assert after["price_key"] == "rf_3tab_sq" and after["unit_cost_cents"] == 9500
+    assert after["description"] == "3-tab shingles" and after["override"]["reason"] == "customer picked 3-tab"
+
+
+def test_edit_a_line_with_a_bad_price_key_is_refused(call, roof):               # C2S8-E15
+    e = roof["id"]
+    line, rev = _arch_line(call, roof)
+    path = f"{API}/estimates/{e}/lines/{line['id']}"
+    bad = call("POST", path, {"rev": rev, "price_key": "no_such_key", "reason": "x"})
+    assert bad.status == 400 and "no price 'no_such_key'" in bad.json()["message"]
+    wrong_unit = call("POST", path, {"rev": rev, "price_key": "rf_drip_lf", "reason": "x"})
+    assert wrong_unit.status == 400 and "per lf, not per sq" in wrong_unit.json()["message"]
+    both = call("POST", path, {"rev": rev, "price_key": "rf_3tab_sq", "price_default": True, "reason": "x"})
+    assert both.status == 400 and "not both" in both.json()["message"]
+
+
+def test_a_picked_item_survives_pricing_with_the_measurements(call, roof):     # C2S8-E16
+    e = roof["id"]
+    line, rev = _arch_line(call, roof)
+    path = f"{API}/estimates/{e}/lines/{line['id']}"
+    _, done = _yes(call, path, {"rev": rev, "price_key": "rf_3tab_sq", "description": "3-tab shingles",
+                                "reason": "customer picked 3-tab"})
+    before = next(ln for s in done["sections"] if s["module_id"] == "roofing"
+                  for ln in s["lines"] if ln["id"] == line["id"])
+    ask, repriced = _yes(call, f"{API}/estimates/{e}/use-measurements",
+                         {"module_id": "roofing", "rev": done["rev"]})
+    assert "2000 → 1200.0" in ask["question"]
+    shingles = next(ln for s in repriced["sections"] if s["module_id"] == "roofing"
+                    for ln in s["lines"] if ln["calc"]["rule"] == "architectural")
+    assert shingles["price_key"] == "rf_3tab_sq" and shingles["unit_cost_cents"] == 9500
+    assert shingles["description"] == "3-tab shingles"
+    assert float(shingles["quantity"]) == pytest.approx(float(before["quantity"]) * 0.6, rel=0.001)
+    assert any("kept the price book item you picked" in w for w in repriced["warnings"])
+
+
+def test_clearing_a_pick_goes_back_to_the_trade_item(call, roof):               # C2S8-E17
+    e = roof["id"]
+    line, rev = _arch_line(call, roof)
+    path = f"{API}/estimates/{e}/lines/{line['id']}"
+    _, done = _yes(call, path, {"rev": rev, "price_key": "rf_3tab_sq", "description": "3-tab shingles",
+                                "reason": "customer picked 3-tab"})
+    ask, cleared = _yes(call, path, {"rev": done["rev"], "price_default": True, "reason": "back to architectural"})
+    assert "back to the roofing trade's own price book item" in ask["question"]
+    after = next(ln for s in cleared["sections"] if s["module_id"] == "roofing"
+                 for ln in s["lines"] if ln["id"] == line["id"])
+    assert after["price_key"] == "rf_arch_sq" and after["unit_cost_cents"] == 12500
+    assert after["description"] == "Architectural shingles" and after["override"] is None
+    _, repriced = _yes(call, f"{API}/estimates/{e}/use-measurements",
+                       {"module_id": "roofing", "rev": cleared["rev"]})
+    shingles = next(ln for s in repriced["sections"] if s["module_id"] == "roofing"
+                    for ln in s["lines"] if ln["calc"]["rule"] == "architectural")
+    assert shingles["price_key"] == "rf_arch_sq"
+    assert not any("kept the price book item" in w for w in repriced["warnings"])

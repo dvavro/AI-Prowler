@@ -275,7 +275,11 @@ def test_screen_and_page_are_built():                                           
     js = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
     for needed in ("SCREENS.takeoffs = renderTakeoffs", "PAGES.takeoff = renderReview", "/tiles/", "/objects",
                    "/measurements/propose", "/measurements/approve", "/edit", "/reject", "/suggest", "/takeoff\"",
-                   "above_confidence", "accept_suggestion", "/viewports/", "calibration"):
+                   "above_confidence", "accept_suggestion", "/viewports/", "calibration",
+                   "bp-guide", "drawTakeoffGuide", "What to measure",
+                   "click all four corners AND back to the start",
+                   "bp-guide-calibration", "guideCalibration", "Calibrate the scale",
+                   "square slab's perimeter"):
         assert needed in js, needed
     for bad in ("innerHTML", "outerHTML", "insertAdjacentHTML", 'style="', "eval(", "document.write"):
         assert bad not in js, bad
@@ -293,3 +297,38 @@ def test_page_buttons_named_in_the_guide_exist():                               
                   "Suggest a change", "Accept the suggestion", "Calibrate", "Fit", "Review queue"):
         assert label in js, label
         assert label.rstrip("…") in g["text"], label
+
+
+def test_guide_starts_with_calibration_and_explains_edge_length():     # C2S7-W03
+    js = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
+    # Calibration is the first step in the guide, before any trade's questions.
+    assert js.index("bp-guide-calibration") < js.index('el("h4", {}, tr.name)')
+    # Clicking the calibration step picks the Calibrate tool, like any guide row.
+    assert 'setTool("calibrate"' in js
+    # Edge length to form says what forms are and why the number matters.
+    assert "concrete.perimeter_lf" in js
+    assert "forms are the boards" in js
+    assert "square slab's perimeter" in js
+
+
+def test_agent_auto_run_markers():                                              # C2S7-W04
+    js = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
+    for needed in (
+            "bp-auto-run", "Agent auto-run", "/auto-run", '"concrete"',
+            "bp-auto-slot", "bp-auto-status", "Agent finished", "timed out",
+            "bp-auto-rerun", "Re-run agent", "/rerun",
+            "concrete-agent", "bp-agent", "Show outline",
+            "Change outline", "bp-retarget", "bp-retarget-select", "/retarget",
+            "slab-candidates", "bp-auto-candidates",
+            "Agent found", "no slab outline",
+            "AUTO_POLL_MS = 2000", "AUTO_TIMEOUT_MS = 10 * 60 * 1000",
+            "stopAutoPoll", "isConnected", "hasConcreteTrade", "autoRunViewport"):
+        assert needed in js, needed
+    # The retarget goes through the ask-first flow, like every other change.
+    assert any("reviewAsk" in ln and "/retarget" in ln for ln in js.splitlines())
+    # The button stays, disabled with the reason, when concrete isn't on the estimate.
+    assert "Add the Concrete trade" in js
+    # The run is watched by polling, and the poll stops when the page goes away.
+    assert "setTimeout" in js and "pollAutoRun" in js
+    # The agent's outline is shown from its own drawing objects, falling back to its shape.
+    assert "showAgentOutline" in js and "zoomToSelection" in js

@@ -10,11 +10,18 @@ Answers become formula variables like this:
 - choice: the chosen option's factor (e.g. condition "heavy" -> 1.35)
 
 Answering again replaces that section's lines (the answers are stored on the
-section, so the estimate always shows where the numbers came from).
+section, so the estimate always shows where the numbers came from). Hand
+changes on the old lines are replaced, with one exception: a price book item
+the user picked on a line (an override whose changed fields include price_key)
+is carried forward onto the regenerated line for the same rule, so the picked
+item (key, cost, description) survives the re-price while the quantity still
+comes from the new answers. The rule id (calc_json.rule, the module manifest's
+line id) is the stable identity, not the price key, since the user changed it.
 """
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from estimator.context import RequestContext
@@ -27,6 +34,9 @@ from estimator.pricing.stack import LineInput
 QTY_PLACES = Decimal("0.0001")
 _TRUE = {"true", "yes", "y", "1", "on"}
 _FALSE = {"false", "no", "n", "0", "off", ""}
+
+# The fields a price book pick carries forward on a re-price (the quantity still comes from the new answers).
+SWAP_FIELDS = ("price_key", "unit_cost_cents", "description")
 
 
 def _registry(registry=None):
@@ -147,6 +157,76 @@ def plan_items(conn, company_id: str, mod, answers: dict) -> tuple[list, bool, d
     return items, samples, stored
 
 
+def _swaps_to_carry(conn, ctx, mod, sid: int, rules_now: set) -> tuple[dict, list]:
+    """Price book items the user picked on the old lines, by rule id, that a re-price must keep.
+
+    A pick is an override whose changed fields include price_key; the line's rule id is the stable identity, not
+    the price key, since the user changed the key. Returns ({rule_id: pick}, [warnings]) — a pick whose item is
+    gone from the book, or priced per another unit now, can't be carried and is reported instead of failing the
+    re-price. Picks on rules the new answers don't make (the line is gone) are left out quietly.
+    """
+    rules = {r.id: r for r in mod.lines}
+    swaps, warnings = {}, []
+    for li in conn.execute("SELECT * FROM line_items WHERE trade_section_id = ? AND override_by IS NOT NULL",
+                           (sid,)):
+        calc = json.loads(li["calc_json"] or "{}")
+        ov = calc.get("override") or {}
+        if "price_key" not in (ov.get("changed") or {}):
+            continue
+        rule = rules.get(calc.get("rule") or "")
+        if rule is None or rule.id not in rules_now:
+            continue
+        price = get_price(conn, ctx.company_id, li["price_key"])
+        if price is None:
+            warnings.append(f"the price book item '{li['price_key']}' on the {rule.description} line is gone, so"
+                            " that line went back to the trade's item")
+            continue
+        if price.unit != rule.unit:
+            warnings.append(f"the price book item '{li['price_key']}' is per {price.unit} now, not per {rule.unit},"
+                            f" so the {rule.description} line went back to the trade's item")
+            continue
+        swaps[rule.id] = {"price_key": li["price_key"], "unit_cost_cents": int(li["unit_cost_cents"]),
+                          "description": li["description"], "sample": price.is_sample,
+                          "reason": li["override_reason"]}
+    return swaps, warnings
+
+
+def _replaced_hand_changes(conn, sid: int, swaps: dict) -> int:
+    """How many overridden lines lose at least one hand change to the re-price.
+
+    A line whose override is only a price book pick that is carried forward loses nothing; anything else (a
+    quantity or waste change, a cost change on its own, or a pick that can't be carried) is replaced.
+    """
+    n = 0
+    for li in conn.execute("SELECT * FROM line_items WHERE trade_section_id = ? AND override_by IS NOT NULL",
+                           (sid,)):
+        calc = json.loads(li["calc_json"] or "{}")
+        changed = set(((calc.get("override") or {}).get("changed") or {}))
+        if changed and changed <= set(SWAP_FIELDS) and "price_key" in changed \
+                and calc.get("rule") in swaps:
+            continue
+        n += 1
+    return n
+
+
+def _carry_swap(conn, ctx, line_id: int, rule, planned_line: dict, price, swap: dict, calc: dict) -> None:
+    """Put a carried price book pick onto a regenerated line, as an override of the trade's own item."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    original = {"quantity": service.qty_text(planned_line["quantity"]), "unit_cost_cents": price.cost_cents,
+                "waste_pct": str(planned_line["waste_pct"]), "description": rule.description,
+                "price_key": rule.price_key}
+    new = {"price_key": swap["price_key"], "unit_cost_cents": swap["unit_cost_cents"],
+           "description": swap["description"]}
+    changed = {k: {"from": original[k], "to": v} for k, v in new.items() if str(v) != str(original[k])}
+    calc["override"] = {"original": original, "changed": changed, "by": ctx.actor, "at": now,
+                        "reason": swap["reason"] or "kept from before"}
+    calc["sample_price"] = swap["sample"]
+    conn.execute("UPDATE line_items SET price_key = ?, unit_cost_cents = ?, description = ?, calc_json = ?,"
+                 " override_by = ?, override_reason = ?, override_at = ?, updated_at = ? WHERE id = ?",
+                 (swap["price_key"], swap["unit_cost_cents"], swap["description"], json.dumps(calc),
+                  ctx.actor, swap["reason"] or "kept from before", now, now, line_id))
+
+
 def answer(conn, ctx: RequestContext, estimate_id: int, module_id: str, answers: dict, rev: int,
            registry=None) -> dict:
     """Price a quick estimate from answers, replacing that module's section on the estimate."""
@@ -157,14 +237,17 @@ def answer(conn, ctx: RequestContext, estimate_id: int, module_id: str, answers:
     stored, variables = resolve_answers(mod, answers)
     planned = build_lines(mod, variables)
     warnings: list[str] = []
+    carried = 0
     with service.transaction(conn):
         service._check_writable(conn, ctx, estimate_id, rev, service.QUICK_ROLES)
         seeded = ensure_sample_prices(conn, ctx.company_id, mod, actor=ctx.actor)
         sid = service._section_id(conn, ctx, estimate_id, module_id, mod.version)
-        hand = conn.execute("SELECT COUNT(*) FROM line_items WHERE trade_section_id = ? AND override_by IS NOT NULL",
-                            (sid,)).fetchone()[0]
-        if hand:
-            warnings.append(f"{hand} hand change(s) on the old {mod.name} lines were replaced by the new pricing")
+        rules_now = {p["rule"].id for p in planned}
+        swaps, swap_warnings = _swaps_to_carry(conn, ctx, mod, sid, rules_now)
+        replaced = _replaced_hand_changes(conn, sid, swaps)
+        if replaced:
+            warnings.append(f"{replaced} hand change(s) on the old {mod.name} lines were replaced by the new pricing")
+        warnings.extend(swap_warnings)
         conn.execute("DELETE FROM line_items WHERE trade_section_id = ?", (sid,))
         conn.execute("UPDATE trade_sections SET params_json = ?, module_version = ?, needs_reprice = 0 WHERE id = ?",
                      (json.dumps(stored), mod.version, sid))
@@ -177,21 +260,28 @@ def answer(conn, ctx: RequestContext, estimate_id: int, module_id: str, answers:
             if price.unit != rule.unit:
                 raise InvalidInput(f"your price '{rule.price_key}' is per {price.unit} but this line is per"
                                    f" {rule.unit}; fix the price book", price_key=rule.price_key)
-            if price.is_sample:
+            if rule.id in swaps:
+                if swaps[rule.id]["sample"]:
+                    sample_keys.append(swaps[rule.id]["price_key"])
+            elif price.is_sample:
                 sample_keys.append(rule.price_key)
-            service._insert_line(
+            calc = {"rule": rule.id, "formula": rule.quantity, "quantity": service.qty_text(p["quantity"]),
+                    "sample_price": price.is_sample}
+            lid = service._insert_line(
                 conn, ctx, sid, kind=rule.kind, description=rule.description, quantity=p["quantity"],
                 unit=rule.unit, unit_cost_cents=price.cost_cents, waste_pct=p["waste_pct"],
-                price_key=rule.price_key, sort_order=order,
-                calc={"rule": rule.id, "formula": rule.quantity, "quantity": service.qty_text(p["quantity"]),
-                      "sample_price": price.is_sample},
-            )
+                price_key=rule.price_key, sort_order=order, calc=calc)
+            if rule.id in swaps:
+                _carry_swap(conn, ctx, lid, rule, p, price, swaps[rule.id], calc)
+                carried += 1
+        if carried:
+            warnings.append(f"kept the price book item you picked on {carried} line(s)")
         if sample_keys:
             warnings.append("These prices are samples, not yours yet: " + ", ".join(sample_keys)
                             + ". Set your own in the price book before sending this bid.")
         service._log(conn, ctx, estimate_id, "quick_estimate_answered",
                      {"module_id": module_id, "answers": stored, "lines": len(planned),
-                      "seeded_sample_prices": seeded})
+                      "seeded_sample_prices": seeded, "swaps_kept": carried})
         service._recalculate(conn, ctx, estimate_id, reg)
         service._bump(conn, ctx, estimate_id)
     result = service.get_estimate(conn, ctx, estimate_id)

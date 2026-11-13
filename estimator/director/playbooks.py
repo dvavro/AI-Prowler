@@ -13,11 +13,13 @@ from pathlib import Path
 import yaml
 
 PLAYBOOK_DIR = Path(__file__).resolve().parent / "playbooks"
-LANES = ("quick_quote", "standard_estimate", "full_takeoff")
+# "project": a project the person builds on the Projects / Plans / Estimates screens; the Director guides each step
+# and takes over at the checks, approval, the quote and the follow-up (2026-11-12, David).
+LANES = ("quick_quote", "standard_estimate", "full_takeoff", "project")
 AGENTS = ("director", "intake", "plan_reader", "estimate_runner", "takeoff", "quick_pricer", "pricer",
           "reviewer", "bid_writer", "follow_up")
 ACTIONS = ("collect_answers", "collect_job", "collect_trades", "price_quick", "price", "read_plans", "run_takeoff", "review",
-           "approve", "write_bid", "follow_up")
+           "approve", "write_bid", "follow_up", "guide_build")
 SENDS_TO_CUSTOMER = ("write_bid",)
 
 

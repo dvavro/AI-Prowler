@@ -46,6 +46,12 @@ Sprint 4 (Coder 2):
                         send?, send_to?, outcome?, convert?, service_date?, rev?, confirm?}   (est_director_next;
                         send and convert ask first: they need confirm=true)
   POST /quick (no estimate_id) now starts a quick-quote Director job, so the quote shows on the Jobs board
+  POST /director/intake {request, has_plans?, customer?, address?, due_date?, module_id?, preview?}
+                                    the Dashboard's "Start a new quote or estimate": starts the right job, returns route
+  POST /estimates/<id>/archive|restore|delete {confirm?, title?}   owner: hide / bring back / delete a project and its
+                                    revisions (asks first; delete needs the name typed and refuses a quoted project)
+  POST /estimates/<id>/director     the project's Director job (made the first time; project lane) and its next step
+                                    (2026-11-12: every project gets one; POST /estimates makes it straight away)
   Bids (owner, estimator, office, field - the bid_send roles): GET /bids?status=&estimate_id=, GET /bids/<id> (bid_preview),
        GET /bids/<id>/file?kind=html|pdf, POST /bids/<id>/send {to?, message?, confirm?} (asks first),
        POST /bids/<id>/status {status}, POST /bids/<id>/convert {customer?, service_date?, confirm?} (asks first)
@@ -54,6 +60,8 @@ Sprint 5 (Coder 2), Plans screen (owner, estimator, reviewer, field; changes by 
   GET  /plans                       every plan set on the company's projects
   GET  /plan-sets/<id>              status and sheets (plan_status, plan_get_sheets)
   POST /plan-sets/<id>/process {confirm?}   read it with the plan engine (plan_process; asks first)
+  POST /plan-sets/<id>/remove {confirm?}    remove the plan set and everything from it (asks first)
+  POST /sheets/<id>/remove {confirm?}       remove one sheet and everything from it (asks first)
   GET  /sheets/<id>                 the sheet with its paper size, and its viewports (plan_get_viewports)
   GET  /sheets/<id>/image           the rendered sheet (plan_get_sheet_image)
   POST /viewports/<id>/scale {scale_note | scale_ratio | calibration: {p1, p2, distance}, confirm?}   (plan_set_scale)
@@ -85,6 +93,10 @@ Sprint 17 (Coder 2): Reports and the plan revision overlay - see estimator/api/r
   /settings/<section>, POST /settings/backup, GET /settings/audit); the full Price Book: POST /price-book/import/preview
   (columns and the guessed mapping), GET /price-book/history/<key>, GET /price-book/markups.
   Sprint 18 (Coder 2): guided tours - see estimator/api/tours_api.py (GET|POST /help/tours/progress, GET /help/practice).
+  Concrete auto-run (Phase 1) - see estimator/api/autorun_api.py: GET /viewports/<id>/slab-candidates,
+  POST /auto-run, GET /auto-run/<id>, POST /auto-run/<id>/rerun, POST /measurements/<id>/retarget|mark-agent
+  AI Log - see estimator/api/ai_log_api.py: GET /ai-log?limit=&offset=&auto_run_id=&task_id=&role=&estimate_id=,
+  GET /ai-log/<id>, GET /ai-log/<id>/image/<n> (the Agents screen's AI Log page, #/agents/ai-log)
 Sprint 8 (Coder 2): Estimates screen - see estimator/api/estimate_api.py: GET /estimates/<id>/detail|validate|history,
   POST /estimates/<id>/options[/choose], /lines, /calculate, /revision, /use-measurements; links in estimator/api/links.py
 Static: /estimator and /estimator/<file> from estimator/ui/web/.
@@ -280,6 +292,8 @@ def _api(req: Request, open_db) -> Response:
 
 _EST = re.compile(r"^/estimates/(\d+)$")
 _EST_EVENTS = re.compile(r"^/estimates/(\d+)/events$")
+_EST_DIRECTOR = re.compile(r"^/estimates/(\d+)/director$")
+_EST_ADMIN = re.compile(r"^/estimates/(\d+)/(archive|restore|delete)$")
 _PROJECT = re.compile(r"^/estimates/(\d+)/project$")
 _PLANS = re.compile(r"^/estimates/(\d+)/plans$")
 _STAGE = re.compile(r"^/estimates/(\d+)/plans/stage$")
@@ -343,7 +357,55 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
             raise _Refuse(400, "invalid_input", "the project name is too long (200 characters at most)")
         est = service.create_estimate(conn, ctx, title, customer_id=_opt(b, "customer_id"),
                                       address=_opt(b, "address"), due_date=_opt(b, "due_date"))
-        return _json(201, redact(est, see))
+        # Every new project gets a Director job that guides it through to sending the quote (2026-11-12, David).
+        from estimator.director import engine as director
+        job = director.adopt(conn, ctx, est["id"])
+        return _json(201, {**redact(est, see), "director_job_id": job["job"]["id"] if job else None})
+
+    if sub == "/director/intake" and m == "POST":
+        # The Dashboard's "Start a new quote or estimate": what's the job, who's it for, are there plans; then the right
+        # job is started and the page says where to go next (2026-11-12, David).
+        from estimator.director import engine as director
+        if ctx.role not in service.QUICK_ROLES:
+            raise _Refuse(403, "permission_denied", f"only {', '.join(service.QUICK_ROLES)} can start a quote or estimate")
+        b = _body(req)
+        for f in ("has_plans", "preview"):
+            if f in b and b[f] is not None and not isinstance(b[f], bool):
+                raise _Refuse(400, "invalid_input", f"{f} must be true or false")
+        cust = b.get("customer")
+        if cust not in (None, {}) and not isinstance(cust, dict):
+            raise _Refuse(400, "invalid_input", "customer must be an object with name, email, phone, address")
+        cust = {str(k): ("" if v is None else str(v).strip())[:200] for k, v in (cust or {}).items()}
+        out = director.intake(conn, ctx, _opt(b, "request") or "", has_plans=b.get("has_plans"), customer=cust or None,
+                              address=_opt(b, "address"), due_date=_opt(b, "due_date"), module_id=_opt(b, "module_id"),
+                              preview=b.get("preview") is True)
+        return _json(200 if b.get("preview") is True else 201, _no_paths(redact(out, see)))
+
+    mm = _EST_ADMIN.match(sub)
+    if mm and m == "POST":
+        # Archive / restore / delete a project (owner; each asks first; delete needs the name typed). 2026-11-12.
+        from estimator.estimating import project_admin
+        eid, action, b = int(mm.group(1)), mm.group(2), _body(req)
+        confirm = b.get("confirm") is True
+        if action == "archive":
+            return _ask_first(lambda: project_admin.archive(conn, ctx, eid, confirm=confirm))
+        if action == "restore":
+            return _ask_first(lambda: project_admin.restore(conn, ctx, eid, confirm=confirm))
+        return _ask_first(lambda: project_admin.delete(conn, ctx, eid, confirm=confirm, title=_opt(b, "title")))
+
+    mm = _EST_DIRECTOR.match(sub)
+    if mm and m == "POST":
+        # The Director panel on the project and estimate pages: the project's job (made the first time) and its next
+        # step, worked out again from where the project stands now.
+        from estimator.bids import service as bids
+        from estimator.director import engine as director
+        eid = int(mm.group(1))
+        out = director.adopt(conn, ctx, eid)
+        if out is None:
+            return _ok(job=None, next_step=None)
+        bid = bids.latest_for_estimate(conn, ctx, out["job"]["estimate_id"])
+        return _json(200, _no_paths(redact({**out, "bid": bids._public(bid) if bid else None,
+                                            "can_open_bids": nav.can_open(ctx.role, "bids")}, see)))
 
     mm = _EST.match(sub)
     if mm and m == "GET":
@@ -432,6 +494,18 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
         return _bids(m, sub, req, ctx, conn, see)
     if sub == "/help/guides" or sub.startswith("/help/guides/"):
         return _help(m, sub, req)
+
+    # ---------------------------------------------------------- Concrete auto-run (Phase 1): slab candidates and runs.
+    # Before Plans and Takeoffs: /viewports/<id>/slab-candidates and /measurements/<id>/retarget|mark-agent
+    # would otherwise be swallowed by _plans / takeoff_api.
+    from estimator.api import autorun_api
+    if autorun_api.handles(sub):
+        return autorun_api.route(m, sub, req, ctx, conn)
+
+    # ---------------------------------------------------------- AI Log: what was sent to the AI and what came back.
+    from estimator.api import ai_log_api
+    if ai_log_api.handles(sub):
+        return ai_log_api.route(m, sub, req, ctx, conn)
 
     # ---------------------------------------------------------- Sprint 5: Plans (plan engine, sheets, scales)
     if sub == "/plans" or sub.startswith(("/plan-sets/", "/sheets/", "/viewports/", "/schedule-rows/")):
@@ -551,8 +625,10 @@ def _price_book(m: str, sub: str, req: Request, ctx, conn) -> Response:
     """GET  /price-book?module_id=&samples_only=1     pricebook_get
        POST /price-book {prices, effective_date, confirm}                         pricebook_update
        POST /price-book/import/stage?name=<file>     stage a CSV/Excel price list for import
-       POST /price-book/import {csv_text | file_path, sheet, mapping, add_new, effective_date, confirm}   pricebook_import
+       POST /price-book/import {csv_text | file_path, sheet, mapping, add_new, module_id, effective_date, confirm}   pricebook_import
        POST /price-book/import/preview {csv_text | file_path, sheet}   columns before an import
+    POST /price-book/<key>/edit {description?, kind?, unit?, module_id?, confirm}   change a price's details
+    POST /price-book/<key>/remove {confirm}   remove a saved price (a module key goes back to its sample)
     Costs are company secrets: only the roles that open the Price Book screen may read them here."""
     from estimator.pricing import importer, price_book
 
@@ -583,6 +659,7 @@ def _price_book(m: str, sub: str, req: Request, ctx, conn) -> Response:
         result = _ask_first(lambda: importer.import_prices(conn, ctx, mapping=mapping,
                                                             effective_date=_opt(b, "effective_date"),
                                                             add_new=b.get("add_new") is True,
+                                                            module_id=_opt(b, "module_id"),
                                                             confirm=b.get("confirm") is True, **source))
         if stage_id is not None and b.get("confirm") is True:
             from estimator.api import staging
@@ -598,6 +675,32 @@ def _price_book(m: str, sub: str, req: Request, ctx, conn) -> Response:
             extra["sheets"] = importer.list_sheets(source["file_path"])
         return _ok(columns=headers, fields=list(importer.FIELDS), mapping=importer.guess_mapping(headers),
                    rows=rows[:5], row_count=len(rows), **extra)
+    mi = _PRICE_ITEM.match(sub)
+    if mi and m == "POST":
+        key, action = mi.group(1), mi.group(2)
+        b = _body(req)
+        if action == "edit":
+            kwargs = {}
+            if "description" in b:
+                v = _opt(b, "description")
+                if v is None:
+                    raise _Refuse(400, "invalid_input", "give the price a description")
+                kwargs["description"] = v
+            if "kind" in b:
+                v = _opt(b, "kind")
+                if v is None:
+                    raise _Refuse(400, "invalid_input", "give the price a kind")
+                kwargs["kind"] = v
+            if "unit" in b:
+                v = _opt(b, "unit")
+                if v is None:
+                    raise _Refuse(400, "invalid_input", "give the price a unit, e.g. sqft")
+                kwargs["unit"] = v
+            if "module_id" in b:
+                kwargs["module_id"] = _opt(b, "module_id")
+            return _ask_first(lambda: price_book.update_price_details(conn, ctx, key,
+                                                                      confirm=b.get("confirm") is True, **kwargs))
+        return _ask_first(lambda: price_book.remove_price(conn, ctx, key, confirm=b.get("confirm") is True))
     mm = _PRICE_HISTORY.match(sub)
     if mm and m == "GET":
         return _ok(**_price_history(conn, ctx, mm.group(1)))
@@ -614,6 +717,7 @@ def _price_book(m: str, sub: str, req: Request, ctx, conn) -> Response:
 
 
 _PRICE_HISTORY = re.compile(r"^/price-book/history/([A-Za-z0-9_.-]{1,100})$")
+_PRICE_ITEM = re.compile(r"^/price-book/([A-Za-z0-9_.-]{1,100})/(edit|remove)$")
 
 
 def _price_history(conn, ctx, key: str) -> dict:
@@ -649,7 +753,7 @@ _BID = re.compile(r"^/bids/(\d+)$")
 _BID_ACT = re.compile(r"^/bids/(\d+)/(send|status|convert|file)$")
 _GUIDE = re.compile(r"^/help/guides/([a-z0-9_]{1,64})$")
 # What the page may hand est_director_next. Flags must be literal true/false (never "yes" or 1).
-NEXT_FLAGS = ("approve", "confirm_sample_prices", "checklist_done", "reviewed", "send", "convert")
+NEXT_FLAGS = ("approve", "confirm_sample_prices", "checklist_done", "reviewed", "send", "convert", "ready")
 NEXT_TEXT = ("module_id", "send_to", "outcome", "service_date")
 NEXT_KEYS = set(NEXT_FLAGS) | set(NEXT_TEXT) | {"answers", "customer", "rev", "confirm"}
 # Where the bid files live on the PC or server: the browser gets them through /bids/<id>/file, never the path.
@@ -836,9 +940,12 @@ def _bid_file(conn, ctx, bid_id: int, kind: str) -> Response:
 
 _PLAN_SET = re.compile(r"^/plan-sets/(\d+)$")
 _PLAN_SET_PROCESS = re.compile(r"^/plan-sets/(\d+)/process$")
+_PLAN_SET_REMOVE = re.compile(r"^/plan-sets/(\d+)/remove$")
 _PLAN_SET_TABLES = re.compile(r"^/plan-sets/(\d+)/(schedules|legends|symbols)$")
 _SCHEDULE_ROW = re.compile(r"^/schedule-rows/(\d+)$")
 _SHEET = re.compile(r"^/sheets/(\d+)$")
+_SHEET_TRADE = re.compile(r"^/sheets/(\d+)/trade-active$")
+_SHEET_REMOVE = re.compile(r"^/sheets/(\d+)/remove$")
 _SHEET_IMAGE = re.compile(r"^/sheets/(\d+)/image$")
 _VP_SCALE = re.compile(r"^/viewports/(\d+)/scale$")
 _SHEET_OBJECTS = re.compile(r"^/sheets/(\d+)/objects$")
@@ -871,8 +978,13 @@ def _tile_rows(conn, ctx, sheet_id: int) -> tuple[dict, dict]:
 def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
     """GET  /plans                        every plan set on the company's projects (Plans screen)
        GET  /plan-sets/<id>               plan_status + plan_get_sheets
+       GET  /plan-sets/<id>?module_id=<trade>     the sheets with active_for_trade for that trade
        POST /plan-sets/<id>/process {confirm}     plan_process (asks first; reads in the background)
+       POST /plan-sets/<id>/remove {confirm}      remove the plan set and everything from it (asks first)
        GET  /sheets/<id>                  the sheet (with its size, for calibration clicks) + plan_get_viewports
+                                          + inactive_trades (the trades this sheet is switched off for)
+       POST /sheets/<id>/trade-active {module_id, active}   switch a sheet on/off for one trade (owner, estimator)
+       POST /sheets/<id>/remove {confirm}         remove one sheet and everything from it (asks first)
        GET  /sheets/<id>/image            the rendered sheet (plan_get_sheet_image), served only from the data folder
        POST /viewports/<id>/scale {scale_note | scale_ratio | calibration: {p1, p2, distance}, confirm}
                                           plan_set_scale (asks first)"""
@@ -897,8 +1009,19 @@ def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
         pid = int(mm.group(1))
         st = store.status(conn, ctx, pid)
         est = service.get_estimate(conn, ctx, st["estimate_id"])
-        return _ok(plan_set=st, sheets=store.sheets(conn, ctx, pid)["sheets"], engine=plan_engine.engine_info(),
-                   estimate={"id": est["id"], "title": est["title"]}, can_edit=can_edit)
+        sheets = store.sheets(conn, ctx, pid)["sheets"]
+        extra = {}
+        trade = (req.query.get("module_id") or "").strip() or None
+        if trade:
+            # Per-trade sheet activation: each sheet says whether it counts for that trade's takeoff.
+            from estimator.takeoff import sheet_trades
+            states = {s["sheet_id"]: s["active"]
+                      for s in sheet_trades.list_for_plan_set(conn, ctx.company_id, pid, trade)}
+            for s in sheets:
+                s["active_for_trade"] = states.get(s["id"], True)
+            extra = {"trade_module_id": trade}
+        return _ok(plan_set=st, sheets=sheets, engine=plan_engine.engine_info(),
+                   estimate={"id": est["id"], "title": est["title"]}, can_edit=can_edit, **extra)
 
     mm = _PLAN_SET_TABLES.match(sub)
     if mm and m == "GET":
@@ -945,6 +1068,15 @@ def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
         return _ask_first(lambda: plan_engine.start(conn, ctx, pid, confirm=b.get("confirm") is True,
                                                     open_conn=None if inline else _open_db))
 
+    mm = _PLAN_SET_REMOVE.match(sub)
+    if mm and m == "POST":
+        if not can_edit:
+            raise _Refuse(403, "permission_denied", "your role can't remove plans")
+        from estimator.takeoff import plan_delete
+        b = _body(req)
+        return _ask_first(lambda: plan_delete.delete_plan_set(conn, ctx, int(mm.group(1)),
+                                                              confirm=b.get("confirm") is True))
+
     mm = _SHEET.match(sub)
     if mm and m == "GET":
         s = store._load_sheet(conn, ctx, int(mm.group(1)))          # not found / another company's sheet
@@ -952,10 +1084,31 @@ def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
         sheet["has_image"] = bool(s["image_path"])
         ps = store.load_plan_set(conn, ctx, s["plan_set_id"])
         from estimator.plan_engine import tiles
+        from estimator.takeoff import sheet_trades
         return _ok(sheet=sheet, viewports=store.viewports(conn, ctx, s["id"])["viewports"],
                    plan_set={"id": ps["id"], "file": ps["original_name"], "estimate_id": ps["estimate_id"]},
                    found=_found_on_sheet(conn, s["id"]), tiles=tiles.info(*_tile_rows(conn, ctx, s["id"])),
+                   inactive_trades=sheet_trades.inactive_for_sheet(conn, ctx.company_id, s["id"]),
                    can_edit=can_edit)
+
+    mm = _SHEET_TRADE.match(sub)
+    if mm and m == "POST":
+        # Per-trade sheet activation: a plain save, not ask-first — flipping a sheet off for a trade is
+        # one click to undo, and it never deletes anything (the sheet stays openable and measurable by hand).
+        from estimator.takeoff import sheet_trades
+        b = _body(req)
+        if not isinstance(b.get("active"), bool):
+            raise _Refuse(400, "invalid_input", "active must be true or false")
+        return _ok(**sheet_trades.set_active(conn, ctx, int(mm.group(1)), b.get("module_id"), b["active"]))
+
+    mm = _SHEET_REMOVE.match(sub)
+    if mm and m == "POST":
+        if not can_edit:
+            raise _Refuse(403, "permission_denied", "your role can't remove plans")
+        from estimator.takeoff import plan_delete
+        b = _body(req)
+        return _ask_first(lambda: plan_delete.delete_sheet(conn, ctx, int(mm.group(1)),
+                                                           confirm=b.get("confirm") is True))
 
     mm = _SHEET_OBJECTS.match(sub)
     if mm and m == "GET":

@@ -788,6 +788,130 @@ CREATE TABLE help_progress (
 );
 CREATE INDEX ix_help_progress_user ON help_progress (user_id)
 """),
+    (19, "price book rows carry their trade", """
+ALTER TABLE price_book ADD COLUMN module_id TEXT
+"""),
+    (20, "concrete agent auto-runs", """
+CREATE TABLE auto_runs (
+    id                   INTEGER PRIMARY KEY,
+    company_id           TEXT NOT NULL,
+    estimate_id          INTEGER NOT NULL,
+    sheet_id             INTEGER NOT NULL,
+    viewport_id          INTEGER NOT NULL,
+    module_id            TEXT NOT NULL,
+    status               TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'done', 'failed')),
+    step                 TEXT NOT NULL DEFAULT 'starting',
+    error                TEXT,
+    candidate_id         TEXT,
+    candidates_json      TEXT NOT NULL DEFAULT '[]',
+    measurement_ids_json TEXT NOT NULL DEFAULT '[]',
+    created_by           TEXT NOT NULL,
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL
+)
+"""),
+    (21, "per-trade sheet activation for takeoff", """
+CREATE TABLE sheet_trade_active (
+    company_id  TEXT NOT NULL,
+    sheet_id    INTEGER NOT NULL,
+    module_id   TEXT NOT NULL,
+    active      INTEGER NOT NULL CHECK (active IN (0, 1)),
+    updated_by  TEXT,
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (company_id, sheet_id, module_id)
+);
+CREATE INDEX ix_sheet_trade_active_sheet ON sheet_trade_active (company_id, sheet_id)
+"""),
+    (22, "AI log: every LLM call, what was sent and what came back", """
+CREATE TABLE ai_log (
+    id               INTEGER PRIMARY KEY,
+    company_id       TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    provider         TEXT NOT NULL,
+    model            TEXT NOT NULL,
+    role             TEXT NOT NULL,
+    purpose          TEXT NOT NULL,
+    auto_run_id      INTEGER,
+    task_id          INTEGER,
+    estimate_id      INTEGER,
+    system_prompt    TEXT NOT NULL,
+    user_prompt      TEXT NOT NULL,
+    images_json      TEXT NOT NULL DEFAULT [],
+    response_text    TEXT,
+    parsed_json      TEXT,
+    input_tokens     INTEGER NOT NULL DEFAULT 0,
+    output_tokens    INTEGER NOT NULL DEFAULT 0,
+    cost_micros      INTEGER NOT NULL DEFAULT 0,
+    duration_ms      INTEGER,
+    ok               INTEGER NOT NULL,
+    error            TEXT
+);
+CREATE INDEX ix_ai_log_company ON ai_log (company_id, created_at);
+CREATE INDEX ix_ai_log_run ON ai_log (company_id, auto_run_id)
+"""),
+    # 2026-11-12, David: every project gets a Director job, in a new 'project' lane. SQLite can't change a CHECK, so
+    # director_jobs is rebuilt. director_steps is rebuilt with it, pointing at the new table first, so dropping the old
+    # jobs table never cascades into the steps (the rename then moves the steps' reference to director_jobs).
+    (23, "project lane for Director jobs", """
+CREATE TABLE director_jobs_new (
+    id                  INTEGER PRIMARY KEY,
+    company_id          TEXT NOT NULL,
+    estimate_id         INTEGER REFERENCES estimates (id),
+    customer_id         TEXT,
+    lane                TEXT CHECK (lane IN ('quick_quote', 'standard_estimate', 'full_takeoff', 'project')),
+    module_id           TEXT,
+    playbook_id         TEXT,
+    playbook_version    TEXT,
+    stage               TEXT NOT NULL DEFAULT 'triage',
+    state               TEXT NOT NULL DEFAULT 'active'
+                        CHECK (state IN ('active', 'waiting_on_user', 'waiting_on_ai', 'waiting_on_customer',
+                                         'waiting_on_feature', 'done', 'cancelled')),
+    waiting_on          TEXT,
+    assigned_to         TEXT,
+    due_date            TEXT,
+    request_text        TEXT NOT NULL DEFAULT '',
+    answers_json        TEXT,
+    open_questions_json TEXT,
+    next_step_json      TEXT,
+    rev                 INTEGER NOT NULL DEFAULT 1,
+    created_by          TEXT,
+    created_at          TEXT NOT NULL,
+    updated_by          TEXT,
+    updated_at          TEXT NOT NULL,
+    customer_json       TEXT,
+    trades_json         TEXT
+);
+INSERT INTO director_jobs_new (id, company_id, estimate_id, customer_id, lane, module_id, playbook_id, playbook_version,
+    stage, state, waiting_on, assigned_to, due_date, request_text, answers_json, open_questions_json, next_step_json,
+    rev, created_by, created_at, updated_by, updated_at, customer_json, trades_json)
+  SELECT id, company_id, estimate_id, customer_id, lane, module_id, playbook_id, playbook_version,
+    stage, state, waiting_on, assigned_to, due_date, request_text, answers_json, open_questions_json, next_step_json,
+    rev, created_by, created_at, updated_by, updated_at, customer_json, trades_json FROM director_jobs;
+CREATE TABLE director_steps_new (
+    id            INTEGER PRIMARY KEY,
+    job_id        INTEGER NOT NULL REFERENCES director_jobs_new (id) ON DELETE CASCADE,
+    stage         TEXT NOT NULL,
+    agent_role    TEXT NOT NULL,
+    provider      TEXT,
+    state         TEXT NOT NULL CHECK (state IN ('queued', 'running', 'done', 'blocked', 'failed', 'skipped')),
+    input_summary TEXT,
+    result_json   TEXT,
+    actor         TEXT,
+    started_at    TEXT NOT NULL,
+    finished_at   TEXT
+);
+INSERT INTO director_steps_new (id, job_id, stage, agent_role, provider, state, input_summary, result_json, actor,
+    started_at, finished_at)
+  SELECT id, job_id, stage, agent_role, provider, state, input_summary, result_json, actor, started_at, finished_at
+  FROM director_steps;
+DROP TABLE director_steps;
+DROP TABLE director_jobs;
+ALTER TABLE director_jobs_new RENAME TO director_jobs;
+ALTER TABLE director_steps_new RENAME TO director_steps;
+CREATE INDEX ix_director_jobs_company ON director_jobs (company_id, state);
+CREATE INDEX ix_director_jobs_estimate ON director_jobs (company_id, estimate_id);
+CREATE INDEX ix_director_steps_job ON director_steps (job_id)
+"""),
 ]
 
 

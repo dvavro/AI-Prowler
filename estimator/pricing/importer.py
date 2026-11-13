@@ -3,7 +3,8 @@
 The list can be a CSV or Excel file on this PC, or CSV text pasted into chat. Columns are matched to the price
 book by name ("Item Code", "Unit Price", ...) or by a mapping you give. Each row updates an existing price, found
 by its price key or, failing that, by its description. With add_new=true, rows that match nothing become new
-prices of your own (they need a unit). Nothing is saved until confirm=true: the first call shows what would change.
+prices of your own (they need a unit). module_id tags those new prices with a trade, so they show under its
+filter in the Price Book. Nothing is saved until confirm=true: the first call shows what would change.
 
 Safety: a row whose unit doesn't match the price's unit (per box vs per each) is skipped, never converted; costs
 must be plain dollar amounts; files are limited to CSV/Excel under 5 MB and 5,000 rows.
@@ -172,7 +173,7 @@ def guess_mapping(headers: list[str], mapping: dict | None = None) -> dict:
 
 def import_prices(conn, ctx, *, file_path: str | None = None, csv_text: str | None = None, mapping: dict | None = None,
                   sheet: str | None = None, effective_date: str | None = None, add_new: bool = False,
-                  confirm: bool = False, registry=None) -> dict:
+                  module_id: str | None = None, confirm: bool = False, registry=None) -> dict:
     from estimator.estimating import service
     from estimator.pricing.price_book import _module_defaults, get_price, set_price
     if ctx.role not in ("owner", "estimator"):
@@ -257,7 +258,7 @@ def import_prices(conn, ctx, *, file_path: str | None = None, csv_text: str | No
             continue
         seen.add(new_key)
         new.append({"row": n, "price_key": new_key, "description": desc, "kind": kind, "unit": unit, "old_cents": None,
-                    "new_cents": cents, "supplier": supplier or None, "was_sample": False})
+                    "new_cents": cents, "supplier": supplier or None, "was_sample": False, "is_new": True})
 
     preview = {"columns_used": cols, "rows_read": len(rows), "updates": len(updates), "new": len(new),
                "unchanged": len(unchanged), "skipped": len(skipped),
@@ -273,8 +274,10 @@ def import_prices(conn, ctx, *, file_path: str | None = None, csv_text: str | No
             "with confirm=true.", **preview)
     with service.transaction(conn):
         for c in updates + new:
+            # New prices take the import's trade; an existing price keeps the trade it already has.
             set_price(conn, ctx.company_id, c["price_key"], description=c["description"], kind=c["kind"], unit=c["unit"],
-                      cost_cents=c["new_cents"], effective_date=effective_date, actor=ctx.actor)
+                      cost_cents=c["new_cents"], effective_date=effective_date, actor=ctx.actor,
+                      module_id=module_id if c.get("is_new") else None)
             if c["supplier"]:
                 conn.execute("UPDATE price_book SET supplier = ? WHERE company_id = ? AND price_key = ? AND effective_date = ?",
                              (c["supplier"], ctx.company_id, c["price_key"], effective_date or date.today().isoformat()))

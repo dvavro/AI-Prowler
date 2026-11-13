@@ -429,12 +429,17 @@ Source: "estimator\agents\prompts\quick_pricer.md"; DestDir: "{app}\estimator\ag
 Source: "estimator\agents\prompts\reviewer.md"; DestDir: "{app}\estimator\agents\prompts"; Flags: ignoreversion
 Source: "estimator\agents\prompts\rules.md"; DestDir: "{app}\estimator\agents\prompts"; Flags: ignoreversion
 Source: "estimator\agents\prompts\takeoff.md"; DestDir: "{app}\estimator\agents\prompts"; Flags: ignoreversion
+Source: "estimator\agents\ai_log.py"; DestDir: "{app}\estimator\agents"; Flags: ignoreversion
+Source: "estimator\agents\concrete_autorun.py"; DestDir: "{app}\estimator\agents"; Flags: ignoreversion
+Source: "estimator\agents\llm_takeoff_runner.py"; DestDir: "{app}\estimator\agents"; Flags: ignoreversion
 Source: "estimator\agents\providers.py"; DestDir: "{app}\estimator\agents"; Flags: ignoreversion
 Source: "estimator\agents\queue.py"; DestDir: "{app}\estimator\agents"; Flags: ignoreversion
 Source: "estimator\agents\roles.py"; DestDir: "{app}\estimator\agents"; Flags: ignoreversion
 Source: "estimator\api\__init__.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
+Source: "estimator\api\ai_log_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\asgi_bridge.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\auth.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
+Source: "estimator\api\autorun_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\estimate_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\jobs_board.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\links.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
@@ -480,6 +485,7 @@ Source: "estimator\director\jobs.py"; DestDir: "{app}\estimator\director"; Flags
 Source: "estimator\director\overrides.py"; DestDir: "{app}\estimator\director"; Flags: ignoreversion
 Source: "estimator\director\playbooks.py"; DestDir: "{app}\estimator\director"; Flags: ignoreversion
 Source: "estimator\director\playbooks\full_takeoff.yaml"; DestDir: "{app}\estimator\director\playbooks"; Flags: ignoreversion
+Source: "estimator\director\playbooks\project.yaml"; DestDir: "{app}\estimator\director\playbooks"; Flags: ignoreversion
 Source: "estimator\director\playbooks\quick_quote.yaml"; DestDir: "{app}\estimator\director\playbooks"; Flags: ignoreversion
 Source: "estimator\director\playbooks\standard_estimate.yaml"; DestDir: "{app}\estimator\director\playbooks"; Flags: ignoreversion
 Source: "estimator\director\settings.py"; DestDir: "{app}\estimator\director"; Flags: ignoreversion
@@ -496,6 +502,7 @@ Source: "estimator\drawing_model\uploads.py"; DestDir: "{app}\estimator\drawing_
 Source: "estimator\errors.py"; DestDir: "{app}\estimator"; Flags: ignoreversion
 Source: "estimator\estimating\__init__.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\assemblies.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
+Source: "estimator\estimating\project_admin.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\quick.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\scenarios.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\service.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
@@ -617,8 +624,12 @@ Source: "estimator\symbols\review.py"; DestDir: "{app}\estimator\symbols"; Flags
 Source: "estimator\symbols\service.py"; DestDir: "{app}\estimator\symbols"; Flags: ignoreversion
 Source: "estimator\takeoff\__init__.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\from_plans.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
+Source: "estimator\takeoff\llm_takeoff.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\measurements.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
+Source: "estimator\takeoff\plan_delete.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\reviews.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
+Source: "estimator\takeoff\sheet_trades.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
+Source: "estimator\takeoff\slab_find.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\team.py"; DestDir: "{app}\estimator"; Flags: ignoreversion
 Source: "estimator\ui\__init__.py"; DestDir: "{app}\estimator\ui"; Flags: ignoreversion
 Source: "estimator\ui\gui_tab.py"; DestDir: "{app}\estimator\ui"; Flags: ignoreversion
@@ -634,6 +645,7 @@ Source: "estimator\ui\help\guides\quote_a_service_job.md"; DestDir: "{app}\estim
 Source: "estimator\ui\help\guides\review_on_phone.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\send_and_follow_up_a_quote.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\set_up_your_price_book.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
+Source: "estimator\ui\help\guides\start_with_the_director.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\turn_a_won_quote_into_a_job.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\upload_plans_and_check_the_scale.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\use_the_jobs_board.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
