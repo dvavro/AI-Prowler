@@ -1,7 +1,7 @@
 # Landscaping maintenance: monthly mowing and upkeep priced by area and visits.
 id: landscaping_maintenance
 name: Landscaping Maintenance
-version: 0.1.0
+version: 0.2.0
 category: service
 path: quick_estimate
 description: Monthly lawn and yard upkeep priced by lawn area and visits, with edging, hedge trimming, weeding beds and leaf cleanup.
@@ -12,7 +12,14 @@ required_any: [lawn_sqft, hedge_lf, beds_sqft]
 recurrence: {question: visits, map: {weekly: Weekly, biweekly: Biweekly, monthly: Monthly}}
 
 questions:
-  - {id: lawn_sqft, label: "Lawn area to mow", type: number, unit: sqft, default: 0, min: 0, max: 200000}
+  - {id: lawn_sqft, label: "Lawn area to mow", type: number, default: 0, min: 0, max: 200000}
+  - id: lawn_unit
+    label: "Lawn area unit"
+    type: choice
+    default: sqft
+    choices:
+      - {value: sqft, label: "Square feet", factor: "1"}
+      - {value: acre, label: "Acres", factor: "43560"}
   - id: visits
     label: "How often?"
     type: choice
@@ -27,7 +34,7 @@ questions:
   - {id: leaf_cleanup, label: "One-time leaf cleanup?", type: boolean, default: false}
 
 lines:
-  - {id: mowing, description: "Mowing (per month)", kind: other, unit: sqft, quantity: "lawn_sqft * visits",
+  - {id: mowing, description: "Mowing (per month)", kind: other, unit: sqft, quantity: "lawn_sqft * lawn_unit * visits",
      price_key: lm_mow_sqft, when: "lawn_sqft > 0"}
   - {id: edging, description: "Edging (per month)", kind: other, unit: ea, quantity: "visits",
      price_key: lm_edge_ea, when: "edging"}

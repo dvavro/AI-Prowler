@@ -9,3 +9,8 @@
   # mow 32,000 x $0.01 = $320; edge 4 x $10; hedges 60 x $1.50 = $90; beds 800 x $0.02 = $16; leaves $150
   expected_lines: {mowing: 32000, edging: 4000, hedges: 9000, beds: 1600, leaves: 15000}
   expected_total_cents: 61600
+- name: 1 acre lawn every 2 weeks
+  answers: {lawn_sqft: 1, lawn_unit: acre}
+  # 1 acre = 43,560 sq ft x 2 visits x $0.01
+  expected_lines: {mowing: 87120}
+  expected_total_cents: 87120

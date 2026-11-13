@@ -29,7 +29,7 @@ const TOOLS = [
 ];
 const RV = { estimateId: null, data: null, sheetId: null, sheet: null, viewports: [], tiles: null, objects: [],
              groups: [], byId: new Map(), selected: new Set(), measurementId: null, tool: "select", draft: [],
-             view: {}, viewer: null };
+             draftTool: null, view: {}, viewer: null };
 
 function svg(tag, attrs) {
   const n = document.createElementNS(SVG_NS, tag);
@@ -80,7 +80,7 @@ async function renderReview(main, estimateId) {
   RV.estimateId = estimateId;
   RV.data = await api("GET", "/estimates/" + estimateId + "/takeoff");
   const d = RV.data;
-  RV.draft = [];
+  RV.draft = []; RV.draftTool = null;
   // A reviewer only looks, approves and adds missed symbols.
   if (!d.can_measure && !["select", "pan"].concat(d.can_approve ? ["symbol"] : []).includes(RV.tool)) RV.tool = "select";
   if (q.get("m")) RV.measurementId = +q.get("m") || null;
@@ -328,12 +328,14 @@ function toolPalette(msg) {
 }
 function setTool(id, msg) {
   RV.tool = id;
-  RV.draft = [];
+  // Switching tools never throws the unfinished line away: it stays drawn
+  // (and keeps the tool it was started with) until it is finished or Esc.
   if (RV.viewer) RV.viewer.drawDraft();
   if (RV.viewer) RV.viewer.clearZoomBox();
   for (const b of document.querySelectorAll(".bp-tool")) b.classList.toggle("active", b.dataset.tool === id);
   const t = TOOLS.find(x => x[0] === id);
-  if ($("bp-tool-help")) $("bp-tool-help").textContent = t ? t[3] : "";
+  if ($("bp-tool-help")) $("bp-tool-help").textContent = (t ? t[3] : "") +
+    (RV.draft.length ? " Your unfinished " + words(RV.draftTool || id) + " is kept — switch back to it to keep drawing, or press Finish." : "");
   if (RV.viewer) RV.viewer.box.classList.toggle("drawing", !["select", "pan"].includes(id));
   if (msg && ["length", "area", "rect", "count", "calibrate"].includes(id)) msg.replaceChildren();
 }
@@ -343,6 +345,7 @@ function viewButtons() {
     mk("bp-zoom-in", "＋", "Zoom in", () => RV.viewer.zoomBy(1.5)),
     mk("bp-zoom-out", "－", "Zoom out", () => RV.viewer.zoomBy(1 / 1.5)),
     mk("bp-fit", "Fit", "Fit the sheet", () => RV.viewer.fit()),
+    mk("bp-rotate", "⟳ Rotate", "Rotate the sheet 90° clockwise", () => RV.viewer.rotate()),
     mk("bp-zoom-sel", "Zoom to selection", "Zoom to what's selected", () => RV.viewer.zoomToSelection()),
     mk("bp-full", "⛶", "Full screen", () => { const v = $("bp-viewer"); if (document.fullscreenElement) document.exitFullscreen(); else if (v.requestFullscreen) v.requestFullscreen(); }));
 }
@@ -350,6 +353,7 @@ function viewButtons() {
 async function openSheet(sheetId, msg) {
   RV.sheetId = sheetId;
   RV.selected = new Set();
+  RV.draft = []; RV.draftTool = null;   // a half-drawn line belongs to its sheet
   RV.symbolList = []; RV.symbolPos = -1; RV.symbolType = null;      // the Symbols tab starts again on each sheet
   const [s, o] = await Promise.all([api("GET", "/sheets/" + sheetId), api("GET", "/sheets/" + sheetId + "/objects")]);
   RV.sheet = s.sheet; RV.viewports = s.viewports; RV.tiles = s.tiles;
@@ -377,7 +381,7 @@ class Viewer {
     this.overlay = svg("svg", { class: "bp-overlay", "aria-hidden": "true" });
     this.stage.append(this.tilesLayer, this.overlay);
     box.replaceChildren(this.stage);
-    this.z = 1; this.tx = 0; this.ty = 0; this.level = -1; this.tileEls = new Map(); this.pointers = new Map(); this.zoomBox = null;
+    this.z = 1; this.tx = 0; this.ty = 0; this.rot = 0; this.level = -1; this.tileEls = new Map(); this.pointers = new Map(); this.zoomBox = null;
     box.addEventListener("wheel", ev => { ev.preventDefault(); this.zoomAt(ev.deltaY < 0 ? 1.2 : 1 / 1.2, ev.clientX, ev.clientY); }, { passive: false });
     box.addEventListener("pointerdown", ev => this.down(ev));
     box.addEventListener("pointermove", ev => this.move(ev));
@@ -398,26 +402,45 @@ class Viewer {
     this.clearZoomBox();
     drawOverlay(this.overlay);
     const saved = RV.view[RV.sheetId];
-    if (saved) { this.z = saved.z; this.tx = saved.tx; this.ty = saved.ty; this.render(); } else this.fit();
+    if (saved) { this.z = saved.z; this.tx = saved.tx; this.ty = saved.ty; this.rot = saved.rot || 0; this.render(); } else { this.rot = 0; this.fit(); }
     if (!RV.tiles) this.box.append(el("p", { class: "bp-empty" }, "This sheet has no image yet."));
   }
+  effDims() { return this.rot % 180 === 0 ? [this.W, this.H] : [this.H, this.W]; }
   fit() {
     const r = this.box.getBoundingClientRect();
-    this.z = Math.max(1e-4, Math.min((r.width - 20) / this.W, (r.height - 20) / this.H));
-    this.tx = (r.width - this.W * this.z) / 2; this.ty = (r.height - this.H * this.z) / 2;
+    const [ew, eh] = this.effDims();
+    this.z = Math.max(1e-4, Math.min((r.width - 20) / ew, (r.height - 20) / eh));
+    const [x0, y0, x1, y1] = rotBox(0, 0, this.W * this.z, this.H * this.z, this.rot);
+    this.tx = (r.width - (x1 - x0)) / 2 - x0;
+    this.ty = (r.height - (y1 - y0)) / 2 - y0;
+    this.render();
+  }
+  rotate() {
+    // Keep whatever is in the middle of the screen in the middle.
+    const r = this.box.getBoundingClientRect();
+    const [ux, uy] = this.toSheet(r.left + r.width / 2, r.top + r.height / 2);
+    this.rot = (this.rot + 90) % 360;
+    this.centerOn(ux, uy);
+  }
+  centerOn(ux, uy) {
+    const r = this.box.getBoundingClientRect();
+    const [rx, ry] = rotXY(ux * this.z, uy * this.z, this.rot);
+    this.tx = r.width / 2 - rx; this.ty = r.height / 2 - ry;
     this.render();
   }
   zoomBy(f) { const r = this.box.getBoundingClientRect(); this.zoomAt(f, r.left + r.width / 2, r.top + r.height / 2); }
   zoomAt(f, cx, cy) {
     const r = this.box.getBoundingClientRect();
     const [ux, uy] = this.toSheet(cx, cy);
-    const fitZ = Math.min(r.width / this.W, r.height / this.H);
+    const [ew, eh] = this.effDims();
+    const fitZ = Math.min(r.width / ew, r.height / eh);
     // Wheel zoom has no working cap: pro viewers let it run until the detail
     // fills the screen. The old fitZ * 40 cap stopped a plan that is a small
     // part of its sheet at ~40 px wide. The raster tiles blur past that, but
     // the vector overlay stays sharp; 4000x fit is a sanity bound only.
     this.z = Math.min(Math.max(this.z * f, fitZ / 4), fitZ * 4000);
-    this.tx = cx - r.left - ux * this.z; this.ty = cy - r.top - uy * this.z;
+    const [rx, ry] = rotXY(ux * this.z, uy * this.z, this.rot);
+    this.tx = cx - r.left - rx; this.ty = cy - r.top - ry;
     this.render();
   }
   zoomToBox(b) {
@@ -425,9 +448,11 @@ class Viewer {
     // Floor is a small absolute size, not a fraction of the sheet: zoom to
     // selection must fit the selected thing, and W/200 is ~1,100 units on a
     // sheet whose plan is only 300 units wide.
-    const w = Math.max(b[2] - b[0], 10), h = Math.max(b[3] - b[1], 10);
+    const [bx0, by0, bx1, by1] = rotBox(b[0], b[1], b[2], b[3], this.rot);
+    const w = Math.max(bx1 - bx0, 10), h = Math.max(by1 - by0, 10);
     this.z = Math.min((r.width * 0.8) / w, (r.height * 0.8) / h);
-    this.tx = r.width / 2 - (b[0] + w / 2) * this.z; this.ty = r.height / 2 - (b[1] + h / 2) * this.z;
+    const [cx0, cy0, cx1, cy1] = rotBox(b[0] * this.z, b[1] * this.z, b[2] * this.z, b[3] * this.z, this.rot);
+    this.tx = r.width / 2 - (cx0 + cx1) / 2; this.ty = r.height / 2 - (cy0 + cy1) / 2;
     this.render();
   }
   zoomToSelection(quiet) {
@@ -454,13 +479,14 @@ class Viewer {
   clearZoomBox() { this.zoomBox = null; this.drawZoomBox(); }
   toSheet(cx, cy) {
     const r = this.box.getBoundingClientRect();
-    return [(cx - r.left - this.tx) / this.z, (cy - r.top - this.ty) / this.z];
+    const [x, y] = rotXY(cx - r.left - this.tx, cy - r.top - this.ty, -this.rot);
+    return [x / this.z, y / this.z];
   }
   render() {
     if (!RV.sheet) return;
-    RV.view[RV.sheetId] = { z: this.z, tx: this.tx, ty: this.ty };
+    RV.view[RV.sheetId] = { z: this.z, tx: this.tx, ty: this.ty, rot: this.rot };
     const w = this.W * this.z, h = this.H * this.z;
-    this.stage.style.transform = "translate(" + this.tx + "px," + this.ty + "px)";
+    this.stage.style.transform = "translate(" + this.tx + "px," + this.ty + "px) rotate(" + this.rot + "deg)";
     this.stage.style.width = w + "px"; this.stage.style.height = h + "px";
     this.overlay.setAttribute("width", w); this.overlay.setAttribute("height", h);
     // Room labels keep the same size on screen at any zoom (lines and dots use non-scaling strokes in the CSS).
@@ -580,7 +606,7 @@ class Viewer {
     let [ux, uy] = this.toSheet(ev.clientX, ev.clientY);
     this.snapped = null;
     const last = RV.draft[RV.draft.length - 1];
-    if (ev.shiftKey && last && RV.tool !== "count") {
+    if (ev.shiftKey && last && (RV.draftTool || RV.tool) !== "count") {
       if (Math.abs(ux - last[0]) >= Math.abs(uy - last[1])) uy = last[1]; else ux = last[0];
     }
     if (!ev.altKey) {
@@ -594,7 +620,7 @@ class Viewer {
     this.drawDraft(this.place(ev));
   }
   key(ev) {
-    if (ev.key === "Escape") { RV.draft = []; this.drawDraft(); this.clearZoomBox(); this.start = null; }
+    if (ev.key === "Escape") { RV.draft = []; RV.draftTool = null; this.drawDraft(); this.clearZoomBox(); this.start = null; }
     else if ((ev.key === "Backspace" || ev.key === "Delete") && RV.draft.length) { RV.draft.pop(); this.drawDraft(); }
     else if (ev.key === "Enter") finishDraft(this.msg);
     else if (ev.key === "+" || ev.key === "=") this.zoomBy(1.5);
@@ -614,7 +640,8 @@ class Viewer {
     }
     g = svg("g", { id: "bp-draft" });
     if (ring) g.append(ring);
-    const pts = cursor && RV.tool !== "count" ? RV.draft.concat([cursor]) : RV.draft.slice();
+    const tool = RV.draftTool || RV.tool;
+    const pts = cursor && tool !== "count" ? RV.draft.concat([cursor]) : RV.draft.slice();
     const shape = draftShape(pts);
     if (shape.type === "point") {
       for (const p of shape.points) g.append(svg("polyline", { points: p + " " + p, class: "bp-dot draft" }));
@@ -628,6 +655,19 @@ class Viewer {
 }
 
 function round3(v) { return Math.round(v * 1000) / 1000; }
+
+// Rotate a point (x, y) by deg degrees around the origin; rotBox does the same
+// for a box and returns its bounding box. The viewer rotates the whole sheet
+// about its top-left corner, so every screen<->sheet conversion goes through these.
+function rotXY(x, y, deg) {
+  const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  return [x * c - y * s, x * s + y * c];
+}
+function rotBox(x0, y0, x1, y1, deg) {
+  const ps = [rotXY(x0, y0, deg), rotXY(x1, y0, deg), rotXY(x0, y1, deg), rotXY(x1, y1, deg)];
+  return [Math.min(...ps.map(p => p[0])), Math.min(...ps.map(p => p[1])),
+          Math.max(...ps.map(p => p[0])), Math.max(...ps.map(p => p[1]))];
+}
 
 // The nearest corner of something drawn on the sheet (shown layers only) or of the shape being drawn, within tol.
 // With `along` (Shift held), only corners in line with that point count, so the segment stays straight.
@@ -648,7 +688,7 @@ function snapPoint(p, tol, along) {
     for (const q of pts) consider(q);
   }
   for (const q of RV.draft.slice(0, -1)) consider(q);
-  if (RV.draft.length > 2 && RV.tool === "area") consider(RV.draft[0]);
+  if (RV.draft.length > 2 && (RV.draftTool || RV.tool) === "area") consider(RV.draft[0]);
   return best;
 }
 
@@ -830,6 +870,7 @@ function inside(p, poly) {
 // ------------------------------------------------------------------ drawing a measurement or calibrating
 function addDraftPoint(p, msg) {
   const tool = RV.tool;
+  if (!RV.draft.length) RV.draftTool = tool;   // the line keeps the tool it was started with
   const last = RV.draft[RV.draft.length - 1];
   if (last && tool !== "count" && Math.hypot(p[0] - last[0], p[1] - last[1]) < 3 / RV.viewer.z) return;   // a double-click's 2nd click
   if (tool === "area" && RV.draft.length >= 3) {
@@ -842,12 +883,13 @@ function addDraftPoint(p, msg) {
 }
 
 function draftShape(pts) {
-  if (RV.tool === "rect" && pts.length >= 2) {
+  const tool = RV.draftTool || RV.tool;
+  if (tool === "rect" && pts.length >= 2) {
     const [a, b] = pts;
     return { type: "polygon", points: [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]] };
   }
-  if (RV.tool === "area" && pts.length >= 3) return { type: "polygon", points: pts };
-  if (RV.tool === "count") return { type: "point", points: pts };
+  if (tool === "area" && pts.length >= 3) return { type: "polygon", points: pts };
+  if (tool === "count") return { type: "point", points: pts };
   return { type: pts.length === 2 ? "line" : "polyline", points: pts };
 }
 
@@ -866,7 +908,7 @@ function feetPerUnit(v) {
 }
 
 function previewText(shape) {
-  if (RV.tool === "calibrate") {
+  if ((RV.draftTool || RV.tool) === "calibrate") {
     if (shape.points.length < 2) return "";
     const [a, b] = shape.points;
     return num(Math.hypot(b[0] - a[0], b[1] - a[1]), 3) + (RV.sheet.units === "paper_in" ? "″ on the paper" : " " + RV.sheet.units);
@@ -901,11 +943,11 @@ function draftReadout(text) {
 }
 
 function finishDraft(msg) {
-  const tool = RV.tool;
+  const tool = RV.draftTool || RV.tool;
   const need = { length: 2, area: 3, rect: 2, count: 1, calibrate: 2 }[tool];
   if (!need || RV.draft.length < need) return;
   const shape = draftShape(RV.draft);
-  RV.draft = [];
+  RV.draft = []; RV.draftTool = null;
   RV.viewer.drawDraft();
   if (tool === "calibrate") { calibrateForm(msg, shape.points); return; }
   const vp = viewportAt(shape.points[0]);

@@ -223,6 +223,24 @@ def test_unclear_request_then_module_chosen(db):  # S3-D17
     r = engine.next_step(db, CTX, r["job"]["id"], module_id="house_cleaning", registry=REG)
     assert r["job"]["lane"] == "quick_quote" and r["job"]["open_questions"]
 
+def _title(db, estimate_id):
+    return db.execute("SELECT title FROM estimates WHERE id = ?", (estimate_id,)).fetchone()[0]
+
+
+def test_start_titles_job_by_chosen_service_not_stale_request(db):  # Bugfix 2026-11-11
+    # A house-cleaning quote started with the stale request text "window cleaning"
+    # used to show up in Projects as "window cleaning".
+    r = _start(db, "window cleaning", module_id="house_cleaning")
+    assert r["job"]["module_id"] == "house_cleaning"
+    assert _title(db, r["job"]["estimate_id"]) == "House Cleaning"
+    # The request text still names the service it mentions.
+    r = _start(db, "clean a 3 bedroom house")
+    assert r["job"]["module_id"] == "house_cleaning"
+    assert _title(db, r["job"]["estimate_id"]) == "clean a 3 bedroom house"
+    # No request text at all: the title is the service name, not its id.
+    r = _start(db, "", module_id="house_cleaning")
+    assert _title(db, r["job"]["estimate_id"]) == "House Cleaning"
+
 
 def test_trades_without_modules_and_full_lane_wait_for_feature(db):  # S3-D18 (updated Sprints 7, 13, 14)
     # every planned trade has a module now; a company that turned one off still gets the hand-pricing path

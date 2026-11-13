@@ -376,6 +376,7 @@ def test_dashboard_lists_reviews_waiting_and_my_work(call, db, ctx_for):
 
 def test_web_page_has_the_sprint2_pages():
     js = (router.WEB_DIR / "app.js").read_text(encoding="utf-8")
-    for needle in ("/plans/stage", "/plans/attach", "/quick", "/project", "XMLHttpRequest"):
+    for needle in ("/plans/stage", "/plans/attach", "/quick", "/project", "XMLHttpRequest",
+                   "Price a small service job in a few taps", "1 Pick a service", "Next: choose a service above."):
         assert needle in js
     assert "innerHTML" not in js                                     # text only, never parsed as HTML

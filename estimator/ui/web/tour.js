@@ -253,7 +253,7 @@ let tourProgress = null;         // {tour_id: status} once loaded
 let tourProgressReady = false;
 
 // Which tour belongs to the screen the user is on (app.js: state.screen/state.page).
-const TOUR_SCREEN = { dashboard: "dashboard", projects: "projects", plans: "plans", takeoffs: "takeoffs",
+const TOUR_SCREEN = { quick: "quick", jobs: "jobs", dashboard: "dashboard", projects: "projects", plans: "plans", takeoffs: "takeoffs",
   reviews: "reviews", estimates: "estimates", bids: "bids", price_book: "price_book",
   symbol_library: "symbol_library", agents: "agents", reports: "reports", settings: "settings", help: "help" };
 const TOUR_PAGE = { project: "project", quick: "quick", jobs: "jobs", job: "job", bid: "bid",

@@ -20,7 +20,7 @@ from estimator.director import jobs as jobstore
 from estimator.director import overrides
 from estimator.director.playbooks import get_playbooks, playbook_for_lane
 from estimator.director.settings import get_settings
-from estimator.director.triage import trades_mentioned, triage
+from estimator.director.triage import _norm, _score, trades_mentioned, triage
 from estimator.errors import ConfirmationRequired, EstimatorError, InvalidInput, NotEditable, NotFound, PermissionDenied
 from estimator.bids import service as bids
 from estimator.integrations import host
@@ -46,6 +46,24 @@ def _tx(conn, fn):
         return fn()
 
 
+def _job_title(request: str, tri, reg, address: str | None) -> str:
+    """The title the Projects list shows for a new job.
+
+    The request text is the title when it names the service that was actually priced. But the
+    request and the chosen service can disagree \u2014 a stale request ("window cleaning") with a
+    service chosen after it ("house cleaning") \u2014 and then the title must come from the chosen
+    module, or a house-cleaning quote shows up in Projects as "window cleaning". With no module
+    at all, the request text is the title, as before.
+    """
+    mod = reg.modules.get(tri.module_id) if tri.module_id else None
+    if mod is None:
+        lines = (request or "").strip().splitlines()
+        return lines[0][:80] if lines else "New job"
+    if request and _score(_norm(request), list(mod.keywords) + [mod.name.lower(), mod.id.replace("_", " ")]) > 0:
+        return (request or "").strip().splitlines()[0][:80]
+    return f"{mod.name} \u2013 {address}" if address else mod.name
+
+
 # ------------------------------------------------------------------ public API
 
 def start(conn, ctx: RequestContext, request: str, *, customer_id: str | None = None, address: str | None = None,
@@ -61,7 +79,7 @@ def start(conn, ctx: RequestContext, request: str, *, customer_id: str | None = 
     if address and not cust.get("address"):
         cust["address"] = address
     tri = triage(request, reg, has_plans=has_plans, module_id=module_id or None)
-    title = (request or "").strip().splitlines()[0][:80] if request else (module_id or "New job")
+    title = _job_title(request, tri, reg, address)
     est = service.create_estimate(conn, ctx, title, customer_id=customer_id, address=address, due_date=due_date)
     pb = playbook_for_lane(tri.lane) if tri.lane else None
     stage = pb.stages[0].id if pb else "triage"

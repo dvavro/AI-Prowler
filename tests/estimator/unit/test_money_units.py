@@ -83,6 +83,7 @@ def test_money_rejects_floats():
 
 @pytest.mark.parametrize("alias,code", [
     ("SF", "sqft"), ("sq ft", "sqft"), ("CY", "cuyd"), ("Squares", "sq"), ("each", "ea"), ("LF", "lf"),
+    ("Acres", "acre"), ("AC", "acre"),
 ])
 def test_normalize_unit_aliases(alias, code):
     assert normalize_unit(alias) == code
@@ -99,6 +100,7 @@ def test_unknown_unit():
     ("9", "sqft", "sqyd", Decimal(1)),
     ("36", "in", "ft", Decimal(3)),
     ("2", "day", "hr", Decimal(16)),
+    ("1", "acre", "sqft", Decimal(43560)),
 ])
 def test_convert(value, src, dst, expected):
     assert convert(value, src, dst) == expected

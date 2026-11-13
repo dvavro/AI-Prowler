@@ -178,9 +178,11 @@ function buildNav() {
 function parseHash() {
   const parts = location.hash.replace(/^#\/?/, "").split("?")[0].split("/").filter(Boolean);
   if (parts[0] === "projects" && /^\d+$/.test(parts[1] || "")) return { screen: "projects", page: "project", arg: +parts[1] };
-  if (parts[0] === "quick") return { screen: "dashboard", page: "quick", arg: /^\d+$/.test(parts[1] || "") ? +parts[1] : null };
-  // Sprint 4: Jobs board and job pages hang off the Dashboard; a bid page off Bids; a guide off Help.
-  if (parts[0] === "jobs") return { screen: "dashboard", page: /^\d+$/.test(parts[1] || "") ? "job" : "jobs", arg: +parts[1] || null };
+  if (parts[0] === "quick" && /^\d+$/.test(parts[1] || "")) return { screen: "quick", page: "quick", arg: +parts[1] };
+  if (parts[0] === "quick") return { screen: "quick", page: null, arg: null };
+  // Sprint 4: Jobs board is a left-menu screen; a job page hangs off it, a bid page off Bids, a guide off Help.
+  if (parts[0] === "jobs" && /^\d+$/.test(parts[1] || "")) return { screen: "jobs", page: "job", arg: +parts[1] };
+  if (parts[0] === "jobs") return { screen: "jobs", page: null, arg: null };
   if (parts[0] === "bids" && /^\d+$/.test(parts[1] || "")) return { screen: "bids", page: "bid", arg: +parts[1] };
   if (parts[0] === "help" && /^[a-z0-9_]+$/.test(parts[1] || "")) return { screen: "help", page: "guide", arg: parts[1] };
   // Sprint 5: a plan set's sheets, and one sheet (viewports, scales, calibration).
@@ -550,15 +552,20 @@ async function renderQuick(main, estimateId) {
     others.length ? el("optgroup", { label: "Trades" }, others.map(m => el("option", { value: m.id }, m.name))) : null);
   const form = el("form", { class: "card section", id: "quick-form" });
   const result = el("div", { id: "quick-result" });
-  parts.push(el("div", { class: "card section" }, el("label", {}, "What's the job?", pick)), form, result);
+  const steps = el("p", { class: "muted", id: "quick-steps" }, "1 Pick a service → 2 Answer the questions → 3 Price it → 4 Approve and send");
+  const next = el("p", { class: "note", id: "quick-next-hint" }, "Next: choose a service above.");
+  parts.push(el("p", { class: "muted" }, "Price a small service job in a few taps — no plans needed. Pick a service, answer a few questions, and get a price from your Price Book."),
+             steps, next,
+             el("div", { class: "card section" }, el("label", {}, "What's the job?", pick)), form, result);
   main.replaceChildren(...parts);
 
   pick.addEventListener("change", async () => {
     form.replaceChildren(); result.replaceChildren();
+    next.textContent = pick.value ? "Next: answer the questions below, then press Price it." : "Next: choose a service above.";
     if (!pick.value) return;
     try {
       const q = await api("GET", "/modules/" + encodeURIComponent(pick.value) + "/questions");
-      buildQuickForm(form, result, q, est);
+      buildQuickForm(form, result, q, est, next);
     } catch (e) { if (e.status !== 401) form.replaceChildren(errorBox(e)); }
   });
   const want = new URLSearchParams(location.hash.split("?")[1] || "").get("module");
@@ -585,7 +592,7 @@ function questionInput(q) {
     q.help ? el("span", { class: "muted small" }, q.help) : null);
 }
 
-function buildQuickForm(form, result, q, est) {
+function buildQuickForm(form, result, q, est, next) {
   const fields = q.questions.map(questionInput);
   const extras = [];
   let title = null, addr = null;
@@ -613,6 +620,7 @@ function buildQuickForm(form, result, q, est) {
       const r = await api("POST", "/quick", body);
       if (est) est.rev = r.rev;                        // a second "Price it" uses the new rev
       showQuickResult(result, r, q.module);
+      if (next) next.textContent = r.job ? "Priced. Next: approve and send the quote." : "Priced. Next: open the project to carry on.";
     } catch (e) {
       if (e.status === 401) return;
       const extra = e.body && e.body.missing ? " (" + e.body.missing.join(", ") + ")" : "";
@@ -1635,7 +1643,7 @@ function renderComing(main, screen) {
     el("ul", {}, screen.tools.map(t => el("li", {}, el("code", {}, t))))));
 }
 
-const SCREENS = { dashboard: renderDashboard, projects: renderProjects, plans: renderPlans, price_book: renderPriceBook,
+const SCREENS = { quick: (m) => renderQuick(m, null), jobs: (m) => renderJobs(m, null), dashboard: renderDashboard, projects: renderProjects, plans: renderPlans, price_book: renderPriceBook,
                   bids: renderBids, help: renderHelp };
 const PAGES = { project: renderProject, quick: renderQuick, jobs: renderJobs, job: renderJob, bid: renderBid, guide: renderGuide,
                 plan_set: renderPlanSet, sheet: renderSheet };
@@ -1649,7 +1657,7 @@ function onChange(ev) {
   if (ev.actor && state.me && ev.actor !== state.me.user_id) {
     toast("Updated by " + ev.actor + (ev.estimate_id ? " (estimate " + ev.estimate_id + ")" : ""));
   }
-  const listScreen = (!state.page && ["dashboard", "projects", "bids"].includes(state.screen)) || state.page === "jobs";
+  const listScreen = (!state.page && ["dashboard", "projects", "bids", "jobs"].includes(state.screen)) || state.page === "jobs";
   const thisProject = state.page === "project" && ev.estimate_id === state.pageArg;
   const thisJob = state.page === "job" && ev.estimate_id === state.jobEstimate;   // e.g. approved in chat
   if (!listScreen && !thisProject && !thisJob) return;             // never redraw the quick-estimate form under the user

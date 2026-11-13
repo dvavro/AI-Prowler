@@ -113,7 +113,7 @@ def test_redact_is_recursive_and_leaves_others_alone():
 
 # ---------------------------------------------------------------- menu and permissions
 
-SPEC_MENU = ["Dashboard", "Projects", "Plans", "Takeoffs", "Reviews", "Estimates", "Bids", "Price Book",
+SPEC_MENU = ["Quick estimate", "Jobs board", "Dashboard", "Projects", "Plans", "Takeoffs", "Reviews", "Estimates", "Bids", "Price Book",
              "Symbol Library", "Agents", "Reports", "Settings", "Help"]
 
 
@@ -128,7 +128,7 @@ def test_field_menu_hides_money_and_admin_screens(call, session_for):
     ids = [s["id"] for s in me["menu"]]
     for hidden in ("price_book", "agents", "settings", "takeoffs"):
         assert hidden not in ids
-    for shown in ("dashboard", "projects", "reviews", "help", "bids"):     # field sends quotes (2026-11-08)
+    for shown in ("quick", "jobs", "dashboard", "projects", "reviews", "help", "bids"):     # field sends quotes (2026-11-08)
         assert shown in ids
     assert me["permissions"]["see_margins"] is False and me["permissions"]["approve"] is False
 
@@ -137,7 +137,7 @@ def test_every_role_has_a_menu_and_permissions(call, session_for):
     from estimator.context import ROLES
     for role in ROLES:
         me = call("GET", "/estimator-api/me", headers=session_for(role)).json()["me"]
-        assert me["menu"][0]["id"] == "dashboard" and me["menu"][-1]["id"] == "help"
+        assert me["menu"][0]["id"] == ("quick" if role in ("owner", "estimator", "office", "field") else "dashboard") and me["menu"][-1]["id"] == "help"
         assert set(me["permissions"]) == {"create_estimate", "edit_estimate", "see_margins", "edit_margins",
                                           "approve", "send_bids", "settings", "upload_plans", "quick_estimate"}
 

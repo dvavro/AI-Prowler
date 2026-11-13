@@ -16,6 +16,11 @@ from __future__ import annotations
 ALL = ("owner", "estimator", "reviewer", "office", "field")
 
 SCREENS = (
+    {"id": "quick", "label": "Quick estimate", "icon": "⚡", "roles": ("owner", "estimator", "office", "field"), "status": "ready", "sprint": 2,
+     "tools": ["est_list_modules", "est_quick_questions", "est_quick_answer", "est_create_estimate",
+               "est_director_start"]},  # == QUICK_ESTIMATE below; keep in step
+    {"id": "jobs", "label": "Jobs board", "icon": "📋", "roles": ("owner", "estimator", "office", "field"), "status": "ready", "sprint": 4,
+     "tools": ["est_jobs_board"]},
     {"id": "dashboard", "label": "Dashboard", "icon": "🏠", "roles": ALL, "status": "ready", "sprint": 1,
      "tools": ["est_project_status", "est_list_estimates", "runner_status", "est_setup_status"]},
     {"id": "projects", "label": "Projects", "icon": "📁", "roles": ALL, "status": "ready", "sprint": 1,
@@ -67,10 +72,11 @@ SCREENS = (
 PAGES = (
     {"id": "project", "label": "Project", "from": "projects", "sprint": 2,
      "tools": ["est_project_status", "est_get_estimate", "plan_upload", "plan_status"]},
+    # Also a left-menu screen now; this entry covers the per-project deep link #/quick/<id>.
     {"id": "quick", "label": "Quick estimate", "from": "dashboard", "sprint": 2,
      "tools": ["est_list_modules", "est_quick_questions", "est_quick_answer", "est_create_estimate",
                "est_director_start"]},
-    # Sprint 4: the Director's Jobs board (quick lane first) and one job's next step.
+    # Sprint 4: the Director's Jobs board (quick lane first) and one job's next step. Also a left-menu screen now.
     {"id": "jobs", "label": "Jobs board", "from": "dashboard", "sprint": 4, "tools": ["est_jobs_board"]},
     {"id": "job", "label": "Job", "from": "jobs", "sprint": 4,
      "tools": ["est_job_status", "est_director_start", "est_director_next"]},
