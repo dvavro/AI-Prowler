@@ -59,6 +59,23 @@ def test_guided_tours_can_be_turned_off_per_user(call):
     assert '["tours", "🎓 Guided tours"]' in settings and 'id: "set-tours-auto"' in settings
 
 
+def test_archive_restore_and_delete_a_project(call):
+    e = call("POST", f"{API}/estimates", {"title": "Test 25X25"}).json()
+    ask = call("POST", f"{API}/estimates/{e['id']}/archive", {}).json()
+    assert ask["needs_confirmation"] and "Archive 'Test 25X25'" in ask["question"]
+    assert call("POST", f"{API}/estimates/{e['id']}/archive", {"confirm": True}).json()["archived"] == 1
+    assert call("GET", f"{API}/estimates/{e['id']}").json()["status"] == "archived"
+    assert call("POST", f"{API}/estimates/{e['id']}/restore", {"confirm": True}).json()["restored"] == 1
+    ask = call("POST", f"{API}/estimates/{e['id']}/delete", {}).json()
+    assert ask["needs_confirmation"] and ask["changes"]
+    assert call("POST", f"{API}/estimates/{e['id']}/delete", {"confirm": True, "title": "nope"}).status == 400
+    r = call("POST", f"{API}/estimates/{e['id']}/delete", {"confirm": True, "title": "Test 25X25"})
+    assert r.status == 200, r.body
+    assert call("GET", f"{API}/estimates/{e['id']}").status == 404
+    js = (router.WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function projectAdminBox(" in js and 'id: "proj-delete"' in js and 'id: "proj-archive"' in js
+
+
 def test_pages_have_the_director_panel_and_start_page():
     js = (router.WEB_DIR / "app.js").read_text(encoding="utf-8")
     assert "function directorPanel(" in js and "/director/intake" in js and 'id: "dash-start"' in js

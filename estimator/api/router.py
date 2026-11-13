@@ -48,6 +48,8 @@ Sprint 4 (Coder 2):
   POST /quick (no estimate_id) now starts a quick-quote Director job, so the quote shows on the Jobs board
   POST /director/intake {request, has_plans?, customer?, address?, due_date?, module_id?, preview?}
                                     the Dashboard's "Start a new quote or estimate": starts the right job, returns route
+  POST /estimates/<id>/archive|restore|delete {confirm?, title?}   owner: hide / bring back / delete a project and its
+                                    revisions (asks first; delete needs the name typed and refuses a quoted project)
   POST /estimates/<id>/director     the project's Director job (made the first time; project lane) and its next step
                                     (2026-11-12: every project gets one; POST /estimates makes it straight away)
   Bids (owner, estimator, office, field - the bid_send roles): GET /bids?status=&estimate_id=, GET /bids/<id> (bid_preview),
@@ -291,6 +293,7 @@ def _api(req: Request, open_db) -> Response:
 _EST = re.compile(r"^/estimates/(\d+)$")
 _EST_EVENTS = re.compile(r"^/estimates/(\d+)/events$")
 _EST_DIRECTOR = re.compile(r"^/estimates/(\d+)/director$")
+_EST_ADMIN = re.compile(r"^/estimates/(\d+)/(archive|restore|delete)$")
 _PROJECT = re.compile(r"^/estimates/(\d+)/project$")
 _PLANS = re.compile(r"^/estimates/(\d+)/plans$")
 _STAGE = re.compile(r"^/estimates/(\d+)/plans/stage$")
@@ -377,6 +380,18 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
                               address=_opt(b, "address"), due_date=_opt(b, "due_date"), module_id=_opt(b, "module_id"),
                               preview=b.get("preview") is True)
         return _json(200 if b.get("preview") is True else 201, _no_paths(redact(out, see)))
+
+    mm = _EST_ADMIN.match(sub)
+    if mm and m == "POST":
+        # Archive / restore / delete a project (owner; each asks first; delete needs the name typed). 2026-11-12.
+        from estimator.estimating import project_admin
+        eid, action, b = int(mm.group(1)), mm.group(2), _body(req)
+        confirm = b.get("confirm") is True
+        if action == "archive":
+            return _ask_first(lambda: project_admin.archive(conn, ctx, eid, confirm=confirm))
+        if action == "restore":
+            return _ask_first(lambda: project_admin.restore(conn, ctx, eid, confirm=confirm))
+        return _ask_first(lambda: project_admin.delete(conn, ctx, eid, confirm=confirm, title=_opt(b, "title")))
 
     mm = _EST_DIRECTOR.match(sub)
     if mm and m == "POST":

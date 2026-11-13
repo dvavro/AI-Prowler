@@ -272,7 +272,7 @@ async function renderDashboard(main, screen) {
         el("ul", { class: "checklist" }, todo.map(s => el("li", {}, (s.label || s.step) + " — " + words(s.status))))));
     }
   }
-  parts.push(el("h3", {}, "Recent"), estimateTable(d.recent));
+  parts.push(el("h3", {}, "Recent"), estimateTable((d.recent || []).filter(e => e.status !== "archived")));
   main.replaceChildren(...parts);
 }
 
@@ -313,7 +313,10 @@ async function renderProjects(main, screen) {
     STATUSES.map(s => el("option", { value: s, selected: s === status }, words(s))));
   pick.addEventListener("change", () => { location.hash = "#/projects" + (pick.value ? "?status=" + pick.value : ""); });
   const find = el("input", { id: "filter-text", type: "search", placeholder: "Filter by name or #", "aria-label": "Filter" });
-  const table = estimateTable(list.estimates);
+  // Archived projects stay out of "All statuses"; pick Archived to see them (2026-11-12).
+  const rows = status ? list.estimates : list.estimates.filter(e => e.status !== "archived");
+  const hidden = list.estimates.length - rows.length;
+  const table = estimateTable(rows);
   find.addEventListener("input", () => {
     const t = find.value.trim().toLowerCase();
     for (const tr of table.querySelectorAll("tbody tr")) {
@@ -321,6 +324,8 @@ async function renderProjects(main, screen) {
     }
   });
   parts.push(el("div", { class: "row filters" }, el("label", {}, "Status", pick), el("label", {}, "Find", find)), table);
+  if (hidden) parts.push(el("p", { class: "muted small", id: "archived-hidden" },
+    el("a", { href: "#/projects?status=archived" }, hidden + " archived project(s)"), " not shown."));
   main.replaceChildren(...parts);
 }
 
@@ -403,7 +408,58 @@ async function renderProject(main, id) {
     } catch (e) { hist.append(errorBox(e)); }
   });
   parts.push(hist);
+  if (state.me && state.me.role === "owner" && !est.practice) parts.push(projectAdminBox(est));
   main.replaceChildren(...parts);
+}
+
+// Archive / restore / delete the project (owner; 2026-11-12, David). Every action asks first; delete needs the name.
+function projectAdminBox(est) {
+  const msg = el("div", { id: "proj-admin-message", role: "status" });
+  const kids = [el("h3", {}, "Archive or delete this project")];
+  if (est.status === "archived") {
+    const restore = el("button", { class: "primary", type: "button", id: "proj-restore" }, "↩ Restore project…");
+    restore.addEventListener("click", () => askConfirm(msg, restore, "/estimates/" + est.id + "/restore", {},
+      r => { toast(r.message); route(); }, "proj-restore"));
+    kids.push(el("p", { class: "muted" }, "This project is archived: it's hidden from Projects and the Dashboard."),
+      el("div", { class: "row" }, restore));
+  } else {
+    const archive = el("button", { class: "button", type: "button", id: "proj-archive" }, "🗄 Archive project…");
+    archive.addEventListener("click", () => askConfirm(msg, archive, "/estimates/" + est.id + "/archive", {},
+      r => { toast(r.message); go("#/projects"); }, "proj-archive"));
+    kids.push(el("p", { class: "muted" }, "Archive hides the project and keeps everything; you can restore it any time. " +
+      "Delete removes it and its plans, measurements, quotes and history for good (a backup is made first)."),
+      el("div", { class: "row" }, archive));
+  }
+  const del = el("button", { class: "button danger", type: "button", id: "proj-delete" }, "🗑 Delete project…");
+  del.addEventListener("click", async () => {
+    del.disabled = true;
+    msg.replaceChildren();
+    try {
+      const r = await api("POST", "/estimates/" + est.id + "/delete", {});
+      if (!r.needs_confirmation) { toast(r.message); go("#/projects"); return; }
+      const name = el("input", { id: "proj-delete-name", maxlength: 200, placeholder: est.title, "aria-label": "Project name" });
+      const yes = el("button", { class: "primary danger", type: "button", id: "proj-delete-confirm" }, "Delete for good");
+      const no = el("button", { class: "button", type: "button", id: "proj-delete-cancel" }, "Cancel");
+      const err = el("div", { id: "proj-delete-error", role: "alert" });
+      no.addEventListener("click", () => msg.replaceChildren(el("p", { class: "muted" }, "Cancelled — nothing was deleted.")));
+      yes.addEventListener("click", async () => {
+        yes.disabled = no.disabled = true;
+        try {
+          const done = await api("POST", "/estimates/" + est.id + "/delete", { confirm: true, title: name.value });
+          toast(done.message);
+          go("#/projects");
+        } catch (e) { yes.disabled = no.disabled = false; if (e.status !== 401) err.replaceChildren(errorBox(e)); }
+      });
+      msg.replaceChildren(el("div", { class: "confirm", id: "proj-delete-box" }, el("p", {}, el("strong", {}, r.question)),
+        (r.changes || []).length ? el("ul", {}, r.changes.map(c => el("li", {}, c))) : null,
+        el("label", {}, "Type the project's name to confirm: " + est.title, name), err, el("div", { class: "row" }, yes, no)));
+      name.focus();
+    } catch (e) { if (e.status !== 401) msg.replaceChildren(errorBox(e)); }
+    finally { del.disabled = false; }
+  });
+  kids[kids.length - 1].append(del);
+  kids.push(msg);
+  return el("div", { class: "card section", id: "project-admin" }, ...kids);
 }
 
 function tile(value, label, cls) {

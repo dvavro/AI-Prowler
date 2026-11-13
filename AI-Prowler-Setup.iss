@@ -502,6 +502,7 @@ Source: "estimator\drawing_model\uploads.py"; DestDir: "{app}\estimator\drawing_
 Source: "estimator\errors.py"; DestDir: "{app}\estimator"; Flags: ignoreversion
 Source: "estimator\estimating\__init__.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\assemblies.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
+Source: "estimator\estimating\project_admin.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\quick.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\scenarios.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\service.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion

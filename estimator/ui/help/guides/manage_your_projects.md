@@ -13,4 +13,5 @@ Projects is where every estimate starts: one project per job, with its plans, es
 
 - A project is the same thing as its estimate: one project, one estimate (plus revisions).
 - Practice projects are marked 🎓 and never count in your win/loss numbers.
+- To clear a project away, open it and scroll to **Archive or delete this project** (owner only). **🗄 Archive project…** hides it and keeps everything; pick **Archived** in the status filter and **↩ Restore project…** to bring it back. **🗑 Delete project…** removes it and its plans, measurements and quotes for good (type the name to confirm; a backup is made first). A project quoted to a customer can only be archived.
 - Ask your AI: "create a project for Miller at 123 Main St", "which projects are still drafts?".

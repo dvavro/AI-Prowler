@@ -60,6 +60,9 @@ td.money { text-align: right; font-variant-numeric: tabular-nums; }
 .row label { flex: 1; min-width: 180px; margin: 0; }
 .section { margin: 18px 0; }
 .checklist li { margin: 4px 0; }
+/* Delete project (2026-11-12) */
+.danger { color: var(--bad); border-color: var(--bad); }
+.primary.danger { background: var(--bad); color: #fff; }
 /* The Director panel on the project, estimate and job pages (2026-11-12) */
 .director-panel { border-left: 4px solid var(--accent, #2563eb); }
 .director-panel .checklist { list-style: none; padding-left: 0; }
