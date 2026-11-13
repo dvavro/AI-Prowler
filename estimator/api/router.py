@@ -250,12 +250,31 @@ def _me(caller: auth.Caller) -> dict:
             "version": estimator.__version__}
 
 
+_web_build_cache: dict = {}
+
+
+def web_build() -> str:
+    """A short hash of the web app's own files (html, js, css), so an open page can tell that a newer version was
+    installed and offer to refresh (2026-11-13: a restart after a deploy changed nothing a page already open could
+    see). Recomputed only when a file's size or time changes."""
+    import hashlib
+    files = sorted(p for p in WEB_DIR.iterdir() if p.is_file() and p.suffix.lower() in (".html", ".js", ".css"))
+    key = tuple((p.name, p.stat().st_mtime_ns, p.stat().st_size) for p in files)
+    if _web_build_cache.get("key") != key:
+        h = hashlib.sha256()
+        for p in files:
+            h.update(p.name.encode("utf-8"))
+            h.update(p.read_bytes())
+        _web_build_cache.update(key=key, build=h.hexdigest()[:10])
+    return _web_build_cache["build"]
+
+
 def _api(req: Request, open_db) -> Response:
     sub = req.path[len(API):] or "/"
     m = req.method
 
     if sub == "/health" and m == "GET":
-        return _ok(app="AI-Prowler Estimator", version=estimator.__version__, mode=auth.mode())
+        return _ok(app="AI-Prowler Estimator", version=estimator.__version__, mode=auth.mode(), build=web_build())
 
     if not auth.write_allowed(m, req.headers):
         return _fail(403, "csrf", "this change must come from the Estimator web app")
@@ -698,6 +717,17 @@ def _price_book(m: str, sub: str, req: Request, ctx, conn) -> Response:
                 kwargs["unit"] = v
             if "module_id" in b:
                 kwargs["module_id"] = _opt(b, "module_id")
+            # 2026-11-12: the Edit row also changes the cost and the sample mark.
+            if "cost" in b and b["cost"] is not None:
+                if isinstance(b["cost"], bool) or not isinstance(b["cost"], (str, int, float)):
+                    raise _Refuse(400, "invalid_input", 'give the cost as dollars, e.g. "250.00"')
+                kwargs["cost"] = str(b["cost"])
+            if "sample" in b and b["sample"] is not None:
+                if not isinstance(b["sample"], bool):
+                    raise _Refuse(400, "invalid_input", "sample must be true or false")
+                kwargs["sample"] = b["sample"]
+            if _opt(b, "effective_date"):
+                kwargs["effective_date"] = _opt(b, "effective_date")
             return _ask_first(lambda: price_book.update_price_details(conn, ctx, key,
                                                                       confirm=b.get("confirm") is True, **kwargs))
         return _ask_first(lambda: price_book.remove_price(conn, ctx, key, confirm=b.get("confirm") is True))
@@ -1339,6 +1369,21 @@ def _opt(b: dict, key: str) -> str | None:
 
 # ------------------------------------------------------------------ static files
 
+_ASSET_REF = re.compile(rb'((?:src|href)=")([A-Za-z0-9_\-]+\.(?:js|css))(")')
+
+
+def _versioned_page(page: bytes) -> bytes:
+    """index.html as served: every script and style sheet it loads gets ?v=<web build> (2026-11-13). Through the
+    Cloudflare tunnel the browser was told to keep .js/.css for 4 hours (Cloudflare replaces our no-cache with
+    max-age=14400), so after an update a computer kept running the old screens. A new build is a new address, so
+    the new files are always fetched; the page itself is never kept (no-cache, and Cloudflare doesn't cache it)."""
+    try:
+        v = web_build().encode("ascii")
+    except OSError:
+        return page
+    return _ASSET_REF.sub(lambda m: m.group(1) + m.group(2) + b"?v=" + v + m.group(3), page)
+
+
 def static(path: str) -> Response:
     if path == APP:   # relative links in index.html need the trailing slash
         return Response(301, "text/plain; charset=utf-8", b"", {"Location": APP + "/", **SECURITY_HEADERS})
@@ -1358,6 +1403,8 @@ def static(path: str) -> Response:
         else:
             return _fail(404, "not_found", "no such file")
     data = target.read_bytes()
+    if target.name == "index.html":
+        data = _versioned_page(data)
     headers = {**SECURITY_HEADERS, "Cache-Control": "no-cache"}
     return Response(200, STATIC_TYPES.get(ext) or mimetypes.guess_type(target.name)[0] or "application/octet-stream",
                     data, headers)

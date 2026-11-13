@@ -154,13 +154,19 @@ def _extract_update_banner_logic(html_path: Path) -> str:
     # fix and whichever haven't yet.
     if "let _swRegistration = null;" in source:
         parts.append("let _swRegistration = null;")
-    for marker in [
+    markers = [
         "function _initUpdateBanner()",
         "function _showUpdateBanner()",
         "function _dismissUpdateBanner()",
         "function _maybeReshowUpdateBanner()",
         "function _refreshForUpdate()",
-    ]:
+    ]
+    # 2026-11-13: the Jobs app also compares the version stamped into its sw.js directly (works for a page the
+    # service worker doesn't control, e.g. after Ctrl+Shift+R). Included only when present.
+    if "function _checkServerBuild(force)" in source:
+        parts.append("let _swBaseline = null, _lastBuildCheck = 0;")
+        markers.append("function _checkServerBuild(force)")
+    for marker in markers:
         parts.append(_extract_braced_block(source, marker))
     return "\n\n".join(parts)
 
@@ -177,7 +183,13 @@ function setupMocks(hasController) {
     updateCallCount: 0, intervalDelayMs: null, intervalCallback: null,
     visibilityHandler: null,
   };
-  global.window = { location: { reload: () => { state.reloadCount++; } } };
+  global.window = { location: { reload: () => { state.reloadCount++; } },
+                    addEventListener: (evt, fn) => { if (evt === 'focus') state.focusHandler = fn; } };
+  // The server's sw.js as fetched by _checkServerBuild (2026-11-13); tests change state.swCache to "deploy".
+  state.swCache = 'aaaaaaaaaaaa';
+  state.fetchCount = 0;
+  global.fetch = (url) => { state.fetchCount++; state.lastFetch = url;
+    return Promise.resolve({ ok: true, text: () => Promise.resolve("const CACHE = '" + state.swCache + "';") }); };
 
   const installingObj = { state: 'installing', _listeners: {} };
   installingObj.addEventListener = function (evt, fn) { this._listeners[evt] = fn; };
@@ -342,6 +354,37 @@ function check(name, cond) { results.push([name, !!cond]); }
     }
   }
 
+  // 2026-11-13: a new deploy is noticed straight from the server's sw.js stamp, even on a page the service worker
+  // doesn't control (a hard refresh) where the 'installed' route above can't fire.
+  if (__HAS_SERVER_CHECK__) {
+    {
+      _updatePending = false; _swBaseline = null; _lastBuildCheck = 0;
+      const { state } = setupMocks(false);                 // no controller: what Ctrl+Shift+R leaves
+      _initUpdateBanner();
+      await new Promise(r => setTimeout(r, 5));
+      check('reads_the_server_stamp_at_start', state.fetchCount === 1 && state.lastFetch === '__EXPECTED_SW_PATH__');
+      check('no_banner_when_nothing_changed', state.bannerShown === false);
+      state.swCache = 'bbbbbbbbbbbb';                       // deployed + restarted
+      global.document._setVisibility('visible');
+      state.visibilityHandler();
+      await new Promise(r => setTimeout(r, 5));
+      check('new_stamp_shows_banner_without_a_controller', state.bannerShown === true && state.reloadCount === 0);
+      check('interval_is_5_minutes_or_less', state.intervalDelayMs <= 5 * 60 * 1000);
+      check('focus_handler_registered', typeof state.focusHandler === 'function');
+    }
+    {
+      _updatePending = false; _swBaseline = null; _lastBuildCheck = 0;
+      const { state } = setupMocks(true);
+      _initUpdateBanner();
+      await new Promise(r => setTimeout(r, 5));
+      const n = state.fetchCount;
+      _maybeReshowUpdateBanner(); _maybeReshowUpdateBanner();   // screen changes within a minute: one look at most
+      await new Promise(r => setTimeout(r, 5));
+      check('screen_changes_are_throttled', state.fetchCount === n);
+      check('no_spurious_banner_on_screen_change', state.bannerShown === false);
+    }
+  }
+
   console.log(JSON.stringify(results));
   process.exit(results.every(r => r[1]) ? 0 : 1);
 })();
@@ -356,6 +399,7 @@ def _run_update_banner_harness(html_path: Path, expected_sw_path: str, tmp_path:
         .replace("__EXTRACTED_LOGIC__", extracted)
         .replace("__EXPECTED_SW_PATH__", expected_sw_path)
         .replace("__HAS_LIVE_RECHECK__", "true" if has_live_recheck else "false")
+        .replace("__HAS_SERVER_CHECK__", "true" if "function _checkServerBuild(force)" in extracted else "false")
     )
 
     script_path = tmp_path / f"update_banner_{app_name}.js"

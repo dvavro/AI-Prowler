@@ -20,7 +20,8 @@ import os
 from pathlib import Path
 
 TILE = 512
-MAX_PDF_DPI = 300
+MAX_PDF_DPI = 600       # 2026-11-13: was 300, which really meant ~240 (a 17" sheet topped out at 4096 px) and stayed
+                        # soft at 8x on a phone; only the tiles on screen are drawn, so the top level costs no more
 MAX_LEVEL = 8
 
 

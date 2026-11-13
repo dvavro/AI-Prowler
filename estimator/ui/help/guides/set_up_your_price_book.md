@@ -4,9 +4,9 @@ Each trade and service comes with sample prices so you can try it out. Put in yo
 
 1. Open **Price Book** in the left menu (owners and estimators).
 2. Tick **Samples only** to see the prices you haven't set yet. Pick a trade or service under **Show**, or a **Kind** (material, labor...), to narrow the list.
-3. Type your cost per unit in the **Cost per unit** box. Changed boxes are highlighted.
-4. Optionally pick the date the new prices **Take effect**.
-5. Click **Save changes…**, check the list of old → new prices, then click **Yes, save**.
+3. Click **✏️ Edit** on the price's row. Every field opens: description, kind, unit, trade, **Cost per unit** and **Sample**. (The cost in the table is for reading; it only changes through Edit.)
+4. Type your cost, and optionally pick the date it **Takes effect**. Happy with a sample's price as it is? Just untick **Sample** — it becomes your own price and the "(sample)" tag comes off.
+5. Click **Save…**, check the list of changes, then click **Yes, save**.
 
 ## Import a supplier price list
 1. Copy the rows from your supplier's spreadsheet, header row first.

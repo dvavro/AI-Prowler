@@ -166,6 +166,12 @@ html,body{height:100%;background:var(--bg);color:#ffffff;font-family:'Inter',-ap
    or acted on. */
 #updateBanner{position:fixed;top:calc(var(--safe-top) + 28px);left:12px;right:12px;z-index:9999;background:var(--surface);border:1px solid var(--cyan);border-radius:14px;padding:12px 14px;box-shadow:0 8px 30px rgba(0,0,0,.5);display:none;align-items:center;justify-content:space-between;gap:10px}
 #updateBanner.show{display:flex}
+/* 2026-11-13 (David): a phone turned sideways has little height, so the Estimates tab drops its Quick estimate /
+   Reviews buttons and gives the plans the room (turn it back upright to switch between them). */
+@media (orientation: landscape) and (max-height: 540px){
+  #screen-estimates .est-modes{display:none !important}
+  #screen-estimates #estimatesFrame{height:calc(100vh - 150px) !important}
+}
 #updateBanner .msg{font-size:13px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
 #updateBanner .actions{display:flex;gap:8px;flex-shrink:0}
 #updateBanner button{border:none;border-radius:9px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent}
@@ -1088,7 +1094,7 @@ textarea::placeholder{color:#c0c6d8}
     <div id="screen-estimates" class="screen">
       <!-- 2026-11-09 (Estimator Coder 2 Sprint 13): Quick estimate or Reviews (symbols and measurements to check
            by touch); the Reviews count comes from /estimator-api/mobile/reviews. -->
-      <div style="display:flex;gap:8px;margin-bottom:8px">
+      <div class="est-modes" style="display:flex;gap:8px;margin-bottom:8px">
         <button type="button" id="estModeQuick" data-testid="est-mode-quick" onclick="estimatesMode('quick')"
                 style="flex:1;min-height:44px;border-radius:10px;border:1px solid #cbd5e1;background:#1e3a8a;color:#fff;font-size:15px">Quick estimate</button>
         <button type="button" id="estModeReviews" data-testid="est-mode-reviews" onclick="estimatesMode('reviews')"
@@ -2243,15 +2249,36 @@ function _initUpdateBanner() {
     reg.update().catch(() => {});
   }).catch(() => {});
 
+  // Found 2026-11-13 (David): after a deploy + restart, a Jobs tab left open on the desktop kept its old
+  // badge (d60307 while the server served 69fc07) and never showed the banner. Two gaps: (1) the service
+  // worker route only fires for a page the worker CONTROLS — a Ctrl+Shift+R hard refresh loads the page
+  // uncontrolled, so `navigator.serviceWorker.controller` is null and the 'installed' check above never
+  // shows anything; (2) a tab that just stays on screen only re-checked every 30 minutes. So the page now
+  // also asks the server directly: it reads the version stamped into /jobs/sw.js (the same content hash,
+  // now covering the Estimator's files too) when it starts, and compares on focus, on every screen change
+  // (at most once a minute) and every 5 minutes. A different value shows the same banner.
+  _checkServerBuild(true);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && _swRegistration) {
-      _swRegistration.update().catch(() => {});
-    }
+    if (document.visibilityState === 'visible') _checkServerBuild(true);
   });
+  window.addEventListener('focus', () => _checkServerBuild(false));
+  setInterval(() => _checkServerBuild(true), 5 * 60 * 1000);
+}
 
-  setInterval(() => {
-    if (_swRegistration) _swRegistration.update().catch(() => {});
-  }, 30 * 60 * 1000);
+let _swBaseline = null, _lastBuildCheck = 0;
+function _checkServerBuild(force) {
+  if (!force && Date.now() - _lastBuildCheck < 60 * 1000) return;
+  _lastBuildCheck = Date.now();
+  if (_swRegistration) _swRegistration.update().catch(() => {});
+  fetch('/jobs/sw.js', { cache: 'no-store', credentials: 'same-origin' })
+    .then(r => (r.ok ? r.text() : ''))
+    .then(t => {
+      const m = t.match(/const CACHE = '([^']*)'/);
+      if (!m || m[1] === 'auto') return;              // not stamped (file opened without the server)
+      if (_swBaseline === null) _swBaseline = m[1];
+      else if (m[1] !== _swBaseline) _showUpdateBanner();
+    })
+    .catch(() => {});                                 // offline or restarting: the next check tries again
 }
 
 function _showUpdateBanner() {
@@ -2272,6 +2299,7 @@ function _dismissUpdateBanner() {
 // update is still pending and the user hasn't tapped Refresh Now yet.
 function _maybeReshowUpdateBanner() {
   if (_updatePending) _showUpdateBanner();
+  else _checkServerBuild(false);                      // a screen change is a good moment to look (2026-11-13)
 }
 
 function _refreshForUpdate() {

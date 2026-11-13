@@ -70,7 +70,7 @@ def _png_size(body):
 
 def test_sheet_has_tiles_rendered_from_the_pdf(call, plan):                         # C2S7-T01
     t = call("GET", f"{API}/sheets/{plan['sheet']}").json()["tiles"]
-    assert t["source"] == "pdf" and t["tile"] == 512 and t["max_level"] == 4         # 36" at up to 300 DPI
+    assert t["source"] == "pdf" and t["tile"] == 512 and t["max_level"] == 5         # 36" at up to 600 DPI (2026-11-13)
     r = call("GET", f"{API}/sheets/{plan['sheet']}/tiles/0/0/0.png")
     assert r.status == 200 and r.content_type == "image/png" and r.headers["X-Content-Type-Options"] == "nosniff"
     assert _png_size(r.body) == (512, 341)                                           # the whole 36 x 24 sheet
@@ -86,7 +86,7 @@ def test_sheet_has_tiles_rendered_from_the_pdf(call, plan):                     
 
 def test_tile_errors(call, plan, session_for):                                      # C2S7-T02
     s = plan["sheet"]
-    for bad in ("5/0/0", "1/2/0", "1/0/2", "0/1/0"):                                   # no such level or place
+    for bad in ("6/0/0", "1/2/0", "1/0/2", "0/1/0"):                                   # no such level or place
         assert call("GET", f"{API}/sheets/{s}/tiles/{bad}.png").status == 404
     assert call("GET", f"{API}/sheets/{s}/tiles/a/0/0.png").status == 404
     assert call("GET", f"{API}/sheets/{s}/tiles/0/0/0.png", headers=session_for("owner", company="acme")).status == 404

@@ -60,6 +60,8 @@ td.money { text-align: right; font-variant-numeric: tabular-nums; }
 .row label { flex: 1; min-width: 180px; margin: 0; }
 .section { margin: 18px 0; }
 .checklist li { margin: 4px 0; }
+/* Price Book: the cost shows as text; it changes through Edit (2026-11-12) */
+#prices input.cost[readonly] { border-color: transparent; background: transparent; cursor: default; text-align: right; }
 /* Delete project (2026-11-12) */
 .danger { color: var(--bad); border-color: var(--bad); }
 .primary.danger { background: var(--bad); color: #fff; }
@@ -123,6 +125,31 @@ ul.guides li { padding: 8px 0; border-bottom: 1px solid var(--line); }
 /* Sprint 5: Plans - the sheet with its viewport boxes, and two-point calibration */
 .sheet-stage { position: relative; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff;
                max-width: 100%; margin: 12px 0; }
+/* 2026-11-13: the sheet viewer - the stage is zoomed and moved inside it with a transform (makeZoomable in app.js). */
+.sheet-zoom { margin: 12px 0; }
+.sheet-viewer { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #fff;
+                touch-action: pan-y; cursor: zoom-in; user-select: none; -webkit-user-select: none; }
+.sheet-viewer:focus-visible { outline: 3px solid #2f6fdf; }
+.sheet-viewer.zoomed { cursor: grab; }
+.sheet-viewer.panning { cursor: grabbing; }
+.sheet-viewer .sheet-stage { margin: 0; border: 0; border-radius: 0; overflow: visible; transform-origin: 0 0; }
+/* (no will-change: transform - browsers then draw the layer once at 1x and stretch it, which blurs when zoomed) */
+.sheet-viewer .sheet-stage.calibrating { cursor: crosshair; outline: 0; }
+.sheet-viewer:has(.calibrating) { outline: 3px solid #f0b400; }
+.sheet-tiles { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.sheet-stage img.sheet-tile { position: absolute; display: block; max-width: none; opacity: 0; transition: opacity .15s; }
+.sheet-stage img.sheet-tile.ready { opacity: 1; }
+.zoom-bar { align-items: center; gap: 6px; margin-bottom: 6px; }
+.sheet-stage.views-hidden .vp-box { display: none; }          /* "View only": the plan as drawn (2026-11-13) */
+#view-only[aria-pressed="true"] { background: #e8f0fe; border-color: #2f6fdf; }
+/* 2026-11-13: "A newer version of the Estimator is installed" - bottom of the screen, above everything */
+.update-banner { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 1000; display: flex;
+                 align-items: center; gap: 10px; flex-wrap: wrap; background: #1f2933; color: #fff; padding: 10px 14px;
+                 border-radius: 10px; box-shadow: 0 6px 24px rgba(0, 0, 0, .25); max-width: calc(100vw - 24px); }
+.zoom-pct { min-width: 3.5em; text-align: center; font-variant-numeric: tabular-nums; }
+.sheet-zoom:fullscreen { display: flex; flex-direction: column; background: #fff; padding: 8px; box-sizing: border-box; }
+.sheet-zoom:fullscreen .sheet-viewer { flex: 1; min-height: 0; }
+.sheet-zoom:fullscreen .sheet-stage { width: min(100%, calc((100vh - 70px) * var(--aspect, 1.5))); }
 .sheet-stage img { display: block; width: 100%; height: auto; }
 .sheet-stage.calibrating { cursor: crosshair; outline: 3px solid #f0b400; }
 .vp-box { position: absolute; border: 2px solid #2f6fdf; background: rgba(47, 111, 223, .06); pointer-events: none; }
@@ -197,6 +224,12 @@ polygon.bp-m.approved { fill: #2b8a3e; }
              image-rendering: crisp-edges; }
 .sym-thumb.none { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; }
 .sym-name { font-weight: 600; text-transform: capitalize; }
+/* Symbol Library pictures: AI-Prowler's drawings (symbol_art.js) or the first example learned from your plans. */
+td.sym-pic { width: 56px; padding: 4px 6px; }
+.sym-art { width: 44px; height: 44px; display: block; color: #1f2933; background: #fff; border: 1px solid var(--line);
+           border-radius: 4px; padding: 2px; box-sizing: border-box; }
+.sym-art.none { color: var(--muted); }
+.sym-thumb.small { width: 44px; height: 44px; }
 .sym-history { font-style: italic; }
 input.narrow { width: 5em; }
 .hidden { display: none; }

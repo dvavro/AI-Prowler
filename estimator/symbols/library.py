@@ -185,7 +185,9 @@ def list_library(conn, ctx: RequestContext, level: str | None = None, trade: str
             continue
         sql = ("SELECT f.*, (SELECT COUNT(*) FROM symbol_examples x WHERE x.definition_id = f.id) AS examples,"
                " (SELECT COUNT(*) FROM symbol_detections d WHERE d.definition_id = f.id AND d.status != 'rejected')"
-               " AS found FROM symbol_definitions f WHERE f.library_id = ?")
+               " AS found, (SELECT x.detection_id FROM symbol_examples x JOIN symbol_detections d ON d.id = x.detection_id"
+               " WHERE x.definition_id = f.id ORDER BY x.id LIMIT 1) AS example_detection_id"
+               " FROM symbol_definitions f WHERE f.library_id = ?")
         args: list = [lib["id"]]
         if trade:
             sql += " AND f.trade = ?"
@@ -204,7 +206,8 @@ def _def_out(r: dict) -> dict:
     return {"id": r["id"], "item_type": r["item_type"], "description": r["description"], "trade": r["trade"],
             "code": r["code"], "assembly_id": r["assembly_id"], "status": r["status"], "approved_by": r["approved_by"],
             "approved_at": r["approved_at"], "version": r["version"], "examples": r.get("examples", 0),
-            "found": r.get("found", 0), "aliases": json.loads(r["ocr_aliases_json"] or "[]")}
+            "found": r.get("found", 0), "aliases": json.loads(r["ocr_aliases_json"] or "[]"),
+            "example_detection_id": r.get("example_detection_id")}
 
 
 def define(conn, ctx: RequestContext, item_type: str, description: str | None = None, trade: str | None = None,

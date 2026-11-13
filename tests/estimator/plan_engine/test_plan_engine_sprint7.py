@@ -32,7 +32,7 @@ def test_pdf_tiles_match_the_page(tmp_path):                                    
         s, ps = _sheet(width=str(w), height=str(h)), {"id": rot + 1, "file_type": "pdf", "file_path": str(pdf),
                                                     "processed_at": "t"}
         meta = tiles.info(s, ps)
-        assert meta["source"] == "pdf" and meta["max_level"] == 4
+        assert meta["source"] == "pdf" and meta["max_level"] == 5          # up to 600 DPI since 2026-11-13
         whole = Image.open(tiles.render(s, ps, 0, 0, 0, tmp_path)).convert("L")
         # The four level-1 tiles, put back together and shrunk, are the level-0 tile.
         cols, rows, size = tiles.grid(w, h, 1)
@@ -66,7 +66,7 @@ def test_cache_is_per_reading_and_bad_tiles_refused(tmp_path):                  
     a = tiles.render(s, {"id": 1, "file_type": "pdf", "file_path": str(pdf), "processed_at": "one"}, 0, 0, 0, tmp_path)
     b = tiles.render(s, {"id": 1, "file_type": "pdf", "file_path": str(pdf), "processed_at": "two"}, 0, 0, 0, tmp_path)
     assert a != b and a.parent.parent == tmp_path / "tiles"
-    for level, x, y in ((5, 0, 0), (-1, 0, 0), (1, 2, 0)):
+    for level, x, y in ((6, 0, 0), (-1, 0, 0), (1, 2, 0)):                         # top is 5 at 600 DPI
         with pytest.raises(ValueError):
             tiles.render(s, {"id": 1, "file_type": "pdf", "file_path": str(pdf)}, level, x, y, tmp_path)
     with pytest.raises(ValueError):

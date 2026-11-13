@@ -594,6 +594,28 @@ def _get_personal_owner_name() -> str:
 # disk; _patch_sw_cache_version() below substitutes this computed value
 # into that line ONLY in the HTTP response body, at serve time — the file
 # on disk is never modified.
+def _embedded_estimator_bytes(pwa_root: str) -> bytes:
+    """2026-11-13 (David): the Jobs app shows the Estimator web app in its 🧮 Estimates tab (a frame of
+    /estimator/), so an Estimator change is a Jobs app change too — but the hash below only covered the
+    Jobs app's own three files, so a deploy that touched only estimator/ui/web never raised the "new
+    version" banner and the open app kept running the old Estimator. For the Jobs app this returns the
+    Estimator's web files (html/js/css, by name and content) to add to the hash; for any other app, or if
+    the Estimator isn't installed, nothing."""
+    import os as _ee_os
+    try:
+        if _ee_os.path.basename(_ee_os.path.normpath(pwa_root)).lower() != "jobs":
+            return b""
+        _web = _ee_os.path.join(_ee_os.path.dirname(_ee_os.path.normpath(pwa_root)), "estimator", "ui", "web")
+        _out = []
+        for _n in sorted(_ee_os.listdir(_web)):
+            if _n.lower().endswith((".html", ".js", ".css")):
+                with open(_ee_os.path.join(_web, _n), "rb") as _fh:
+                    _out.append(_n.encode("utf-8") + b"\0" + _fh.read())
+        return b"\0".join(_out)
+    except Exception:
+        return b""
+
+
 def _compute_pwa_sw_cache_version(pwa_root: str, sw_source_bytes: bytes) -> str:
     """Short content hash over sw.js's own source (as read from disk,
     placeholder and all) plus index.html and manifest.json from the same
@@ -619,6 +641,7 @@ def _compute_pwa_sw_cache_version(pwa_root: str, sw_source_bytes: bytes) -> str:
             h.update(_data)
         except Exception:
             pass
+    h.update(_embedded_estimator_bytes(pwa_root))      # the Estimator inside the Jobs app (2026-11-13)
     return h.hexdigest()[:12]
 
 
@@ -659,6 +682,7 @@ def _compute_pwa_build(pwa_root: str, page_bytes: bytes) -> str:
                 h.update(_fh.read())
         except Exception:
             pass
+    h.update(_embedded_estimator_bytes(pwa_root))      # so the badge changes with the banner (2026-11-13)
     return f"{_pwa_app_version()} · {h.hexdigest()[:6]}"
 
 

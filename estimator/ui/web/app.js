@@ -831,10 +831,11 @@ async function renderPriceBook(main, screen) {
   } else {
     const tradeName = Object.fromEntries((mods.modules || []).map(m => [m.id, m.name]));
     const tbody = el("tbody", {}, book.prices.map(p => {
-      const input = el("input", { type: "text", inputmode: "decimal", class: "cost", "data-key": p.price_key,
-                                  "data-old": dollars(p.cost_cents), value: dollars(p.cost_cents), "aria-label": "Cost for " + p.description });
-      input.addEventListener("input", () => input.classList.toggle("changed", input.value.trim() !== input.dataset.old));
-      const edit = el("button", { class: "link-btn", type: "button", "data-edit": p.price_key, title: "Change the description, kind, unit, or trade" }, "✏️ Edit");
+      // 2026-11-12, David: the cost here is read-only; a price changes only through ✏️ Edit (which asks first).
+      const input = el("input", { type: "text", class: "cost", readonly: true, tabindex: "-1", "data-key": p.price_key,
+                                  value: dollars(p.cost_cents), "aria-label": "Cost for " + p.description,
+                                  title: "Click ✏️ Edit to change the cost" });
+      const edit = el("button", { class: "link-btn", type: "button", "data-edit": p.price_key, title: "Change the cost, description, kind, unit, trade or sample mark" }, "✏️ Edit");
       const remove = el("button", { class: "link-btn", type: "button", "data-remove": p.price_key, title: "Remove this price" }, "🗑️ Remove");
       const hist = el("button", { class: "link-btn", type: "button", "data-history": p.price_key, title: "Price history and job costs" }, "📈 History");
       const row = el("tr", { "data-key": p.price_key, "data-kind": p.kind },
@@ -863,19 +864,8 @@ async function renderPriceBook(main, screen) {
     };
     find.addEventListener("input", narrow);
     pickKind.addEventListener("change", narrow);
-    const eff = el("input", { type: "date", id: "pb-effective", "aria-label": "Effective date" });
-    const save = el("button", { class: "primary", type: "button", id: "pb-save" }, "Save changes…");
-    const msg = el("div", { id: "pb-message", role: "status" });
-    save.addEventListener("click", async () => {
-      const prices = {};
-      for (const i of tbody.querySelectorAll("input.cost")) {
-        if (i.value.trim() !== i.dataset.old) prices[i.dataset.key] = i.value.trim().replace(/^\$/, "");
-      }
-      msg.replaceChildren();
-      if (!Object.keys(prices).length) { msg.append(el("p", { class: "muted" }, "Nothing changed.")); return; }
-      await askThenSave(msg, save, "/price-book", { prices, effective_date: eff.value || null }, r => r.changed.length + " price(s) saved.");
-    });
-    parts.push(table, el("div", { class: "card section row" }, el("label", {}, "Takes effect (optional)", eff), save), msg);
+    parts.push(table, el("p", { class: "muted small", id: "pb-edit-hint" },
+      "To change a price, click ✏️ Edit on its row. Every change asks before it's saved."));
   }
   parts.push(addPriceForm(mods.modules, moduleId), importBox(mods.modules, moduleId));
   main.replaceChildren(...parts);
@@ -891,8 +881,9 @@ async function askThenSave(msg, btn, path, body, doneText) {
       // Fix 5: when nothing saved, say why — e.g. the Add form's code already
       // exists with a different unit, so the import skipped the row.
       const skipped = (r.skipped_rows || []).map(s => el("li", {}, "Row " + s.row + (s.item ? " (" + s.item + ")" : "") + ": " + s.reason));
-      msg.replaceChildren(el("p", {}, r.message || "Nothing to change."),
-        skipped.length ? el("ul", {}, skipped) : null);
+      // (replaceChildren would print a null as the word "null" - 2026-11-12)
+      msg.replaceChildren(...[el("p", {}, r.message || "Nothing to change."),
+        skipped.length ? el("ul", {}, skipped) : null].filter(Boolean));
       return;
     }
     const yes = el("button", { class: "primary", type: "button", id: "pb-confirm" }, "Yes, save");
@@ -961,28 +952,42 @@ function priceEdit(row, p, modules) {
     ["material", "labor", "equipment", "sub", "other"].map(k => el("option", { value: k, selected: k === p.kind }, words(k))));
   const unit = el("input", { type: "text", id: "pb-edit-unit", value: p.unit, "aria-label": "Unit" });
   const trade = tradeSelect("pb-edit-trade", modules, p.module_id || "");
+  // 2026-11-12: every field is editable here, the cost and the sample mark too. The cost starts from what's typed in
+  // the table (so a cost typed there isn't lost), and unticking Sample keeps the price as your own.
+  const tableCost = row.querySelector("input.cost");
+  const cost = el("input", { type: "text", inputmode: "decimal", id: "pb-edit-cost",   // not .cost: the table's Save reads those
+                             value: tableCost ? tableCost.value : dollars(p.cost_cents), "aria-label": "Cost per unit" });
+  const sample = el("input", { type: "checkbox", id: "pb-edit-sample", checked: !!p.sample });
+  const eff = el("input", { type: "date", id: "pb-edit-effective", "aria-label": "Takes effect" });
   const save = el("button", { class: "primary", type: "button", id: "pb-edit-save" }, "Save…");
   const cancel = el("button", { class: "button", type: "button", id: "pb-edit-cancel" }, "Cancel");
   const msg = el("div", { id: "pb-edit-message", role: "status" });
   const cell = el("td", { colspan: 7 },
     el("div", { class: "row filters" },
-      el("label", {}, "Item", el("span", { class: "muted" }, p.price_key)),
+      el("label", {}, "Item ", el("span", { class: "muted" }, p.price_key)),
       el("label", {}, "Description", desc),
       el("label", {}, "Kind", kind),
       el("label", {}, "Unit", unit),
       el("label", {}, "Trade", trade),
+      el("label", {}, "Cost per unit ($)", cost),
+      el("label", {}, "Takes effect (optional)", eff),
+      el("label", { class: "check", title: "A sample is a placeholder shipped with the trade. Untick to keep this price as your own." },
+        sample, " Sample (placeholder)"),
       el("span", {}, save, " ", cancel)),
+    p.sample ? el("p", { class: "muted small" }, "Happy with this price? Untick Sample and click Save… to keep it as your own.") : null,
     msg);
   row.after(el("tr", { class: "pb-edit", "data-edit-for": p.price_key }, cell));
   cancel.addEventListener("click", () => cell.closest("tr").remove());
   save.addEventListener("click", async () => {
     msg.replaceChildren();
-    const d = desc.value.trim(), u = unit.value.trim();
+    const d = desc.value.trim(), u = unit.value.trim(), c = cost.value.trim().replace(/^\$/, "").replace(/,/g, "");
     if (!d) { msg.replaceChildren(errorBox({ message: "Give the item a description." })); return; }
     if (!u) { msg.replaceChildren(errorBox({ message: "Give the item a unit, e.g. sqft." })); return; }
+    if (c === "" || isNaN(Number(c)) || Number(c) < 0) { msg.replaceChildren(errorBox({ message: "Give the cost as dollars, e.g. 250.00." })); return; }
     cancel.disabled = true;
     await askThenSave(msg, save, "/price-book/" + encodeURIComponent(p.price_key) + "/edit",
-      { description: d, kind: kind.value, unit: u, module_id: trade.value || null },
+      { description: d, kind: kind.value, unit: u, module_id: trade.value || null, cost: c, sample: sample.checked,
+        effective_date: eff.value || null },
       () => "Price updated.");
     cancel.disabled = false;
   });
@@ -1425,13 +1430,208 @@ async function renderSheet(main, id) {
   }
   if (r.found && r.found.length) parts.push(foundSummary(r.found));
   if (s.has_image) {
-    parts.push(stage);
+    // 2026-11-13: zoom and pan to read details (wheel / pinch / buttons / drag). Looking never changes anything,
+    // so everyone who can open the plans gets it; changes below stay owner and estimator only (r.can_edit).
+    const viewer = el("div", { class: "sheet-viewer", id: "sheet-viewer" }, stage);
+    if (s.width && s.height) stage.style.setProperty("--aspect", parseFloat(s.width) / parseFloat(s.height));
+    const bar = zoomBar(makeZoomable(viewer, stage, img, { tiles: r.tiles, sheetId: id }));
+    bar.insertBefore(viewOnlyButton(stage, !r.can_edit), bar.lastChild);
+    parts.push(el("div", { class: "sheet-zoom", id: "sheet-zoom" }, bar, viewer));
+    if (!r.can_edit) parts.push(el("p", { class: "muted small", id: "sheet-view-only" }, "View only — your role can look at the plans but not change them."));
     sheetImageUrl(id).then(u => { img.src = u; }).catch(e => stage.replaceChildren(errorBox(e)));
   } else {
     parts.push(el("p", { class: "muted" }, "This sheet has no image yet."));
   }
   parts.push(el("h3", {}, "Views and scales"), viewportTable(r, s, stage, img, msg), msg);
   main.replaceChildren(...parts);
+}
+
+// ------------------------------------------------------------------ Sheet viewer: zoom and pan (2026-11-13)
+// The stage (image + view boxes + calibration dots, all placed in %) is scaled and moved with a CSS transform inside
+// the viewer, so clicks on it still land on the right spot of the drawing (calibration reads getBoundingClientRect).
+// Mouse: scroll to zoom at the pointer (scrolling down at full view scrolls the page), drag to move, double-click
+// zooms in. Touch: pinch to zoom, drag with one finger once zoomed in. Keys: + − 0 and the arrows.
+function makeZoomable(viewer, stage, img, sharp) {
+  const MAX = 8;
+  const z = { k: 1, x: 0, y: 0, onChange: null };
+  // Sharp when zoomed (2026-11-13): the saved sheet picture is at most 150 dpi, so past ~2x it goes soft (worst on a
+  // phone, whose screen packs 2-3 pixels per point). Zoomed in, the part on screen is laid over with the same 512 px
+  // tiles Blueprint Review uses - re-drawn from the PDF at up to 300 dpi - once the zoom settles.
+  const tiles = sharp && sharp.tiles, tileLayer = tiles ? el("div", { class: "sheet-tiles", id: "sheet-tiles" }) : null;
+  if (tileLayer) img.after(tileLayer);
+  const tileEls = new Map();
+  let tileLevel = -1, tileTimer = null;
+  const dropTile = (k, n) => { if (n.src && n.src.startsWith("blob:")) URL.revokeObjectURL(n.src); n.remove(); tileEls.delete(k); };
+  const updateTiles = () => {
+    if (!tiles || !stage.offsetWidth) return;
+    const long = Math.max(tiles.width, tiles.height);
+    const dpr = window.devicePixelRatio || 1;
+    const shownPx = Math.max(stage.offsetWidth, stage.offsetHeight) * z.k * dpr;      // device pixels on the long side
+    const basePx = Math.max(img.naturalWidth || 0, img.naturalHeight || 0);
+    const want = Math.max(0, Math.min(tiles.max_level, Math.ceil(Math.log2(Math.max(1, shownPx / tiles.tile)))));
+    if (shownPx <= basePx * 1.15 || want === 0) { tileEls.forEach((n, k) => dropTile(k, n)); tileLevel = -1; return; }
+    if (want !== tileLevel) { tileEls.forEach((n, k) => { if (!k.startsWith(want + "/")) dropTile(k, n); }); tileLevel = want; }
+    const size = long / Math.pow(2, want), perPx = tiles.width / stage.offsetWidth;    // sheet units per stage px
+    const sx0 = (-z.x / z.k) * perPx, sx1 = ((viewer.clientWidth - z.x) / z.k) * perPx;
+    const sy0 = (-z.y / z.k) * perPx, sy1 = ((viewer.clientHeight - z.y) / z.k) * perPx;
+    const cols = Math.ceil(tiles.width / size - 1e-9), rows = Math.ceil(tiles.height / size - 1e-9);
+    const cx0 = Math.max(0, Math.floor(sx0 / size)), cx1 = Math.min(cols - 1, Math.floor(sx1 / size));
+    const cy0 = Math.max(0, Math.floor(sy0 / size)), cy1 = Math.min(rows - 1, Math.floor(sy1 / size));
+    if ((cx1 - cx0 + 1) * (cy1 - cy0 + 1) > 120) return;                               // never a flood of requests
+    for (let x = cx0; x <= cx1; x++) for (let y = cy0; y <= cy1; y++) {
+      const k = want + "/" + x + "/" + y;
+      if (tileEls.has(k)) continue;
+      const w = Math.min(size, tiles.width - x * size), h = Math.min(size, tiles.height - y * size);
+      const n = el("img", { class: "sheet-tile", alt: "", draggable: "false", "data-tile": k });
+      n.style.left = (x * size / tiles.width * 100) + "%"; n.style.top = (y * size / tiles.height * 100) + "%";
+      n.style.width = (w / tiles.width * 100) + "%"; n.style.height = (h / tiles.height * 100) + "%";
+      n.addEventListener("load", () => n.classList.add("ready"), { once: true });
+      tileEls.set(k, n);
+      tileLayer.append(n);
+      const path = "/estimator-api/sheets/" + sharp.sheetId + "/tiles/" + want + "/" + x + "/" + y + ".png";
+      (typeof tileUrl === "function" ? tileUrl(sharp.sheetId, want, x, y) : Promise.resolve(path))
+        .then(u => { if (tileEls.get(k) === n) n.src = u; }).catch(() => dropTile(k, n));
+    }
+  };
+  const scheduleTiles = () => { if (!tiles) return; clearTimeout(tileTimer); tileTimer = setTimeout(updateTiles, 150); };
+  const size = () => ({ vw: viewer.clientWidth, vh: viewer.clientHeight, w: stage.offsetWidth, h: stage.offsetHeight });
+  const fit1 = (pos, content, box) => content <= box ? (box - content) / 2 : Math.min(0, Math.max(box - content, pos));
+  const apply = () => {
+    const { vw, vh, w, h } = size();
+    if (z.k <= 1.0001) z.k = 1;
+    z.x = fit1(z.x, w * z.k, vw); z.y = fit1(z.y, h * z.k, vh);      // smaller than the viewer: centred
+    stage.style.transform = "translate(" + z.x + "px, " + z.y + "px) scale(" + z.k + ")";
+    viewer.classList.toggle("zoomed", z.k > 1);
+    viewer.style.touchAction = z.k > 1 ? "none" : "pan-y";        // at full view one finger still scrolls the page
+    if (z.onChange) z.onChange(z.k);
+    scheduleTiles();
+  };
+  const zoomAt = (factor, cx, cy) => {
+    const k = Math.min(MAX, Math.max(1, z.k * factor));
+    z.x = cx - (cx - z.x) * k / z.k;
+    z.y = cy - (cy - z.y) * k / z.k;
+    z.k = k;
+    apply();
+  };
+  const local = ev => { const b = viewer.getBoundingClientRect(); return [ev.clientX - b.left, ev.clientY - b.top]; };
+  const centre = () => [viewer.clientWidth / 2, viewer.clientHeight / 2];
+
+  viewer.addEventListener("wheel", ev => {
+    if (z.k === 1 && ev.deltaY > 0) return;                       // let the page scroll past the sheet
+    ev.preventDefault();
+    zoomAt(Math.exp(-ev.deltaY * 0.0015), ...local(ev));
+  }, { passive: false });
+
+  const pts = new Map();
+  let last = null, pinch = null, moved = 0;
+  const onMove = ev => {
+    if (!pts.has(ev.pointerId)) return;
+    pts.set(ev.pointerId, [ev.clientX, ev.clientY]);
+    if (pts.size >= 2) {
+      const [a, b] = [...pts.values()];
+      const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      const box = viewer.getBoundingClientRect();
+      const mid = [(a[0] + b[0]) / 2 - box.left, (a[1] + b[1]) / 2 - box.top];
+      if (pinch) { zoomAt(d / pinch.d, ...mid); z.x += mid[0] - pinch.mid[0]; z.y += mid[1] - pinch.mid[1]; apply(); }
+      pinch = { d, mid }; moved += 10;
+      return;
+    }
+    if (!last || z.k === 1) return;
+    const dx = ev.clientX - last[0], dy = ev.clientY - last[1];
+    moved += Math.abs(dx) + Math.abs(dy);
+    last = [ev.clientX, ev.clientY];
+    if (moved > 4) { viewer.classList.add("panning"); z.x += dx; z.y += dy; apply(); }
+  };
+  const onUp = ev => {
+    pts.delete(ev.pointerId);
+    pinch = null;
+    last = pts.size === 1 ? [...pts.values()][0] : null;
+    if (!pts.size) {
+      viewer.classList.remove("panning");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    }
+  };
+  viewer.addEventListener("pointerdown", ev => {
+    if (ev.button > 0) return;
+    if (!pts.size) {
+      moved = 0;
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+    }
+    pts.set(ev.pointerId, [ev.clientX, ev.clientY]);
+    last = [ev.clientX, ev.clientY];
+    if (z.k > 1) ev.preventDefault();                             // no image drag / text selection while moving
+  });
+  // A drag isn't a click: don't let the end of a pan place a calibration point.
+  viewer.addEventListener("click", ev => { if (moved > 4) { ev.stopPropagation(); ev.preventDefault(); moved = 0; } }, true);
+  viewer.addEventListener("dblclick", ev => {
+    if (stage.classList.contains("calibrating")) return;
+    ev.preventDefault();
+    zoomAt(2, ...local(ev));
+  });
+  img.addEventListener("dragstart", ev => ev.preventDefault());
+  viewer.tabIndex = 0;
+  viewer.setAttribute("aria-label", "Plan sheet — use + and − to zoom, the arrow keys to move, 0 to see the whole sheet");
+  viewer.addEventListener("keydown", ev => {
+    const step = 60;
+    const keys = { "+": () => zoomAt(1.4, ...centre()), "=": () => zoomAt(1.4, ...centre()), "-": () => zoomAt(1 / 1.4, ...centre()),
+                   "0": () => { z.k = 1; apply(); }, ArrowLeft: () => { z.x += step; apply(); }, ArrowRight: () => { z.x -= step; apply(); },
+                   ArrowUp: () => { z.y += step; apply(); }, ArrowDown: () => { z.y -= step; apply(); } };
+    if (keys[ev.key] && (z.k > 1 || !ev.key.startsWith("Arrow"))) { ev.preventDefault(); keys[ev.key](); }
+  });
+  window.addEventListener("resize", () => { if (viewer.isConnected) apply(); });
+  return {
+    zoomIn: () => zoomAt(1.4, ...centre()), zoomOut: () => zoomAt(1 / 1.4, ...centre()),
+    fit: () => { z.k = 1; apply(); }, get k() { return z.k; },
+    set onChange(f) { z.onChange = f; }, refresh: apply, viewer,
+  };
+}
+
+// "View only" (2026-11-13): hides the boxes AI-Prowler draws over the sheet (each view it found, with its scale or
+// NTS) so the plan reads like the original drawing. On by default for people who can't change the plans (field
+// crew); each person's choice is kept by this browser.
+function viewOnlyButton(stage, defaultOn) {
+  const KEY = "est_sheet_view_only";
+  let on = defaultOn;
+  try { const saved = localStorage.getItem(KEY); if (saved !== null) on = saved === "1"; } catch (e) { /* private mode */ }
+  const b = el("button", { class: "button small", type: "button", id: "view-only",
+    title: "Hide the view boxes AI-Prowler draws over the sheet (they show each view's scale, or NTS = not to scale)" });
+  const set = v => {
+    on = v;
+    stage.classList.toggle("views-hidden", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    b.textContent = on ? "👁 View only: on" : "👁 View only: off";
+  };
+  b.addEventListener("click", () => { set(!on); try { localStorage.setItem(KEY, on ? "1" : "0"); } catch (e) { /* ignore */ } });
+  set(on);
+  return b;
+}
+
+function zoomBar(zoom) {
+  const pct = el("span", { class: "zoom-pct", id: "zoom-pct" }, "100%");
+  zoom.onChange = k => { pct.textContent = Math.round(k * 100) + "%"; };
+  const btn = (id, label, title, fn) => el("button", { class: "button small", type: "button", id, title, "aria-label": title, onclick: fn }, label);
+  const bar = el("div", { class: "row zoom-bar", id: "zoom-bar" },
+    btn("zoom-out", "−", "Zoom out", () => zoom.zoomOut()), pct, btn("zoom-in", "+", "Zoom in", () => zoom.zoomIn()),
+    btn("zoom-fit", "Fit", "See the whole sheet", () => zoom.fit()));
+  const box = zoom.viewer;
+  if (document.fullscreenEnabled) {
+    const full = btn("zoom-full", "⛶ Full screen", "Full screen (Esc to leave)", () => {
+      const wrap = box.parentElement;
+      if (document.fullscreenElement) document.exitFullscreen(); else if (wrap) wrap.requestFullscreen().catch(() => {});
+    });
+    document.addEventListener("fullscreenchange", () => {
+      if (!box.isConnected) return;
+      full.textContent = document.fullscreenElement ? "✕ Exit full screen" : "⛶ Full screen";
+      zoom.fit();
+    });
+    bar.append(full);
+  }
+  bar.append(el("span", { class: "muted small" }, "Scroll or pinch to zoom · drag to move · double-click to zoom in"));
+  return bar;
 }
 
 // Sprint 6: what the plan engine found on the sheet (walls, rooms, symbols...), with measured totals.
@@ -2087,6 +2287,42 @@ function stopLive() {
   setLive("off", "Live updates off");
 }
 
+// ------------------------------------------------------------------ "a new version is installed" (2026-11-13)
+// An open page keeps running the code it loaded, so after an update is installed and AI-Prowler restarted, nothing
+// changed until someone reloaded by hand. The server reports a hash of the web app's files (/health -> build); the
+// page remembers the one it started with and checks again when it comes back into view, on a screen change (at
+// most once a minute) and every 10 minutes. A different build shows a banner: Refresh now, or Later (it comes back
+// on the next screen change, like the Jobs app's). Nothing reloads by itself - someone may be mid-edit.
+// Inside the Jobs app the Jobs app's own banner covers this (its version includes the Estimator's files).
+let webBuild = null, updateWaiting = false, lastUpdateCheck = 0;
+async function checkForUpdate(force) {
+  if (!force && Date.now() - lastUpdateCheck < 60000) return;
+  lastUpdateCheck = Date.now();
+  try {
+    const r = await fetch(API + "/health", { cache: "no-store", credentials: "same-origin" });
+    const b = r.ok ? (await r.json()).build : null;
+    if (!b) return;
+    if (webBuild === null) webBuild = b;
+    else if (b !== webBuild) { updateWaiting = true; showUpdateBanner(); }
+  } catch (e) { /* offline or restarting: try again later */ }
+}
+function showUpdateBanner() {
+  if (!updateWaiting || document.getElementById("update-banner")) return;
+  const later = el("button", { class: "button", type: "button", id: "update-later" }, "Later");
+  const now = el("button", { class: "primary", type: "button", id: "update-refresh", onclick: () => location.reload() }, "🔄 Refresh now");
+  const bar = el("div", { class: "update-banner", id: "update-banner", role: "status" },
+    el("span", {}, "A newer version of the Estimator is installed."), now, later);
+  later.addEventListener("click", () => bar.remove());
+  document.body.append(bar);
+}
+function watchForUpdates() {
+  if (EMBEDDED) return;
+  checkForUpdate(true);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkForUpdate(true); });
+  window.addEventListener("hashchange", () => { showUpdateBanner(); checkForUpdate(false); });
+  setInterval(() => checkForUpdate(true), 10 * 60 * 1000);
+}
+
 // ------------------------------------------------------------------ boot
 async function boot() {
   if (EMBEDDED) document.body.classList.add("embedded");   // inside the Jobs app's Estimates tab
@@ -2094,6 +2330,7 @@ async function boot() {
   $("logout").addEventListener("click", doLogout);
   $("menu-toggle").addEventListener("click", () => $("nav").classList.toggle("open"));
   window.addEventListener("hashchange", route);
+  watchForUpdates();
   try {
     const r = await api("GET", "/me");
     start(r.me);

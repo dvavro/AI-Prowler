@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import re
 
-VERSION = 4                         # Sprint 12: fuller electrical and plumbing libraries, and what each one feeds
+VERSION = 5                         # Sprint 12: fuller electrical and plumbing libraries, and what each one feeds
                                     # Sprint 14: the HVAC library; Sprint 15: the landscape library
+                                    # 2026-11-13: low voltage, architectural and fire alarm symbols
 
 #  item type, trade, description, OCR aliases, CAD block-name words
 _ROWS = (
@@ -31,9 +32,10 @@ _ROWS = (
     ("emergency_light", "electrical", "Emergency light", ("EM",), ("EMERG",)),
     ("smoke_detector", "electrical", "Smoke detector", ("SD", "SMK"), ("SMOKE", "SMK")),
     ("co_detector", "electrical", "Carbon monoxide detector", ("CO", "CM"), ("CO_DET", "CODET")),
-    ("data_outlet", "electrical", "Data outlet", ("DATA",), ("DATA", "CAT6", "CAT5")),
-    ("phone_outlet", "electrical", "Telephone outlet", ("TEL",), ("PHONE", "TEL")),
-    ("tv_outlet", "electrical", "TV outlet", ("TV", "CATV"), ("CATV", "TV")),
+    # (2026-11-13: data, phone, TV and speakers are filed under Low Voltage; they're still priced in Electrical.)
+    ("data_outlet", "low_voltage", "Data outlet", ("DATA",), ("DATA", "CAT6", "CAT5")),
+    ("phone_outlet", "low_voltage", "Telephone outlet", ("TEL",), ("PHONE", "TEL")),
+    ("tv_outlet", "low_voltage", "TV outlet", ("TV", "CATV"), ("CATV", "TV")),
     ("ceiling_fan", "electrical", "Ceiling fan", ("CF",), ("CEILFAN", "CEILING_FAN")),
     ("panel", "electrical", "Electrical panel", (), ("PANEL", "PNL")),
     ("junction_box", "electrical", "Junction box", ("J", "JB"), ("JBOX", "JUNCTION")),
@@ -49,7 +51,24 @@ _ROWS = (
     ("light_exterior", "electrical", "Exterior light", (), ("FLOODLIGHT", "EXTLIGHT")),
     ("smoke_co_detector", "electrical", "Smoke and CO detector", ("SD/CO", "SDCO"), ("SMOKECO",)),
     ("doorbell", "electrical", "Doorbell", ("DB",), ("DOORBELL", "CHIME")),
-    ("speaker", "electrical", "Speaker", ("SPKR",), ("SPEAKER",)),
+    ("speaker", "low_voltage", "Speaker", ("SPKR",), ("SPEAKER",)),
+    # 2026-11-13: security and network devices (low voltage)
+    ("security_camera", "low_voltage", "Security camera", ("CCTV", "CAM"), ("CAMERA", "CCTV")),
+    ("card_reader", "low_voltage", "Card reader", ("CR",), ("CARDREADER",)),
+    ("motion_sensor", "low_voltage", "Motion sensor (security)", ("PIR",), ("MOTIONSENSOR", "MOTIONDET", "PIR")),
+    ("door_contact", "low_voltage", "Door contact (security)", ("DC",), ("DOORCONTACT",)),
+    ("keypad", "low_voltage", "Security keypad", ("KP",), ("KEYPAD",)),
+    ("intercom", "low_voltage", "Intercom station", ("INT",), ("INTERCOM",)),
+    ("wireless_access_point", "low_voltage", "Wireless access point", ("WAP",), ("WAP", "ACCESSPOINT", "WIFI")),
+    # 2026-11-13: architectural items an estimator counts (not the drawing references: tags, markers, grid bubbles)
+    ("door", "architectural", "Door, single swing", (), ("DOOR", "SWINGDOOR")),
+    ("door_double", "architectural", "Door, double (pair)", (), ("DOUBLEDOOR", "DBLDOOR", "PAIRDOOR")),
+    ("door_sliding", "architectural", "Door, sliding", (), ("SLIDINGDOOR", "SLIDERDOOR", "PATIODOOR")),
+    ("door_pocket", "architectural", "Door, pocket", (), ("POCKETDOOR",)),
+    ("door_garage", "architectural", "Garage (overhead) door", (), ("GARAGEDOOR", "OVERHEADDOOR")),
+    ("window", "architectural", "Window", (), ("WINDOW",)),
+    ("skylight", "architectural", "Skylight", (), ("SKYLIGHT",)),
+    ("column", "architectural", "Column", (), ("COLUMN",)),
     ("thermostat", "mechanical", "Thermostat", ("T", "TSTAT"), ("TSTAT", "THERMOSTAT")),
     ("exhaust_fan", "mechanical", "Exhaust fan", ("EF",), ("EXHAUST", "EF")),
     ("supply_diffuser", "mechanical", "Supply diffuser", ("SA",), ("DIFFUSER", "SUPPLY")),
@@ -92,6 +111,10 @@ _ROWS = (
     ("water_meter", "plumbing", "Water meter", ("MTR",), ("WATERMETER",)),
     ("sprinkler_head", "fire", "Sprinkler head", (), ("SPRINKLER", "SPK")),
     ("fire_extinguisher", "fire", "Fire extinguisher", ("FE",), ("EXTING",)),
+    # 2026-11-13: fire alarm devices (NFPA 170 has symbols for them)
+    ("pull_station", "fire", "Fire alarm pull station", ("FAPS",), ("PULLSTATION", "MANUALSTATION")),
+    ("horn_strobe", "fire", "Fire alarm horn/strobe", ("HS", "H/S"), ("HORNSTROBE", "STROBE")),
+    ("fire_alarm_panel", "fire", "Fire alarm control panel", ("FACP",), ("FACP", "FIREALARMPANEL")),
     # Sprint 15: the landscape library (plants and irrigation valves on landscape and irrigation plans)
     ("tree", "landscape", "Tree", (), ("TREE", "DECIDUOUS", "EVERGREEN", "SHADETREE")),
     ("palm", "landscape", "Palm", (), ("PALM",)),
@@ -141,7 +164,7 @@ FEEDS = {
 }
 
 # The trade a symbol is filed under and the estimating module it's priced in, where the names differ.
-TRADE_MODULES = {"mechanical": "hvac", "landscape": "landscaping"}
+TRADE_MODULES = {"mechanical": "hvac", "landscape": "landscaping", "low_voltage": "electrical"}
 
 # When several symbols answer the same choice, the more particular one wins (a tankless heater over a tank).
 CHOICE_ORDER = {"water_heater": ("tankless", "tank"), "system": ("mini_split", "heat_pump", "package", "split")}

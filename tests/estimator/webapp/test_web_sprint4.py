@@ -398,7 +398,7 @@ def test_guides_name_real_buttons():
     """The steps quote the page's button labels - check they're really in app.js, so a renamed button fails here."""
     js = (router.WEB_DIR / "app.js").read_text(encoding="utf-8")
     for label in ("⚡ Quick estimate", "Price it", "Next: approve and send →", "📋 Jobs board", "✓ Approve",
-                  "📨 Send the quote…", "👍 Customer said yes", "Make it a job in AI-Prowler…", "Save changes…",
+                  "📨 Send the quote…", "👍 Customer said yes", "Make it a job in AI-Prowler…", "✏️ Edit",   # Price Book: prices change through Edit (2026-11-12)
                   "Check the list…", "Mine only", "Show finished", "Use the sample prices anyway"):
         assert label in js, label
 

@@ -208,19 +208,30 @@ def _trade_name(module_id: str | None, registry=None) -> str:
 
 
 def update_price_details(conn, ctx, price_key: str, *, description: str | None = None, kind: str | None = None,
-                         unit: str | None = None, module_id=KEEP, confirm: bool = False,
+                         unit: str | None = None, module_id=KEEP, cost: str | None = None,
+                         sample: bool | None = None, effective_date: str | None = None, confirm: bool = False,
                          registry=None) -> dict:
-    """Change a price's description, kind, unit, or trade — not its cost or its key.
+    """Change a price's description, kind, unit, trade, cost and sample mark — everything but its key.
 
-    The cost stays what it is (costs are changed on the Price Book table itself).
     module_id=KEEP (the default) leaves the trade alone; None takes the trade off;
-    a module id sets it. A new dated row is written, so the old details stay in
-    the price's history. Asks first unless confirm=true.
+    a module id sets it. cost is dollars as text ("250.00"); None keeps the cost.
+    sample=False makes it your own price (the "(sample)" tag comes off the
+    description); sample=True marks it a placeholder; None means your own price
+    from now on - saving an edit is taking the price as yours (2026-11-12, David:
+    "accept the current price and remove the sample wording"). A new dated row is
+    written, so the old details stay in the price's history. Asks first unless
+    confirm=true.
     """
+    from estimator.core.units.money import cents_from_decimal, format_cents
     from estimator.errors import ConfirmationRequired, InvalidInput, NotFound, PermissionDenied
     from estimator.estimating import service
     if ctx.role not in ("owner", "estimator"):
         raise PermissionDenied(f"role '{ctx.role}' can't change prices", role=ctx.role)
+    if effective_date:
+        try:
+            date.fromisoformat(effective_date)
+        except ValueError:
+            raise InvalidInput("effective_date must be YYYY-MM-DD", field="effective_date") from None
     cur = get_price(conn, ctx.company_id, price_key)
     defaults = _module_defaults(registry)
     if cur is None and price_key not in defaults:
@@ -242,6 +253,10 @@ def update_price_details(conn, ctx, price_key: str, *, description: str | None =
         new_module = None
     else:
         new_module = str(module_id).strip() or None
+    was_sample = True if cur is None else cur.is_sample
+    new_sample = False if sample is None else bool(sample)
+    if not new_sample and new_desc.endswith(" (sample)"):
+        new_desc = new_desc[: -len(" (sample)")].rstrip()          # your own price drops the "(sample)" tag
     changes = []
     if new_desc != base.description:
         changes.append(f'Description: "{base.description}" -> "{new_desc}"')
@@ -251,6 +266,18 @@ def update_price_details(conn, ctx, price_key: str, *, description: str | None =
         changes.append(f"Unit: {base.unit} -> {new_unit}")
     if new_module != cur_module:
         changes.append(f"Trade: {_trade_name(cur_module, registry)} -> {_trade_name(new_module, registry)}")
+    new_cents = base.cost_cents
+    if cost is not None and str(cost).strip() != "":
+        try:
+            new_cents = cents_from_decimal(str(cost).strip().lstrip("$").replace(",", ""))
+        except (ValueError, TypeError):
+            raise InvalidInput('give the cost as dollars, e.g. "250.00"', field="cost") from None
+        if new_cents < 0:
+            raise InvalidInput("the cost can't be negative", field="cost")
+    if new_cents != base.cost_cents:
+        changes.append(f"Cost: {format_cents(base.cost_cents)} -> {format_cents(new_cents)} per {new_unit}")
+    if new_sample != was_sample:
+        changes.append("Sample: no — it's your own price now" if not new_sample else "Sample: yes — marked as a placeholder")
     if not changes:
         return {"ok": True, "changed": [], "message": "Nothing to change."}
     if not confirm:
@@ -262,11 +289,13 @@ def update_price_details(conn, ctx, price_key: str, *, description: str | None =
         # so "keep" still has to carry the current trade onto the new row.
         kwargs = {"clear_module_id": True} if new_module is None else {"module_id": new_module}
         set_price(conn, ctx.company_id, price_key, description=new_desc, kind=new_kind, unit=new_unit,
-                  cost_cents=base.cost_cents, actor=ctx.actor, is_sample=False, **kwargs)
+                  cost_cents=new_cents, actor=ctx.actor, is_sample=new_sample, effective_date=effective_date or None,
+                  **kwargs)
         service._log(conn, ctx, None, "price_details_changed",
                      {"price_key": price_key, "changes": changes})
     return {"ok": True, "changed": changes, "summary": "; ".join(changes),
-            "note": "The cost is unchanged; bids already made keep their prices."}
+            "note": ("The cost is unchanged" if new_cents == base.cost_cents else "New prices apply to new and "
+                     "re-priced estimates") + "; bids already made keep their prices."}
 
 
 def remove_price(conn, ctx, price_key: str, *, confirm: bool = False, registry=None) -> dict:

@@ -669,6 +669,7 @@ Source: "estimator\ui\web\settings.js"; DestDir: "{app}\estimator\ui\web"; Flags
 Source: "estimator\ui\web\tour.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
 Source: "estimator\ui\web\review.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
 Source: "estimator\ui\web\verify.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
+Source: "estimator\ui\web\symbol_art.js"; DestDir: "{app}\estimator\ui\web"; Flags: ignoreversion
 
 ; --- v9.6.0 Service Desk (2026-10-27) ---
 ; desk_*.py : the ticket system (rules, database, per-ticket folders, attachments,

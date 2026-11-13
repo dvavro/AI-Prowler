@@ -76,6 +76,38 @@ def test_archive_restore_and_delete_a_project(call):
     assert "function projectAdminBox(" in js and 'id: "proj-delete"' in js and 'id: "proj-archive"' in js
 
 
+def _price(call, key):
+    return next(p for p in call("GET", f"{API}/price-book").json()["prices"] if p["price_key"] == key)
+
+
+def test_price_edit_changes_the_cost_and_takes_a_sample_as_yours(call):
+    # 2026-11-12, David: Edit said "Nothing to change" and the sample tag stayed. Every field is editable now.
+    p = _price(call, "cc_fill_load")
+    assert p["sample"] is True and p["description"].endswith("(sample)")
+    base = {"description": p["description"], "kind": p["kind"], "unit": p["unit"], "module_id": p["module_id"]}
+    # Accept the sample's price as it is: untick Sample, change nothing else.
+    ask = call("POST", f"{API}/price-book/cc_fill_load/edit", {**base, "cost": "250.00", "sample": False}).json()
+    assert ask["needs_confirmation"] and any("your own price" in c for c in ask["changes"])
+    assert any(c.startswith("Description") for c in ask["changes"])            # the "(sample)" tag comes off
+    call("POST", f"{API}/price-book/cc_fill_load/edit", {**base, "cost": "250.00", "sample": False, "confirm": True})
+    p = _price(call, "cc_fill_load")
+    assert p["sample"] is False and p["cost_cents"] == 25000 and p["description"] == "Fill dirt delivered per truck load"
+    # Change the cost from the Edit row.
+    base["description"] = p["description"]
+    ask = call("POST", f"{API}/price-book/cc_fill_load/edit", {**base, "cost": "260", "sample": False}).json()
+    assert ask["changes"] == ["Cost: $250.00 -> $260.00 per ea"]
+    call("POST", f"{API}/price-book/cc_fill_load/edit", {**base, "cost": "260", "sample": False, "confirm": True})
+    assert _price(call, "cc_fill_load")["cost_cents"] == 26000
+    nothing = call("POST", f"{API}/price-book/cc_fill_load/edit", {**base, "cost": "260.00", "sample": False}).json()
+    assert nothing["message"] == "Nothing to change."
+    assert call("POST", f"{API}/price-book/cc_fill_load/edit", {**base, "cost": "lots"}).status == 400
+    assert call("POST", f"{API}/price-book/cc_fill_load/edit", {**base, "sample": "no"}).status == 400
+    js = (router.WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'id: "pb-edit-cost"' in js and 'id: "pb-edit-sample"' in js and ".filter(Boolean)" in js
+    # The table's cost can't be typed in: a price changes only through Edit (2026-11-12).
+    assert 'class: "cost", readonly: true' in js and 'id: "pb-save"' not in js
+
+
 def test_pages_have_the_director_panel_and_start_page():
     js = (router.WEB_DIR / "app.js").read_text(encoding="utf-8")
     assert "function directorPanel(" in js and "/director/intake" in js and 'id: "dash-start"' in js

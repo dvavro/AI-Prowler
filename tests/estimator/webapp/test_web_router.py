@@ -207,7 +207,7 @@ def test_app_page_and_files(call):
     assert r.status == 301 and r.headers["Location"] == "/estimator/"
     page = call("GET", "/estimator/")
     assert page.status == 200 and page.content_type.startswith("text/html")
-    assert b'src="app.js"' in page.body and b"<script>" not in page.body     # no inline script (CSP)
+    assert b'src="app.js?v=' in page.body and b"<script>" not in page.body   # no inline script (CSP); versioned 2026-11-13
     assert "default-src 'self'" in page.headers["Content-Security-Policy"]
     # Sprint 3: framed only by its own site (the Jobs app's Estimates tab), never by another site.
     assert page.headers["X-Frame-Options"] == "SAMEORIGIN"

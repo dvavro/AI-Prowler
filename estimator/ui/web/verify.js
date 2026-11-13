@@ -220,6 +220,7 @@ async function renderSymbolLibrary(main, screen) {
   }
   const parts = [el("div", { class: "page-head" }, el("h2", {}, screen.label), head),
     el("p", { class: "muted" }, "What each symbol on a plan means. A plan set's own legend always wins; then your company's symbols (learned when someone relabels or approves one in Reviews); then AI-Prowler's standard symbols."),
+    el("p", { class: "muted small", id: "symlib-columns" }, "Learned examples: pictures of the symbol saved from your own plans when someone approves or relabels it in Reviews — the more it has, the better it's found. Found on your plans: how many times it has been counted on your plans so far. Both start at 0 and grow as you review plans."),
     el("div", { class: "row filters" }, el("label", {}, "Trade", pickTrade)), msg];
   const form = el("div", { id: "symlib-form" });
   if (r.can_define) {
@@ -235,8 +236,12 @@ async function renderSymbolLibrary(main, screen) {
       ? "Nothing yet. Relabel or approve symbols in Reviews, or add one here." : "No symbols for this trade."));
     for (const t of trades) {
       sec.append(el("h4", {}, words(t)), el("table", { class: "list" },
-        el("thead", {}, el("tr", {}, el("th", {}, "Symbol"), el("th", {}, "Code"), el("th", {}, "Examples"), el("th", {}, "Found"), el("th", {}, ""))),
+        el("thead", {}, el("tr", {}, el("th", {}, "Picture"), el("th", {}, "Symbol"), el("th", {}, "Code"),
+          el("th", { title: "Pictures of this symbol saved from your own plans (each time someone approves or relabels one in Reviews). The plan engine looks for these on every new plan set." }, "Learned examples"),
+          el("th", { title: "How many times this symbol has been counted on your plans (not counting ones taken out in Reviews)." }, "Found on your plans"),
+          el("th", {}, ""))),
         el("tbody", {}, lib.by_trade[t].map(dfn => el("tr", { "data-id": dfn.id, "data-type": dfn.item_type },
+          el("td", { class: "sym-pic" }, symbolThumb(dfn)),
           el("td", {}, el("strong", {}, dfn.description || words(dfn.item_type)), el("div", { class: "small muted" }, dfn.item_type + (dfn.version > 1 ? " · v" + dfn.version : ""))),
           el("td", {}, (dfn.aliases || []).join(", ") || dfn.code || "—"),
           el("td", { class: "num" }, dfn.examples || 0), el("td", { class: "num" }, dfn.found || 0),
@@ -245,6 +250,17 @@ async function renderSymbolLibrary(main, screen) {
     parts.push(sec);
   }
   main.replaceChildren(...parts);
+}
+
+// The Symbol Library's picture: a symbol learned from your plans shows the real one (its first example), otherwise
+// AI-Prowler's own drawing of the standard symbol (symbol_art.js).
+function symbolThumb(dfn) {
+  const drawing = () => symbolPicture(dfn.item_type, (dfn.aliases || [])[0] || dfn.code);
+  if (!dfn.example_detection_id) return drawing();
+  const img = el("img", { alt: words(dfn.item_type) + " from your plans", loading: "lazy", class: "sym-thumb small" });
+  img.addEventListener("error", () => { img.replaceWith(drawing()); }, { once: true });
+  apiImage(img, "/estimator-api/symbol-detections/" + dfn.example_detection_id + "/crop.png");
+  return img;
 }
 
 function editButton(form, trades, dfn) {

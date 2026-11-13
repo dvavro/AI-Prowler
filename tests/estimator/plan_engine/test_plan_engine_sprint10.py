@@ -145,7 +145,9 @@ def test_code_only_legend_entries_counted_where_the_code_stands_alone(tmp_path):
 @pytest.mark.parametrize("name, item", [("DUPLEX_OUTLET", "duplex_receptacle"), ("DUPLEX_OUTLET_GFI", "duplex_receptacle_gfci"),
                                         ("REC-WP", "duplex_receptacle_wp"), ("SWITCH_3WAY", "switch_3way"),
                                         ("E-SMOKE-DET", "smoke_detector"), ("P_TOILET", "water_closet"),
-                                        ("DOOR_36", None), ("NORTH_ARROW", None)])
+                                        ("DOOR_36", "door"), ("NORTH_ARROW", None),   # doors count since 2026-11-13
+                                        ("DOORBELL", "doorbell"), ("DOOR_CONTACT", "door_contact"),
+                                        ("DOUBLE_DOOR_72", "door_double"), ("SKYLIGHT_2X4", "skylight")])
 def test_block_names(name, item):                                                    # C2S10-E07
     got = lib.by_block_name(name)
     assert (got["item_type"] if got else None) == item
@@ -157,13 +159,13 @@ def test_cad_blocks_become_detections(tmp_path):                                
     ezdxf = pytest.importorskip("ezdxf")
     doc = ezdxf.new("R2010")
     doc.header["$INSUNITS"] = 2
-    for name in ("DUPLEX_OUTLET_GFI", "DOOR_36"):
+    for name in ("DUPLEX_OUTLET_GFI", "NORTH_ARROW"):
         b = doc.blocks.new(name=name)
         b.add_line((0, 0), (1, 0))
     msp = doc.modelspace()
     for x in (1, 3, 5):
         msp.add_blockref("DUPLEX_OUTLET_GFI", (x, 1))
-    msp.add_blockref("DOOR_36", (8, 1))
+    msp.add_blockref("NORTH_ARROW", (8, 1))                # not a symbol to count
     path = tmp_path / "e.dxf"
     doc.saveas(path)
     s = pe.process(path, "dxf", {"work_dir": str(tmp_path / "w")})["sheets"][0]
