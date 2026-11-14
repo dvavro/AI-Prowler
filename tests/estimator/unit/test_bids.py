@@ -174,8 +174,13 @@ def test_convert_needs_a_customer_and_a_live_bid(db, fake_host):  # S4-B12
         bids.convert_to_job(db, CTX, b["id"], confirm=True, customer={"name": "Al"}, service_date="next week")
 
 
-def test_host_unavailable_is_clear(db):  # S4-B13
+def test_host_unavailable_is_clear(db, monkeypatch):  # S4-B13
     host.set_host(None)
+    # In the full run another test has already imported ai_prowler_mcp; host._find falls back to it, so hide it
+    # (otherwise the real send_email runs and fails with "Email not configured" instead).
+    import sys
+    monkeypatch.delitem(sys.modules, "ai_prowler_mcp", raising=False)
+    monkeypatch.setattr(sys.modules["__main__"], "create_quote", None, raising=False)
     e = _approved(db)
     b = bids.generate(db, CTX, e["id"], customer=JANE)
     with pytest.raises(host.HostUnavailable):

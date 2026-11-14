@@ -190,7 +190,9 @@ def test_customers_see_the_name_label_and_photo(db):
     d = json.loads(out)
     assert st == 200 and d["display"] == "Sam · Virtual assistant" and d["photo_url"].startswith(
         "/support-api/agent/photo")
-    assert set(d) == {"ok", "enabled", "name", "label", "display", "photo_url"}   # nothing internal
+    # nothing internal; ask_who (anyone / verified / ticket) tells the page whether and how to show the Ask chat
+    assert set(d) == {"ok", "enabled", "name", "label", "display", "photo_url", "ask_who"}
+    assert d["ask_who"] == "anyone"
     st, ct, img = desk_portal.route("GET", "/support-api/agent/photo", query={}, body=b"", content_type="",
                                     ip="1.2.3.4", db_path=db, edition="solo")
     assert st == 200 and ct == b"image/jpeg"

@@ -67,7 +67,12 @@ def test_internal_errors_dont_crash(monkeypatch):  # S2-T06
     assert r["error"] == "internal_error"
 
 
-def test_register_on_fastmcp():  # S2-T07
+def test_register_on_fastmcp(monkeypatch):  # S2-T07
+    import sys
+    # In the full run other tests leave a stand-in FastMCP (_FakeFastMCP, no list_tools) in sys.modules: drop the
+    # mcp modules for this test so the real package is imported (monkeypatch puts the others back afterwards).
+    for name in [k for k in sys.modules if k == "mcp" or k.startswith("mcp.")]:
+        monkeypatch.delitem(sys.modules, name)
     pytest.importorskip("mcp")
     from mcp.server.fastmcp import FastMCP
     import asyncio

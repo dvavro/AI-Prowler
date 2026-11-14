@@ -1526,7 +1526,9 @@ def find_section(page, module_id: str):
     def walk(w):
         for c in w.winfo_children():
             try:
-                text = str(c.cget("text")).strip()
+                # 2026-11-13: a collapsible section's title starts with its ▼ / ▶ arrow (the Estimator tab's
+                # sections), so the marker is matched after it.
+                text = str(c.cget("text")).strip().lstrip("▼▶").strip()
             except Exception:
                 text = ""
             if text and c.winfo_ismapped():

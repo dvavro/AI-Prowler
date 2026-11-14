@@ -19,6 +19,11 @@ def estimator_sandbox(tmp_path, monkeypatch):
     monkeypatch.setenv("ESTIMATOR_DATA_DIR", str(data))
     monkeypatch.setenv("ESTIMATOR_PDF_BROWSER", "none")   # tests don't launch a browser unless they ask to
     monkeypatch.setenv("ESTIMATOR_WATCHER", "off")        # no background thread unless a test starts one
+    # In the full run (run_tests.bat) tests outside tests\estimator start AI-Prowler, whose start-up starts the
+    # Director watcher thread; stop it so it doesn't run against these tests' databases.
+    watch = sys.modules.get("estimator.director.watch")
+    if watch is not None and watch.is_running():
+        watch.stop_background()
     return data
 
 

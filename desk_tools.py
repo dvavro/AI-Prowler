@@ -1216,6 +1216,14 @@ SETTING_HELP = {
     "agent_wait_hours": "hours a customer waits with no team reply before the agent nudges",
     "agent_reply_signoff": "words after the assistant's name in its sign-off (blank = business name)",
     "agent_include_service_link": "add the 'request service' link to the agent's first replies",
+    # The public pages' Ask chat (2026-11-13: these settings had no help, so Claude, Muse or Grok couldn't explain them)
+    "agent_ask_who": "who may ask the assistant on the public pages: anyone (no check), verified "
+                     "(a 6-digit code by text or email first) or ticket (only on a ticket's own status page)",
+    "agent_ask_services": "the Ask chat may answer questions about the services you offer (yes / no)",
+    "agent_ask_products": "the Ask chat may answer questions about the products you sell (yes / no)",
+    "agent_ask_per_hour": "questions one visitor may ask the chat per hour (0 = no limit)",
+    "agent_ask_context_file": "path of a .txt or .md file on this PC with extra business information "
+                              "(FAQs, policies) the Ask chat reads; blank = none",
     # Phase 5 — the one business Google Calendar (personal installs only)
     "calendar_sync": "personal installs: off, or ai = Claude, Muse or Grok syncs one business Google Calendar (busy times in, bookings out)",
     "calendar_name": "the business Google Calendar's name, e.g. Blue Wave Jobs (one calendar only)",

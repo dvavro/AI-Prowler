@@ -54,7 +54,8 @@ def test_init_is_idempotent_and_records_schema_version(db):
         con.close()
     assert {"tickets", "ticket_events", "ticket_messages", "ticket_attachments", "queues",
             "ticket_types", "assignment_rules", "customer_contacts"} <= tables
-    assert ver == str(desk_db.SCHEMA_VERSION)
+    # SCHEMA_VERSION is the base SQL; each migration (2: the chat's ask_codes / ask_tokens) moves it on
+    assert ver == str(max([desk_db.SCHEMA_VERSION] + [v for v, _ in desk_db.MIGRATIONS]))
 
 
 def test_state_check_constraint_rejects_unknown_state(db):

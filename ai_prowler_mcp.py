@@ -27306,6 +27306,11 @@ def diff_files(
 #   • Bounded: a hard timeout prevents a hung interpreter from wedging the server.
 # ══════════════════════════════════════════════════════════════════════════════
 _DEV_CHECK_TIMEOUT_SEC = 120   # generous enough for an import that loads heavy deps
+# 2026-11-13 (David): "When AI-Prowler runs scripts, cmd windows get opened on the laptop". AI-Prowler runs
+# without a console, so every console program it starts (cmd.exe for .bat, python, node, gcc ...) got a NEW,
+# visible console window. CREATE_NO_WINDOW gives them a hidden console instead; output is still captured.
+# Windows only (0 elsewhere). GUI programs a script opens on purpose (a --human Playwright browser) still show.
+_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
 def _dev_tools_enabled() -> tuple[bool, str]:
@@ -27371,7 +27376,7 @@ def compile_check(filepath: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> s
         proc = _sp.run(
             [sys.executable, "-m", "py_compile", resolved],
             capture_output=True, text=True, timeout=max(5, int(timeout_sec)),
-            shell=False)
+            shell=False, creationflags=_NO_WINDOW)
     except _sp.TimeoutExpired:
         return f"⏱️  compile_check timed out after {timeout_sec}s on {resolved}."
     except Exception as exc:
@@ -27438,7 +27443,7 @@ def check_python_import(module_or_path: str, timeout_sec: int = _DEV_CHECK_TIMEO
         proc = _sp.run(
             [sys.executable, "-c", f"import {module}"],
             capture_output=True, text=True, timeout=max(5, int(timeout_sec)),
-            shell=False, cwd=cwd)
+            shell=False, cwd=cwd, creationflags=_NO_WINDOW)
     except _sp.TimeoutExpired:
         return f"⏱️  check_python_import timed out after {timeout_sec}s importing {module}."
     except Exception as exc:
@@ -27583,7 +27588,7 @@ def _run_dev_subprocess(argv: list, timeout_sec: int,
     import subprocess as _sp
     try:
         proc = _sp.run(argv, capture_output=True, text=True,
-                       timeout=max(5, int(timeout_sec)), shell=False)
+                       timeout=max(5, int(timeout_sec)), shell=False, creationflags=_NO_WINDOW)
         out = (proc.stderr or "") + (proc.stdout or "")
         return proc.returncode, out.strip()
     except _sp.TimeoutExpired:
@@ -27898,7 +27903,7 @@ def run_script(script_path: str, args: str = "",
                                f"_aip_run_{os.getpid()}.exe")
         compile_proc = _sp.run(
             ["gcc", resolved, "-o", tmp_bin],
-            capture_output=True, text=True, timeout=60, shell=False, cwd=cwd)
+            capture_output=True, text=True, timeout=60, shell=False, cwd=cwd, creationflags=_NO_WINDOW)
         if compile_proc.returncode != 0:
             return (f"❌ gcc compile failed for {resolved}\n"
                     f"{compile_proc.stderr or compile_proc.stdout}")
@@ -27910,7 +27915,7 @@ def run_script(script_path: str, args: str = "",
                                f"_aip_run_{os.getpid()}.exe")
         compile_proc = _sp.run(
             ["g++", resolved, "-o", tmp_bin],
-            capture_output=True, text=True, timeout=60, shell=False, cwd=cwd)
+            capture_output=True, text=True, timeout=60, shell=False, cwd=cwd, creationflags=_NO_WINDOW)
         if compile_proc.returncode != 0:
             return (f"❌ g++ compile failed for {resolved}\n"
                     f"{compile_proc.stderr or compile_proc.stdout}")
@@ -27921,7 +27926,7 @@ def run_script(script_path: str, args: str = "",
         # Compile first, then run.
         compile_proc = _sp.run(
             ["javac", resolved],
-            capture_output=True, text=True, timeout=60, shell=False, cwd=cwd)
+            capture_output=True, text=True, timeout=60, shell=False, cwd=cwd, creationflags=_NO_WINDOW)
         if compile_proc.returncode != 0:
             return (f"❌ javac compile failed for {resolved}\n"
                     f"{compile_proc.stderr or compile_proc.stdout}")
@@ -27965,6 +27970,7 @@ def run_script(script_path: str, args: str = "",
             timeout=max(5, int(timeout_sec)),
             shell=use_shell,
             cwd=cwd,
+            creationflags=_NO_WINDOW,
         )
     except FileNotFoundError as exc:
         return (f"⚠️  run_script: runner not found — {exc}\n"
@@ -28235,6 +28241,7 @@ with open(LOG, "a", encoding="utf-8", buffering=1) as lf:
             stdout=lf, stderr=lf,
             shell=USE_SHELL,
             cwd=_cwd or None,
+            creationflags=0x08000000 if os.name == "nt" else 0,   # CREATE_NO_WINDOW: no cmd window pops up
         )
         # Update manifest with real PID
         try:
@@ -28295,8 +28302,10 @@ with open(LOG, "a", encoding="utf-8", buffering=1) as lf:
         wp = _sp.Popen(
             [wrapper_py, wrapper_path],
             stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-            creationflags=getattr(_sp, "DETACHED_PROCESS", 0)
-                          | getattr(_sp, "CREATE_NEW_PROCESS_GROUP", 0),
+            # 2026-11-13: CREATE_NO_WINDOW (a hidden console) instead of DETACHED_PROCESS (none): with no console
+            # to inherit, every console program the job started (cmd.exe, python, powershell in run_tests.bat)
+            # opened its own visible window on the desktop.
+            creationflags=_NO_WINDOW | getattr(_sp, "CREATE_NEW_PROCESS_GROUP", 0),
         )
         # Record wrapper PID in manifest
         manifest["wrapper_pid"] = wp.pid
