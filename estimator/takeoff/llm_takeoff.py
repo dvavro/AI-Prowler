@@ -224,8 +224,13 @@ def parse_reading(text: str, sheet_id: int) -> dict:
 
 
 def _call(conn, ctx: RequestContext, cfg: dict, run: dict, system: str, user: str,
-          images: list[dict], *, purpose: str, images_refs: list[dict]) -> tuple[str, str, str, int]:
+          images: list[dict], *, purpose: str, images_refs: list[dict],
+          step: str = "read", flow: str | None = None) -> tuple[str, str, str, int]:
     """One vision call on the main provider, then the backup. (text, provider, model, AI Log id).
+
+    The model is the one the top of the Small Business tab sets for this step's group (2026-11-13): reading plans
+    and calibrating are complex steps; picking the foundation sheet is an internal step (providers.STEP_GROUPS).
+    flow names the step list to look in (default: this LLM takeoff; the auto calibrator passes its own).
 
     The budget is checked first; every attempt's usage is recorded (agents/roles.py),
     including failed ones, so the budget meter sees the real cost. Every attempt is
@@ -242,7 +247,8 @@ def _call(conn, ctx: RequestContext, cfg: dict, run: dict, system: str, user: st
         if not ok:
             errors.append(f"{which}: {why}")
             continue
-        model = providers.model_for(which, cfg["model"] if which == cfg["provider"] else None)
+        model = providers.model_for_step(which, flow or ROLE, step,
+                                         cfg.get("model_pinned") if which == cfg["provider"] else None)
         started = time.monotonic()
         try:
             text, usage = providers.ask_vision(which, system, user, images, model)
@@ -363,6 +369,28 @@ def llm_candidate(reading: dict, quantities: dict, provider: str, model: str) ->
 
 # ------------------------------------------------------------------ the measurements
 
+def _slab_viewport(conn, sheet_id: int) -> int | None:
+    """The view the slab measurements belong to on the sheet the AI picked (2026-11-13, David): a sheet can now hold
+    a footer detail and the foundation plan as separate views, so not simply the first one - the one titled as the
+    foundation / slab plan, else the biggest (the plan, not a detail)."""
+    rows = conn.execute("SELECT id, label, bbox_json FROM viewports WHERE sheet_id = ? ORDER BY id",
+                        (sheet_id,)).fetchall()
+    if not rows:
+        return None
+
+    def score(r):
+        label = (r["label"] or "").upper()
+        named = any(w in label for w in ("FOUNDATION", "SLAB")) and not any(
+            w in label for w in ("DETAIL", "SECTION", "FOOTER", "FOOTING"))
+        try:
+            b = json.loads(r["bbox_json"] or "null") or [0, 0, 0, 0]
+            size = (float(b[2]) - float(b[0])) * (float(b[3]) - float(b[1]))
+        except (TypeError, ValueError, IndexError):
+            size = 0.0
+        return (named, size, -r["id"])
+    return max(rows, key=score)["id"]
+
+
 def create_measurements(conn, ctx: RequestContext, run: dict, reading: dict, quantities: dict,
                         provider: str, model: str) -> list[int]:
     """Propose the slab, footer and form measurements from the quantities the app
@@ -371,9 +399,7 @@ def create_measurements(conn, ctx: RequestContext, run: dict, reading: dict, qua
     if run["sheet_id"] == sheet_id:
         viewport_id = run["viewport_id"]
     else:
-        row = conn.execute("SELECT id FROM viewports WHERE sheet_id = ? ORDER BY id LIMIT 1",
-                           (sheet_id,)).fetchone()
-        viewport_id = row["id"] if row else None
+        viewport_id = _slab_viewport(conn, sheet_id)
     dims = f"{reading['slab_width_ft']} x {reading['slab_length_ft']}"
     footer = "".join(x for x in (f", footer {reading['footer_size']}" if reading["footer_size"] else "",
                                  f" {reading['footer_bar']}" if reading["footer_bar"] else ""))
@@ -458,7 +484,7 @@ def run_llm_takeoff(conn, ctx: RequestContext, run: dict, on_step=None) -> dict:
                                      " sheet's id, or null if none of these sheets shows a foundation drawing>,"
                                      " \"notes\": \"one line saying why\"}. If you cannot tell, return null - never guess.",
                                    images, purpose="LLM takeoff: find the foundation sheet",
-                                   images_refs=refs)
+                                   images_refs=refs, step="classify")
         try:
             found_id, notes = parse_classification(text, [s["id"] for s in shown])
         except LlmTakeoffError as exc:
@@ -471,6 +497,8 @@ def run_llm_takeoff(conn, ctx: RequestContext, run: dict, on_step=None) -> dict:
             raise LlmTakeoffError("the AI couldn't tell which sheet is the foundation plan"
                                   + (f" ({notes})" if notes else "")
                                   + " - open the foundation sheet and run it from there")
+
+    calibration = _calibrate_if_needed(conn, ctx, run, foundation["id"], step)
 
     step("reading the plan with the AI")
     prep = _prepare_image(conn, person_ctx, foundation["id"],
@@ -504,6 +532,30 @@ def run_llm_takeoff(conn, ctx: RequestContext, run: dict, on_step=None) -> dict:
 
     step("measuring")
     measurement_ids = create_measurements(conn, ctx, run, reading, quantities, provider, model)
+    cand = llm_candidate(reading, quantities, provider, model)
+    if calibration:
+        cand["calibration"] = calibration
     return {"reading": reading, "quantities": quantities, "measurement_ids": measurement_ids,
             "provider": provider, "model": model, "foundation_sheet_id": foundation["id"],
-            "candidate": llm_candidate(reading, quantities, provider, model)}
+            "candidate": cand, "calibration": calibration}
+
+
+def _calibrate_if_needed(conn, ctx: RequestContext, run: dict, sheet_id: int, step) -> dict | None:
+    """Calibrate the slab's view when it has no scale yet (2026-11-13, David: the AI Agent calibrates the plans
+    itself). The quantities come from the written dimensions either way, so a view the calibrator can't do doesn't
+    stop the run: it is marked "manual calibration required", and the run says so. Returns a short summary for the
+    run (status, scale, reason, view) or None when the view already had a scale."""
+    from estimator.takeoff import auto_calibrate
+    vp_id = run["viewport_id"] if run["sheet_id"] == sheet_id else _slab_viewport(conn, sheet_id)
+    if vp_id is None:
+        return None
+    vp = conn.execute("SELECT id, label, scale_ratio, is_nts FROM viewports WHERE id = ?", (vp_id,)).fetchone()
+    if vp is None or (vp["scale_ratio"] and not vp["is_nts"]):
+        return None
+    step("calibrating the sheet")
+    try:
+        got = auto_calibrate.auto_calibrate(conn, ctx, vp_id, run=run)
+    except EstimatorError as exc:
+        got = {"status": "manual_required", "reason": exc.message, "how": auto_calibrate.MANUAL_HOW}
+    return {k: got.get(k) for k in ("status", "scale_ratio", "reason", "how", "method", "check")
+            if got.get(k) is not None} | {"viewport_id": vp_id, "view": vp["label"] or "main view"}

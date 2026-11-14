@@ -611,6 +611,7 @@ Source: "estimator\plan_engine\titleblock.py"; DestDir: "{app}\estimator\plan_en
 Source: "estimator\plan_engine\vectors.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
 Source: "estimator\plan_engine\viewports.py"; DestDir: "{app}\estimator\plan_engine"; Flags: ignoreversion
 Source: "estimator\practice.py"; DestDir: "{app}\estimator"; Flags: ignoreversion
+Source: "estimator\project_sync.py"; DestDir: "{app}\estimator"; Flags: ignoreversion
 Source: "estimator\pricing\__init__.py"; DestDir: "{app}\estimator\pricing"; Flags: ignoreversion
 Source: "estimator\pricing\importer.py"; DestDir: "{app}\estimator\pricing"; Flags: ignoreversion
 Source: "estimator\pricing\price_book.py"; DestDir: "{app}\estimator\pricing"; Flags: ignoreversion
@@ -623,6 +624,7 @@ Source: "estimator\symbols\results.py"; DestDir: "{app}\estimator\symbols"; Flag
 Source: "estimator\symbols\review.py"; DestDir: "{app}\estimator\symbols"; Flags: ignoreversion
 Source: "estimator\symbols\service.py"; DestDir: "{app}\estimator\symbols"; Flags: ignoreversion
 Source: "estimator\takeoff\__init__.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
+Source: "estimator\takeoff\auto_calibrate.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\from_plans.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\llm_takeoff.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\measurements.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
@@ -632,6 +634,7 @@ Source: "estimator\takeoff\sheet_trades.py"; DestDir: "{app}\estimator\takeoff";
 Source: "estimator\takeoff\slab_find.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\team.py"; DestDir: "{app}\estimator"; Flags: ignoreversion
 Source: "estimator\ui\__init__.py"; DestDir: "{app}\estimator\ui"; Flags: ignoreversion
+Source: "estimator\ui\agents_flow.py"; DestDir: "{app}\estimator\ui"; Flags: ignoreversion
 Source: "estimator\ui\gui_tab.py"; DestDir: "{app}\estimator\ui"; Flags: ignoreversion
 Source: "estimator\ui\help\__init__.py"; DestDir: "{app}\estimator\ui\help"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\check_an_estimate_against_the_plans.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion

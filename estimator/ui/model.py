@@ -436,6 +436,12 @@ def tool_status(which=None, find_spec=None) -> list[dict]:
     conv = dwg.find_converter(which=which, search_installs=real_which)
     oda = conv["path"] if conv else ""
     tess = which("tesseract") or ""
+    if not tess and real_which:                  # 2026-11-13: the plan engine's own search (install folders too)
+        try:
+            from estimator.plan_engine import ocr
+            tess = ocr.tesseract_path() or ""
+        except Exception:  # noqa: BLE001
+            tess = ""
     dwg_entry = {"tool": "DWG converter (ODA File Converter)", "ok": bool(oda),
                  "detail": f"{conv['name']} found at {oda}; DWG plan files are converted to DXF with it." if oda else
                            "Not installed, so DWG plan files cannot be opened. It is a free download from the"
@@ -458,6 +464,138 @@ def tool_status(which=None, find_spec=None) -> list[dict]:
     ]
 
 
+def recheck_tools() -> list[dict]:
+    """Look for the CAD and OCR tools again (2026-11-13, David: "a check button ... that recheck tools and OCR"):
+    forget what the plan engine remembered (Tesseract is looked up once per run), so a tool installed since AI-Prowler
+    started shows up without a restart."""
+    try:
+        from estimator.plan_engine import ocr
+        ocr.reset()
+    except Exception:  # noqa: BLE001
+        pass
+    return tool_status()
+
+
+# ---------------------------------------------------------------- 📤 send a project to the server
+
+def sync_projects() -> list[dict]:
+    """This PC's projects that can be sent to the server (newest first), for the picker."""
+    with _open() as conn:
+        rows = conn.execute("SELECT id, title, address, status, updated_at FROM estimates WHERE company_id = ?"
+                            " AND is_practice = 0 AND status != 'archived' ORDER BY updated_at DESC, id DESC LIMIT 300",
+                            (_ctx().company_id,)).fetchall()
+    return [{"id": r["id"], "label": f"#{r['id']}  {r['title']}" + (f" — {r['address']}" if r["address"] else ""),
+             "title": r["title"]} for r in rows]
+
+
+def sync_settings() -> dict:
+    from estimator import project_sync
+    return project_sync.load_settings()
+
+
+def save_sync_settings(server_url: str, username: str, share_path: str) -> tuple[bool, str]:
+    from estimator import project_sync
+    try:
+        if server_url.strip():
+            server_url = project_sync.server_base(server_url)
+        project_sync.save_settings(server_url, username, share_path)
+    except Exception as exc:  # noqa: BLE001
+        return False, getattr(exc, "message", str(exc))
+    return True, "Saved (the password is never saved)."
+
+
+_server_tokens: dict = {}       # server address -> session token, for this run of AI-Prowler only
+
+
+def send_project(estimate_id: int, via: str, *, password: str = "", replace: bool = False) -> tuple[bool, str]:
+    """📤 Send one project to the server. via = "network" (mapped drive) or "internet" (Remote Access address)."""
+    from estimator import project_sync
+    s = project_sync.load_settings()
+    try:
+        with _open() as conn:
+            if via == "network":
+                out = project_sync.send_to_share(conn, _ctx(), int(estimate_id), s["share_path"],
+                                                 replace_anyway=replace)
+            else:
+                base = project_sync.server_base(s["server_url"])
+                token = _server_tokens.get(base)
+                if password or not token:
+                    if not s["username"] or not password:
+                        return False, "Enter your server user name and password, then send again."
+                    token = _server_tokens[base] = project_sync.sign_in(base, s["username"], password)
+                try:
+                    out = project_sync.send_over_internet(conn, _ctx(), int(estimate_id), base, token,
+                                                          replace_anyway=replace)
+                except Exception:
+                    _server_tokens.pop(base, None)          # a stale sign-in: ask for the password next time
+                    raise
+    except Exception as exc:  # noqa: BLE001 - shown to the person, never a crash
+        return False, getattr(exc, "message", str(exc))
+    mb = out["bytes"] / (1024 * 1024)
+    return True, f"{out['say']} ({mb:.1f} MB, {out['files']} file(s))"
+
+
+def _remote_link(path: str) -> str:
+    """https://<Remote Access address>/<path>/ the way the Small Business tab makes the Jobs app's link, or "" while
+    Remote Access isn't set up."""
+    import json
+    from pathlib import Path
+    try:
+        cfg = json.loads((Path.home() / ".ai-prowler" / "config.json").read_text(encoding="utf-8"))
+        d = (cfg.get("tunnel_domain", "") or "").strip().replace("https://", "").replace("http://", "").rstrip("/")
+        return f"https://{d}/{path}/" if d else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def phone_link() -> str:
+    """The Estimator's address for phones (Remote Access): https://<tunnel domain>/estimator/."""
+    return _remote_link("estimator")
+
+
+def jobs_link() -> str:
+    """The Jobs app's address - the same link as the Small Business tab's Jobs App row (2026-11-13: the Jobs app's
+    Estimates screen opens the Estimator too)."""
+    return _remote_link("jobs")
+
+
+def email_link(url: str, subject: str, intro: str) -> tuple[bool, str]:
+    """Email a link with AI-Prowler's own email settings (~/.ai-prowler/email_config.json), to its default address -
+    the same as the Jobs app's 📧 Email to user."""
+    import base64
+    import json
+    import smtplib
+    import ssl
+    from email.mime.text import MIMEText
+    from pathlib import Path
+    if not url:
+        return False, "There's no link yet - turn on Remote Access in the Settings tab first."
+    path = Path.home() / ".ai-prowler" / "email_config.json"
+    if not path.exists():
+        return False, "Set up your email in Settings → Email first."
+    try:
+        c = json.loads(path.read_text(encoding="utf-8"))
+        host, port, user = c.get("smtp_host", ""), int(c.get("smtp_port", 587)), c.get("username", "")
+        password = base64.b64decode(c.get("_password_b64", "")).decode()
+        to_addr = c.get("default_to", user)
+        msg = MIMEText(f"{intro}\n\n  {url}\n\nTip: tap the browser menu and choose 'Add to Home Screen' to install it "
+                       "as an app icon.", "plain")
+        msg["Subject"], msg["From"], msg["To"] = subject, f"{c.get('from_name', user)} <{user}>", to_addr
+        if c.get("use_tls", True):
+            with smtplib.SMTP(host, port) as srv:
+                srv.ehlo()
+                srv.starttls(context=ssl.create_default_context())
+                srv.login(user, password)
+                srv.sendmail(user, to_addr, msg.as_string())
+        else:
+            with smtplib.SMTP_SSL(host, port) as srv:
+                srv.login(user, password)
+                srv.sendmail(user, to_addr, msg.as_string())
+    except Exception as exc:  # noqa: BLE001 - shown to the person as is
+        return False, f"Couldn't send it: {exc}"
+    return True, f"Link sent to {to_addr}."
+
+
 def web_app_access() -> dict:
     """Where the Estimator web app is and who can sign in, for the Phone and web app section of the tab.
 
@@ -472,7 +610,6 @@ def web_app_access() -> dict:
         "lines": [
             "The Estimator web app is built: plans, reviews and takeoffs in a browser, on this PC or a phone.",
             f"On this PC: http://localhost:{port}/estimator/",
-            "On your phone: open the same address through Remote Access (in Server mode, your office network address works too).",
             "You can also see your estimates in the Jobs app, on the Estimates screen \u2014 it is the same web app, on your phone.",
             "Sign-in uses AI-Prowler accounts. The owner has full access; managers and staff sign in as office, and with the Estimating scope (Admin, Manage Scopes) as estimators who can change and approve; field crew can look, but not change or approve.",
         ],

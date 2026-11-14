@@ -1278,7 +1278,7 @@ async function renderPlanSet(main, id) {
         el("td", {}, el("a", { href: "#/sheets/" + s.id }, s.sheet_no || "page " + s.page_no)),
         el("td", {}, s.title || "—"),
         el("td", {}, (DISCIPLINE_ICON[s.discipline] || "") + " " + words(s.discipline)),
-        el("td", {}, s.viewports.map(v => v.is_nts ? "NTS" : (v.scale_note || (v.measurable ? "1:" + v.scale_ratio : "—"))).join(" · "),
+        el("td", {}, s.viewports.map(v => { const t = scaleLabel(v); return t === "no scale" ? "—" : t; }).join(" · "),
           s.needs_scale ? el("span", { class: "status sample" }, " needs a scale") : null),
         el("td", {}, s.revision || ""), toggleCell(s), delCell(s))))));
   } else if (ps.status === "processed") {
@@ -1406,6 +1406,20 @@ function placeBox(node, box, sheet) {
   return node;
 }
 
+// The scale a view measures with, in words (2026-11-13): after a calibration or a typed ratio the view used to keep
+// showing its original note ("NTS") although it was measured at the new scale.
+function scaleLabel(v) {
+  // 2026-11-13: the auto calibrator couldn't do this view - a person must, and the table says so.
+  if (!v.measurable && v.auto_calibration && v.auto_calibration.status === "manual_required")
+    return "⚠️ calibrate by hand" + (v.scale_note ? " (the plan says " + v.scale_note + ")" : "");
+  if (v.is_nts) return "NTS";
+  const r = v.scale_ratio ? Math.round(parseFloat(v.scale_ratio) * 100) / 100 : null;
+  if (v.measurable && (v.scale_method === "calibration" || v.scale_method === "manual"))
+    return "1″ = " + r + "″ (" + (v.scale_method === "calibration" ? "calibrated" : "set by hand") + ")";
+  if (v.scale_note) return v.scale_note;
+  return v.measurable ? "1:" + r : "no scale";
+}
+
 async function renderSheet(main, id) {
   const r = await api("GET", "/sheets/" + id);
   const s = r.sheet;
@@ -1421,7 +1435,7 @@ async function renderSheet(main, id) {
   for (const v of r.viewports) {
     if (!v.bbox) continue;
     stage.append(placeBox(el("div", { class: "vp-box" + (v.measurable ? "" : v.is_nts ? " nts" : " unscaled"), "data-vp": v.id },
-      el("span", {}, (v.label || "View") + " · " + (v.is_nts ? "NTS" : v.scale_note || (v.measurable ? "1:" + v.scale_ratio : "no scale")))), v.bbox, s));
+      el("span", {}, (v.label || "View") + " · " + scaleLabel(v))), v.bbox, s));
   }
   const parts = [...head];
   if (canOpen("takeoffs")) {
@@ -1658,7 +1672,9 @@ function viewportTable(r, s, stage, img, msg) {
       r.can_edit && paper ? el("th", {}, "Change it") : null)),
     el("tbody", {}, r.viewports.map(v => el("tr", { "data-vp": v.id },
       el("td", {}, v.label || "View " + v.id),
-      el("td", {}, v.is_nts ? "Not to scale (NTS)" : v.measurable ? (v.scale_note || "1 : " + v.scale_ratio) + " — 1″ = " + v.scale_ratio + "″" :
+      el("td", {}, v.is_nts ? "Not to scale (NTS)" : v.measurable ? (v.scale_method === "calibration" || v.scale_method === "manual"
+          ? scaleLabel(v) + (v.scale_note ? " — the plan says " + v.scale_note : "")
+          : (v.scale_note || "1 : " + v.scale_ratio) + " — 1″ = " + v.scale_ratio + "″") :
         el("span", { class: "status sample" }, "no scale yet")),
       el("td", {}, words(v.scale_method) + (v.scale_confidence && v.scale_method !== "none" ? " (" + Math.round(parseFloat(v.scale_confidence) * 100) + "%)" : "") +
         (v.scale_set_by ? " · set by " + v.scale_set_by : "")),

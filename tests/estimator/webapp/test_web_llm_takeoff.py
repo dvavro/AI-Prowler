@@ -235,12 +235,12 @@ def test_get_run_reports_the_source(call, db, empty):
 # ---------------------------------------------------------------- the page says the AI didn't run
 
 def test_blueprint_review_points_at_the_llm_switch_when_takeoff_is_off():
-    """The candidates line when LLM takeoff is off: it says the AI didn't run and links
-    to the Agents page, instead of only suggesting manual measuring. The on / not-ready
-    lines stay as they were."""
+    """The candidates line when LLM takeoff is off: it says the AI didn't run and where the switch is - AI-Prowler's
+    Estimator tab → AI agents since 2026-11-13 (the agents' settings live on the desktop) - instead of only
+    suggesting manual measuring. The on / not-ready lines stay as they were."""
     review = (WEB / "review.js").read_text(encoding="utf-8")
-    for needle in ("didn't run because LLM takeoff is off", 'href: "#/agents"',
-                   "Turn it on in 🤖 AI agents",
+    for needle in ("didn't run because LLM takeoff is off",
+                   "Turn it on in AI-Prowler's 🏗 Estimator tab → 🤖 AI agents (AI takeoff → Suggest)",
                    "the AI will read the plan instead when you run it (LLM takeoff is on)",
                    "LLM takeoff is on, but the AI isn't ready"):
         assert needle in review, needle

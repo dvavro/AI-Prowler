@@ -148,8 +148,8 @@ def test_tab_is_added_with_its_sections(root, db_home, switch, wizard):  # S16-G
     frame = build_estimator_tab(app)
     assert frame is not None and app.notebook.tab(1, "text") == model.TAB_TITLE
     tab = app._estimator_tab
-    assert set(tab.sections) == {"setup", "company", "labor", "trades", "agents", "director", "modules", "data", "cad",
-                                 "phone", "help"}
+    assert set(tab.sections) == {"setup", "company", "labor", "trades", "agents", "director", "modules", "data", "sync",
+                                 "cad", "phone", "help"}
     texts = _texts(frame)
     assert any("🧭 Estimator setup" in t for t in texts)                  # Setup AI-Prowler scrolls to this
     assert any("The Estimator is ON" in t for t in texts) and any("Setup checklist: 0 of 10" in t for t in texts)
@@ -534,3 +534,137 @@ def test_scrollbar_reaches_bottom_after_collapse_all_and_expand(root, db_home, s
     canvas.yview_moveto(1.0)
     root.update_idletasks()
     assert canvas.yview()[1] == 1.0, "scrollbar must reach the bottom"
+
+
+# ---------------------------------------------------------------- 🤖 AI agents, set up like the other agents (2026-11-13)
+
+def _roles():
+    from estimator.agents import roles
+    with model._open() as conn:
+        return {r["role"]: r for r in roles.overview(conn, "default")["roles"]}
+
+
+def test_agents_section_sets_each_step_and_one_runner(root, db_home, switch, wizard):  # S16-G20
+    from estimator.ui import agents_flow as af
+    from estimator.ui.gui_tab import build_estimator_tab
+    app = FakeApp(root)
+    build_estimator_tab(app)
+    tab = app._estimator_tab
+    v = tab._agent_vars
+    assert {k for k in v if k.startswith("mode_")} == {"mode_" + r for r, _s, _st in af.STEPS}
+    assert all(v["mode_" + r].get() == "Off" for r, _s, _st in af.STEPS)        # everything starts Off
+    v["runner"].set("Grok (API key)")
+    v["backup"].set("Claude (API key)")
+    v["mode_llm_takeoff"].set("Suggest (a person approves)")
+    v["mode_reviewer"].set("From chat only")
+    v["day"].set("3.50")
+    tab._agent_save()
+    got = _roles()
+    assert (got["llm_takeoff"]["provider"], got["llm_takeoff"]["fallback_provider"]) == ("grok_api", "claude_api")
+    assert got["reviewer"]["provider"] == "chat_only" and got["reviewer"]["fallback_provider"] is None
+    assert got["bid_writer"]["provider"] == "off"
+    assert model.agents()["budget"]["daily_cents"] == 350
+    v["mode_llm_takeoff"].set("Off")                                             # and back off again
+    tab._agent_save()
+    assert _roles()["llm_takeoff"]["provider"] == "off"
+
+
+def test_each_agent_can_have_its_own_model(root, db_home, switch, wizard):  # S16-G22
+    from estimator.agents import providers
+    from estimator.ui import agents_flow as af
+    from estimator.ui.gui_tab import build_estimator_tab
+    app = FakeApp(root)
+    build_estimator_tab(app)
+    tab = app._estimator_tab
+    v = tab._agent_vars
+    assert v["model_llm_takeoff"].get() == af.GROUP_DEFAULT                     # follows the Small Business tab
+    v["mode_llm_takeoff"].set("Suggest (a person approves)")
+    v["model_llm_takeoff"].set("Claude Opus 5.5")
+    tab._agent_save()
+    r = _roles()["llm_takeoff"]
+    assert r["provider"] == "claude_api" and r["model_pinned"] == "claude-opus-5-5"
+    assert providers.model_for_step("claude_api", "llm_takeoff", "classify", r["model_pinned"]) == "claude-opus-5-5"
+    v["runner"].set("Grok (API key)")                                            # a Claude model can't run on Grok
+    assert v["model_llm_takeoff"].get() == af.GROUP_DEFAULT
+    tab._agent_save()
+    assert _roles()["llm_takeoff"]["model_pinned"] is None
+
+
+def test_cad_check_again_and_phone_link(root, db_home, switch, wizard, monkeypatch, tmp_path):  # S16-G23
+    from estimator.ui.gui_tab import build_estimator_tab
+    calls = []
+    monkeypatch.setattr(model, "recheck_tools", lambda: calls.append(1) or
+                        [{"tool": "Tesseract OCR (reads scanned plans)", "ok": True, "detail": "Found at C:\\t.exe."}])
+    monkeypatch.setattr(model, "phone_link", lambda: "https://ap-test.ai-prowler.com/estimator/")
+    monkeypatch.setattr(model, "jobs_link", lambda: "https://ap-test.ai-prowler.com/jobs/")
+    app = FakeApp(root)
+    build_estimator_tab(app)
+    tab = app._estimator_tab
+    tab.cad_recheck()
+    assert calls == [1]
+    assert any("Tesseract OCR" in w.cget("text") and w.cget("text").startswith("✅")
+               for w in tab.cad_lines.winfo_children())
+    assert tab.phone_url.get() == "https://ap-test.ai-prowler.com/estimator/"
+    assert tab.jobs_url.get() == "https://ap-test.ai-prowler.com/jobs/"
+    buttons = [w.cget("text") for w in _walk(tab.sections["phone"]) if isinstance(w, ttk.Button)]
+    assert buttons[0] == "🌐 Open Estimator in browser"                         # the desktop one comes first
+    assert buttons.count("📋 Copy") == 2 and buttons.count("📧 Email to user") == 2 and buttons.count("📱 QR") == 2
+    frames = [w.cget("text") for w in _walk(tab.sections["phone"]) if isinstance(w, ttk.LabelFrame)]
+    assert frames[0].startswith("🖥 On this PC") and frames[1].startswith("📱 Estimator") and frames[2].startswith("🧰 Jobs App")
+
+
+def _walk(w):
+    for c in w.winfo_children():
+        yield c
+        yield from _walk(c)
+
+
+def test_send_project_to_server_section(root, db_home, switch, wizard, monkeypatch, tmp_path):  # S16-G24
+    from estimator.ui.gui_tab import build_estimator_tab
+    from estimator.estimating import service
+    from estimator.context import personal_context
+    from estimator.database import open_database
+    conn = open_database()
+    eid = service.create_estimate(conn, personal_context(), "Smith house", address="12 Oak St")["id"]
+    conn.close()
+    sent = []
+    monkeypatch.setattr(model, "send_project", lambda e, via, password="", replace=False:
+                        sent.append((e, via, password, replace)) or (True, "Copied to the server's inbox."))
+    app = FakeApp(root)
+    build_estimator_tab(app)
+    tab = app._estimator_tab
+    texts = [w.cget("text") for w in _walk(tab.sections["sync"]) if isinstance(w, ttk.Button)]
+    assert "🏢 Send through the office network (faster)" in texts and "🌐 Send over the internet" in texts
+    v = tab._sync_vars
+    assert v["project"].get().startswith(f"#{eid}  Smith house")
+    share = tmp_path / "exchange"
+    share.mkdir()
+    v["share"].set(str(share))
+    v["url"].set("acme.example.com/jobs/")
+    v["user"].set("dana")
+    v["password"].set("secret")
+    tab._sync_go("internet")
+    for _ in range(50):
+        root.update()
+        if sent and tab._sync_status.cget("text").startswith("✅"):
+            break
+        import time
+        time.sleep(0.05)
+    assert sent == [(eid, "internet", "secret", False)], tab._sync_status.cget("text")
+    assert tab._sync_status.cget("text").startswith("✅") and v["password"].get() == ""   # never kept around
+    saved = model.sync_settings()
+    assert saved == {"server_url": "https://acme.example.com", "username": "dana", "share_path": str(share)}
+
+
+def test_agents_flow_colours_each_step_by_its_mode():  # S16-G21
+    from estimator.ui import agents_flow as af
+    pic = af.flow({"llm_takeoff": "on", "reviewer": "chat_only", "plan_reader": "on"},
+                  {"plan_reader": False, "takeoff": False}, "claude_api")
+    steps = {s["id"]: s for s in pic["steps"]}
+    assert steps["llm_takeoff"]["color"] == af.COLORS["on"] and steps["llm_takeoff"]["word"] == "waits for OK"
+    assert steps["reviewer"]["color"] == af.COLORS["chat_only"] and steps["bid_writer"]["word"] == "off"
+    assert steps["plan_reader"]["word"] == "needs plans"                          # on, but waits for the Plan Engine
+    lit = {s["id"] for s in pic["states"] if s["lit"]}
+    assert lit == {"Takeoff", "Review"}                                          # Plans isn't lit: it can't run yet
+    assert "AI takeoff" in pic["summary"] and "Reviewer" in pic["summary"]
+    assert "complex step" in steps["llm_takeoff"]["help"] and "internal step" in steps["reviewer"]["help"]

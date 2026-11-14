@@ -275,6 +275,70 @@ def test_mark_agent_rejects_bad_candidate_and_approved(call, db, slab):         
                 {"auto_run_id": rid, "candidate_id": "c2"}).status == 400
 
 
+# ---------------------------------------------------------------- the agent's own calibration (2026-11-13)
+
+def _calibrated(db, vp, by="owner", at="2099-01-01T00:00:00+00:00", method="calibration"):
+    db.execute("UPDATE viewports SET scale_method = ?, scale_set_by = ?, scale_set_at = ? WHERE id = ?",
+               (method, by, at, vp))
+
+
+def test_agent_calibration_is_stamped_as_the_agents(call, db, slab):                          # AR-A19
+    rid = _run(db, slab)
+    _calibrated(db, slab["vp"])                         # the Calibrate tool records the signed-in person
+    r = call("POST", f"{API}/viewports/{slab['vp']}/mark-agent", {"auto_run_id": rid})
+    assert r.status == 200, r.json()
+    assert r.json()["scale_set_by"] == "concrete-agent"
+    assert db.execute("SELECT scale_set_by FROM viewports WHERE id = ?",
+                      (slab["vp"],)).fetchone()["scale_set_by"] == "concrete-agent"
+    scale = call("GET", f"{API}/auto-run/{rid}").json()["run"]["scale"]
+    assert scale["by_agent"] is True and scale["during_run"] is True and scale["method"] == "calibration"
+
+
+def test_mark_agent_scale_refuses_an_older_calibration_or_another_view(call, db, slab):      # AR-A20
+    rid = _run(db, slab)
+    _calibrated(db, slab["vp"], at="2026-11-11T18:29:19+00:00")    # a person calibrated before the run
+    assert call("POST", f"{API}/viewports/{slab['vp']}/mark-agent", {"auto_run_id": rid}).status == 400
+    assert db.execute("SELECT scale_set_by FROM viewports WHERE id = ?",
+                      (slab["vp"],)).fetchone()["scale_set_by"] == "owner"
+    _calibrated(db, slab["vp"], method="note")                     # a plan note, not a calibration
+    assert call("POST", f"{API}/viewports/{slab['vp']}/mark-agent", {"auto_run_id": rid}).status == 400
+    other = db.execute("INSERT INTO viewports (company_id, sheet_id, label, scale_ratio, is_nts)"
+                       " VALUES ('default', ?, 'Detail', '12', 0)", (slab["sheet"],)).lastrowid
+    _calibrated(db, other)
+    assert call("POST", f"{API}/viewports/{other}/mark-agent", {"auto_run_id": rid}).status == 400
+
+
+def test_run_says_whose_scale_it_measured_with(call, db, slab):                               # AR-A21
+    rid = _run(db, slab)
+    _calibrated(db, slab["vp"], at="2026-11-11T18:29:19+00:00")
+    scale = call("GET", f"{API}/auto-run/{rid}").json()["run"]["scale"]
+    assert scale["set_by"] == "owner" and scale["by_agent"] is False and scale["during_run"] is False
+    assert scale["set_at"].startswith("2026-11-11") and float(scale["scale_ratio"]) == 84.3225
+    db.execute("UPDATE viewports SET scale_ratio = NULL WHERE id = ?", (slab["vp"],))
+    assert call("GET", f"{API}/auto-run/{rid}").json()["run"]["scale"] is None
+
+
+def test_reviewer_cannot_stamp_a_calibration(call, db, slab, session_for):                    # AR-A22
+    rid = _run(db, slab)
+    _calibrated(db, slab["vp"])
+    assert call("POST", f"{API}/viewports/{slab['vp']}/mark-agent", {"auto_run_id": rid},
+                headers=session_for("reviewer")).status == 403
+
+
+def test_auto_calibrate_route(call, db, slab, session_for):                                    # AR-A23
+    """The fixture's view already has a scale: replacing it asks first; with no written dimensions and AI takeoff
+    off, the answer is "manual calibration required" with the reason and how - and the view says so."""
+    r = call("POST", f"{API}/viewports/{slab['vp']}/auto-calibrate", {})
+    assert r.status == 200 and r.json()["needs_confirmation"] is True and "already has a scale" in r.json()["question"]
+    got = call("POST", f"{API}/viewports/{slab['vp']}/auto-calibrate", {"confirm": True}).json()
+    assert got["status"] == "manual_required" and "AI takeoff is off" in got["reason"] and "Calibrate" in got["how"]
+    vp = call("GET", f"{API}/sheets/{slab['sheet']}").json()["viewports"][0]
+    assert vp["auto_calibration"]["status"] == "manual_required"
+    assert call("POST", f"{API}/viewports/{slab['vp']}/auto-calibrate", {"confirm": True},
+                headers=session_for("reviewer")).status == 403
+    assert call("POST", f"{API}/viewports/9999/auto-calibrate", {"confirm": True}).status == 404
+
+
 # ---------------------------------------------------------------- roles
 
 def test_reviewer_reads_but_cannot_start(call, slab, session_for):                            # AR-A15

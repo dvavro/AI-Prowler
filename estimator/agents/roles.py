@@ -52,7 +52,10 @@ def _shape(role: str, row) -> dict:
     out = {"role": role, "label": meta["label"], "does": meta["does"], "works_now": meta["works_now"],
            "provider": provider, "provider_label": providers.PROVIDER_LABELS[provider],
            "model": (row["model"] if row else None) or (providers.model_for(provider) if ok else None),
-           "fallback_provider": fallback, "ready": ok, "why_not": "" if ok else why}
+           "fallback_provider": fallback, "ready": ok, "why_not": "" if ok else why,
+           # The model this agent was set to itself (2026-11-13), or None = its group's model from the top of the
+           # Small Business tab (complex & customer, or internal steps).
+           "model_pinned": (row["model"] if row else None) or None}
     if fallback:
         fok, fwhy = providers.ready(fallback)
         out.update(fallback_ready=fok, fallback_why_not="" if fok else fwhy)

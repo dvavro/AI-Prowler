@@ -28,6 +28,10 @@ Sprint 2 (Coder 2):
                                     raw file body (streamed to disk, up to 300 MB); checked with plan_upload's
                                     checks and NOT attached yet: returns stage_id + what will be attached
   POST /estimates/<id>/plans/attach {stage_id, supersedes_plan_set_id} -> plan_upload confirm=true
+  POST /sync/receive[?replace=1]     a project bundle sent from a PC (project_sync.py; streamed, up to 500 MB):
+                                     new estimate the first time, updated in place after (kept beside a server copy
+                                     changed since, unless replace=1)
+  GET  /sync/received               projects this server has received from PCs
   DELETE /estimates/<id>/plans/stage/<stage_id>   cancel a staged upload
   GET  /modules?path=quick          trade/service modules (est_list_modules)
   GET  /modules/<id>/questions      intake questions (est_quick_questions)
@@ -325,7 +329,34 @@ QUICK_PATHS = ("quick_estimate", "both")
 def is_upload(method: str, path: str) -> bool:
     """True for the one call whose body the host must NOT read into memory (plan files up to 300 MB)."""
     p = unquote(urlsplit(path).path)
-    return method.upper() == "POST" and p.startswith(API + "/") and bool(_STAGE.match(p[len(API):]))
+    return method.upper() == "POST" and p.startswith(API + "/") and (
+        bool(_STAGE.match(p[len(API):])) or p[len(API):] == SYNC_RECEIVE)
+
+
+SYNC_RECEIVE = "/sync/receive"      # a project sent from a PC (project_sync.py), streamed to disk like plan files
+
+
+def _sync_receive(req: Request, ctx, conn) -> Response:
+    from estimator import project_sync
+    from estimator.api import staging
+    if ctx.role not in project_sync.RECEIVE_ROLES:
+        raise _Refuse(403, "permission_denied", "only the owner, an estimator or the office can send projects here")
+    length = req.length if req.stream is not None else len(req.body)
+    if length <= 0:
+        raise _Refuse(400, "invalid_input", "the project file is empty")
+    if length > project_sync.MAX_BUNDLE_BYTES:
+        raise _Refuse(413, "too_large", "the project file is over 500 MB")
+    stage_id, path = staging.new(ctx, None, "project.zip")
+    try:
+        got = staging.receive(req.stream if req.stream is not None else io.BytesIO(req.body), length, path)
+        if got != length:
+            raise _Refuse(400, "upload_incomplete", "the upload was cut off; please send it again")
+        replace = str(req.query.get("replace") or "").lower() in ("1", "true", "yes")
+        out = project_sync.receive_bundle(conn, ctx, path, replace_anyway=replace,
+                                          received_by=f"internet ({ctx.actor})")
+    finally:
+        staging.drop(stage_id)
+    return _json(200, _no_paths(out))
 
 
 def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Response:
@@ -463,6 +494,14 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
     mm = _STAGE.match(sub)
     if mm and m == "POST":
         return _stage_plan(req, ctx, conn, int(mm.group(1)))
+
+    if sub == SYNC_RECEIVE and m == "POST":
+        return _sync_receive(req, ctx, conn)
+
+    if sub == "/sync/received" and m == "GET":
+        from estimator import project_sync
+        rows = project_sync.received(conn, ctx)
+        return _ok(projects=rows, count=len(rows))
 
     mm = _ATTACH.match(sub)
     if mm and m == "POST":

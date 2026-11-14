@@ -288,7 +288,10 @@ def _run_one(conn, ctx, task: dict, cfg: dict, reg) -> dict:
         if not ok:
             errors.append(f"{which}: {why}")
             continue
-        model = providers.model_for(which, cfg["model"] if which == cfg["provider"] else None)
+        # The model follows the top of the Small Business tab (2026-11-13): reviewer notes are an internal step,
+        # bid scope and follow-ups are customer messages (providers.STEP_GROUPS).
+        model = providers.model_for_step(which, task["role"], None,
+                                         cfg.get("model_pinned") if which == cfg["provider"] else None)
         started = time.monotonic()
         try:
             text, usage = providers.ask(which, system, user, model)

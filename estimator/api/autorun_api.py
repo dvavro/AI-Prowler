@@ -47,6 +47,8 @@ _RUNS = re.compile(r"^/auto-run$")
 _RUN_ONE = re.compile(r"^/auto-run/(\d+)$")
 _RERUN = re.compile(r"^/auto-run/(\d+)/rerun$")
 _MEAS_ACT = re.compile(r"^/measurements/(\d+)/(retarget|mark-agent)$")
+_VP_MARK = re.compile(r"^/viewports/(\d+)/mark-agent$")
+_VP_AUTOCAL = re.compile(r"^/viewports/(\d+)/auto-calibrate$")
 
 AGENT = "concrete-agent"         # proposed_by on every measurement the agent makes
 LLM_AGENT = "llm-takeoff"          # proposed_by on every measurement the LLM fallback makes
@@ -57,7 +59,8 @@ PLAYWRIGHT_ERROR = "Playwright/Chromium is not installed — run: playwright ins
 
 def handles(sub: str) -> bool:
     return (bool(_CANDIDATES.match(sub)) or bool(_RUNS.match(sub)) or bool(_RUN_ONE.match(sub))
-            or bool(_RERUN.match(sub)) or bool(_MEAS_ACT.match(sub)))
+            or bool(_RERUN.match(sub)) or bool(_MEAS_ACT.match(sub)) or bool(_VP_MARK.match(sub))
+            or bool(_VP_AUTOCAL.match(sub)))
 
 
 def _now() -> str:
@@ -102,6 +105,7 @@ def _shape_run(row) -> dict:
             "step": r["step"], "error": r["error"], "candidate_id": r["candidate_id"],
             "candidates": cands,
             "source": "llm" if any(c.get("source") == "llm" for c in cands) else "geometry",
+            "calibration": next((c["calibration"] for c in cands if c.get("calibration")), None),
             "measurement_ids": json.loads(r["measurement_ids_json"] or "[]"),
             "created_at": r["created_at"], "updated_at": r["updated_at"]}
 
@@ -373,6 +377,41 @@ def mark_agent_measurement(conn, ctx, measurement_id: int, auto_run_id: int, can
     return {"measurement": ms.detail(conn, ctx, m["id"])["measurement"]}
 
 
+def mark_agent_scale(conn, ctx, viewport_id: int, auto_run_id: int) -> dict:
+    """Stamp the calibration the agent just made in the page as the agent's (2026-11-13, David).
+
+    The agent calibrates through Blueprint Review's own Calibrate tool, signed in as the person who started it,
+    so the scale was recorded as set by that person and nothing said the agent had done it. Only the run's own
+    viewport, only a calibration, and only one made after the run started can be stamped."""
+    from estimator.errors import InvalidInput
+    from estimator.estimating import service
+    run = _load_run(conn, ctx, int(auto_run_id))
+    if int(run["viewport_id"]) != int(viewport_id):
+        raise InvalidInput(f"run {auto_run_id} measures another viewport", viewport_id=viewport_id)
+    vp = conn.execute("SELECT * FROM viewports WHERE id = ? AND company_id = ?",
+                      (int(viewport_id), ctx.company_id)).fetchone()
+    if vp is None or vp["scale_method"] != "calibration" or (vp["scale_set_at"] or "") < (run["created_at"] or ""):
+        raise InvalidInput("that viewport wasn't calibrated during this run", viewport_id=viewport_id)
+    with service.transaction(conn):
+        conn.execute("UPDATE viewports SET scale_set_by = ? WHERE id = ?", (AGENT, vp["id"]))
+        service._log(conn, ctx, run["estimate_id"], "scale_calibrated_by_agent",
+                     {"run_id": run["id"], "viewport_id": vp["id"], "scale_ratio": vp["scale_ratio"]})
+    return {"viewport_id": vp["id"], "scale_ratio": vp["scale_ratio"], "scale_set_by": AGENT}
+
+
+def run_scale(conn, ctx, run: dict) -> dict | None:
+    """The scale a run measured with, and who set it - so the page can say "the agent calibrated the sheet" or
+    "used the scale the owner calibrated on Nov 11" instead of leaving it unsaid."""
+    vp = conn.execute("SELECT scale_ratio, scale_method, scale_set_by, scale_set_at, is_nts FROM viewports"
+                      " WHERE id = ? AND company_id = ?", (run["viewport_id"], ctx.company_id)).fetchone()
+    if vp is None or not vp["scale_ratio"]:
+        return None
+    by = vp["scale_set_by"] or ("the plan's scale note" if vp["scale_method"] == "note" else None)
+    return {"scale_ratio": vp["scale_ratio"], "method": vp["scale_method"], "set_by": by,
+            "set_at": vp["scale_set_at"], "by_agent": vp["scale_set_by"] in (AGENT, LLM_AGENT, "auto-calibrator"),
+            "during_run": bool(vp["scale_set_at"]) and vp["scale_set_at"] >= (run["created_at"] or "")}
+
+
 # ------------------------------------------------------------------ routes
 
 def route(m: str, sub: str, req, ctx, conn):
@@ -436,7 +475,31 @@ def route(m: str, sub: str, req, ctx, conn):
 
     mm = _RUN_ONE.match(sub)
     if mm and m == "GET":
-        return _ok(run=_shape_run(_load_run(conn, ctx, int(mm.group(1)))))
+        row = _load_run(conn, ctx, int(mm.group(1)))
+        return _ok(run={**_shape_run(row), "scale": run_scale(conn, ctx, row)})
+
+    mm = _VP_MARK.match(sub)
+    if mm and m == "POST":
+        _role(ctx, ms.PROPOSE_ROLES, "mark an agent calibration")
+        auto_run_id = _int_opt(_body(req).get("auto_run_id"))
+        if auto_run_id is None:
+            raise _refuse("say which auto-run calibrated this viewport (auto_run_id)")
+        return _ok(**mark_agent_scale(conn, ctx, int(mm.group(1)), auto_run_id))
+
+    mm = _VP_AUTOCAL.match(sub)
+    if mm and m == "POST":
+        # 2026-11-13: calibrate from the written dimensions, or say a person must (and why). Asks before replacing a
+        # scale the view already has. auto_run_id: the run that asked (its person started it).
+        from estimator.takeoff import auto_calibrate
+        b = _body(req)
+        run = None
+        rid = _int_opt(b.get("auto_run_id"))
+        if rid is not None:
+            run = _load_run(conn, ctx, rid)
+            if int(run["viewport_id"]) != int(mm.group(1)):
+                raise _refuse(f"run {rid} measures another viewport")
+        return _ask(lambda: auto_calibrate.auto_calibrate(conn, ctx, int(mm.group(1)), confirm=bool(b.get("confirm")),
+                                                          run=run))
 
     mm = _RERUN.match(sub)
     if mm and m == "POST":

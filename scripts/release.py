@@ -712,6 +712,21 @@ MANIFEST_FILES = [
     "desk/sw.js",
     "desk/icon-192.png",
     "desk/icon-512.png",
+    # 2026-11-13 (David): the Estimator. AI-Prowler-Setup.iss has shipped the whole estimator\ package since
+    # Sprint 26, and update_install*.bat / deploy_to_install.py copy the folder whole, but it was never in this
+    # list - so in-app auto-updates never delivered a single Estimator file (an updated ai_prowler_mcp.py could
+    # meet an old Estimator, and new modules such as estimator/project_sync.py never arrived). One glob per file
+    # type, so every runtime file ships and a new one is never missed; *.py never matches the *.py.bak<N> edit
+    # backups or __pycache__\*.pyc. tests/estimator/unit/test_installer_estimator_block.py keeps these globs
+    # covering exactly the installer's estimator files.
+    "estimator/**/*.py",
+    "estimator/**/*.yaml",
+    "estimator/**/*.md",
+    "estimator/**/*.csv",
+    "estimator/**/*.js",
+    "estimator/**/*.css",
+    "estimator/**/*.html",
+    "estimator/**/*.png",
     # NOTE: rag_icon.ico and python-3.11.8-amd64.exe are intentionally excluded.
     # rag_icon.ico rarely changes and is large binary noise in the update.
     # python-3.11.8-amd64.exe is the bundled Python installer — it is never

@@ -167,8 +167,67 @@ def _revision(page: Page, zone: list[float]) -> tuple[str | None, str | None]:
     return rev, (max(dates).isoformat() if dates else None)
 
 
+BORDER_SPAN = 0.75          # a title-block border runs at least this much of the sheet's height (or width)
+BORDER_EDGE_IN = 0.6        # ...and isn't the sheet's own border, this close to the paper's edge
+BORDER_MAX_SHARE = 0.25     # ...and the strip it closes off is at most this share of the sheet
+
+
+def border_zone(page: Page) -> list[float] | None:
+    """The title block found by its border line (2026-11-13, David): a vertical line down most of the sheet in the
+    right part of it, or a horizontal one across most of it near the bottom. The strips in zones() are only a guess
+    from where the text is; a sideways title block (the firm's name written up the right edge) was missed, the bottom
+    strip won, and the drawing area was cut off at 82% of the height while running over the real title block.
+    A border drawn in several strokes counts by the height it covers. Returns [x0, top, x1, bottom] or None."""
+    w, h = page.width, page.height
+    segs = getattr(page, "segments", None) or []
+    vert: dict[int, list] = {}
+    horiz: dict[int, list] = {}
+    for (x0, y0), (x1, y1) in segs:
+        if abs(x0 - x1) < 0.01 and 0.6 * w < x0 < w - BORDER_EDGE_IN:
+            vert.setdefault(round(x0 * 100), []).append((min(y0, y1), max(y0, y1)))
+        elif abs(y0 - y1) < 0.01 and 0.65 * h < y0 < h - BORDER_EDGE_IN:
+            horiz.setdefault(round(y0 * 100), []).append((min(x0, x1), max(x0, x1)))
+    for r in getattr(page, "rects", None) or []:              # a title block drawn as one rectangle
+        x0, top, x1, bottom = r
+        if 0.6 * w < x0 < w - BORDER_EDGE_IN and x1 >= w - BORDER_EDGE_IN - 0.5:
+            vert.setdefault(round(x0 * 100), []).append((top, bottom))
+    # How much of the sheet each line really covers: overlapping pieces count once, so drawing lines that happen to
+    # sit at the same x (a plan's walls one above the other) don't add up to a fake border.
+    # A title block is a strip, at most a quarter of the sheet wide (a notes column framed further left is not it).
+    # And it holds writing: a tall line with nothing written between it and the next one (a plan's own outline) is
+    # part of the drawing. The leftmost line that passes is the block's edge, not a column inside it.
+    words = getattr(page, "words", None) or []
+    xs = sorted(k / 100 for k, spans in vert.items() if w - k / 100 <= BORDER_MAX_SHARE * w
+                and _covered(spans) >= BORDER_SPAN * h)
+    for i, x in enumerate(xs):
+        nxt = xs[i + 1] if i + 1 < len(xs) else w
+        if any(x < wd.x0 and wd.x1 <= nxt + 0.05 for wd in words):
+            return [round(x, 3), 0.0, w, h]
+    ys = sorted(k / 100 for k, spans in horiz.items() if h - k / 100 <= BORDER_MAX_SHARE * h
+                and _covered(spans) >= BORDER_SPAN * w)
+    for i, y in enumerate(ys):
+        nxt = ys[i + 1] if i + 1 < len(ys) else h
+        if any(y < wd.top and wd.bottom <= nxt + 0.05 for wd in words):
+            return [0.0, round(y, 3), w, h]
+    return None
+
+
+def _covered(spans: list) -> float:
+    """Length covered by a set of (start, end) spans, overlaps counted once; gaps under 0.05" are bridged."""
+    total, cur = 0.0, None
+    for a, b in sorted(spans):
+        if cur and a <= cur[1] + 0.05:
+            cur[1] = max(cur[1], b)
+        else:
+            if cur:
+                total += cur[1] - cur[0]
+            cur = [a, b]
+    return total + (cur[1] - cur[0] if cur else 0.0)
+
+
 def read(page: Page) -> TitleBlock:
-    """The title block of one page: tries the right strip, then the bottom strip, and keeps whichever found more."""
+    """The title block of one page: tries the right strip, then the bottom strip, and keeps whichever found more.
+    A border line, when there is one, says where the block really is (border_zone)."""
     best = TitleBlock()
     for name, zone in zones(page).items():
         sheet_no, word = _sheet_no(page, zone)
@@ -181,6 +240,9 @@ def read(page: Page) -> TitleBlock:
         tb.found = sum(1 for x in (sheet_no, title, tb.discipline != "other") if x)
         if tb.found > best.found:
             best = tb
+    drawn = border_zone(page)
+    if drawn:
+        best.zone = drawn
     return best
 
 

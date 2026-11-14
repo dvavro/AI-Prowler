@@ -160,6 +160,108 @@ def _layout_boxes(notes: list[ScaleNote], area: list[float]) -> list[list[float]
     return boxes  # type: ignore[return-value]
 
 
+CELL_IN = 0.1                    # line work is grouped on a grid of this size
+DETAIL_ABOVE_IN = 1.5            # a detail's drawing ends at most this far above its title
+DETAIL_PAD_IN = 0.15
+SPLIT_SHARE = 0.25               # split only when this much of the sheet's line work is outside the detail
+
+
+def _components(segs: list, area: list[float]) -> list[tuple[list[float], int]]:
+    """Groups of touching line work: (bbox, segment count) each. Lines are walked on a 0.1" grid; lines in the same
+    or neighbouring cells are one group."""
+    parent = list(range(len(segs)))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    owner: dict[tuple[int, int], int] = {}
+    for i, ((x0, y0), (x1, y1)) in enumerate(segs):
+        n = max(1, int(max(abs(x1 - x0), abs(y1 - y0)) / (CELL_IN / 2)))
+        for k in range(n + 1):
+            t = k / n
+            c = (int((x0 + (x1 - x0) * t) / CELL_IN), int((y0 + (y1 - y0) * t) / CELL_IN))
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    j = owner.get((c[0] + dx, c[1] + dy))
+                    if j is not None:
+                        a, b = root(i), root(j)
+                        if a != b:
+                            parent[a] = b
+            owner.setdefault(c, i)
+    groups: dict[int, list[float]] = {}
+    counts: dict[int, int] = {}
+    for i, ((x0, y0), (x1, y1)) in enumerate(segs):
+        r = root(i)
+        b = groups.get(r)
+        lo_x, hi_x, lo_y, hi_y = min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)
+        groups[r] = [lo_x, lo_y, hi_x, hi_y] if b is None else [min(b[0], lo_x), min(b[1], lo_y),
+                                                                 max(b[2], hi_x), max(b[3], hi_y)]
+        counts[r] = counts.get(r, 0) + 1
+    return [(groups[r], counts[r]) for r in groups]
+
+
+def _seg_box(s) -> list[float]:
+    return [min(s[0][0], s[1][0]), min(s[0][1], s[1][1]), max(s[0][0], s[1][0]), max(s[0][1], s[1][1])]
+
+
+def _work_segments(page: Page, area: list[float]) -> list:
+    """The drawing's line work: lines in the drawing area, without sheet-long border lines."""
+    w, h = page.width, page.height
+    return [s for s in (getattr(page, "segments", None) or [])
+            if _inside(_seg_box(s), area) and abs(s[1][0] - s[0][0]) < 0.8 * w and abs(s[1][1] - s[0][1]) < 0.8 * h]
+
+
+def _detail_box(note: ScaleNote, comps: list, area: list[float]) -> list[float] | None:
+    """The box around the drawing a view title belongs to (2026-11-13, David): the line work just above the title,
+    plus anything wholly inside it. An "NTS" footing detail used to get the whole sheet - or, with two titles, a row
+    split halfway between them that cut the slab plan in two."""
+    ln = note.line
+    picked = [b for b, _ in comps
+              if ln.top - DETAIL_ABOVE_IN <= b[3] <= ln.bottom + 0.3
+              and b[0] <= ln.x1 + 1.0 and b[2] >= ln.x0 - 1.0]
+    if not picked:
+        return None
+    box = [min(ln.x0, *(b[0] for b in picked)), min(ln.top, *(b[1] for b in picked)),
+           max(ln.x1, *(b[2] for b in picked)), max(ln.bottom, *(b[3] for b in picked))]
+    for _ in range(2):                              # pieces wholly inside the detail are part of it
+        grown = [b for b, _ in comps if b[0] >= box[0] - 0.3 and b[1] >= box[1] - 0.3
+                 and b[2] <= box[2] + 0.3 and b[3] <= box[3] + 0.3]
+        box = [min(box[0], *(b[0] for b in grown)), min(box[1], *(b[1] for b in grown)),
+               max(box[2], *(b[2] for b in grown)), max(box[3], *(b[3] for b in grown))]
+    box = [max(area[0], box[0] - DETAIL_PAD_IN), max(area[1], box[1] - DETAIL_PAD_IN),
+           min(area[2], box[2] + DETAIL_PAD_IN), min(area[3], box[3] + DETAIL_PAD_IN)]
+    return [round(v, 3) for v in box]
+
+
+def _size(b: list[float]) -> float:
+    return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+
+def _overlap(a: list[float], b: list[float]) -> float:
+    return _size([max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])])
+
+
+def _cluster_boxes(notes: list[ScaleNote], frames: list, segs: list, area: list[float]) -> dict[int, list] | None:
+    """A box from the line work for every view without a frame, or None when that doesn't give clean, separate views
+    (then the row layout is used, as before)."""
+    unframed = [i for i, f in enumerate(frames) if not f]
+    if not unframed or len(segs) < 4:
+        return None
+    comps = _components(segs, area)
+    boxes = {i: _detail_box(notes[i], comps, area) for i in unframed}
+    if not all(boxes.values()):
+        return None
+    every = list(boxes.values()) + [f for f in frames if f]
+    for a in range(len(every)):
+        for b in range(a + 1, len(every)):
+            if _overlap(every[a], every[b]) > 0.2 * min(_size(every[a]), _size(every[b])):
+                return None
+    return boxes  # type: ignore[return-value]
+
+
 def find(page: Page, zone: list[float] | None) -> list[dict]:
     """The viewports for the drawing model (engine contract: key, label, bbox, scale_note, scale_method, ...)."""
     area = drawing_area(page, zone)
@@ -178,15 +280,34 @@ def find(page: Page, zone: list[float] | None) -> list[dict]:
         return [vp]
     for n in notes:
         n.label = _label_for(n, drawing_lines)
+    frames = [_frame_for(n, page, area) for n in notes]
+    segs = _work_segments(page, area)
+    clustered = _cluster_boxes(notes, frames, segs, area)
+    leftover = False
+    if clustered:
+        views = [f for f in frames if f] + list(clustered.values())
+        outside = sum(1 for s in segs if not any(_inside(_seg_box(s), v) for v in views))
+        leftover = outside >= SPLIT_SHARE * len(segs)
+        # A lone title whose drawing is (nearly) the whole sheet keeps the whole drawing area, as before.
+        if len(notes) == 1 and not frames[0] and (not leftover or _size(clustered[0]) > 0.6 * _size(area)):
+            clustered, leftover = None, False
     layout = _layout_boxes(notes, area)
     out = []
     for i, n in enumerate(sorted(range(len(notes)), key=lambda j: (notes[j].line.top, notes[j].line.x0))):
         note = notes[n]
-        frame = _frame_for(note, page, area)
-        bbox, conf = (frame, 0.9) if frame else (layout[n], 0.65)
+        if frames[n]:
+            bbox, conf = frames[n], 0.9
+        elif clustered:
+            bbox, conf = clustered[n], 0.75
+        else:
+            bbox, conf = layout[n], 0.65
         if not note.with_word_scale:
             conf -= 0.1
-        out.append({"key": "main" if len(notes) == 1 else f"v{i + 1}", "label": note.label, "bbox": bbox,
-                    "scale_note": note.note, "scale_method": "note", "scale_confidence": round(conf, 2),
+        out.append({"key": "main" if len(notes) == 1 and not leftover else f"v{i + 1}", "label": note.label,
+                    "bbox": bbox, "scale_note": note.note, "scale_method": "note", "scale_confidence": round(conf, 2),
                     **({"is_nts": True} if note.is_nts else {})})
+    if leftover:
+        # The rest of the sheet has no scale of its own: a person sets it or calibrates (details inside it are
+        # read by their own view, not this one).
+        out.append({"key": "main", "label": None, "bbox": area, "scale_method": "none", "scale_confidence": 0.0})
     return out

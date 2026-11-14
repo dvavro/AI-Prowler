@@ -538,7 +538,17 @@ def _vp_out(v: dict) -> dict:
             "bbox": json.loads(v["bbox_json"]) if v["bbox_json"] else None, "scale_note": v["scale_note"],
             "scale_ratio": v["scale_ratio"], "scale_method": v["scale_method"],
             "scale_confidence": v["scale_confidence"], "is_nts": bool(v["is_nts"]),
-            "measurable": bool(v["scale_ratio"]) and not v["is_nts"], "scale_set_by": v["scale_set_by"]}
+            "measurable": bool(v["scale_ratio"]) and not v["is_nts"], "scale_set_by": v["scale_set_by"],
+            "auto_calibration": _cal(v)}
+
+
+def _cal(v: dict) -> dict | None:
+    """The auto calibrator's last result for this view (2026-11-13), or None."""
+    try:
+        raw = v["calibration_json"] if "calibration_json" in v.keys() else None
+        return json.loads(raw) if raw else None
+    except (ValueError, TypeError):
+        return None
 
 
 def sheets(conn, ctx: RequestContext, plan_set_id: int, discipline: str | None = None) -> dict:
@@ -768,7 +778,8 @@ def set_scale(conn, ctx: RequestContext, viewport_id: int, scale_note: str | Non
     new_ratio = None if is_nts else str(ratio.normalize() if ratio == ratio.to_integral_value() else ratio)
     with service.transaction(conn):
         conn.execute("UPDATE viewports SET scale_ratio = ?, is_nts = ?, scale_method = ?, scale_confidence = '1',"
-                     " scale_note = COALESCE(?, scale_note), scale_set_by = ?, scale_set_at = ? WHERE id = ?",
+                     " scale_note = COALESCE(?, scale_note), scale_set_by = ?, scale_set_at = ?,"
+                     " calibration_json = NULL WHERE id = ?",
                      (new_ratio, int(is_nts), method, scale_note if scale_note else None, ctx.actor, _now(), vp["id"]))
         vp_now = {"scale_ratio": new_ratio, "is_nts": is_nts}
         measured = 0

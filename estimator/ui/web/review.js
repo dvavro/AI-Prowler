@@ -1256,6 +1256,15 @@ function drawAutoRunStatus() {
     parts.push(el("p", { class: "note", id: "bp-auto-status", role: "status" }, n
       ? "Agent finished: " + n + " proposed measurement(s)" + src + " — review and approve them below."
       : "Agent finished: no measurements proposed on this sheet."));
+    // The AI (API key) reads the dimensions written on the plan and the app does the maths: no scale, no
+    // calibration - say so instead of naming a scale it never used (2026-11-13, David).
+    if (AUTO.source === "llm") parts.push(el("p", { class: "muted small", id: "bp-auto-scale" },
+      "📐 The AI read the slab's written dimensions off the plan; the app worked out the quantities from them. No scale or calibration was used."));
+    else if (AUTO.scale) parts.push(el("p", { class: "muted small", id: "bp-auto-scale" }, autoScaleText(AUTO.scale)));
+    // The run calibrated the view itself, or found it couldn't (2026-11-13): say which, and what to do.
+    const cal = AUTO.calibration && autoCalText(AUTO.calibration);
+    if (cal) parts.push(el("p", { class: cal[0], id: "bp-auto-calibration-result", role: cal[0] === "error" ? "alert" : null },
+      (AUTO.calibration.view || "the view") + ": " + cal[1]));
   } else if (runHere && AUTO.status === "failed") {
     parts.push(el("p", { class: "error", id: "bp-auto-status", role: "alert" },
       "Agent run failed — " + (AUTO.error || "unknown error")));
@@ -1271,18 +1280,19 @@ function drawAutoRunStatus() {
     if (!list.length && llm && llm.enabled) {
       text = llm.ready
         ? "Agent found no slab outline on this sheet — the AI will read the plan instead when you run it (LLM takeoff is on)."
-        : "Agent found no slab outline on this sheet — LLM takeoff is on, but the AI isn't ready (no API key saved?) — check 🤖 AI agents in Setup.";
+        : "Agent found no slab outline on this sheet — LLM takeoff is on, but the AI isn't ready (no API key saved?) — check AI-Prowler's 🏗 Estimator tab → 🤖 AI agents.";
     }
     if (list.length) {
       const big = list.reduce((a, b) => parseFloat(b.area_sqft || 0) > parseFloat(a.area_sqft || 0) ? b : a, list[0]);
       text = "Agent found " + list.length + " possible slab outline(s) — the largest is " + candidateLabel(big) + ".";
     }
     // LLM takeoff off: the AI won't run at all — say so and point at the switch, instead of only
-    // suggesting manual measuring (off is the default, so this is the line most people see).
+    // suggesting manual measuring (off is the default, so this is the line most people see). The switch is on the
+    // desktop: AI-Prowler's 🏗 Estimator tab → 🤖 AI agents, with the other agents' settings (2026-11-13).
     if (!list.length && llm && !llm.enabled) {
       parts.push(el("p", { class: "muted small", id: "bp-auto-candidates" },
         "Agent found no slab outline on this sheet — the AI didn't run because LLM takeoff is off. ",
-        el("a", { href: "#/agents" }, "Turn it on in 🤖 AI agents"), " to let the AI read the plan, or measure it manually."));
+        "Turn it on in AI-Prowler's 🏗 Estimator tab → 🤖 AI agents (AI takeoff → Suggest) to let the AI read the plan, or measure it manually."));
     } else {
       parts.push(el("p", { class: "muted small", id: "bp-auto-candidates" }, text));
     }
@@ -1294,6 +1304,17 @@ function drawAutoRunStatus() {
     el("a", { href: "#/agents/ai-log?auto_run_id=" + AUTO.runId }, "📋 AI Log — what the AI was given and what it returned for this run")));
   if (AUTO.status !== "running" && (runKnownHere || agentHere) && RV.data.can_measure) parts.push(rerunButton());
   slot.replaceChildren(...parts);
+}
+
+// Which scale the agent measured with, and who set it (2026-11-13): "The agent calibrated this sheet…" or "Measured
+// with the scale owner calibrated on 2026-11-11…", so a calibration is never silently someone else's.
+function autoScaleText(s) {
+  const ratio = "1″ = " + (Math.round(parseFloat(s.scale_ratio) * 10) / 10) + "″";
+  const when = s.set_at ? " on " + String(s.set_at).slice(0, 10) : "";
+  if (s.by_agent && s.during_run) return "📏 The agent calibrated this sheet itself (" + ratio + ") — check the scale in Views and scales.";
+  if (s.method === "calibration") return "📏 Measured with the scale " + (s.set_by || "someone") + " calibrated" + when + " (" + ratio + ").";
+  if (s.method === "note") return "📏 Measured with the plan's own scale note (" + ratio + ").";
+  return "📏 Measured with the scale set by " + (s.set_by || "someone") + when + " (" + ratio + ").";
 }
 
 function stopAutoPoll() { if (AUTO.timer) { clearTimeout(AUTO.timer); AUTO.timer = null; } }
@@ -1336,6 +1357,8 @@ function pollAutoRun() {
     AUTO.source = run.source || "geometry";
     if (run.status === "done") {
       AUTO.status = "done";
+      AUTO.scale = run.scale || null;
+      AUTO.calibration = run.calibration || null;
       AUTO.measurementIds = run.measurement_ids || [];
       const n = AUTO.measurementIds.length;
       const src = AUTO.source === "llm" ? " (read from the plan by the AI)" : "";
@@ -1586,6 +1609,68 @@ function guideCalibration() {
   return ["approved", "✓ calibrated" + (scaled ? " — 1″ = " + scaled.scale_ratio + "″" : "")];
 }
 
+// The auto calibrator (2026-11-13, David): per view, what it did or why a person must calibrate it, and a button to
+// run it. It reads the plan's written dimensions (the drawing's own lines first; the AI when AI takeoff is on).
+function autoCalText(c) {
+  if (!c) return null;
+  if (c.status === "manual_required")
+    return ["error", "⚠️ Manual calibration required — " + (c.reason || "") + " " + (c.how || "")];
+  if (c.status === "calibrated" || c.status === "calibrated_unchecked") {
+    const used = c.used ? c.used.label : "a written dimension";
+    const check = (c.check || []).map(x => x.label + " " + x.off_pct + "% off").join(", ");
+    const how = c.method === "drawing" ? "the drawing's own dimension lines" : "the dimensions the AI read";
+    return [c.status === "calibrated" ? "muted small" : "note",
+      "📏 Calibrated automatically from " + used + " (" + how + ")" +
+      (check ? " — checked against " + check + "." : " — only one dimension, so it couldn't be cross-checked: measure something you know to check it.")];
+  }
+  return null;
+}
+
+function autoCalibrationBox() {
+  const views = RV.viewports || [];
+  const rows = [];
+  for (const v of views) {
+    const said = autoCalText(v.auto_calibration);
+    const name = v.label || "main view";
+    const line = el("li", { class: "bp-auto-cal", "data-viewport": String(v.id) });
+    if (said) line.append(el("p", { class: said[0], role: said[0] === "error" ? "alert" : null }, name + ": " + said[1]));
+    if (!v.measurable && RV.data.can_measure) {
+      const b = el("button", { class: "button", type: "button", "data-autocal": String(v.id),
+        title: "Reads the dimensions written on the plan and sets the scale from them. Uses the drawing's own lines first; "
+          + "the AI (your API key) only when AI takeoff is on. If none are found, it says you need to calibrate by hand." },
+        "🤖 Auto-calibrate " + name);
+      b.addEventListener("click", () => runAutoCalibrate(v, b, false));
+      line.append(b);
+    }
+    if (line.childNodes.length) rows.push(line);
+  }
+  return rows.length ? el("ul", { class: "bp-rows", id: "bp-auto-calibration" }, ...rows) : null;
+}
+
+async function runAutoCalibrate(v, button, confirm) {
+  const msg = $("review-message");
+  button.disabled = true;
+  const was = button.textContent;
+  button.textContent = "⏳ Reading the written dimensions…";
+  try {
+    const got = await api("POST", "/viewports/" + v.id + "/auto-calibrate", confirm ? { confirm: true } : {});
+    if (got.needs_confirmation) {
+      if (window.confirm(got.question)) return runAutoCalibrate(v, button, true);
+      return;
+    }
+    const said = autoCalText(got);
+    await refreshData();
+    await openSheet(RV.sheetId, msg);
+    if (msg && said) msg.replaceChildren(el("p", { class: said[0] === "error" ? "error" : "ok", id: "bp-autocal-result" },
+      (v.label || "main view") + ": " + said[1]));
+  } catch (e) {
+    if (msg) msg.replaceChildren(el("p", { class: "error" }, "Auto-calibrate failed — " + (e.message || e)));
+  } finally {
+    button.disabled = false;
+    button.textContent = was;
+  }
+}
+
 function drawTakeoffGuide() {
   const slot = $("bp-guide-slot");
   if (!slot || !RV.data) return;
@@ -1611,6 +1696,8 @@ function drawTakeoffGuide() {
     calRow.addEventListener("keydown", ev => { if (ev.key === "Enter") pickCal(); });
   }
   parts.push(el("ul", { class: "bp-rows", id: "bp-guide-calibration" }, calRow));
+  const auto = autoCalibrationBox();
+  if (auto) parts.push(auto);
   for (const tr of trades) {
     parts.push(el("h4", {}, tr.name));
     // A sheet switched off for this trade: the guide stays (measuring by hand still works), with the note.

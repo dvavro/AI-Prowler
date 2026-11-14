@@ -37,6 +37,13 @@ def _room_labels(page: Page, box: list[float], skip: set[str]) -> list[tuple[str
     return out
 
 
+def _nested(inner: list[float], outer: list[float]) -> bool:
+    """inner lies inside outer and is smaller (a detail inside the sheet's main view)."""
+    return (inner[0] >= outer[0] - 0.01 and inner[1] >= outer[1] - 0.01 and inner[2] <= outer[2] + 0.01
+            and inner[3] <= outer[3] + 0.01
+            and (inner[2] - inner[0]) * (inner[3] - inner[1]) < (outer[2] - outer[0]) * (outer[3] - outer[1]) - 0.01)
+
+
 def find(page: Page, viewports: list[dict], discipline: str | None = None) -> tuple[list[dict], list[str]]:
     """(objects, notes) for one sheet. discipline: the title block's, so every view on a site or landscape sheet is read
     as a site plan."""
@@ -48,6 +55,11 @@ def find(page: Page, viewports: list[dict], discipline: str | None = None) -> tu
         if not box:
             continue
         segs = [s for s in segments if vectors.inside(s, box, pad=0.02)]
+        # 2026-11-13: a detail can sit inside the sheet's unscaled "main" view; its lines belong to the detail only,
+        # so nothing is read (or counted) twice.
+        inner = [o["bbox"] for o in viewports if o is not vp and o.get("bbox") and _nested(o["bbox"], box)]
+        if inner:
+            segs = [s for s in segs if not any(vectors.inside(s, b, pad=0.02) for b in inner)]
         if not segs:
             continue
         ratio = _ratio(vp)

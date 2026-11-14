@@ -155,7 +155,7 @@ def test_migration_23_keeps_jobs_and_their_steps():  # PD-10
                  " VALUES (7, 'default', 'quick_quote', 'approve', 'x', 'x', '{\"name\": \"Pat\"}')")
     conn.execute("INSERT INTO director_steps (job_id, stage, agent_role, state, started_at)"
                  " VALUES (7, 'triage', 'director', 'done', 'x')")
-    assert migrate(conn) == [23]
+    assert migrate(conn, 23) == [23]                      # (later migrations come after it - 24: auto calibration)
     assert conn.execute("SELECT lane, customer_json FROM director_jobs WHERE id = 7").fetchone() == \
         ("quick_quote", '{"name": "Pat"}')
     assert conn.execute("SELECT COUNT(*) FROM director_steps WHERE job_id = 7").fetchone()[0] == 1

@@ -72,6 +72,57 @@ def model_for(provider: str, model: str | None = None) -> str:
         return ""
 
 
+# Which model each Estimator AI step uses (2026-11-13, David: "assign complex estimator flows to use a complex AI and
+# less complex flows use less complex AI ... that is already configured at the top of the Business Tab"). The same
+# two Claude models Jobs and the Service Desk use: "complex & customer" (agent_claude_model) and "internal steps"
+# (agent_claude_model_light). Reading plans, calibrating and checking a takeoff are complex - a misread dimension
+# is a wrong price; what a customer reads is a customer message; picking a sheet or noting for a reviewer is an
+# internal step. An unknown step counts as complex (the safe side), like desk_agent_providers.
+STEP_GROUPS: dict[str, dict[str, str]] = {
+    "llm_takeoff": {"classify": "simple", "read": "complex", "check": "complex"},
+    "auto_calibrate": {"find": "complex", "pinpoint": "complex"},
+    "plan_reader": {"classify": "simple"},
+    "takeoff": {"measure": "complex"},
+    "reviewer": {"notes": "simple"},
+    "bid_writer": {"scope": "customer"},
+    "follow_up": {"email": "customer"},
+}
+GROUP_LABELS = {"complex": "complex step", "customer": "customer message", "simple": "internal step"}
+
+
+def step_group(role: str, step: str | None = None) -> str:
+    """'complex' | 'customer' | 'simple' for one Estimator AI step."""
+    steps = STEP_GROUPS.get(role) or {}
+    if step is None and len(set(steps.values())) == 1:
+        return next(iter(steps.values()))
+    return steps.get(step or "", "complex")
+
+
+def fits(provider: str, model: str | None) -> bool:
+    """A model name that belongs to this runner (a Claude model on the Claude key, a Grok one on Grok)."""
+    m = (model or "").lower()
+    return bool(m) and ((provider == "claude_api" and m.startswith("claude")) or
+                        (provider == "grok_api" and m.startswith("grok")))
+
+
+def model_for_step(provider: str, role: str, step: str | None = None, pinned: str | None = None) -> str:
+    """The model for one Estimator AI step. The model the agent was set to itself in the Estimator tab (pinned) wins
+    when it belongs to this runner (2026-11-13, David: "select the AI Model type for each agent"); otherwise the
+    internal-steps model for an internal step (when one is chosen at the top of the Small Business tab), else the
+    complex & customer model. Grok has one model."""
+    if fits(provider, pinned):
+        return pinned  # type: ignore[return-value]
+    main = model_for(provider)
+    if provider != "claude_api" or step_group(role, step) != "simple":
+        return main
+    h = _host()
+    try:
+        light = h.light_model() if h is not None and hasattr(h, "light_model") else ""
+    except Exception:  # noqa: BLE001
+        light = ""
+    return light or main
+
+
 def ask(provider: str, system: str, user: str, model: str = "") -> tuple[str, dict]:
     """(text, {input, output}) or ProviderError with the provider's own message."""
     if provider not in API_PROVIDERS:

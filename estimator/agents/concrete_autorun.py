@@ -404,7 +404,19 @@ class ConcreteAutoRun:
         objects = self.api.get(f"/sheets/{sheet_id}/objects").get("objects") or []
         dim = find_calibration_dimension(objects, candidate)
         if dim is None:
-            raise AgentError(NO_DIMENSION)
+            # No dimension line matches the slab: let the auto calibrator read the written dimensions (2026-11-13).
+            self.log("no matching dimension line - asking the auto calibrator")
+            try:
+                got = self.api.post(f"/viewports/{viewport_id}/auto-calibrate", {"auto_run_id": self.run_id})
+            except ApiError as e:
+                raise AgentError(f"{NO_DIMENSION} ({e})") from None
+            if got.get("status") in ("calibrated", "calibrated_unchecked"):
+                self.log(f"auto-calibrated: 1 inch = {got.get('scale_ratio')} inches")
+                page.reload()
+                page.wait_for_timeout(500)
+                return self._slab_candidates(viewport_id)
+            raise AgentError("Manual calibration required — " + (got.get("reason") or NO_DIMENSION) + " "
+                             + (got.get("how") or ""))
         self.log(f"calibrating on the {dim['label']} dimension at {dim['points']}")
         page.click('button[data-tool="calibrate"]')
         page.wait_for_timeout(200)
@@ -420,6 +432,11 @@ class ConcreteAutoRun:
             found = self._slab_candidates(viewport_id)
             if found.get("calibrated"):
                 self.log(f"calibrated: 1 inch = {found.get('scale_ratio')} inches")
+                # The page saved it as the signed-in person: stamp it as the agent's (2026-11-13).
+                try:
+                    self.api.post(f"/viewports/{viewport_id}/mark-agent", {"auto_run_id": self.run_id})
+                except ApiError as e:
+                    self.log(f"could not mark the calibration as the agent's: {e}")
                 return found
             time.sleep(1)
         raise AgentError("calibration did not take - the viewport still has no scale")

@@ -84,6 +84,23 @@ def plans(db, tmp_path):
     return {"est": est, "ps": ps, "s1": s1, "s2": s2, "vp": vp}
 
 
+def test_slab_measurements_go_on_the_foundation_view_not_the_footer_detail(db, plans):
+    """2026-11-13: a sheet can now hold the footer detail and the foundation plan as separate views."""
+    s2 = plans["s2"]
+    detail = db.execute("INSERT INTO viewports (company_id, sheet_id, label, bbox_json, is_nts)"
+                        " VALUES ('default', ?, '12X20 MONO. FOOTER DETAIL', '[3.6, 0.25, 8.0, 5.1]', 1)",
+                        (s2,)).lastrowid
+    plan = db.execute("INSERT INTO viewports (company_id, sheet_id, label, bbox_json, is_nts)"
+                      " VALUES ('default', ?, 'FOUNDATION PLAN', '[7.5, 2.9, 14.6, 10.75]', 1)", (s2,)).lastrowid
+    assert lt._slab_viewport(db, s2) == plan
+    db.execute("UPDATE viewports SET label = NULL WHERE id = ?", (plan,))       # no title: the biggest view
+    assert lt._slab_viewport(db, s2) == plan
+    db.execute("DELETE FROM viewports WHERE id = ?", (plan,))
+    assert lt._slab_viewport(db, s2) == detail
+    db.execute("DELETE FROM viewports WHERE id = ?", (detail,))
+    assert lt._slab_viewport(db, s2) is None
+
+
 def _on(db, provider="claude_api", **extra):
     return roles.update_role(db, CTX, "llm_takeoff", {"provider": provider, **extra}, confirm=True)
 

@@ -56,6 +56,25 @@ def test_no_stale_or_duplicate_entries():  # S26-I02
     assert not dups, f"duplicate estimator entries in the installer: {dups[:5]}"
 
 
+def test_in_app_updates_ship_every_estimator_file():  # S26-I04 (2026-11-13)
+    """scripts/release.py MANIFEST_FILES (what the in-app auto-update downloads) covers exactly the installer's
+    Estimator payload: a new file type under estimator/ that no glob matches fails here."""
+    import ast
+    tree = ast.parse((REPO / "scripts" / "release.py").read_text(encoding="utf-8"))
+    listed = next([e.value for e in node.value.elts] for node in ast.walk(tree)
+                  if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "MANIFEST_FILES"
+                                                          for t in node.targets))
+    shipped = set()
+    for rel in listed:
+        if rel.startswith("estimator/"):
+            hits = {p.relative_to(REPO).as_posix().replace("/", BS) for p in REPO.glob(rel) if p.is_file()}
+            assert hits, f"release list glob matches nothing: {rel}"
+            shipped |= hits
+    payload = _payload()
+    assert not sorted(payload - shipped), f"in-app updates would miss: {sorted(payload - shipped)[:5]}"
+    assert not sorted(shipped - payload), f"in-app updates would ship non-payload files: {sorted(shipped - payload)[:5]}"
+
+
 def test_destdir_matches_location():  # S26-I03
     for src, destdirs in _entries().items():
         want = "{app}" + BS + BS.join(src.split(BS)[:-1])

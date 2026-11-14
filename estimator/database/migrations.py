@@ -912,6 +912,29 @@ CREATE INDEX ix_director_jobs_company ON director_jobs (company_id, state);
 CREATE INDEX ix_director_jobs_estimate ON director_jobs (company_id, estimate_id);
 CREATE INDEX ix_director_steps_job ON director_steps (job_id)
 """),
+    # 2026-11-13 (David): the auto calibrator's result per view - how it calibrated (the dimensions it used and the
+    # cross-check), or that a person has to calibrate it by hand and why. NULL = never tried.
+    (24, "auto calibration result on viewports", """
+ALTER TABLE viewports ADD COLUMN calibration_json TEXT
+"""),
+    # 2026-11-13 (David): projects sent from a PC to the server (project_sync.py). One row per sending PC's project,
+    # so a second send updates the same server estimate instead of making a new one.
+    (25, "projects received from PCs", """
+CREATE TABLE project_sync (
+    company_id          TEXT NOT NULL,
+    source_key          TEXT NOT NULL,
+    estimate_id         INTEGER NOT NULL,
+    source_pc           TEXT,
+    source_estimate_id  INTEGER,
+    title               TEXT,
+    sent_by             TEXT,
+    sent_at             TEXT,
+    received_by         TEXT,
+    received_at         TEXT NOT NULL,
+    PRIMARY KEY (company_id, source_key)
+);
+CREATE INDEX ix_project_sync_estimate ON project_sync (company_id, estimate_id)
+"""),
 ]
 
 

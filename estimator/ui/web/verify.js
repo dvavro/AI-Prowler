@@ -298,6 +298,9 @@ async function renderAgents(main, screen) {
     el("p", { class: "muted" }, "Each trade has a takeoff agent. Turn trades off, set how sure an agent must be before its quantities can go through, and watch the takeoff runs."),
     msg];
   if (!r.can_configure) parts.push(el("p", { class: "note" }, "Only the owner changes these settings."));
+  // 2026-11-13: the AI agents (which AI runs them, what each step does, the budget) are set on the desktop.
+  parts.push(el("p", { class: "muted small", id: "agents-ai-settings-where" },
+    "Which AI runs the agents, what each one does (AI takeoff, Reviewer, Bid writer, Follow-up …) and the AI budget are set in AI-Prowler's 🏗 Estimator tab → 🤖 AI agents and budget; the models come from the top of the 🏢 Small Business tab."));
   parts.push(r.agents.length ? el("table", { class: "list", id: "agents-list" },
     el("thead", {}, el("tr", {}, el("th", {}, "Trade"), el("th", {}, "On"), el("th", {}, "Sure enough at"), el("th", {}, "Approve by itself"), el("th", {}, "Reads sheets"), el("th", {}, ""))),
     el("tbody", {}, r.agents.map(a => agentRow(a, r.can_configure, msg))))
