@@ -97,6 +97,18 @@ TRIAGE_CASES = [
     ("need cleaners for a 2 bedroom apartment", "quick_quote", "house_cleaning"),
     ("replace the windows", "standard_estimate", "windows_doors"),
     ("new landscaping with pavers", "standard_estimate", "landscaping"),
+    # What's being done to what decides it (2026-11-15, Jamie): these all went to the wrong module before.
+    ("replace 8 windows", "standard_estimate", "windows_doors"),
+    ("paint 3 bedrooms", "standard_estimate", "painting"),
+    ("replace carpet in 3 bedrooms", "standard_estimate", "flooring"),
+    ("new driveway slab", "standard_estimate", "concrete"),
+    ("wash the siding on my house", "quick_quote", "pressure_washing"),
+    ("clean my roof", "quick_quote", "pressure_washing"),
+    ("install a new toilet and sink", "standard_estimate", "plumbing"),
+    ("I need my SUV cleaned inside and out", "quick_quote", "car_detailing"),
+    ("ceramic coat my car", "quick_quote", "car_detailing"),
+    ("clean my 3 bed 2 bath house", "quick_quote", "house_cleaning"),
+    ("put down gravel and plants in the front yard", "standard_estimate", "landscaping"),
 ]
 
 

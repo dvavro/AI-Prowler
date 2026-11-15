@@ -34,6 +34,43 @@ TRADE_WORDS = {
 }
 
 
+# What the person wants done to what (2026-11-15, Jamie): keywords alone sent "replace 8 windows" to window cleaning,
+# "paint 3 bedrooms" to house cleaning and "wash the siding" to siding. An action word with a thing it's done to
+# gives that module a bonus, so the verb decides between cleaning a thing and building or replacing it.
+_BUILD = ("replace", "replacing", "install", "installing", "new", "build", "put in", "put down", "pour", "add",
+          "upgrade", "swap")
+_CLEAN = ("clean", "cleaned", "cleaning", "wash", "washed", "washing", "power wash", "pressure wash", "soft wash")
+INTENT_PAIRS = [
+    ("pressure_washing", _CLEAN, ("siding", "roof", "driveway", "deck", "fence", "patio", "sidewalk", "pavers")),
+    ("house_cleaning", ("clean", "cleaned", "cleaning", "deep clean"),
+     ("house", "home", "apartment", "condo", "bed", "beds", "bath", "baths", "bedroom", "bedrooms")),
+    ("car_detailing", _CLEAN + ("detail", "detailed", "ceramic", "ceramic coat", "wax", "polish"),
+     ("car", "cars", "truck", "suv", "van", "jeep", "vehicle", "vehicles", "minivan"),
+     ("clean out", "cleanout", "half a truck", "truck load", "truckload", "a truck", "junk", "haul")),
+    ("concrete", _BUILD, ("slab", "driveway", "patio", "sidewalk", "footing", "footings")),
+    ("flooring", _BUILD, ("carpet", "floor", "floors", "flooring", "tile", "lvp", "laminate", "hardwood")),
+    ("painting", ("paint", "painted", "painting", "repaint"),
+     ("room", "rooms", "bedroom", "bedrooms", "house", "home", "interior", "exterior", "walls", "ceilings", "cabinets",
+      "trim", "garage", "kitchen", "bathroom")),
+    ("plumbing", _BUILD, ("toilet", "toilets", "sink", "sinks", "faucet", "faucets", "shower", "tub", "water heater")),
+    ("windows_doors", _BUILD, ("window", "windows", "door", "doors", "slider", "sliding door")),
+    ("landscaping", _BUILD, ("gravel", "rock", "plants", "turf", "artificial turf", "trees", "shrubs", "drip")),
+]
+INTENT_BONUS = 15
+
+
+def _has(text: str, words) -> bool:
+    return any(f" {w} " in text for w in words)
+
+
+def _intent_bonus(text: str) -> dict:
+    out: dict = {}
+    for mid, verbs, things, *unless in INTENT_PAIRS:
+        if _has(text, verbs) and _has(text, things) and not (unless and _has(text, unless[0])):
+            out[mid] = out.get(mid, 0) + INTENT_BONUS
+    return out
+
+
 @dataclass
 class TriageResult:
     lane: str | None
@@ -75,14 +112,15 @@ def triage(request: str, registry, has_plans: bool = False, module_id: str | Non
         return TriageResult("full_takeoff", reason="plans were attached")
 
     text = _norm(request)
+    bonus = _intent_bonus(text)
     scored = sorted(((
-        _score(text, list(m.keywords) + [m.name.lower(), m.id.replace("_", " ")]), m.id) for m in quick_mods),
-        reverse=True)
+        _score(text, list(m.keywords) + [m.name.lower(), m.id.replace("_", " ")]) + bonus.get(m.id, 0), m.id)
+        for m in quick_mods), reverse=True)
     scored = [(s, mid) for s, mid in scored if s > 0]
     trade_mods = {m.id: m for m in registry.list() if m.category == "construction"}
     trade_words = {t: list(words) + list(trade_mods[t].keywords if t in trade_mods else ())
                    for t, words in TRADE_WORDS.items()}
-    trades = sorted(((_score(text, words), t) for t, words in trade_words.items()), reverse=True)
+    trades = sorted(((_score(text, words) + bonus.get(t, 0), t) for t, words in trade_words.items()), reverse=True)
     trades = [(s, t) for s, t in trades if s > 0]
 
     if scored and (not trades or scored[0][0] >= trades[0][0]):
