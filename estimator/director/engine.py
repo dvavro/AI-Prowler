@@ -1237,11 +1237,14 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
          ("Trades in this quote: " + ", ".join(name(t) for t in (want or trades)) if (want or trades) else
           "Pick the trades this project needs (one or more)"),
          "each trade is measured and priced on its own, then they go out together in one quote", f"#/projects/{eid}")
-    item("plans", have_plans or trades,
-         "Add the plans on the project page" + ("" if have_plans else " (or skip this and price the trades from typed "
-                                                                    "measurements)"),
-         "the quantities come from the plans; without plans, type the measurements into each trade",
-         f"#/projects/{eid}")
+    # Service-only projects (car detailing, pool, ...) have no plans to add (2026-11-15, Jamie).
+    services_only = bool(want) and all(t in reg.modules and reg.modules[t].category == "service" for t in want)
+    if not (services_only and not have_plans):
+        item("plans", have_plans or trades,
+             "Add the plans on the project page" + ("" if have_plans else " (or skip this and price the trades from "
+                                                                        "typed measurements)"),
+             "the quantities come from the plans; without plans, type the measurements into each trade",
+             f"#/projects/{eid}")
     if plans.get("processing") or plans.get("uploaded"):
         item("reading", False, "Wait for the plans to be read", "the sheets have to be read before they can be measured",
              f"#/projects/{eid}")

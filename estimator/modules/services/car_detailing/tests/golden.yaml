@@ -17,3 +17,15 @@
   # exterior 60; interior 90; clay 50; two-step 350; ceramic 500
   expected_lines: {exterior: 6000, interior: 9000, clay_bar: 5000, polish_two: 35000, ceramic: 50000}
   expected_total_cents: 105000
+- name: exterior only leaves out the interior add-ons (2026-11-15, Jamie)
+  answers: {vehicles: 1, vehicle_size: large, package: exterior, pet_hair: true, shampoo: true, odor: true,
+            clay_bar: true}
+  # exterior 1 x 1.4 x 1.15 x 60 = 96.60; clay 1 x 1.4 x 50 = 70; no pet hair, shampoo or odor
+  expected_lines: {exterior: 9660, clay_bar: 7000}
+  expected_total_cents: 16660
+- name: interior only leaves out the paint add-ons (2026-11-15, Jamie)
+  answers: {vehicles: 1, package: interior, condition: light, shampoo: true, clay_bar: true,
+            paint_correction: one_step, ceramic_coating: true}
+  # interior 90; shampoo 80; no clay bar, polish or ceramic
+  expected_lines: {interior: 9000, shampoo: 8000}
+  expected_total_cents: 17000

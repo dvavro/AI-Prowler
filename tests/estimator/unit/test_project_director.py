@@ -170,6 +170,17 @@ def test_picked_trades_each_get_a_price_to_do(db):  # PD-16
     assert r["next_step"]["ready_ok"] is True
 
 
+def test_service_only_project_skips_the_plans_step(db):  # PD-18 (2026-11-15, Jamie)
+    est, _ = _project(db, "Car detail")
+    ns = engine.set_project_trades(db, CTX, est["id"], ["car_detailing"], registry=REG)["next_step"]
+    keys = [t["key"] for t in ns["todo"]]
+    assert "plans" not in keys and "price_car_detailing" in keys
+    assert ns["say"].startswith("Price Car Detailing")
+    # A construction trade on the same project brings the plans step back.
+    ns = engine.set_project_trades(db, CTX, est["id"], ["car_detailing", "concrete"], registry=REG)["next_step"]
+    assert "plans" in [t["key"] for t in ns["todo"]]
+
+
 def test_project_trades_are_checked(db):  # PD-17
     est, _ = _project(db)
     with pytest.raises(InvalidInput, match="unknown trades"):

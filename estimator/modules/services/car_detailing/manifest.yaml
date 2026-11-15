@@ -1,8 +1,9 @@
-# Car detailing: quick estimate per vehicle (2026-11-14, David). Sample prices are placeholders;
+# Car detailing: quick estimate per vehicle (2026-11-14, David). 0.1.1 (2026-11-15, Jamie): interior add-ons
+# only on interior/full packages, paint add-ons only on exterior/full. Sample prices are placeholders;
 # the setup wizard asks the company to replace them with its own.
 id: car_detailing
 name: Car Detailing
-version: 0.1.0
+version: 0.1.1
 category: service
 path: quick_estimate
 description: Exterior, interior or full details per vehicle, adjusted for vehicle size and condition, with pet hair, shampoo, odor, clay bar, paint correction, ceramic coating, headlights, engine bay and a mobile fee.
@@ -85,19 +86,19 @@ lines:
   - {id: interior, description: "Interior detail (size and condition adjusted)", kind: other, unit: ea,
      quantity: "vehicles * vehicle_size * condition", price_key: dt_interior_ea, when: "package == 2 or package == 3"}
   - {id: pet_hair, description: "Pet hair removal", kind: other, unit: ea, quantity: "vehicles",
-     price_key: dt_pet_hair_ea, when: "pet_hair"}
+     price_key: dt_pet_hair_ea, when: "pet_hair and package != 1"}
   - {id: shampoo, description: "Shampoo seats and carpets", kind: other, unit: ea, quantity: "vehicles * vehicle_size",
-     price_key: dt_shampoo_ea, when: "shampoo"}
+     price_key: dt_shampoo_ea, when: "shampoo and package != 1"}
   - {id: odor, description: "Odor removal (ozone)", kind: other, unit: ea, quantity: "vehicles",
-     price_key: dt_odor_ea, when: "odor"}
+     price_key: dt_odor_ea, when: "odor and package != 1"}
   - {id: clay_bar, description: "Clay bar decontamination", kind: other, unit: ea, quantity: "vehicles * vehicle_size",
-     price_key: dt_clay_ea, when: "clay_bar"}
+     price_key: dt_clay_ea, when: "clay_bar and package != 2"}
   - {id: polish_one, description: "Paint correction, one-step polish", kind: other, unit: ea,
-     quantity: "vehicles * vehicle_size", price_key: dt_polish1_ea, when: "paint_correction == 1"}
+     quantity: "vehicles * vehicle_size", price_key: dt_polish1_ea, when: "paint_correction == 1 and package != 2"}
   - {id: polish_two, description: "Paint correction, two-step compound and polish", kind: other, unit: ea,
-     quantity: "vehicles * vehicle_size", price_key: dt_polish2_ea, when: "paint_correction == 2"}
+     quantity: "vehicles * vehicle_size", price_key: dt_polish2_ea, when: "paint_correction == 2 and package != 2"}
   - {id: ceramic, description: "Ceramic coating", kind: other, unit: ea, quantity: "vehicles * vehicle_size",
-     price_key: dt_ceramic_ea, when: "ceramic_coating"}
+     price_key: dt_ceramic_ea, when: "ceramic_coating and package != 2"}
   - {id: headlights, description: "Headlight restoration (pairs)", kind: other, unit: ea, quantity: "headlights",
      price_key: dt_headlight_pair, when: "headlights > 0"}
   - {id: engine_bay, description: "Engine bay cleaning", kind: other, unit: ea, quantity: "vehicles",
