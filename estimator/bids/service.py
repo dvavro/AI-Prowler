@@ -85,6 +85,22 @@ def _customer_view(r: dict) -> dict:
     return {k: str(v) for k, v in out.items()}
 
 
+def fill_from_prowler(cust: dict) -> dict:
+    """An existing AI-Prowler customer given by ID only gets its name, email, phone and address filled in from
+    AI-Prowler (2026-11-15, Jamie): picked by ID alone, the quote showed no name and the job's name was the ID.
+    Anything already given wins; with no customer list here (or no such customer) it comes back as it was."""
+    if not cust or not cust.get("customer_id") or cust.get("name"):
+        return cust
+    try:
+        found = host.find_customers(customer_id=cust["customer_id"], limit=1)
+    except host.HostUnavailable:
+        return cust
+    if not found:
+        return cust
+    view = {k: v for k, v in _customer_view(found[0]).items() if v and k in set(CUSTOMER_FIELDS)}
+    return {**view, **cust}
+
+
 def _company(conn, company_id: str) -> dict:
     row = conn.execute("SELECT * FROM company_profile WHERE company_id = ?", (company_id,)).fetchone()
     return dict(row) if row else {}
@@ -380,6 +396,7 @@ def convert_to_job(conn, ctx: RequestContext, bid_id: int, *, confirm: bool = Fa
         cust = dict(b["customer"])
         cust.pop("customer_id", None) if picked else None
         cust.update(picked)
+        cust = fill_from_prowler(cust)
     customer_id = cust.get("customer_id") or (None if picked else b["customer_id"])
     if not customer_id and not cust.get("name"):
         raise InvalidInput("who is the customer? give at least their name (and email/phone/address if known)",

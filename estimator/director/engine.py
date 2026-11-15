@@ -128,7 +128,8 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
         if cust.get("customer_id") or {"first_name", "last_name", "company", "customer_type"} & set(cust):
             # A customer picked from AI-Prowler, or a new one filled in the popup, replaces the old one whole
             # (2026-11-14): merging kept an old customer_id, or an old company, on a different customer.
-            job["customer"] = cust
+            # Picked by ID alone, its name, email and address come from AI-Prowler (2026-11-15, Jamie).
+            job["customer"] = bids.fill_from_prowler(cust)
         else:
             job["customer"].update(cust)
         _tx(conn, lambda: jobstore.save_job(conn, ctx, job))
@@ -925,6 +926,11 @@ def _write_bid(conn, ctx, job, reg, stage, notes, inputs, **_):
         bid = bids._load(conn, ctx, made["id"])
     if bid["status"] != "draft":
         return True                                   # already sent
+    if inputs.get("outcome") in ("won", "lost") and not inputs.get("send"):
+        # The quote was handed over in person or by phone, not emailed (2026-11-15, Jamie): outcome=won before
+        # sending was silently ignored. Follow-up records the answer (and convert=true makes the job).
+        notes.append(f"Quote {bid['number']} wasn't emailed from here; recording the customer's answer as given.")
+        return True
     to = (inputs.get("send_to") or job["customer"].get("email") or "").strip()
     if inputs.pop("send", False):
         if not to:

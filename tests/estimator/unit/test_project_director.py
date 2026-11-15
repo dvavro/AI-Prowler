@@ -181,6 +181,19 @@ def test_service_only_project_skips_the_plans_step(db):  # PD-18 (2026-11-15, Ja
     assert "plans" in [t["key"] for t in ns["todo"]]
 
 
+def test_won_before_sending_is_recorded(db, fake_host):  # PD-19 (2026-11-15, Jamie)
+    # A quote handed over in person: outcome=won at the "send it?" step used to be ignored without a word.
+    est, r = _project(db)
+    _price(db, est["id"])
+    jid = r["job"]["id"]
+    engine.next_step(db, CTX, jid, customer={"name": "Sam Lee"}, ready=True, registry=REG)
+    r = engine.next_step(db, CTX, jid, reviewed=True, approve=True, confirm_sample_prices=True, registry=REG)
+    assert r["job"]["stage"] == "write_bid"
+    r = engine.next_step(db, CTX, jid, outcome="won", registry=REG)
+    assert any("wasn't emailed" in n for n in r["notes"])
+    assert "Make it a job" in r["next_step"]["say"]
+
+
 def test_project_trades_are_checked(db):  # PD-17
     est, _ = _project(db)
     with pytest.raises(InvalidInput, match="unknown trades"):
