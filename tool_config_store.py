@@ -414,7 +414,9 @@ def set_group_enabled(mode, group, enabled):
 # automatic work; it never touches their settings or data, so off and on again loses nothing. No entry means on: an
 # install is only changed when someone turns a feature off.
 FEATURES_KEY = "features"
-FEATURE_CATEGORIES = {"analyses": "agentic_analysis", "email": "email"}
+# 2026-11-14: the Estimator's switch (estimator/ui/model.py FEATURE) is one too, so its tools count as off in the
+# MCP Tool Configuration totals and how_to_use_ai_prowler's THIS CONNECTION footer while it's turned off.
+FEATURE_CATEGORIES = {"analyses": "agentic_analysis", "email": "email", "estimator": "estimator"}
 
 
 def feature_on(name):

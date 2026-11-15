@@ -2,7 +2,7 @@
 # Plan takeoff (slab polygons, footing lines) plugs into the same questions in Phase 4.
 id: concrete
 name: Concrete
-version: 0.1.0
+version: 0.2.0
 category: construction
 path: both
 description: Slabs, driveways, patios and sidewalks priced from area, thickness and perimeter, with reinforcement, base, footings, finish, removal and pump.
@@ -49,9 +49,16 @@ questions:
       - {value: exposed, label: "Exposed aggregate", factor: "3"}
   - {id: fill_loads, label: "Fill dirt, truck loads delivered", type: number, unit: ea, default: 0, min: 0, max: 500,
      help: "Site work before the slab. A dump truck load is about 15 to 18 cu yd. Leave 0 if no fill is needed."}
-  - {id: grade_pad, label: "Spread, level and compact the pad?", type: boolean, default: false,
-     help: "Grading of the slab area before forms go in, priced per sq ft of slab."}
+  # 2026-11-14 (David): leveling is on by default - nearly every slab needs the pad leveled and compacted.
+  - {id: grade_pad, label: "Spread, level and compact the pad?", type: boolean, default: true,
+     help: "Grading of the slab area before forms go in, priced per sq ft of slab. Untick it if the pad is already level."}
+  - {id: excavate_depth_in, label: "Dig down (excavate) to grade", type: number, unit: in, default: 0, min: 0, max: 60,
+     help: "Inches of soil to dig out and haul away over the slab area; priced per cubic yard. Leave 0 if none."}
+  - {id: excavation_lump, label: "Excavation, lump sum ($)", type: number, default: 0, min: 0, max: 500000,
+     help: "Or a set price for the dig (a sub's quote, a bobcat day). Added as one line; leave 0 if none."}
   - {id: base, label: "Gravel base (4 in ABC)?", type: boolean, default: true}
+  - {id: vapor_barrier, label: "Vapor barrier (10 mil poly) under the slab?", type: boolean, default: false,
+     help: "For slabs under a building (house, garage, shed with a floor)."}
   - {id: remove_existing, label: "Remove existing concrete?", type: boolean, default: false}
   - {id: footing_lf, label: "Thickened edge / footing (12 x 12 in)", type: number, unit: lf, default: 0, min: 0, max: 5000}
   - id: footing_rebar_size
@@ -71,10 +78,17 @@ lines:
   # Site work: fill dirt by the truck load, then level and compact the pad.
   - {id: fill, description: "Fill dirt, delivered (truck loads)", kind: material, unit: ea, quantity: "fill_loads",
      price_key: cc_fill_load, when: "fill_loads > 0"}
+  # Excavation (2026-11-14): dig to grade by the cubic yard (area x depth), and/or a lump sum.
+  - {id: excavate, description: "Excavate to grade and haul away", kind: labor, unit: cuyd,
+     quantity: "area_sqft * excavate_depth_in / 12 / 27", price_key: cc_excavate_cy, when: "excavate_depth_in > 0"}
+  - {id: excavation_lump, description: "Excavation (lump sum)", kind: sub, unit: ea, quantity: "excavation_lump",
+     price_key: cc_lump_dollar, when: "excavation_lump > 0"}
   - {id: grade, description: "Spread, level and compact pad", kind: labor, unit: sqft, quantity: "area_sqft",
      price_key: cc_grade_sqft, when: "grade_pad"}
   - {id: base, description: "Gravel base, 4 in, compacted", kind: material, unit: sqft, quantity: "area_sqft",
      price_key: cc_base_sqft, when: "base"}
+  - {id: vapor_barrier, description: "Vapor barrier, 10 mil poly", kind: material, unit: sqft, quantity: "area_sqft",
+     waste: "0.10", price_key: cc_vapor_sqft, when: "vapor_barrier"}
   - {id: forms, description: "Forms and layout", kind: labor, unit: lf,
      quantity: "perimeter_lf if perimeter_lf > 0 else ceil(4 * sqrt(area_sqft))", price_key: cc_form_lf}
   - {id: footing, description: "Dig thickened edge / footing", kind: labor, unit: lf, quantity: "footing_lf",

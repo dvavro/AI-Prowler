@@ -565,6 +565,9 @@ Source: "estimator\modules\construction\windows_doors\manifest.yaml"; DestDir: "
 Source: "estimator\modules\construction\windows_doors\pricing_defaults.csv"; DestDir: "{app}\estimator\modules\construction\windows_doors"; Flags: ignoreversion
 Source: "estimator\modules\construction\windows_doors\tests\golden.yaml"; DestDir: "{app}\estimator\modules\construction\windows_doors\tests"; Flags: ignoreversion
 Source: "estimator\modules\registry.py"; DestDir: "{app}\estimator\modules"; Flags: ignoreversion
+Source: "estimator\modules\services\car_detailing\manifest.yaml"; DestDir: "{app}\estimator\modules\services\car_detailing"; Flags: ignoreversion
+Source: "estimator\modules\services\car_detailing\pricing_defaults.csv"; DestDir: "{app}\estimator\modules\services\car_detailing"; Flags: ignoreversion
+Source: "estimator\modules\services\car_detailing\tests\golden.yaml"; DestDir: "{app}\estimator\modules\services\car_detailing\tests"; Flags: ignoreversion
 Source: "estimator\modules\services\generic_service\manifest.yaml"; DestDir: "{app}\estimator\modules\services\generic_service"; Flags: ignoreversion
 Source: "estimator\modules\services\generic_service\pricing_defaults.csv"; DestDir: "{app}\estimator\modules\services\generic_service"; Flags: ignoreversion
 Source: "estimator\modules\services\generic_service\tests\golden.yaml"; DestDir: "{app}\estimator\modules\services\generic_service\tests"; Flags: ignoreversion

@@ -11,6 +11,7 @@ the pricing stack, and the approval threshold is a company setting.
 """
 from __future__ import annotations
 
+import re
 from decimal import Decimal, InvalidOperation
 
 from estimator.context import RequestContext
@@ -124,7 +125,12 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
     if customer:
         cust = bids.clean_customer(customer)
         job = jobstore.load_job(conn, ctx, job["id"])
-        job["customer"].update(cust)
+        if cust.get("customer_id") or {"first_name", "last_name", "company", "customer_type"} & set(cust):
+            # A customer picked from AI-Prowler, or a new one filled in the popup, replaces the old one whole
+            # (2026-11-14): merging kept an old customer_id, or an old company, on a different customer.
+            job["customer"] = cust
+        else:
+            job["customer"].update(cust)
         _tx(conn, lambda: jobstore.save_job(conn, ctx, job))
 
     if trades is not None:
@@ -246,16 +252,20 @@ def _ask_before_sending(conn, ctx, job, *, send, send_to, customer, convert, out
     money = format_cents(bid["total_cents"] if bid else ((est or {}).get("totals") or {}).get("total_cents", 0))
     cust = dict(job.get("customer") or {})
     if isinstance(customer, dict):
-        cust.update({k: v for k, v in customer.items() if v})
+        cust.update({k: v for k, v in bids.clean_customer(customer).items() if v})
     if convert:
         if bid is not None and (bid["job_id"] or (bid["status"] != "won" and outcome != "won")):
             convert = False          # already a job, or not won: the step does nothing, so there's nothing to ask
     if convert:
         name = cust.get("name") or (bid["customer"].get("name") if bid else "")
         when = f" with service on {service_date}" if service_date else ""
+        who = (f"existing customer {name} ({cust['customer_id']})" if isinstance(customer, dict) and customer.get("customer_id")
+               else name)
+        makes = ("an approved quote and a job" if isinstance(customer, dict) and customer.get("customer_id")
+                 else "the customer (if new), an approved quote and a job")
         raise ConfirmationRequired(
-            f"Turn the {money} quote into a job{' for ' + name if name else ''}{when}? This creates the customer "
-            "(if new), an approved quote and a job in AI-Prowler. Call again with confirm=true once the user says yes.",
+            f"Turn the {money} quote into a job{' for ' + who if who else ''}{when}? This creates {makes} "
+            "in AI-Prowler. Call again with confirm=true once the user says yes.",
             job_id=job["id"], action="convert", total_cents=bid["total_cents"] if bid else None,
             service_date=service_date)
     if send:
@@ -443,7 +453,9 @@ def _run(conn, ctx, job_id: int, reg, inputs: dict | None = None, triage_info: d
         if job["lane"] is None:
             _wait(conn, ctx, job, "waiting_on_user", "user", _triage_step(job, reg))
             break
-        pb = get_playbooks()[job["playbook_id"]]
+        # A job with a lane but no playbook (older jobs, or ones made outside start()) runs its lane's playbook
+        # (2026-11-13: KeyError None on the project page's Director call).
+        pb = get_playbooks()[job["playbook_id"]] if job["playbook_id"] else playbook_for_lane(job["lane"])
         if not pb.available:
             _wait(conn, ctx, job, "waiting_on_feature", "feature", {
                 "stage": job["stage"], "agent": pb.stage(job["stage"]).agent,
@@ -814,6 +826,12 @@ def _read_plans(conn, ctx, job, reg, stage, notes, **_):
 def _run_takeoff(conn, ctx, job, reg, stage, notes, **_):
     """Hand the trades to the Estimate Runner, wait for the takeoffs, then take the approved quantities back."""
     trades = _job_trades(job)
+    if not trades:
+        # A takeoff job with no trades yet (older jobs, or ones made outside start()) asks for them instead of
+        # failing (2026-11-13: the project page's Director panel showed "give the trades to measure").
+        if not _collect_trades(conn, ctx, job, reg, stage, notes):
+            return False
+        trades = _job_trades(job)
     run = runner.latest_run(conn, ctx, job_id=job["id"])
     if run is None or run["estimate_id"] != job["estimate_id"]:
         st = runner.start_run(conn, ctx, job["estimate_id"], trades, job_id=job["id"], registry=reg)
@@ -1043,6 +1061,84 @@ def adopt(conn, ctx: RequestContext, estimate_id: int, registry=None) -> dict | 
     return _run(conn, ctx, job_id, reg)
 
 
+def project_trades(job: dict) -> list[str]:
+    """The trades a project is quoting (picked when it was made, or on the project page), in order."""
+    ans = job.get("answers") or {}
+    want = list(ans.get("_trades") or [])
+    if not want and ans.get("_trade"):
+        want = [ans["_trade"]]
+    return want
+
+
+def trade_choices(registry=None) -> list[dict]:
+    """Every trade or service a project can quote, construction trades first (for the "which trades?" pickers)."""
+    reg = _registry(registry)
+    mods = [m for m in reg.list() if m.id != service.CUSTOM_MODULE]
+    mods.sort(key=lambda m: (m.category != "construction", m.name.lower()))
+    return [{"module_id": m.id, "name": m.name, "category": m.category} for m in mods]
+
+
+def resolve_trades(words, registry=None) -> tuple[list[str], list[str]]:
+    """Trade names as a person says them ("concrete and framing", "Drywall", "paint") -> module ids, plus the words
+    that matched no trade. Each piece is tried as an id, then a trade name, then the trade keywords (2026-11-14)."""
+    reg = _registry(registry)
+    if isinstance(words, str):
+        words = re.split(r",|;|\band\b|\bplus\b|&|\n", words)
+    found, unknown = [], []
+    by_name = {_norm(m.name): m.id for m in reg.list() if m.id != service.CUSTOM_MODULE}
+    for w in words or []:
+        w = str(w).strip()
+        if not w:
+            continue
+        key = w.lower().replace(" ", "_")
+        if key in reg.modules and key != service.CUSTOM_MODULE:
+            found.append(key)
+            continue
+        if _norm(w) in by_name:
+            found.append(by_name[_norm(w)])
+            continue
+        hits = [t for t in trades_mentioned(w, reg) if t != service.CUSTOM_MODULE]
+        if hits:
+            found.extend(hits)
+        else:
+            unknown.append(w)
+    return list(dict.fromkeys(found)), unknown
+
+
+def set_project_trades(conn, ctx: RequestContext, estimate_id: int, trades, registry=None) -> dict:
+    """Say which trades a project quotes (2026-11-14, David: a new project asks which trades it needs - one project can
+    quote several trades, all in the one quote). Replaces the list; trades already priced stay priced either way.
+    The Director then asks for each trade still to price."""
+    reg = _registry(registry)
+    if ctx.role not in service.QUICK_ROLES:
+        raise PermissionDenied(f"only {', '.join(service.QUICK_ROLES)} can choose a project's trades", role=ctx.role)
+    if isinstance(trades, str):
+        trades = [t.strip() for t in trades.split(",") if t.strip()]
+    if not isinstance(trades, (list, tuple)):
+        raise InvalidInput("trades is a list of trade ids, e.g. [\"concrete\", \"framing\"]", field="trades")
+    order = list(dict.fromkeys(str(t).strip() for t in trades if str(t).strip()))
+    bad = [t for t in order if t not in reg.modules or t == service.CUSTOM_MODULE]
+    if bad:
+        raise InvalidInput(f"unknown trades: {bad}", field="trades", available=[c["module_id"] for c in trade_choices(reg)])
+    est = service.get_estimate(conn, ctx, int(estimate_id))
+    adopt(conn, ctx, est["id"], registry=reg)            # makes the project's Director job if it hasn't one yet
+    job = project_job_for(conn, ctx, est["id"])
+    if job is None:
+        raise NotEditable(f"project {est['id']} has no Director job ({est['status']})", estimate_id=est["id"])
+    job = jobstore.load_job(conn, ctx, job["id"])
+    job["answers"]["_trades"] = order
+    if order:
+        job["answers"]["_trade"] = order[0]
+    else:
+        job["answers"].pop("_trade", None)
+    names = [reg.modules[t].name for t in order]
+    _tx(conn, lambda: (jobstore.save_job(conn, ctx, job),
+                       jobstore.log_step(conn, ctx, job["id"], "trades", "director", "done",
+                                         "trades: " + (", ".join(names) or "none"), {"trades": order}),
+                       service._log(conn, ctx, est["id"], "project_trades_set", {"job_id": job["id"], "trades": order})))
+    return _run(conn, ctx, job["id"], reg)
+
+
 def intake(conn, ctx: RequestContext, request: str, *, has_plans: bool | None = None, customer: dict | None = None,
            address: str | None = None, due_date: str | None = None, module_id: str | None = None,
            preview: bool = False, registry=None) -> dict:
@@ -1088,6 +1184,9 @@ def intake(conn, ctx: RequestContext, request: str, *, has_plans: bool | None = 
     job["request_text"] = text or title
     if mod is not None and mod.category == "construction":
         job["answers"]["_trade"] = mod.id
+        # Every construction trade the request names, e.g. "framing and drywall" (2026-11-14).
+        named = [t for t in trades_mentioned(text, reg) if t in reg.modules and reg.modules[t].category == "construction"]
+        job["answers"]["_trades"] = list(dict.fromkeys([mod.id, *named]))
     _tx(conn, lambda: (jobstore.save_job(conn, ctx, job),
                        conn.execute("UPDATE director_jobs SET request_text = ? WHERE id = ?", (job["request_text"], job["id"])),
                        jobstore.log_step(conn, ctx, job["id"], "intake", "intake", "done",
@@ -1131,6 +1230,13 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
     def item(key, done, text, why, link=None):
         todo.append({"key": key, "done": bool(done), "text": text, "why": why, "link": link})
 
+    # Which trades the project quotes comes first (2026-11-14, David): one project can quote several trades.
+    want = project_trades(job)
+    name = lambda t: reg.modules[t].name if t in reg.modules else t.replace("_", " ")   # noqa: E731
+    item("trades", want or trades,
+         ("Trades in this quote: " + ", ".join(name(t) for t in (want or trades)) if (want or trades) else
+          "Pick the trades this project needs (one or more)"),
+         "each trade is measured and priced on its own, then they go out together in one quote", f"#/projects/{eid}")
     item("plans", have_plans or trades,
          "Add the plans on the project page" + ("" if have_plans else " (or skip this and price the trades from typed "
                                                                     "measurements)"),
@@ -1155,18 +1261,22 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
               "Measure the plans in Blueprint Review" if not tk.get("approved") else
               f"Measurements approved ({tk['approved']})"),
              "only approved measurements are priced", f"#/takeoffs/{eid}")
-    want = (job.get("answers") or {}).get("_trade")                   # the trade named when the project was started
     if trades:
-        item("price", True, "Trades priced: " + ", ".join(t.replace("_", " ") for t in trades),
+        item("price", True, "Trades priced: " + ", ".join(name(t) for t in trades),
              "nothing is priced yet, so there's no total to check", f"#/estimates/{eid}")
     elif tk.get("approved"):
         item("price", False, "Price the trades from the approved measurements (on the estimate: Price it with the "
                              "approved measurements)", "nothing is priced yet, so there's no total to check",
              f"#/estimates/{eid}")
-    else:
-        item("price", False, "Price the " + (want.replace("_", " ") if want else "trades") + ": type the measurements "
-                             "(⚡ Add a quick estimate)", "nothing is priced yet, so there's no total to check",
-             f"#/quick/{eid}" + (f"?module={want}" if want else ""))
+    elif not want:
+        item("price", False, "Price the trades: type the measurements (⚡ Add a quick estimate)",
+             "nothing is priced yet, so there's no total to check", f"#/quick/{eid}")
+    # One to-do per picked trade that isn't priced yet, each with its own link.
+    still = [t for t in want if t not in trades]
+    for t in still:
+        item("price_" + t, False, f"Price {name(t)}: type the measurements (⚡ quick estimate)"
+             + (" or measure it in Blueprint Review" if have_plans else ""),
+             f"{name(t)} is in this quote but has no price yet", f"#/quick/{eid}?module={t}")
     cust = job.get("customer") or {}
     has_customer = bool(cust.get("name") or cust.get("email") or cust.get("customer_id"))
     item("customer", has_customer,
@@ -1177,6 +1287,9 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
     if ready:
         if total <= 0:
             notes.append("Not ready yet: nothing on the estimate is priced.")
+        elif still:
+            notes.append("Not ready yet: " + ", ".join(name(t) for t in still) + " still to price (or take "
+                         + ("it" if len(still) == 1 else "them") + " off this project's trades).")
         else:
             left = [t["text"] for t in todo if not t["done"] and t["key"] in ("reading", "scale", "symbols", "measure")]
             if left:
@@ -1200,7 +1313,8 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
             say += " Add the customer's name and email too: the quote is sent to them."
     _wait(conn, ctx, job, "waiting_on_user", "user", {
         "stage": stage.id, "agent": stage.agent, "say": say, "why": why, "todo": todo, "estimate_id": eid,
-        "total_cents": total, "ready_ok": total > 0, "needs_customer": not has_customer,
+        "total_cents": total, "ready_ok": total > 0 and not still, "needs_customer": not has_customer,
+        "trades_wanted": want, "trades_priced": trades, "pick_trades": not (want or trades),
         "tools": ["est_director_next(job_id, ready=true)", "est_director_next(job_id, customer={name, email})",
                   "est_project_status(estimate_id)"]})
     return False

@@ -1,0 +1,19 @@
+# Golden cases: sample prices, no markups (Personal-mode defaults). Totals in cents.
+- name: one sedan, exterior only, hits the minimum charge
+  answers: {vehicles: 1, package: exterior}
+  # 1 x 1.0 x 1.15 x 60 = 69.00 -> minimum 75.00
+  expected_subtotal_cents: 6900
+  expected_total_cents: 7500
+- name: two large SUVs, full detail, heavy, pet hair, headlights, mobile
+  answers: {vehicles: 2, vehicle_size: large, package: full, condition: heavy, pet_hair: true, headlights: 1,
+            mobile: true}
+  # exterior 2 x 1.4 x 1.4 x 60 = 235.20; interior 2 x 1.4 x 1.4 x 90 = 352.80;
+  # pet hair 2 x 40 = 80; headlights 1 x 75 = 75; mobile 25
+  expected_lines: {exterior: 23520, interior: 35280, pet_hair: 8000, headlights: 7500, mobile: 2500}
+  expected_total_cents: 76800
+- name: one car, full detail with clay bar, two-step correction and ceramic coating
+  answers: {vehicles: 1, package: full, condition: light, clay_bar: true, paint_correction: two_step,
+            ceramic_coating: true}
+  # exterior 60; interior 90; clay 50; two-step 350; ceramic 500
+  expected_lines: {exterior: 6000, interior: 9000, clay_bar: 5000, polish_two: 35000, ceramic: 50000}
+  expected_total_cents: 105000

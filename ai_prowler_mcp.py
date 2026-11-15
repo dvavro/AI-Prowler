@@ -9538,6 +9538,69 @@ def hr_get_setup_status(ctx: "Context | None" = None) -> str:
             f"Missing: {', '.join(missing) if missing else 'setup_complete flag not yet set'}.")
 
 
+# Estimator section of how_to_use_ai_prowler (2026-11-14, David: the guide named none of the Estimator's tools).
+# Every Estimator tool is named here (tests/unit/test_howto_names_every_tool.py checks it). When the Estimator is
+# switched off (Setup AI-Prowler -> Change my choices, or the Estimator tab) only the short line is given, and the
+# THIS CONNECTION footer lists its tools as off.
+_ESTIMATOR_GUIDE = (
+    "  • Estimator (quotes and estimates, from a one-tap service quote to a full plan takeoff):\n"
+    "      Start with how_to_estimate(topic or question) - it gives the workflow, the agent roles and the how-to\n"
+    "      guides. Money is in integer cents; every change needs the estimate's current rev (re-read after a\n"
+    "      stale_revision). Anything that emails a customer, makes records in AI-Prowler or overwrites prices\n"
+    "      returns needs_confirmation first: ask the user, then call again with confirm=true.\n"
+    "      Web app: /estimator/ on this PC (port 8770), or the Estimates tab of the Jobs app.\n"
+    "    Director (one job from request to sent quote, step by step): est_director_start (a plain request),\n"
+    "      est_director_next (answers, approve, send, won/lost, convert), est_director_change_lane,\n"
+    "      est_director_add_trade, est_project_trades (the trades a project quotes, in plain words: 'concrete\n"
+    "      and framing', add or remove), est_director_book_site_visit, est_job_status, est_jobs_board,\n"
+    "      est_director_briefing, est_director_inbox, est_director_watch_now, est_director_watch_status,\n"
+    "      est_followups_due, est_director_settings_get, est_director_settings_update, est_playbook_list,\n"
+    "      est_playbook_update.\n"
+    "    Setup and services: est_setup_status, est_setup_step, est_list_modules, est_sample_project.\n"
+    "    Estimates and projects: est_create_estimate, est_get_estimate, est_list_estimates, est_project_status,\n"
+    "      est_add_trade, est_remove_trade, est_quick_questions, est_quick_answer, est_add_line_item,\n"
+    "      est_update_line_item, est_get_assemblies, est_apply_assembly, est_calculate, est_validate,\n"
+    "      est_scenarios, est_choose_scenario (good/better/best), est_create_revision, est_assign, est_my_work.\n"
+    "    Prices and history: pricebook_get, pricebook_update, pricebook_import, est_record_actuals,\n"
+    "      est_compare_history.\n"
+    "    Quotes (bids): bid_generate, bid_preview, bid_send, bid_set_status, bid_list, bid_convert_to_job\n"
+    "      (a won quote becomes a customer, quote and job in AI-Prowler; pass customer {customer_id} to use\n"
+    "      an existing customer).\n"
+    "    Plans: plan_upload, plan_process, plan_status, plan_get_sheets, plan_get_sheet_image,\n"
+    "      plan_get_viewports, plan_set_scale, plan_get_objects, plan_get_schedules, plan_update_schedule_row,\n"
+    "      plan_get_legends, plan_get_crop, plan_get_rooms_walls, plan_trade_answers, plan_compare_revisions,\n"
+    "      plan_processing_queue, plan_publish_to_server, plan_set_design_firm, est_server_compute.\n"
+    "    Symbols: symbol_detections_list, symbol_detection_review, symbol_find_similar, symbol_library_list,\n"
+    "      symbol_define.\n"
+    "    Takeoffs and reviews (only approved measurements are priced): takeoff_propose, takeoff_manual,\n"
+    "      takeoff_list, takeoff_detail, takeoff_confirm, takeoff_edit, takeoff_delete, takeoff_suggest_change,\n"
+    "      review_start, review_save, review_approve, review_history, review_highlight,\n"
+    "      review_require_before_send.\n"
+    "    Runner and agents: runner_start, runner_status, runner_submit_takeoff, runner_review_task,\n"
+    "      runner_retry_task, agent_config_get, agent_config_update, agent_roles_get, agent_roles_update,\n"
+    "      agent_budget_update, est_agent_tasks, est_agent_next, est_agent_submit, est_agent_apply,\n"
+    "      est_agent_run_now.\n"
+    "    Data and privacy: est_export, est_data_export, est_data_import, est_ai_privacy.\n"
+    "      Single tools can be switched off in Settings → MCP Tool Configuration (Estimator group); the\n"
+    "      whole Estimator in Setup AI-Prowler. Switched-off tools are listed in THIS CONNECTION below.\n\n"
+)
+_ESTIMATOR_OFF_GUIDE = (
+    "  • Estimator: turned off on this install (Setup AI-Prowler → Change my choices, or the Estimator tab,\n"
+    "      turns it on; a restart applies it). Its tools aren't available - tell the user how to turn it on.\n\n"
+)
+
+
+def _estimator_guide() -> str:
+    """The Estimator section as this install has it: the full list when it's on, one line when it's off."""
+    try:
+        from estimator.ui.model import is_on as _est_on
+        if not _est_on():
+            return _ESTIMATOR_OFF_GUIDE
+    except Exception:  # noqa: BLE001 - no Estimator installed: say nothing about it
+        return ""
+    return _ESTIMATOR_GUIDE
+
+
 # Access-only folders section of how_to_use_ai_prowler (the feature is personal
 # mode only; the guide text is the same on every connector — see the docstring).
 _ACCESS_ONLY_GUIDE = (
@@ -9610,7 +9673,11 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
     try:
         mcp_version = _mcp_pkg.__version__
     except Exception:
-        mcp_version = "unknown"
+        try:                                    # the mcp package has no __version__; its install record does
+            from importlib.metadata import version as _pkg_version
+            mcp_version = _pkg_version("mcp")
+        except Exception:
+            mcp_version = "unknown"
 
     instructions_active = "instructions" in _fastmcp_params
 
@@ -9629,7 +9696,8 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "connection; personal mode sees the full catalog, server mode sees\n"
         "a smaller Tier-A-suppressed subset)\n"
         + "-" * 30 + "\n"
-        "AI-Prowler exposes fourteen tool families. Most question-answering\\n"
+        "AI-Prowler exposes fifteen tool families (the Estimator is the fifteenth).\n"
+        "Most question-answering\n"
         "tasks use the first two; the others cover indexing, code editing,\n"
         "dev tooling, communications, contractor/field-service workflows,\n"
         "the mileage tracker,\n"
@@ -9974,6 +10042,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "      delete_quote, delete_route, delete_route_stop, delete_service_pricing.\n"
         "      Index and tasks: indexing_status, cancel_indexing, get_all_queued_tasks.\n"
         "\n"
+        + _estimator_guide() +
 
         "PREFERRED TOOL SEQUENCE — KNOWLEDGE RETRIEVAL\n"
         + "-" * 30 + "\n"
@@ -10494,6 +10563,14 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
                 _htu_cat = _tool_catalog.category_of(_htu_name) or "other"
                 _htu_by_cat.setdefault(_htu_cat, []).append(_htu_name)
             for _htu_cat_key, _htu_names in _htu_by_cat.items():
+                # A whole group switched off (e.g. the Estimator, 109 tools) is one line, not every name (2026-11-14).
+                _htu_group = set(_tool_catalog.tools_in_category(_htu_cat_key)) & _htu_available
+                if len(_htu_names) > 8 and _htu_group and set(_htu_names) >= _htu_group:
+                    footer_lines.append(
+                        f"    {_tool_catalog.category_label(_htu_cat_key)}: all {len(_htu_names)} tools are "
+                        "switched off (the whole group)"
+                    )
+                    continue
                 footer_lines.append(
                     f"    {_tool_catalog.category_label(_htu_cat_key)}: "
                     + ", ".join(_htu_names)
@@ -10568,6 +10645,18 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
     except Exception:
         pass  # Briefing is non-fatal — never block the main guidance
 
+    # The guide follows this install's tool configuration (2026-11-14, David): every switched-off tool is marked
+    # "(off)" where the guide names it, not only listed in the footer, so a section is never read as available.
+    try:
+        if _tool_catalog is not None:
+            _htu_off = sorted(_USER_DISABLED_TOOLS & set(_tool_catalog.tools_available_in_mode(
+                "server" if _IS_SERVER_MODE else "personal")), key=len, reverse=True)
+            if _htu_off:
+                import re as _re_htu
+                base_text = _re_htu.sub(r"\b(" + "|".join(map(_re_htu.escape, _htu_off)) + r")\b(?! \(off\))",
+                                        r"\1 (off)", base_text)
+    except Exception as _htu_e:  # noqa: BLE001 - the guide always comes back, marked or not
+        _log.debug("how_to_use_ai_prowler: couldn't mark switched-off tools (%s)", _htu_e)
     return base_text + "\n".join(footer_lines) + "\n".join(briefing_lines)
 
 

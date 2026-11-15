@@ -4807,6 +4807,9 @@ or from the Help menu."""
         except Exception:
             pass   # config unreadable — fall back to 'home' / 'personal'
 
+        # 2026-11-14 (David): the per-tool breakdown (tool_calls: {name: count}) is no longer sent - with 400+ MCP
+        # tools it was too much data. The heartbeat still says this install is live (install_id, version, edition,
+        # mode, OS) plus ONE number: how many tool calls in the last day. Nothing per tool leaves the PC.
         return {
             'install_id': install_id,
             'version': APP_VERSION,
@@ -4815,8 +4818,6 @@ or from the Help menu."""
             'os': os_str,
             'chunks_indexed': self._telemetry_count_chunks(),
             'tools_called_24h': total,
-            # New: per-tool breakdown (v2 schema)
-            'tool_calls': tool_calls,
         }
 
     def _telemetry_tick(self):

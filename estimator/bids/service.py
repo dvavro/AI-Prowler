@@ -21,7 +21,10 @@ from estimator.integrations import host
 
 BID_STATUSES = ("draft", "sent", "viewed", "won", "lost", "expired", "void")
 ESTIMATE_STATUS_FOR = {"sent": "sent", "won": "won", "lost": "lost", "expired": "expired"}
-CUSTOMER_FIELDS = ("name", "email", "phone", "address", "city", "state", "zip")
+CUSTOMER_FIELDS = ("name", "email", "phone", "address", "city", "state", "zip",
+                   # 2026-11-14: the New customer popup fills these like the Jobs app's own form does.
+                   "first_name", "last_name", "company", "customer_type")
+CUSTOMER_TYPES = ("Residential", "Commercial")
 DEFAULT_VALID_DAYS = 30
 PRICE_DETAILS = ("lines", "trade_totals")    # every line priced, or one price per trade with the scope listed
 DEFAULT_TERMS = ("This quote is valid until {valid_until}. Payment is due when the work is complete. "
@@ -50,7 +53,36 @@ def clean_customer(customer: dict | None) -> dict:
     out = {k: str(v).strip() for k, v in customer.items() if v not in (None, "")}
     if "email" in out and "@" not in out["email"]:
         raise InvalidInput("that email address doesn't look right", field="email")
+    if "customer_type" in out:
+        kind = out["customer_type"].lower()[:3]
+        match = [t for t in CUSTOMER_TYPES if t.lower().startswith(kind)]
+        if not match:
+            raise InvalidInput("customer_type is Residential or Commercial", field="customer_type")
+        out["customer_type"] = match[0]
+    if not out.get("name"):
+        # The name on the quote and the job: the company, else the person.
+        person = " ".join(x for x in (out.get("first_name"), out.get("last_name")) if x)
+        if out.get("company") or person:
+            out["name"] = out.get("company") or person
     return out
+
+
+def find_customers(ctx: RequestContext, query: str = "", limit: int = 25) -> dict:
+    """AI-Prowler's existing customers, for the "Use an existing customer" list when a quote becomes a job."""
+    service._require_edit_role(ctx, service.QUICK_ROLES)
+    rows = host.find_customers(query=query, limit=limit)
+    return {"customers": [_customer_view(r) for r in rows], "count": len(rows), "query": query}
+
+
+def _customer_view(r: dict) -> dict:
+    """One AI-Prowler customer row in the Estimator's customer shape (the fields clean_customer takes)."""
+    person = " ".join(x for x in (r.get("first_name"), r.get("last_name")) if x)
+    out = {"customer_id": r.get("customer_id", ""), "name": r.get("company_name") or person or r.get("customer_id", ""),
+           "company": r.get("company_name", ""), "first_name": r.get("first_name", ""), "last_name": r.get("last_name", ""),
+           "email": r.get("email", ""), "phone": r.get("phone", ""), "address": r.get("street_address", ""),
+           "city": r.get("city", ""), "state": r.get("state", ""), "zip": r.get("zip", ""),
+           "customer_type": r.get("customer_type", ""), "status": r.get("status", "")}
+    return {k: str(v) for k, v in out.items()}
 
 
 def _company(conn, company_id: str) -> dict:
@@ -292,13 +324,19 @@ def ensure_customer(cust: dict, customer_id: str | None = None) -> tuple[str, di
     customer_id = customer_id or cust.get("customer_id")
     if customer_id:
         return customer_id, {}
-    if not cust.get("name"):
+    if not (cust.get("name") or cust.get("first_name") or cust.get("last_name") or cust.get("company")):
         raise InvalidInput("who is the customer? give at least their name (and email/phone/address if known)",
                            field="customer")
-    first, last = _split_name(cust["name"])
+    if cust.get("first_name") or cust.get("last_name"):
+        first, last = cust.get("first_name", ""), cust.get("last_name", "")
+    elif cust.get("company") and not cust.get("name"):
+        first, last = "", ""
+    else:
+        first, last = _split_name(cust["name"])
     updates = {"First Name": first, "Last Name": last, "Status Active/Inactive": "Active"}
     for src, col in (("email", "Email"), ("phone", "Phone"), ("address", "Street Address"), ("city", "City"),
-                     ("state", "State"), ("zip", "ZIP")):
+                     ("state", "State"), ("zip", "ZIP"), ("company", "Company Name"),
+                     ("customer_type", "Customer Type Comm/Res")):
         if cust.get(src):
             updates[col] = cust[src]
     text = host.call("create_customer", updates=updates)
@@ -325,9 +363,24 @@ def convert_to_job(conn, ctx: RequestContext, bid_id: int, *, confirm: bool = Fa
             date.fromisoformat(service_date)
         except ValueError:
             raise InvalidInput("service_date must be YYYY-MM-DD", field="service_date") from None
-    cust = dict(b["customer"])
-    cust.update(clean_customer(customer))
-    customer_id = cust.get("customer_id") or b["customer_id"]
+    picked = clean_customer(customer)
+    if picked.get("customer_id"):
+        # An existing AI-Prowler customer chosen in the popup (2026-11-14): use that customer as it is, and check it's
+        # really there first so the quote can't point at a customer that doesn't exist.
+        try:
+            found = host.find_customers(customer_id=picked["customer_id"], limit=1)
+        except host.HostUnavailable:
+            found = None                       # no customer list here (a host without one) - trust the ID
+        if found is not None and not found:
+            raise InvalidInput(f"there's no customer {picked['customer_id']} in AI-Prowler; pick another or make a new one",
+                               field="customer")
+        cust = dict(_customer_view(found[0]), **picked) if found else picked
+        cust = {k: v for k, v in cust.items() if v and k in set(CUSTOMER_FIELDS) | {"customer_id"}}
+    else:
+        cust = dict(b["customer"])
+        cust.pop("customer_id", None) if picked else None
+        cust.update(picked)
+    customer_id = cust.get("customer_id") or (None if picked else b["customer_id"])
     if not customer_id and not cust.get("name"):
         raise InvalidInput("who is the customer? give at least their name (and email/phone/address if known)",
                            field="customer")

@@ -210,6 +210,9 @@ def test_host_id_extraction():  # S4-B16
     assert host.extract_id("✅ Customer added\nNEW_CUST_ID=CUST-0012\n", "CUST") == "CUST-0012"
     assert host.extract_id("✅ Created job JOB-0099 for Jane", "JOB") == "JOB-0099"
     assert host.extract_id("✅ done", "QTE") is None
+    # Year-style IDs keep every part (2026-11-14: CUST-2026-616 was cut to CUST-2026 -> FOREIGN KEY failed).
+    assert host.extract_id("✅ Customer added\nNEW_CUST_ID=CUST-2026-616\n", "CUST") == "CUST-2026-616"
+    assert host.extract_id("✅ Quote QTE-2026-031 saved", "QTE") == "QTE-2026-031"
 
 
 def test_pdf_with_real_browser(db, monkeypatch):  # S4-B17

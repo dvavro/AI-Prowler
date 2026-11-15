@@ -38,8 +38,9 @@ def test_a_new_project_gets_a_director_job_that_says_what_to_do_and_why(db):  # 
     job, ns = r["job"], r["next_step"]
     assert job["lane"] == "project" and job["stage"] == "build" and job["estimate_id"] == est["id"]
     assert job["state"] == "waiting_on_user" and job["request_text"] == "NSB Slab"
-    assert ns["say"].startswith("Add the plans") and ns["why"]
-    assert {t["key"] for t in ns["todo"]} >= {"plans", "price", "customer"}
+    # 2026-11-14: a project with no trades picked asks for them first.
+    assert ns["say"].startswith("Pick the trades") and ns["why"] and ns["pick_trades"] is True
+    assert {t["key"] for t in ns["todo"]} >= {"trades", "plans", "price", "customer"}
     assert ns["ready_ok"] is False and ns["needs_customer"] is True
     assert r["estimate"]["total_cents"] == 0
 
@@ -127,8 +128,9 @@ def test_intake_trade_without_plans_goes_to_the_measurements_form(db):  # PD-12
     eid = r["estimate"]["id"]
     assert r["job"]["lane"] == "project" and r["route"] == f"#/quick/{eid}?module=concrete"
     ns = r["next_step"]
-    price = next(t for t in ns["todo"] if t["key"] == "price")
-    assert "concrete" in price["text"] and price["link"] == f"#/quick/{eid}?module=concrete"
+    price = next(t for t in ns["todo"] if t["key"] == "price_concrete")      # one to-do per trade (2026-11-14)
+    assert "concrete" in price["text"].lower() and price["link"] == f"#/quick/{eid}?module=concrete"
+    assert ns["trades_wanted"] == ["concrete"] and ns["pick_trades"] is False
     assert not ns["needs_customer"]
     est = service.get_estimate(db, CTX, eid)
     assert "Pat Lee" in est["title"] and est["address"] == "1 Main St"
@@ -138,6 +140,44 @@ def test_intake_with_plans_goes_to_the_project_page(db):  # PD-13
     r = engine.intake(db, CTX, "bid the framing and drywall from the plans", has_plans=True, registry=REG)
     assert r["job"]["lane"] == "project" and r["route"] == f"#/projects/{r['estimate']['id']}"
     assert r["next_step"]["say"].startswith("Add the plans")
+
+
+def test_intake_records_every_trade_it_names(db):  # PD-15 (2026-11-14)
+    r = engine.intake(db, CTX, "bid the framing and drywall from the plans", has_plans=True, registry=REG)
+    wanted = r["next_step"]["trades_wanted"]
+    assert wanted[0] in ("framing", "drywall") and set(wanted) >= {"framing", "drywall"}
+
+
+# ---------------------------------------------------------------- Which trades the project quotes (2026-11-14, David)
+
+def test_picked_trades_each_get_a_price_to_do(db):  # PD-16
+    est, r = _project(db)
+    r = engine.set_project_trades(db, CTX, est["id"], ["concrete", "framing"], registry=REG)
+    ns = r["next_step"]
+    assert ns["trades_wanted"] == ["concrete", "framing"] and ns["pick_trades"] is False
+    assert next(t for t in ns["todo"] if t["key"] == "trades")["done"]
+    keys = {t["key"] for t in ns["todo"]}
+    assert {"price_concrete", "price_framing"} <= keys
+    # Concrete priced, framing not: the estimate isn't ready, and "ready" says framing is still to price.
+    _price(db, est["id"])
+    r = engine.adopt(db, CTX, est["id"], registry=REG)
+    ns = r["next_step"]
+    assert "price_concrete" not in {t["key"] for t in ns["todo"]} and ns["ready_ok"] is False
+    r = engine.next_step(db, CTX, r["job"]["id"], ready=True, registry=REG)
+    assert r["job"]["stage"] == "build" and "still to price" in r["notes"][0]
+    # Take framing off the list: now it's ready.
+    r = engine.set_project_trades(db, CTX, est["id"], ["concrete"], registry=REG)
+    assert r["next_step"]["ready_ok"] is True
+
+
+def test_project_trades_are_checked(db):  # PD-17
+    est, _ = _project(db)
+    with pytest.raises(InvalidInput, match="unknown trades"):
+        engine.set_project_trades(db, CTX, est["id"], ["concrete", "basket_weaving"], registry=REG)
+    with pytest.raises(InvalidInput):
+        engine.set_project_trades(db, CTX, est["id"], {"concrete": 1}, registry=REG)
+    r = engine.set_project_trades(db, CTX, est["id"], "concrete, concrete,framing", registry=REG)   # text, duplicates
+    assert r["next_step"]["trades_wanted"] == ["concrete", "framing"]
 
 
 def test_intake_service_is_a_quick_quote(db):  # PD-14

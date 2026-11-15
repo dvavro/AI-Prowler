@@ -90,6 +90,9 @@ TRIAGE_CASES = [
     ("pool deck pressure washing", "quick_quote", "pressure_washing"),
     ("clean out the gutters", "quick_quote", "generic_service"),
     ("my pool needs weekly cleaning", "quick_quote", "pool_service"),
+    ("detail my car inside and out", "quick_quote", "car_detailing"),          # 2026-11-14
+    ("wash my car and do the interior", "quick_quote", "car_detailing"),
+    ("ceramic coating on my truck", "quick_quote", "car_detailing"),
     ("clean my house every two weeks", "quick_quote", "house_cleaning"),
     ("need cleaners for a 2 bedroom apartment", "quick_quote", "house_cleaning"),
     ("replace the windows", "standard_estimate", "windows_doors"),

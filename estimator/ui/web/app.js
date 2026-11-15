@@ -293,15 +293,24 @@ async function renderProjects(main, screen) {
     const addr = el("input", { id: "new-address", placeholder: "Job address", maxlength: 500 });
     const due = el("input", { id: "new-due", type: "date" });
     const btn = el("button", { class: "primary", type: "submit", id: "new-create" }, "Create project");
+    // 2026-11-14, David: a new project asks which trades it quotes - one or more, all in the one quote.
+    const picker = tradePicker("new", []);
+    const newMsg = el("div", { id: "new-message", role: "status" });
     const form = el("form", { class: "card section", id: "new-project" },
       el("strong", {}, "New project"),
       el("div", { class: "row" }, el("label", {}, "Name", title), el("label", {}, "Address", addr),
-         el("label", {}, "Due date", due), btn));
+         el("label", {}, "Due date", due)),
+      el("p", { class: "muted small" }, "Which trades does this project need? Tick every trade you're quoting — " +
+        "each is priced on its own and they go out together in one quote. You can change them later on the project page."),
+      picker.node, newMsg, el("div", { class: "row" }, btn));
     form.addEventListener("submit", async ev => {
       ev.preventDefault();
+      const trades = picker.value();
+      if (!trades.length) { newMsg.replaceChildren(el("p", { class: "error" }, "Tick at least one trade for this project.")); return; }
+      newMsg.replaceChildren();
       btn.disabled = true;
       try {
-        const est = await api("POST", "/estimates", { title: title.value, address: addr.value, due_date: due.value });
+        const est = await api("POST", "/estimates", { title: title.value, address: addr.value, due_date: due.value, trades });
         toast("Created " + est.title);
         go("#/projects/" + est.id);
       } catch (e) { if (e.status !== 401) toast(e.message); }
@@ -958,6 +967,10 @@ function priceEdit(row, p, modules) {
   const cost = el("input", { type: "text", inputmode: "decimal", id: "pb-edit-cost",   // not .cost: the table's Save reads those
                              value: tableCost ? tableCost.value : dollars(p.cost_cents), "aria-label": "Cost per unit" });
   const sample = el("input", { type: "checkbox", id: "pb-edit-sample", checked: !!p.sample });
+  // Typing your own cost makes it your price (2026-11-13): the Sample box used to stay ticked, so a sample price you
+  // had just changed was still saved as a sample. Tick it again by hand to keep a placeholder.
+  const startCost = cost.value;
+  cost.addEventListener("input", () => { if (cost.value.trim() !== startCost.trim()) sample.checked = false; });
   const eff = el("input", { type: "date", id: "pb-edit-effective", "aria-label": "Takes effect" });
   const save = el("button", { class: "primary", type: "button", id: "pb-edit-save" }, "Save…");
   const cancel = el("button", { class: "button", type: "button", id: "pb-edit-cancel" }, "Cancel");
@@ -1632,18 +1645,38 @@ function zoomBar(zoom) {
     btn("zoom-out", "−", "Zoom out", () => zoom.zoomOut()), pct, btn("zoom-in", "+", "Zoom in", () => zoom.zoomIn()),
     btn("zoom-fit", "Fit", "See the whole sheet", () => zoom.fit()));
   const box = zoom.viewer;
-  if (document.fullscreenEnabled) {
-    const full = btn("zoom-full", "⛶ Full screen", "Full screen (Esc to leave)", () => {
-      const wrap = box.parentElement;
-      if (document.fullscreenElement) document.exitFullscreen(); else if (wrap) wrap.requestFullscreen().catch(() => {});
-    });
-    document.addEventListener("fullscreenchange", () => {
-      if (!box.isConnected) return;
-      full.textContent = document.fullscreenElement ? "✕ Exit full screen" : "⛶ Full screen";
-      zoom.fit();
-    });
-    bar.append(full);
+  // Full screen everywhere (2026-11-13, David: "the full screen view isn't shown on my iPhone"). iPhone Safari has no
+  // Fullscreen API for page elements (document.fullscreenEnabled is false, only videos can go full screen), so the
+  // button was never added there. Now: the real Fullscreen API where it exists (with Safari's webkit names for iPad),
+  // otherwise a "fill the window" view - the viewer covers the whole page (.pseudo-full) until ✕ or Esc.
+  const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+  const nativeOk = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+  let pseudo = false;
+  const full = btn("zoom-full", "⛶ Full screen", "Full screen (Esc to leave)", () => {
+    const wrap = box.parentElement;
+    if (!wrap) return;
+    if (fsEl()) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
+    if (pseudo) { setPseudo(false); return; }
+    if (nativeOk && wrap.requestFullscreen) wrap.requestFullscreen().catch(() => setPseudo(true));
+    else if (nativeOk && wrap.webkitRequestFullscreen) wrap.webkitRequestFullscreen();
+    else setPseudo(true);
+  });
+  const label = () => { full.textContent = (fsEl() || pseudo) ? "✕ Exit full screen" : "⛶ Full screen"; };
+  const refit = () => requestAnimationFrame(() => { if (box.isConnected) zoom.fit(); });
+  function setPseudo(on) {
+    pseudo = on;
+    const wrap = box.parentElement;
+    if (wrap) wrap.classList.toggle("pseudo-full", on);
+    document.documentElement.classList.toggle("pseudo-full-on", on);
+    label();
+    refit();
   }
+  const changed = () => { if (!box.isConnected) return; label(); refit(); };
+  document.addEventListener("fullscreenchange", changed);
+  document.addEventListener("webkitfullscreenchange", changed);
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && pseudo && box.isConnected) setPseudo(false); });
+  window.addEventListener("hashchange", () => { if (pseudo) setPseudo(false); });   // leaving the page closes it
+  bar.append(full);
   bar.append(el("span", { class: "muted small" }, "Scroll or pinch to zoom · drag to move · double-click to zoom in"));
   return bar;
 }
@@ -1935,14 +1968,105 @@ function nextControls(j, ns, msg) {
   }
   if (j.bid && j.bid.status === "won" && !j.bid.job_id) {
     const date = el("input", { type: "date", id: "job-service-date", "aria-label": "Service date" });
-    const name = el("input", { id: "job-customer-name", maxlength: 200, value: (j.bid.customer && j.bid.customer.name) || "",
-                               placeholder: "Customer name", "aria-label": "Customer name" });
+    // 2026-11-14: the button asks who the customer is first - an existing AI-Prowler customer or a new one.
     const conv = el("button", { class: "primary", type: "button", id: "job-convert" }, "Make it a job in AI-Prowler…");
-    conv.addEventListener("click", () => step(j, { convert: true, service_date: date.value || null,
-                                                   ...(name.value.trim() ? { customer: { name: name.value.trim() } } : {}) }, msg));
-    out.push(el("div", { class: "row" }, el("label", {}, "Customer", name), el("label", {}, "Service date (optional)", date), conv));
+    conv.addEventListener("click", () => customerPicker(Object.assign({}, j.job.customer || {}, j.bid.customer || {}),
+      customer => step(j, { convert: true, service_date: date.value || null, customer }, msg)));
+    out.push(el("div", { class: "row" }, el("label", {}, "Service date (optional)", date), conv));
   }
   return out;
+}
+
+// "Make it a job in AI-Prowler…" (2026-11-14): who is the customer? Pick one already in AI-Prowler, or fill in a new
+// one like the Jobs app's Add customer form. onPicked gets {customer_id, ...} for an existing customer, or the new
+// customer's fields (no customer_id) - AI-Prowler only creates it after the yes/no question.
+function customerPicker(prefill, onPicked) {
+  const pre = prefill || {};
+  const close = () => { back.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = e => { if (e.key === "Escape") close(); };
+  // -- Existing customer
+  const find = el("input", { id: "cust-find", type: "search", maxlength: 100, value: pre.name || "",
+                             placeholder: "Search name, company, phone, email or address", "aria-label": "Search customers" });
+  const list = el("div", { id: "cust-results", class: "cust-results", role: "list" });
+  let timer = null, seq = 0;
+  const search = async () => {
+    const mine = ++seq;
+    list.replaceChildren(el("p", { class: "muted" }, "Searching…"));
+    try {
+      const r = await api("GET", "/prowler-customers?q=" + encodeURIComponent(find.value.trim()));
+      if (mine !== seq) return;
+      list.replaceChildren(...(r.customers.length ? r.customers.map(c => el("button", {
+          type: "button", class: "cust-row", role: "listitem", "data-id": c.customer_id,
+          onclick: () => { close(); onPicked({ customer_id: c.customer_id }, c); } },
+        el("strong", {}, c.name || c.customer_id),
+        (c.company && (c.first_name || c.last_name)) ? " · " + [c.first_name, c.last_name].filter(Boolean).join(" ") : "",
+        el("span", { class: "muted small" }, " " + [c.customer_id, [c.address, c.city].filter(Boolean).join(", "), c.phone, c.email]
+          .filter(Boolean).join(" · ") + (c.status && c.status !== "Active" ? " · " + c.status : ""))))
+        : [el("p", { class: "muted", id: "cust-none" }, "No customer matches. Try fewer words, or make a new customer."),
+           el("button", { type: "button", class: "button", onclick: () => show("new") }, "＋ New customer")]));
+    } catch (e) {
+      if (mine === seq) list.replaceChildren(errorBox(e));
+    }
+  };
+  find.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+  // -- New customer (the Jobs app's Add customer fields)
+  const words = (pre.name || "").trim().split(/\s+/).filter(Boolean);
+  const looksCompany = /\b(llc|inc|corp|co|company|ltd|group|services|church|hoa|association)\b\.?/i.test(pre.name || "");
+  const f = (id, label, value, attrs) => {
+    const input = el("input", Object.assign({ id: "cust-new-" + id, maxlength: 200, value: value || "" }, attrs || {}));
+    return [input, el("label", {}, label, input)];
+  };
+  const type = el("select", { id: "cust-new-type", "aria-label": "Customer type" },
+    ["Residential", "Commercial"].map(t => el("option", { value: t, selected: (pre.customer_type || (looksCompany ? "Commercial" : "Residential")) === t }, t)));
+  const [company, companyL] = f("company", "Company", pre.company || (looksCompany ? pre.name : ""));
+  const [first, firstL] = f("first", "First name", pre.first_name || (looksCompany ? "" : words[0]));
+  const [last, lastL] = f("last", "Last name", pre.last_name || (looksCompany ? "" : words.slice(1).join(" ")));
+  const [phone, phoneL] = f("phone", "Phone", pre.phone, { type: "tel" });
+  const [email, emailL] = f("email", "Email", pre.email, { type: "email" });
+  const [street, streetL] = f("address", "Street address", pre.address);
+  const [city, cityL] = f("city", "City", pre.city);
+  const [st, stL] = f("state", "State", pre.state);
+  const [zip, zipL] = f("zip", "ZIP", pre.zip, { inputmode: "numeric", maxlength: 10 });
+  const newMsg = el("div", { id: "cust-new-message", role: "status" });
+  const useNew = el("button", { type: "button", class: "primary", id: "cust-new-use" }, "Use this new customer");
+  useNew.addEventListener("click", () => {
+    const v = x => x.value.trim();
+    if (!v(company) && !v(first) && !v(last)) {
+      newMsg.replaceChildren(el("p", { class: "error" }, "Give a first or last name, or a company."));
+      return;
+    }
+    if (v(email) && !v(email).includes("@")) {
+      newMsg.replaceChildren(el("p", { class: "error" }, "That email address doesn't look right."));
+      return;
+    }
+    const c = { customer_type: type.value, company: v(company), first_name: v(first), last_name: v(last), phone: v(phone),
+                email: v(email), address: v(street), city: v(city), state: v(st), zip: v(zip) };
+    Object.keys(c).forEach(k => { if (!c[k]) delete c[k]; });
+    close();
+    onPicked(c, c);
+  });
+  // -- The popup
+  const tabOld = el("button", { type: "button", class: "tab", id: "cust-tab-existing", onclick: () => show("old") }, "Use an existing customer");
+  const tabNew = el("button", { type: "button", class: "tab", id: "cust-tab-new", onclick: () => show("new") }, "＋ New customer");
+  const paneOld = el("div", { id: "cust-pane-existing" }, find, list);
+  const paneNew = el("div", { id: "cust-pane-new", hidden: true },
+    el("div", { class: "form-grid" }, el("label", {}, "Type", type), companyL, firstL, lastL, phoneL, emailL, streetL, cityL, stL, zipL),
+    newMsg, el("div", { class: "row" }, useNew));
+  const show = which => {
+    paneOld.hidden = which !== "old"; paneNew.hidden = which === "old";
+    tabOld.classList.toggle("on", which === "old"); tabNew.classList.toggle("on", which !== "old");
+    (which === "old" ? find : (first.value ? phone : first)).focus();
+  };
+  const box = el("div", { class: "cust-pop card", id: "cust-picker", role: "dialog", "aria-modal": "true", "aria-label": "Choose the customer" },
+    el("div", { class: "cust-pop-head" }, el("strong", {}, "Who is the customer?"),
+      el("button", { type: "button", class: "link-btn", id: "cust-close", "aria-label": "Close", onclick: close }, "✕")),
+    el("p", { class: "muted small" }, "Pick a customer already in AI-Prowler so the job lands on their record, or make a new one."),
+    el("div", { class: "row tabs" }, tabOld, tabNew), paneOld, paneNew);
+  const back = el("div", { class: "cust-pop-back", id: "cust-picker-back", onclick: e => { if (e.target === back) close(); } }, box);
+  document.body.append(back);
+  document.addEventListener("keydown", onKey);
+  show("old");
+  search();
 }
 
 // Send one est_director_next step. Emailing a customer or creating a job asks a yes/no question first.
@@ -1988,6 +2112,32 @@ function directorPanel(eid) {
   return card;
 }
 
+// "Which trades does this project need?" (2026-11-14, David): tick one or more; they're all priced and sent in one
+// quote. Construction trades first, then services. value() is the ticked module ids in list order.
+let TRADE_LIST = null;
+function tradePicker(prefix, selected) {
+  const chosen = new Set(selected || []);
+  const box = el("div", { class: "trade-pick", id: prefix + "-trades", role: "group", "aria-label": "Trades in this quote" },
+    el("p", { class: "muted" }, "Loading the trades…"));
+  const fill = mods => {
+    const group = (label, list) => list.length ? el("fieldset", { class: "trade-group" }, el("legend", {}, label),
+      list.map(m => el("label", { class: "trade-opt" },
+        el("input", { type: "checkbox", value: m.id, "data-trade": m.id, checked: chosen.has(m.id) }), " " + m.name))) : null;
+    box.replaceChildren(group("Construction trades", mods.filter(m => m.category === "construction")),
+                        group("Services", mods.filter(m => m.category !== "construction")));
+  };
+  (async () => {
+    try {
+      if (!TRADE_LIST) {
+        const r = await api("GET", "/modules");
+        TRADE_LIST = r.modules.filter(m => m.id !== "custom").map(m => ({ id: m.id, name: m.name, category: m.category }));
+      }
+      fill(TRADE_LIST);
+    } catch (e) { if (e.status !== 401) box.replaceChildren(errorBox(e)); }
+  })();
+  return { node: box, value: () => [...box.querySelectorAll("input[data-trade]:checked")].map(i => i.value) };
+}
+
 async function loadDirectorPanel(card, eid, notes) {
   let d;
   try { d = await api("POST", "/estimates/" + eid + "/director", {}); }
@@ -2012,6 +2162,26 @@ async function loadDirectorPanel(card, eid, notes) {
   }
   const msg = el("div", { id: "director-message", role: "status" });
   if (!done && ns.stage === "build") {
+    // The trades in this quote (2026-11-14): asked first when none are picked; changeable any time after.
+    const have = (ns.trades_wanted && ns.trades_wanted.length) ? ns.trades_wanted : (ns.trades_priced || []);
+    const picker = tradePicker("director", have);
+    const saveTrades = el("button", { class: ns.pick_trades ? "primary" : "button", type: "button", id: "director-trades-save" },
+      ns.pick_trades ? "Use these trades" : "Save the trades");
+    saveTrades.addEventListener("click", async () => {
+      const t = picker.value();
+      if (!t.length) { msg.replaceChildren(el("p", { class: "error" }, "Tick at least one trade.")); return; }
+      saveTrades.disabled = true;
+      try {
+        const r = await api("POST", "/estimates/" + eid + "/trades", { trades: t });
+        loadDirectorPanel(card, eid, r.notes || []);
+      } catch (e) { if (e.status !== 401) msg.replaceChildren(errorBox(e)); saveTrades.disabled = false; }
+    });
+    const tradeBox = el("div", { class: "card section", id: "director-trades" },
+      el("strong", {}, ns.pick_trades ? "Which trades does this project need?" : "Trades in this quote"),
+      el("p", { class: "muted small" }, "Tick every trade you're quoting. Each is priced on its own and they go out together in one quote."),
+      picker.node, el("div", { class: "row" }, saveTrades));
+    if (ns.pick_trades) kids.push(tradeBox);
+    else kids.push(el("details", { id: "director-trades-edit" }, el("summary", {}, "✏️ Change the trades"), tradeBox));
     if (ns.needs_customer) {
       const name = el("input", { id: "director-cust-name", maxlength: 200, placeholder: "Customer name", "aria-label": "Customer name" });
       const email = el("input", { id: "director-cust-email", type: "email", maxlength: 200, placeholder: "customer@example.com",
@@ -2116,13 +2286,12 @@ async function renderBid(main, id) {
   if (["draft", "sent", "viewed"].includes(b.status)) acts.push(el("div", { class: "row" }, statusButton(b, "void", "Void this quote", msg)));
   if (["sent", "viewed", "won"].includes(b.status) && !b.job_id) {
     const date = el("input", { type: "date", id: "bid-service-date", "aria-label": "Service date" });
-    const name = el("input", { id: "bid-customer-name", maxlength: 200, value: (b.customer && b.customer.name) || "",
-                               placeholder: "Customer name", "aria-label": "Customer name" });
+    // 2026-11-14: the button asks who the customer is first - an existing AI-Prowler customer or a new one.
     const conv = el("button", { class: "primary", type: "button", id: "bid-convert" }, "Make it a job in AI-Prowler…");
-    conv.addEventListener("click", () => askThen(msg, conv, "/bids/" + b.id + "/convert",
-      { service_date: date.value || null, customer: name.value.trim() ? { name: name.value.trim() } : null },
-      r => r.already_converted ? "Already a job: " + r.job_id : "Created " + Object.entries(r.created || {}).filter(([, v]) => v).map(([k, v]) => k.replace(/_/g, " ") + " " + v).join(", ")));
-    acts.push(el("div", { class: "row" }, el("label", {}, "Customer", name), el("label", {}, "Service date (optional)", date), conv));
+    conv.addEventListener("click", () => customerPicker(b.customer || {}, customer => askThen(msg, conv, "/bids/" + b.id + "/convert",
+      { service_date: date.value || null, customer },
+      r => r.already_converted ? "Already a job: " + r.job_id : "Created " + Object.entries(r.created || {}).filter(([, v]) => v).map(([k, v]) => k.replace(/_/g, " ") + " " + v).join(", "))));
+    acts.push(el("div", { class: "row" }, el("label", {}, "Service date (optional)", date), conv));
   }
   parts.push(el("div", { class: "card section", id: "bid-actions" }, acts.length ? acts : el("p", { class: "muted" }, "Nothing more to do on this quote.")), msg);
   parts.push(el("details", { class: "card section" }, el("summary", {}, "Plain-text copy"), el("pre", { class: "bid-text" }, b.text || "")));

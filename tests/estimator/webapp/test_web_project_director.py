@@ -19,6 +19,26 @@ def test_new_project_gets_a_director_job_and_panel(call):
     assert again["job"]["rev"] == d["job"]["rev"]
 
 
+def test_new_project_takes_its_trades(call):  # 2026-11-14, David: a new project asks which trades it quotes
+    e = call("POST", f"{API}/estimates", {"title": "Shed", "trades": ["concrete", "framing"]})
+    assert e.status == 201, e.body
+    d = call("POST", f"{API}/estimates/{e.json()['id']}/director", {}).json()
+    ns = d["next_step"]
+    assert ns["trades_wanted"] == ["concrete", "framing"] and ns["pick_trades"] is False
+    assert {"price_concrete", "price_framing"} <= {t["key"] for t in ns["todo"]}
+    # Changed later on the project page.
+    r = call("POST", f"{API}/estimates/{e.json()['id']}/trades", {"trades": ["drywall"]})
+    assert r.status == 200, r.body
+    assert r.json()["next_step"]["trades_wanted"] == ["drywall"]
+    assert call("POST", f"{API}/estimates/{e.json()['id']}/trades", {"trades": "drywall"}).status == 400
+    assert call("POST", f"{API}/estimates/{e.json()['id']}/trades", {"trades": ["nope"]}).status == 400
+    assert call("POST", f"{API}/estimates", {"title": "x", "trades": "concrete"}).status == 400
+    # No trades picked: the panel asks for them.
+    e2 = call("POST", f"{API}/estimates", {"title": "Bare"}).json()
+    ns2 = call("POST", f"{API}/estimates/{e2['id']}/director", {}).json()["next_step"]
+    assert ns2["pick_trades"] is True and ns2["say"].startswith("Pick the trades")
+
+
 def test_ready_flag_goes_through_the_jobs_api(call):
     e = call("POST", f"{API}/estimates", {"title": "Slab"}).json()
     r = call("POST", f"{API}/quick", {"estimate_id": e["id"], "rev": e["rev"], "module_id": "concrete",

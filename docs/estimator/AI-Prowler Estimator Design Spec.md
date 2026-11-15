@@ -657,7 +657,7 @@ The whole estimating process can be run three ways, and they can be mixed on the
 
 ## MCP tool catalog
 
-108 tools, prefixed by area so the AI can find them, registered in the same MCP server as AI-Prowler's existing tools. All return JSON with ids, units and a `warnings` list.
+109 tools, prefixed by area so the AI can find them, registered in the same MCP server as AI-Prowler's existing tools. All return JSON with ids, units and a `warnings` list.
 
 | Area | Tool | Purpose | Writes? |
 | --- | --- | --- | --- |
@@ -728,6 +728,7 @@ The whole estimating process can be run three ways, and they can be mixed on the
 | Runner | `runner_review_task` | A person checks a trade's submitted quantities; approving prices them onto the estimate | Yes |
 | Runner | `runner_submit_takeoff` | Hand in one trade's quantities, measured from the plans | Yes |
 | Project | `est_project_status` | Project dashboard: overall status, per-trade task states, headline quantities | No |
+| Project | `est_project_trades` | Say which trades a project quotes, in plain words ("concrete and framing"; action set, add or remove); with no trades, lists the project's trades and the choices. The Director then asks for each trade still to price | Yes |
 | Project | `est_assign` | Assign an estimate and its Director job to a person by sign-in name; they get a notice | Yes |
 | Project | `est_my_work` | Open estimates and Director jobs assigned to me, with new notices | No |
 | Agents | `agent_config_get` / `agent_config_update` | Read or change trade-agent settings (enabled, thresholds, sheets, auto-advance) | Update needs confirm |
@@ -1016,7 +1017,7 @@ Every screen lists the MCP tools that do the same things, so anything done by cl
 | **Quick estimate** | Service picker, intake questions form, photo assist, price result, convert to quote; on-screen description and next-step guide | `est_list_modules`, `est_quick_questions`, `est_quick_answer`, `est_create_estimate`, `est_director_start` |
 | **Jobs board** | Jobs by lane and stage, who each job is waiting for, mine-only and finished filters, new quick quote | `est_jobs_board` |
 | **Dashboard** | Projects needing attention, review items waiting, bids out, runs in progress, AI usage and cost, setup checklist | `est_project_status`, `est_list_estimates`, `runner_status`, `est_setup_status` |
-| **Projects** | New project (customer, address, trades, due date), project list with filters, open project dashboard with per-trade status and quantity tiles | `est_create_estimate`, `est_add_trade`, `est_remove_trade`, `est_project_status` |
+| **Projects** | New project (customer, address, trades, due date), project list with filters, open project dashboard with per-trade status and quantity tiles | `est_create_estimate`, `est_add_trade`, `est_remove_trade`, `est_project_status`, `est_project_trades` |
 | **Plans** | Upload (PDF, images, DXF, DWG), validation messages, sheet list by discipline, viewports and scales, set or calibrate scale, legends found, schedules found and row edits, revision upload and revision report | `plan_upload`, `plan_process`, `plan_status`, `plan_get_sheets`, `plan_get_viewports`, `plan_set_scale`, `plan_get_legends`, `plan_get_schedules`, `plan_update_schedule_row`, `plan_compare_revisions` |
 | **Takeoffs (Blueprint Review)** | Split view, tool palette, layers, measurement list by trade and room, two-way highlighting, measurement detail, approve, edit, reject, suggested changes on locked items, markups | `takeoff_propose`, `takeoff_list`, `takeoff_detail`, `takeoff_confirm`, `takeoff_edit`, `takeoff_delete`, `takeoff_manual`, `takeoff_suggest_change`, `plan_get_objects` |
 | **Reviews** | Review queue sorted by confidence and cost impact, click-to-highlight counts, symbol detection grid, add, deselect, relabel, find similar, approve review version, second-check, review history | `review_highlight`, `symbol_detections_list`, `symbol_detection_review`, `symbol_find_similar`, `review_start`, `review_save`, `review_approve`, `review_history` |

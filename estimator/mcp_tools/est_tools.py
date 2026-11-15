@@ -321,6 +321,69 @@ def est_director_add_trade(job_id: int, module_id: str, answers: dict | str | No
                                              remove=bool(remove)))
 
 
+def _find_project(conn, ctx, project) -> dict:
+    """A project by its number (estimate id) or by part of its name; the newest one when none is given."""
+    listing = service.list_estimates(conn, ctx, limit=500)["estimates"]
+    text = str(project if project is not None else "").strip().lstrip("#")
+    if text.isdigit():
+        return service.get_estimate(conn, ctx, int(text))
+    live = [e for e in listing if not e.get("practice")]
+    if not text:
+        if not live:
+            raise InvalidInput("there are no projects yet; make one first (est_create_estimate)")
+        return service.get_estimate(conn, ctx, live[0]["id"])
+    low = text.lower()
+    exact = [e for e in live if (e.get("title") or "").lower() == low]
+    hits = exact or [e for e in live if low in (e.get("title") or "").lower()]
+    if len(hits) == 1:
+        return service.get_estimate(conn, ctx, hits[0]["id"])
+    if not hits:
+        raise InvalidInput(f"no project called '{text}'", field="project",
+                           recent=[{"id": e["id"], "title": e["title"]} for e in live[:10]])
+    raise InvalidInput(f"more than one project matches '{text}'; say which (by number)", field="project",
+                       matches=[{"id": e["id"], "title": e["title"]} for e in hits[:10]])
+
+
+def est_project_trades(project: str = "", trades: str | list | None = None, action: str = "set") -> str:
+    """Tell the Estimator which trades a project quotes, in plain words: "concrete and framing", "add drywall",
+    "take painting off". One project can quote several trades; each is priced on its own and they go out together in
+    one quote, and the Director asks for each trade still to price.
+
+    project: the project's number or part of its name (blank = the newest project).
+    trades:  trade names as the user says them ("concrete, framing", "Drywall", "paint") or ids. Leave it out to see
+             the project's trades and every trade you can pick.
+    action:  set (the trades are exactly these), add (keep the others too) or remove (take these off)."""
+    def go(c):
+        ctx = _ctx()
+        est = _find_project(c, ctx, project)
+        job = director.project_job_for(c, ctx, est["id"])
+        current = director.project_trades(job) if job else []
+        reg = get_registry()
+        name = lambda t: reg.modules[t].name if t in reg.modules else t      # noqa: E731
+        if trades in (None, "", []):
+            return {"ok": True, "estimate_id": est["id"], "title": est["title"],
+                    "trades": [{"module_id": t, "name": name(t)} for t in current],
+                    "choices": director.trade_choices(reg),
+                    "how": "call again with trades=\"concrete and framing\" (action=set, add or remove)"}
+        mode = (action or "set").strip().lower()
+        if mode not in ("set", "add", "remove"):
+            raise InvalidInput("action is set, add or remove", field="action")
+        ids, unknown = director.resolve_trades(trades if isinstance(trades, (list, tuple)) else str(trades), reg)
+        if unknown:
+            raise InvalidInput(f"no trade called {', '.join(repr(u) for u in unknown)}", field="trades",
+                               choices=[f"{ch['name']} ({ch['module_id']})" for ch in director.trade_choices(reg)])
+        new = (ids if mode == "set" else list(dict.fromkeys([*current, *ids])) if mode == "add"
+               else [t for t in current if t not in ids])
+        if not new:
+            raise InvalidInput("a project needs at least one trade; set the trades it quotes instead of removing them all",
+                               field="trades")
+        out = director.set_project_trades(c, ctx, est["id"], new, registry=reg)
+        out["project"] = {"estimate_id": est["id"], "title": est["title"]}
+        out["trades_now"] = [name(t) for t in new]
+        return out
+    return _run(go)
+
+
 def est_director_book_site_visit(job_id: int, date: str, start_time: str = "", end_time: str = "", notes: str = "",
                                  customer: dict | str | None = None, confirm: bool = False) -> str:
     """Book a site visit to measure, as a scheduled job in AI-Prowler (date YYYY-MM-DD, times HH:MM). Only works when
@@ -1187,7 +1250,7 @@ def est_server_compute(small_processing: bool | None = None, max_sheets: int | N
 
 TOOLS = (
     est_director_start, est_director_next, est_director_change_lane, est_job_status, est_jobs_board,
-    est_director_add_trade, est_director_book_site_visit, est_validate, est_scenarios, est_choose_scenario,
+    est_director_add_trade, est_project_trades, est_director_book_site_visit, est_validate, est_scenarios, est_choose_scenario,
     est_followups_due, est_director_briefing, est_director_inbox, est_director_watch_now, est_director_watch_status,
     est_director_settings_get, est_director_settings_update, est_playbook_list, est_playbook_update,
     pricebook_get, pricebook_update, pricebook_import, est_create_revision,

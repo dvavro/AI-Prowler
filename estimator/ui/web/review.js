@@ -360,8 +360,46 @@ function viewButtons() {
     mk("bp-fit", "Fit", "Fit the sheet", () => RV.viewer.fit()),
     mk("bp-rotate", "⟳ Rotate", "Rotate the sheet 90° clockwise", () => RV.viewer.rotate()),
     mk("bp-zoom-sel", "Zoom to selection", "Zoom to what's selected", () => RV.viewer.zoomToSelection()),
-    mk("bp-full", "⛶", "Full screen", () => { const v = $("bp-viewer"); if (document.fullscreenElement) document.exitFullscreen(); else if (v.requestFullscreen) v.requestFullscreen(); }));
+    mk("bp-full", "⛶", "Full screen", () => toggleBpFull()));
 }
+
+// Full screen for the Blueprint Review viewer (2026-11-13: iPhone Safari has no Fullscreen API for page elements, so the
+// ⛶ button did nothing there). The real API where it exists (webkit names for iPad), else the viewer fills the window
+// (.pseudo-full) with its own ✕ button, since the toolbar is outside it.
+function toggleBpFull() {
+  const v = $("bp-viewer");
+  if (!v) return;
+  const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  if (fsEl) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
+  if (v.classList.contains("pseudo-full")) { setBpPseudoFull(v, false); return; }
+  const native = document.fullscreenEnabled || document.webkitFullscreenEnabled;
+  if (native && v.requestFullscreen) v.requestFullscreen().catch(() => setBpPseudoFull(v, true));
+  else if (native && v.webkitRequestFullscreen) v.webkitRequestFullscreen();
+  else setBpPseudoFull(v, true);
+}
+function setBpPseudoFull(v, on) {
+  v.classList.toggle("pseudo-full", on);
+  document.documentElement.classList.toggle("pseudo-full-on", on);
+  const old = $("bp-full-close");
+  if (old) old.remove();
+  if (on) {
+    const close = el("button", { class: "button bp-full-close", type: "button", id: "bp-full-close",
+      title: "Exit full screen", "aria-label": "Exit full screen" }, "✕ Exit full screen");
+    close.addEventListener("pointerdown", e => e.stopPropagation());
+    close.addEventListener("click", e => { e.stopPropagation(); setBpPseudoFull(v, false); });
+    v.append(close);
+  }
+  requestAnimationFrame(() => { if (RV.viewer) RV.viewer.fit(); });
+}
+document.addEventListener("keydown", e => {
+  const v = $("bp-viewer");
+  if (e.key === "Escape" && v && v.classList.contains("pseudo-full")) setBpPseudoFull(v, false);
+});
+window.addEventListener("hashchange", () => {
+  const v = $("bp-viewer");
+  document.documentElement.classList.remove("pseudo-full-on");
+  if (v && v.classList.contains("pseudo-full")) setBpPseudoFull(v, false);
+});
 
 async function openSheet(sheetId, msg) {
   RV.sheetId = sheetId;
@@ -1008,8 +1046,11 @@ function saveForm(msg, what) {
     const t = trades.find(x => x.module_id === trade.value);
     feeds.replaceChildren(el("option", { value: "" }, "— not linked to a question —"),
       ...(t ? t.questions : []).map(q => el("option", { value: q.id }, q.label + (q.unit ? " (" + q.unit + ")" : ""))));
-    const guess = (t ? t.questions : []).find(q => (what.kind === "area" && /sq|sf/.test(q.unit || "")) ||
-      (what.kind === "length" && /lf|ft|feet/.test(q.unit || "")) || (what.kind === "count" && /ea|count/.test(q.unit || "") ));
+    // Match the whole unit (2026-11-13): /ft/ also matched "sqft", so a drawn length was pointed at an area question
+    // and the server turned the save down ("a measurement in lf can't feed 'area_sqft'").
+    const UNITS = { area: ["sqft", "sf", "sy"], length: ["lf", "ft", "feet"], perimeter: ["lf", "ft", "feet"], count: ["ea", "each", "count"] };
+    const fits = UNITS[what.kind] || [];
+    const guess = (t ? t.questions : []).find(q => fits.includes(String(q.unit || "").toLowerCase().trim()));
     if (guess) feeds.value = guess.id;
   };
   trade.addEventListener("change", fillFeeds);

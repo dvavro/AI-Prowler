@@ -268,7 +268,7 @@ class TestHRAppsGuideIntegration:
         assert "hr_list_employees" in body
         assert "hr_send_notification" in body
         assert "server only" in body.lower()
-        assert "fourteen tool families" in body   # 2026-10-25: + mileage tracker
+        assert "fifteen tool families" in body    # 2026-10-25: + mileage tracker; 2026-11-14: + the Estimator
 
     def test_hr_body_identical_server_and_personal(self, mcp_mod, monkeypatch):
         """The HR section does not vary per connector - only the footer does."""
@@ -298,6 +298,23 @@ class TestHRAppsGuideIntegration:
         result = self._server_result(mcp_mod, monkeypatch, frozenset())
         assert "Nothing is disabled" in result
         assert "hr_list_employees" not in result.split("THIS CONNECTION")[1]
+
+    def test_switched_off_tools_are_marked_in_the_body(self, mcp_mod, monkeypatch):
+        """2026-11-14 (David): the guide follows the tool configuration - a switched-off tool is
+        marked "(off)" wherever the guide names it, and an enabled one is not."""
+        result = self._server_result(mcp_mod, monkeypatch, {"send_sms", "hr_list_employees"})
+        body = result.split("THIS CONNECTION")[0]
+        assert "send_sms (off)" in body and "hr_list_employees (off)" in body
+        assert "send_email (off)" not in body and "send_email" in body
+        assert "(off) (off)" not in body
+        clean = self._server_result(mcp_mod, monkeypatch, frozenset())
+        assert "(off)" not in clean.split("THIS CONNECTION")[0]
+
+    def test_the_estimator_is_in_the_guide(self, mcp_mod, monkeypatch):
+        """2026-11-14 (David): the guide named none of the Estimator's tools."""
+        result = self._server_result(mcp_mod, monkeypatch, frozenset())
+        assert "est_project_trades" in result and "how_to_estimate" in result and "bid_convert_to_job" in result
+        assert "fourteen" not in result and "question-answering\\n" not in result
 
     def test_hr_catalog_category_is_server_only(self, mcp_mod):
         """All 21 hr_* tools (20 + hr_agent, 2026-10-31) sit in the 'hr' catalog category, SERVER mode."""

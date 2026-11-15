@@ -59,6 +59,8 @@ Sprint 4 (Coder 2):
   Bids (owner, estimator, office, field - the bid_send roles): GET /bids?status=&estimate_id=, GET /bids/<id> (bid_preview),
        GET /bids/<id>/file?kind=html|pdf, POST /bids/<id>/send {to?, message?, confirm?} (asks first),
        POST /bids/<id>/status {status}, POST /bids/<id>/convert {customer?, service_date?, confirm?} (asks first)
+     GET /prowler-customers?q=&limit=   AI-Prowler's customers (read only), to pick one when a quote becomes a job;
+     customer {customer_id} uses that customer, {first_name, last_name, company, customer_type, ...} makes a new one
   GET  /help/guides?q=&screen=      how-to guides; GET /help/guides/<id> one guide
 Sprint 5 (Coder 2), Plans screen (owner, estimator, reviewer, field; changes by owner and estimator):
   GET  /plans                       every plan set on the company's projects
@@ -409,8 +411,23 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
                                       address=_opt(b, "address"), due_date=_opt(b, "due_date"))
         # Every new project gets a Director job that guides it through to sending the quote (2026-11-12, David).
         from estimator.director import engine as director
+        trades = b.get("trades")
+        if trades is not None and not isinstance(trades, list):
+            raise _Refuse(400, "invalid_input", "trades must be a list of trade ids")
         job = director.adopt(conn, ctx, est["id"])
+        if trades:
+            # 2026-11-14: the trades this project quotes, picked on the New project form.
+            job = director.set_project_trades(conn, ctx, est["id"], trades)
         return _json(201, {**redact(est, see), "director_job_id": job["job"]["id"] if job else None})
+
+    mm = re.match(r"^/estimates/(\d+)/trades$", sub)
+    if mm and m == "POST":
+        # The trades a project quotes (replaces the list): {trades: ["concrete", "framing"]} (2026-11-14).
+        from estimator.director import engine as director
+        b = _body(req)
+        if not isinstance(b.get("trades"), list):
+            raise _Refuse(400, "invalid_input", "trades must be a list of trade ids")
+        return _json(200, _no_paths(redact(director.set_project_trades(conn, ctx, int(mm.group(1)), b["trades"]), see)))
 
     if sub == "/director/intake" and m == "POST":
         # The Dashboard's "Start a new quote or estimate": what's the job, who's it for, are there plans; then the right
@@ -550,6 +567,11 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
         return _jobs(m, sub, req, ctx, conn, see)
     if sub == "/bids" or sub.startswith("/bids/"):
         return _bids(m, sub, req, ctx, conn, see)
+    if sub == "/prowler-customers" and m == "GET":
+        # 2026-11-14: AI-Prowler's existing customers, for "Use an existing customer" when a quote becomes a job.
+        from estimator.bids import service as bids
+        return _json(200, bids.find_customers(ctx, (req.query.get("q") or "").strip()[:100],
+                                              int(req.query.get("limit") or 25)))
     if sub == "/help/guides" or sub.startswith("/help/guides/"):
         return _help(m, sub, req)
 

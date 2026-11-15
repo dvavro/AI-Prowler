@@ -1,0 +1,13 @@
+price_key,description,kind,unit,cost
+dt_exterior_ea,Exterior detail per car (sample),other,ea,60.00
+dt_interior_ea,Interior detail per car (sample),other,ea,90.00
+dt_pet_hair_ea,Pet hair removal per vehicle (sample),other,ea,40.00
+dt_shampoo_ea,Shampoo seats and carpets per car (sample),other,ea,80.00
+dt_odor_ea,Odor removal ozone per vehicle (sample),other,ea,60.00
+dt_clay_ea,Clay bar decontamination per car (sample),other,ea,50.00
+dt_polish1_ea,One-step polish per car (sample),other,ea,175.00
+dt_polish2_ea,Two-step compound and polish per car (sample),other,ea,350.00
+dt_ceramic_ea,Ceramic coating per car (sample),other,ea,500.00
+dt_headlight_pair,Headlight restoration per pair (sample),other,ea,75.00
+dt_engine_ea,Engine bay cleaning per vehicle (sample),other,ea,50.00
+dt_mobile_ea,Mobile travel fee per visit (sample),other,ea,25.00

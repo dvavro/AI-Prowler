@@ -1,32 +1,46 @@
 # Golden cases: sample prices, no markups. Totals in cents.
-- name: 400 sq ft patio, defaults (4 in, mesh, broom, gravel base)
+# 2026-11-14 (v0.2.0): leveling (grade_pad) is on by default - 400 sq ft x $0.30 = $120 more on the default cases.
+- name: 400 sq ft patio, defaults (4 in, mesh, broom, gravel base, pad leveled)
   answers: {area_sqft: 400}
-  # base 400 x $0.75; forms ceil(4 x sqrt 400) = 80 lf x $3.50; mesh 440 x $0.35;
+  # grade 400 x $0.30; base 400 x $0.75; forms ceil(4 x sqrt 400) = 80 lf x $3.50; mesh 440 x $0.35;
   # concrete 4.9383 cy x 1.05 x $165 = $855.56; finish 400 x $2.25; joints 400 x $0.15
+  expected_lines: {grade: 12000, base: 30000, forms: 28000, mesh: 15400, concrete: 85556, place_finish: 90000, joints: 6000}
+  expected_total_cents: 266956
+- name: 400 sq ft patio, pad already level
+  answers: {area_sqft: 400, grade_pad: false}
   expected_lines: {base: 30000, forms: 28000, mesh: 15400, concrete: 85556, place_finish: 90000, joints: 6000}
   expected_total_cents: 254956
 - name: 600 sq ft stamped driveway, 5 in, rebar, removal, 40 ft footing, pump
   answers: {area_sqft: 600, thickness_in: "5", perimeter_lf: 110, reinforcement: rebar, finish: stamped,
             remove_existing: true, footing_lf: 40, pump: true}
   # concrete (600 x 5 / 12 / 27 + 40 / 27) = 10.7407 cy x 1.05 x $165 = $1,860.83
-  # rebar 800 lf x 1.10 x $0.85 = $748; footing rebar 80 x 1.10 x $0.85 = $74.80 (default #4 size)
-  expected_lines: {removal: 120000, base: 45000, forms: 38500, footing: 24000, rebar: 74800, footing_rebar_4: 7480,
-                   concrete: 186083, place_finish: 135000, stamped: 270000, joints: 9000, pump: 65000}
-  expected_total_cents: 974863
+  # rebar 800 lf x 1.10 x $0.85 = $748; footing rebar 80 x 1.10 x $0.85 = $74.80 (default #4 size); grade 600 x $0.30
+  expected_lines: {removal: 120000, grade: 18000, base: 45000, forms: 38500, footing: 24000, rebar: 74800,
+                   footing_rebar_4: 7480, concrete: 186083, place_finish: 135000, stamped: 270000, joints: 9000,
+                   pump: 65000}
+  expected_total_cents: 992863
 - name: 600 sq ft stamped driveway, 5 in, rebar, removal, 40 ft footing, #5 footing rebar, pump
   answers: {area_sqft: 600, thickness_in: "5", perimeter_lf: 110, reinforcement: rebar, finish: stamped,
             remove_existing: true, footing_lf: 40, footing_rebar_size: "5", pump: true}
   # same as the case above except footing rebar: 80 lf x 1.10 x $1.25 = $110.00 (vs $74.80 for #4);
-  # the slab rebar grid stays #4 (rebar: 74800). Total 974863 - 7480 + 11000 = 978383.
-  expected_lines: {removal: 120000, base: 45000, forms: 38500, footing: 24000, rebar: 74800, footing_rebar_5: 11000,
-                   concrete: 186083, place_finish: 135000, stamped: 270000, joints: 9000, pump: 65000}
-  expected_total_cents: 978383
+  # the slab rebar grid stays #4 (rebar: 74800). Total 992863 - 7480 + 11000 = 996383.
+  expected_lines: {removal: 120000, grade: 18000, base: 45000, forms: 38500, footing: 24000, rebar: 74800,
+                   footing_rebar_5: 11000, concrete: 186083, place_finish: 135000, stamped: 270000, joints: 9000,
+                   pump: 65000}
+  expected_total_cents: 996383
 - name: 400 sq ft patio with 10 loads of fill dirt and pad grading
   answers: {area_sqft: 400, fill_loads: 10, grade_pad: true}
-  # same as the first case plus fill 10 x $250 = $2,500 and grading 400 x $0.30 = $120
+  # same as the first case plus fill 10 x $250 = $2,500
   expected_lines: {fill: 250000, grade: 12000, base: 30000, forms: 28000, mesh: 15400, concrete: 85556,
                    place_finish: 90000, joints: 6000}
   expected_total_cents: 516956
+- name: 400 sq ft shed slab dug down 6 in, vapor barrier, plus a lump sum for the bobcat
+  answers: {area_sqft: 400, excavate_depth_in: 6, vapor_barrier: true, excavation_lump: 350}
+  # excavate 400 x 6 / 12 / 27 = 7.4074 cy x $45 = $333.33; lump sum $350 x $1;
+  # vapor barrier 400 x 1.10 x $0.20 = $88; the rest as the first case ($2,669.56)
+  expected_lines: {excavate: 33333, excavation_lump: 35000, vapor_barrier: 8800, grade: 12000, base: 30000,
+                   forms: 28000, mesh: 15400, concrete: 85556, place_finish: 90000, joints: 6000}
+  expected_total_cents: 344089
 - name: Small 40 sq ft pad comes to the $1,200 minimum
   answers: {area_sqft: 40, base: false, reinforcement: none}
   expected_total_cents: 120000

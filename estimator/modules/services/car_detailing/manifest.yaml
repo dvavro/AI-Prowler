@@ -1,0 +1,106 @@
+# Car detailing: quick estimate per vehicle (2026-11-14, David). Sample prices are placeholders;
+# the setup wizard asks the company to replace them with its own.
+id: car_detailing
+name: Car Detailing
+version: 0.1.0
+category: service
+path: quick_estimate
+description: Exterior, interior or full details per vehicle, adjusted for vehicle size and condition, with pet hair, shampoo, odor, clay bar, paint correction, ceramic coating, headlights, engine bay and a mobile fee.
+minimum_charge: "75.00"
+keywords: [car detailing, auto detailing, detail my car, detail my truck, car detail, detailing, detailer, mobile detailing,
+           car wash, wash my car, wash and wax, interior detail, exterior detail, full detail, ceramic coating,
+           paint correction, headlight restoration, engine bay, vehicle detailing, truck detailing, suv detailing]
+notes:
+  - "Ask whether there's water and power at the car, or bring your own (mobile details)."
+  - "Note any existing scratches, dents or stains with the customer before starting."
+# Options for the quote.
+scenarios:
+  - {id: exterior, label: "Exterior wash and wax", answers: {package: exterior}}
+  - {id: full, label: "Full detail (inside and out)", answers: {package: full}}
+  - {id: full_ceramic, label: "Full detail with ceramic coating", answers: {package: full, clay_bar: true, ceramic_coating: true}}
+# A won quote with one of these answers becomes a repeating job in AI-Prowler.
+recurrence: {question: how_often, map: {weekly: Weekly, biweekly: Biweekly, monthly: Monthly}}
+
+questions:
+  - {id: vehicles, label: "Number of vehicles", type: integer, default: 1, min: 1, max: 50}
+  - id: vehicle_size
+    label: "Vehicle size"
+    type: choice
+    default: car
+    choices:
+      - {value: car, label: "Car / sedan / coupe", factor: "1.0"}
+      - {value: small_suv, label: "Small SUV / small truck", factor: "1.2"}
+      - {value: large, label: "Large SUV / full-size truck / minivan", factor: "1.4"}
+      - {value: oversize, label: "Van / 3-row SUV / dually", factor: "1.6"}
+  - id: package
+    label: "Package"
+    type: choice
+    required: true
+    # factor is a code used by the line rules: 1 exterior, 2 interior, 3 full (both)
+    choices:
+      - {value: exterior, label: "Exterior (hand wash, wheels and tires, spray wax)", factor: "1"}
+      - {value: interior, label: "Interior (vacuum, wipe down, glass, mats)", factor: "2"}
+      - {value: full, label: "Full detail (inside and out)", factor: "3"}
+  - id: condition
+    label: "How dirty is it?"
+    type: choice
+    default: normal
+    choices:
+      - {value: light, label: "Light (kept up)", factor: "1.0"}
+      - {value: normal, label: "Normal", factor: "1.15"}
+      - {value: heavy, label: "Heavy (stains, mud, sand, kids' mess)", factor: "1.4"}
+  - {id: pet_hair, label: "Pet hair removal?", type: boolean, default: false}
+  - {id: shampoo, label: "Shampoo seats and carpets?", type: boolean, default: false}
+  - {id: odor, label: "Odor removal (ozone treatment)?", type: boolean, default: false,
+     help: "Smoke, pets or spills."}
+  - {id: clay_bar, label: "Clay bar paint decontamination?", type: boolean, default: false}
+  - id: paint_correction
+    label: "Paint correction (polish)"
+    type: choice
+    default: none
+    # factor is a code: 0 none, 1 one-step polish, 2 two-step compound and polish
+    choices:
+      - {value: none, label: "None", factor: "0"}
+      - {value: one_step, label: "One-step polish (light swirls)", factor: "1"}
+      - {value: two_step, label: "Two-step compound and polish (heavier swirls, scratches)", factor: "2"}
+  - {id: ceramic_coating, label: "Ceramic coating?", type: boolean, default: false,
+     help: "Usually after a clay bar and paint correction."}
+  - {id: headlights, label: "Headlight pairs to restore", type: integer, default: 0, min: 0, max: 50}
+  - {id: engine_bay, label: "Engine bay cleaning?", type: boolean, default: false}
+  - {id: mobile, label: "Mobile (at the customer's place)?", type: boolean, default: false,
+     help: "One travel fee for the visit."}
+  - id: how_often
+    label: "How often?"
+    type: choice
+    default: one_time
+    choices:
+      - {value: one_time, label: "One time", factor: "0"}
+      - {value: weekly, label: "Weekly", factor: "1"}
+      - {value: biweekly, label: "Every 2 weeks", factor: "1"}
+      - {value: monthly, label: "Monthly", factor: "1"}
+
+lines:
+  - {id: exterior, description: "Exterior detail (size and condition adjusted)", kind: other, unit: ea,
+     quantity: "vehicles * vehicle_size * condition", price_key: dt_exterior_ea, when: "package == 1 or package == 3"}
+  - {id: interior, description: "Interior detail (size and condition adjusted)", kind: other, unit: ea,
+     quantity: "vehicles * vehicle_size * condition", price_key: dt_interior_ea, when: "package == 2 or package == 3"}
+  - {id: pet_hair, description: "Pet hair removal", kind: other, unit: ea, quantity: "vehicles",
+     price_key: dt_pet_hair_ea, when: "pet_hair"}
+  - {id: shampoo, description: "Shampoo seats and carpets", kind: other, unit: ea, quantity: "vehicles * vehicle_size",
+     price_key: dt_shampoo_ea, when: "shampoo"}
+  - {id: odor, description: "Odor removal (ozone)", kind: other, unit: ea, quantity: "vehicles",
+     price_key: dt_odor_ea, when: "odor"}
+  - {id: clay_bar, description: "Clay bar decontamination", kind: other, unit: ea, quantity: "vehicles * vehicle_size",
+     price_key: dt_clay_ea, when: "clay_bar"}
+  - {id: polish_one, description: "Paint correction, one-step polish", kind: other, unit: ea,
+     quantity: "vehicles * vehicle_size", price_key: dt_polish1_ea, when: "paint_correction == 1"}
+  - {id: polish_two, description: "Paint correction, two-step compound and polish", kind: other, unit: ea,
+     quantity: "vehicles * vehicle_size", price_key: dt_polish2_ea, when: "paint_correction == 2"}
+  - {id: ceramic, description: "Ceramic coating", kind: other, unit: ea, quantity: "vehicles * vehicle_size",
+     price_key: dt_ceramic_ea, when: "ceramic_coating"}
+  - {id: headlights, description: "Headlight restoration (pairs)", kind: other, unit: ea, quantity: "headlights",
+     price_key: dt_headlight_pair, when: "headlights > 0"}
+  - {id: engine_bay, description: "Engine bay cleaning", kind: other, unit: ea, quantity: "vehicles",
+     price_key: dt_engine_ea, when: "engine_bay"}
+  - {id: mobile, description: "Mobile service travel fee", kind: other, unit: ea, quantity: "1",
+     price_key: dt_mobile_ea, when: "mobile"}

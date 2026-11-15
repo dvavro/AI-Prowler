@@ -79,7 +79,7 @@ def test_register_on_fastmcp(monkeypatch):  # S2-T07
     server = FastMCP("estimator-test")
     names = t.register(server)
     listed = {tool.name for tool in asyncio.run(server.list_tools())}
-    assert set(names) <= listed and len(names) == len(t.TOOLS) == 108       # +6 assemblies, line edits, add/remove trade, design firm (Coder 1 S25), +4 revisions/server queue (Coder 1 S24), +5 symbol_* tools (Coder 2 S10-11), +2 plan_get_rooms_walls / plan_trade_answers (S12)
+    assert set(names) <= listed and len(names) == len(t.TOOLS) == 109       # +1 est_project_trades (2026-11-14), +6 assemblies, line edits, add/remove trade, design firm (Coder 1 S25), +4 revisions/server queue (Coder 1 S24), +5 symbol_* tools (Coder 2 S10-11), +2 plan_get_rooms_walls / plan_trade_answers (S12)
     tool = next(x for x in asyncio.run(server.list_tools()) if x.name == "est_quick_answer")
     assert {"estimate_id", "module_id", "answers", "rev"} <= set(tool.inputSchema["properties"])
 
@@ -171,6 +171,26 @@ def test_sprint8_tools(fake_host):  # S8-T01
     j(t.est_director_settings_update({"calendar_booking_enabled": True}))
     assert j(t.est_director_book_site_visit(jid, "2026-11-12"))["error"] == "needs_confirmation"
     assert j(t.est_director_book_site_visit(jid, "2026-11-12", confirm=True))["visit_job_id"] == "JOB-0001"
+
+
+def test_project_trades_in_plain_words():  # 2026-11-14, David: the user just tells the AI the trades
+    e = j(t.est_create_estimate("NSB Shed slab test2"))
+    # Nothing given: the project's trades (none yet) and the list to pick from.
+    look = j(t.est_project_trades("shed slab"))
+    assert look["estimate_id"] == e["id"] and look["trades"] == []
+    assert {"concrete", "framing"} <= {c["module_id"] for c in look["choices"]}
+    r = j(t.est_project_trades("shed slab", "Concrete and framing"))
+    assert r["ok"] and r["trades_now"] == ["Concrete", "Framing"]
+    assert r["next_step"]["trades_wanted"] == ["concrete", "framing"]
+    r = j(t.est_project_trades(str(e["id"]), "drywall", action="add"))
+    assert r["next_step"]["trades_wanted"] == ["concrete", "framing", "drywall"]
+    r = j(t.est_project_trades(f"#{e['id']}", "framing", action="remove"))
+    assert r["next_step"]["trades_wanted"] == ["concrete", "drywall"]
+    bad = j(t.est_project_trades(str(e["id"]), "basket weaving"))
+    assert bad["error"] == "invalid_input" and "basket weaving" in bad["message"] and bad["choices"]
+    assert j(t.est_project_trades("no such project", "concrete"))["error"] == "invalid_input"
+    assert j(t.est_project_trades(str(e["id"]), "concrete, drywall", action="remove"))["error"] == "invalid_input"
+    assert j(t.est_project_trades(str(e["id"]), "concrete", action="maybe"))["error"] == "invalid_input"
 
 
 def test_sprint9_tools():  # S9-T01

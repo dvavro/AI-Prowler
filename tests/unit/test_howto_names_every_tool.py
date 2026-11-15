@@ -20,6 +20,32 @@ def test_every_tool_is_named_in_the_guide():
     assert not [t for t in TOOLS if not re.search(r"\b" + t + r"\b", guide)]
 
 
+def test_every_estimator_tool_is_named_in_the_guide():
+    # 2026-11-14 (David): the Estimator's tools are registered by est_tools.register, not @mcp.tool(), so the check
+    # above never saw them - and the guide named none of them.
+    from estimator.mcp_tools.est_tools import TOOLS as EST
+    guide = _guide()
+    assert not [f.__name__ for f in EST if not re.search(r"\b" + f.__name__ + r"\b", guide)]
+
+
+def test_the_estimator_section_follows_its_switch(monkeypatch):
+    import estimator.ui.model as em
+    import importlib
+    import tool_config_store as tcs
+    src = SRC
+    assert "+ _estimator_guide() +" in src
+    ns = {}
+    a = src.index("_ESTIMATOR_GUIDE = (")
+    b = src.index("# Access-only folders section", a)
+    exec(src[a:b], ns)                                       # the constants and _estimator_guide, on their own
+    monkeypatch.setattr(em, "is_on", lambda: True)
+    assert "est_project_trades" in ns["_estimator_guide"]()
+    monkeypatch.setattr(em, "is_on", lambda: False)
+    off = ns["_estimator_guide"]()
+    assert "turned off" in off and "est_" not in off
+    assert tcs.FEATURE_CATEGORIES["estimator"] == "estimator"      # off -> its tools count as off in the footer
+
+
 def test_every_tool_is_in_the_catalog():
     assert not sorted(set(TOOLS) - set(tc.TOOL_CATALOG))
 

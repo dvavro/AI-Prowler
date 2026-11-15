@@ -25,7 +25,7 @@ SCREENS = (
      "tools": ["est_project_status", "est_list_estimates", "runner_status", "est_setup_status"]},
     {"id": "projects", "label": "Projects", "icon": "📁", "roles": ALL, "status": "ready", "sprint": 1,
      "tools": ["est_create_estimate", "est_list_estimates", "est_add_trade", "est_remove_trade",
-               "est_project_status"]},
+               "est_project_status", "est_project_trades"]},
     # Office see the plans they approve from (and already upload); scales and fixes stay store.EDIT_ROLES.
     {"id": "plans", "label": "Plans", "icon": "📐", "roles": ("owner", "estimator", "reviewer", "office", "field"),
      "status": "ready", "sprint": 5,

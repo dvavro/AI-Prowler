@@ -32,8 +32,8 @@ def test_every_catalogued_estimator_tool_is_registered():
 
 
 def test_catalog_states_the_true_count():
-    assert len(TOOLS) == 108
-    assert len(tc.tools_in_category("estimator")) == 108
+    assert len(TOOLS) == 109                      # +1 est_project_trades (2026-11-14)
+    assert len(tc.tools_in_category("estimator")) == 109
 
 
 def test_estimator_category_exists_last_and_unlocked():
@@ -94,13 +94,13 @@ def test_panel_group_list_includes_estimator_with_108_tools():
                 cats.append((cat.key, tools))
         est = dict(cats).get("estimator")
         assert est is not None, mode
-        assert len(est) == 108, mode
+        assert len(est) == 109, mode
         assert set(est) == _registered_names(), mode
 
 
 def test_panel_totals_include_estimator_tools():
-    # Personal: 198 catalogued + 108 estimator = 306. Server: 186 + 108 = 294.
+    # Personal: 198 catalogued + 109 estimator = 307. Server: 186 + 109 = 295.
     # (The panel header reads "N of M tools enabled in <mode> mode".)
-    assert len(tc.tools_available_in_mode("personal")) == 306
-    assert len(tc.tools_available_in_mode("server")) == 294
-    assert len(tc.TOOL_CATALOG) == 328
+    assert len(tc.tools_available_in_mode("personal")) == 307
+    assert len(tc.tools_available_in_mode("server")) == 295
+    assert len(tc.TOOL_CATALOG) == 329
