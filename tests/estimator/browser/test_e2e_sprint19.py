@@ -111,12 +111,12 @@ def test_E2E_S19_M7_price_book_file_import(page, db, tmp_path):
     xlsx = xlsx_supplier(tmp_path)
     open_import_box(page)
     page.set_input_files("#pb-file", xlsx)
-    page.wait_for_function("() => document.querySelector('#pb-import-message').textContent.includes('row(s)')")
+    page.wait_for_function("() => document.querySelector('#pb-import-message')?.textContent.includes('row(s)')")
     assert "suppliers.xlsx" in page.inner_text("#pb-import-message")
     assert page.locator("#pb-sheet").is_visible()
     assert page.locator("#pb-sheet option").count() == 2
     page.select_option("#pb-sheet", "Cover")
-    page.wait_for_function("() => document.querySelector('#pb-mapping').textContent.includes('Note')")
+    page.wait_for_function("() => document.querySelector('#pb-mapping')?.textContent.includes('Note')")
     page.select_option("#pb-sheet", "Prices")
     page.wait_for_function("() => document.querySelector('#pb-mapping select[data-field=cost]')?.value === 'Unit Price'")
     assert page.input_value("#pb-mapping select[data-field=price_key]") == "Item Code"
@@ -134,7 +134,7 @@ def test_E2E_S19_M7_price_book_file_import(page, db, tmp_path):
     csv_path.write_text(CSV_22, encoding="utf-8")
     open_import_box(page)
     page.set_input_files("#pb-file", csv_path)
-    page.wait_for_function("() => document.querySelector('#pb-csv').value.includes('0.22')")
+    page.wait_for_function("() => document.querySelector('#pb-csv')?.value.includes('0.22')")
     page.click("#pb-columns")
     page.wait_for_selector("#pb-mapping select[data-field=cost]")
     page.click("#pb-import")
@@ -148,12 +148,12 @@ def test_E2E_S19_M7_price_book_file_import(page, db, tmp_path):
     big.write_bytes(b"x" * (5 * 1024 * 1024 + 1))
     open_import_box(page)
     page.set_input_files("#pb-file", big)
-    page.wait_for_function("() => document.querySelector('#pb-import-message').textContent.trim().length > 0")
+    page.wait_for_function("() => document.querySelector('#pb-import-message')?.textContent.trim().length > 0")
     assert "5 MB" in page.inner_text("#pb-import-message")
     wrong = tmp_path / "suppliers.pdf"
     wrong.write_bytes(b"%PDF-1.4 fake")
     page.set_input_files("#pb-file", wrong)
-    page.wait_for_function("() => document.querySelector('#pb-import-message').textContent.includes('cannot be used')")
+    page.wait_for_function("() => document.querySelector('#pb-import-message')?.textContent.includes('cannot be used')")
     # Pasting still works after the file flows.
     type_in(page, "#pb-csv", CSV_TEXT.replace("0.19", "0.30"))
     page.click("#pb-columns")

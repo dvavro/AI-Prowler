@@ -124,10 +124,10 @@ def test_relabel_and_skip(phone, job):                                          
     open_reviews(phone, "?kind=symbol")
     first = card_id(phone)
     phone.tap("#mrev-skip")
-    phone.wait_for_function("() => document.querySelector('#mrev-position').textContent === '2 of 5'")
+    phone.wait_for_function("() => document.querySelector('#mrev-position')?.textContent === '2 of 5'")
     assert card_id(phone) != first and "5 symbols" in waiting(phone)                # skip changes nothing
     phone.tap("#mrev-prev")
-    phone.wait_for_function("() => document.querySelector('#mrev-position').textContent === '1 of 5'")
+    phone.wait_for_function("() => document.querySelector('#mrev-position')?.textContent === '1 of 5'")
     phone.tap("#mrev-relabel")
     phone.select_option("#mrev-type", "floor_box")
     phone.tap("#mrev-relabel-go")
@@ -149,14 +149,14 @@ def test_approve_a_measurement_and_see_a_typed_one(phone, job):                 
             assert "Typed in" in phone.inner_text("#mrev-picture")
         if phone.inner_text("#mrev-position") == "1 of 2":
             phone.tap("#mrev-next")
-            phone.wait_for_function("() => document.querySelector('#mrev-position').textContent === '2 of 2'")
+            phone.wait_for_function("() => document.querySelector('#mrev-position')?.textContent === '2 of 2'")
     assert any("144.00 sqft" in t and "KITCHEN" in t for _, t in titles)
     if titles[0][0] == str(job["room_m"]):                                          # back to the room measurement
         phone.tap("#mrev-prev")
     phone.wait_for_function(f"() => document.querySelector('#mrev-card')?.dataset.id === '{job['room_m']}'")
     phone.tap("#mrev-approve")
     answer_yes(phone, "mrev")
-    phone.wait_for_function("() => document.querySelector('#mrev-position').textContent === '1 of 1'")
+    phone.wait_for_function("() => document.querySelector('#mrev-position')?.textContent === '1 of 1'")
     assert "1 measurements" in waiting(phone) or "1 measurement" in waiting(phone)
 
 

@@ -67,7 +67,7 @@ def test_pan_keeps_unfinished_length(page, house):                              
         page.click("#bp-save-yes")
     except PlaywrightTimeoutError:
         pass
-    page.wait_for_function("() => document.querySelector('#bp-measurements').children.length > 0")
+    page.wait_for_function("() => document.querySelector('#bp-measurements')?.children.length > 0")
 
 
 def test_rotate_keeps_the_middle_still(page, house):                                # RV-B02

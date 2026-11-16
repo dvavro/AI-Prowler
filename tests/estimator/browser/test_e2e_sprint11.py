@@ -233,7 +233,7 @@ def test_E2E_S11_M6_agent_trade_off_run_skipped(page, db):
     # reads the old setting. Wait for the confirm box to go away - askThen only
     # re-renders after the save POST finishes - then check the saved state.
     page.wait_for_selector("#agents-confirm", state="detached")
-    page.wait_for_function("() => document.querySelector('#agents-list tr[data-module=framing] input[type=checkbox]').checked === false")
+    page.wait_for_function("() => document.querySelector('#agents-list tr[data-module=framing] input[type=checkbox]')?.checked === false")
     # Start a run on a second estimate: framing is skipped, with the warning.
     est2 = service.create_estimate(db, CTX, "Smith house")
     out = runner.start_run(db, CTX, est2["id"], ["framing", "drywall"])

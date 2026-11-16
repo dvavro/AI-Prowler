@@ -116,7 +116,7 @@ def test_E2E_S16_M2_scan_calibration(page, db, tmp_path):
     page.click("#cal-confirm-box button.primary")
     page.wait_for_function("() => document.body.innerText.match(/Calibrated: 1\u2033 = 3[56]/) && "
                            "document.body.innerText.includes('18 object(s) re-measured')")
-    page.wait_for_function("() => document.querySelector('#viewports').innerText.includes('calibration')")
+    page.wait_for_function("() => document.querySelector('#viewports')?.innerText.includes('calibration')")
     # After calibration the rooms measure to about 683 sq ft, and still two rooms.
     total = _sqft(assert_scan_quantities(page, est["id"]))
     assert 670 <= total <= 695
