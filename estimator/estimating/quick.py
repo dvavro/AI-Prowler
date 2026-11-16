@@ -129,6 +129,7 @@ def build_lines(mod, variables: dict) -> list[dict]:
                 continue
             qty = evaluate(rule.quantity, variables).quantize(QTY_PLACES, rounding=ROUND_HALF_UP)
             waste = evaluate(rule.waste, variables)
+            show = evaluate(rule.show, variables) if rule.show else None
         except FormulaError as exc:
             raise InvalidInput(f"line '{rule.id}' couldn't be calculated: {exc}", line=rule.id) from None
         if qty < 0:
@@ -136,7 +137,7 @@ def build_lines(mod, variables: dict) -> list[dict]:
         if qty == 0:
             continue
         out.append({"rule": rule, "quantity": qty,
-                    "waste_pct": waste})
+                    "waste_pct": waste, "show": show})
     return out
 
 
@@ -267,6 +268,9 @@ def answer(conn, ctx: RequestContext, estimate_id: int, module_id: str, answers:
                 sample_keys.append(rule.price_key)
             calc = {"rule": rule.id, "formula": rule.quantity, "quantity": service.qty_text(p["quantity"]),
                     "sample_price": price.is_sample}
+            if p.get("show") is not None:      # what the customer's quote shows (2026-11-15)
+                calc["show_quantity"] = service.qty_text(p["show"])
+                calc["show_unit"] = rule.show_unit
             lid = service._insert_line(
                 conn, ctx, sid, kind=rule.kind, description=rule.description, quantity=p["quantity"],
                 unit=rule.unit, unit_cost_cents=price.cost_cents, waste_pct=p["waste_pct"],

@@ -140,3 +140,16 @@ def test_director_fills_a_customer_picked_by_id(db, picker_host):  # CP-08 (2026
     r = engine.next_step(db, CTX, r["job"]["id"], customer={"customer_id": "CUST-2026-616"}, registry=REG)
     cust = r["job"].get("customer") or engine.jobstore.load_job(db, CTX, r["job"]["id"])["customer"]
     assert cust["name"] == "AI Prowler LLC" and cust["email"] == "d@example.com"
+
+
+def test_new_job_warns_about_missing_address_and_crew(db, picker_host):  # CP-09 (2026-11-15, Jamie)
+    # Seen on the server: JOB-2063 had no address and was left off the Nov 18 route without a word, and Estimator
+    # jobs have no crew, so in Server mode they're on nobody's route.
+    b = _won(db, customer={"name": "No Address", "email": "n@x.com"})
+    out = bids.convert_to_job(db, CTX, b["id"], confirm=True)
+    assert any("no street address" in w for w in out["warnings"])
+    assert not any("no crew" in w for w in out["warnings"])          # Personal mode: one route, no crews
+    from dataclasses import replace
+    server = replace(CTX, mode="server")
+    assert any("no crew" in w for w in bids.job_warnings({"address": "1 Main St"}, server, "JOB-1"))
+    assert bids.job_warnings({"address": "1 Main St"}, CTX, "JOB-1") == []

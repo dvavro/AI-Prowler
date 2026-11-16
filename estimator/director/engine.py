@@ -978,6 +978,7 @@ def _follow_up(conn, ctx, job, reg, stage, notes, inputs, **_):
             _tx(conn, lambda: jobstore.log_step(conn, ctx, job["id"], stage.id, stage.agent, "done",
                                                 f"converted to job {done['job_id']}", done.get("created")))
             notes.append(f"Created in AI-Prowler: {', '.join(f'{k} {v}' for k, v in done['created'].items() if v)}.")
+            notes.extend(done.get("warnings") or [])
             return True
         _wait(conn, ctx, job, "waiting_on_user", "user", {
             "stage": stage.id, "agent": stage.agent,

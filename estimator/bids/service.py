@@ -112,6 +112,17 @@ def _template(conn, company_id: str) -> dict:
     return json.loads(row["data_json"]) if row and row["data_json"] else {}
 
 
+def _shown(ln: dict) -> tuple:
+    """The count and unit the customer sees for a line (2026-11-15, Jamie): the module's `show` count ("1 vehicle")
+    when it has one and nobody changed the line by hand, else the priced quantity and unit."""
+    calc = ln.get("calc") or {}
+    if calc.get("show_quantity") and calc.get("show_unit") and not calc.get("override"):
+        q = calc["show_quantity"]
+        word = calc["show_unit"]
+        return q, word if q in ("1", "1.0") else word + "s"
+    return ln["quantity"], ln["unit"]
+
+
 def _snapshot(est: dict, registry=None) -> dict:
     from estimator.modules import get_registry
     reg = registry or get_registry()
@@ -124,7 +135,8 @@ def _snapshot(est: dict, registry=None) -> dict:
             price = ln["calc"].get("price", {})
             ln_tax = int(price.get("tax_cents", 0))
             ln_total = int(ln["total_cents"] or 0)
-            lines.append({"description": ln["description"], "quantity": ln["quantity"], "unit": ln["unit"],
+            qty, unit = _shown(ln)
+            lines.append({"description": ln["description"], "quantity": qty, "unit": unit,
                           "price_cents": ln_total - ln_tax})
             line_sum += ln_total - ln_tax
             tax += ln_tax
@@ -459,6 +471,21 @@ def convert_to_job(conn, ctx: RequestContext, bid_id: int, *, confirm: bool = Fa
     out = _public(_load(conn, ctx, b["id"]))
     out["created"] = dict(created, quote_id=quote_id, job_id=job_id)
     out["recurrence"] = recurrence
+    out["warnings"] = job_warnings(cust, ctx, job_id)
+    return out
+
+
+def job_warnings(cust: dict, ctx: RequestContext, job_id: str | None) -> list[str]:
+    """What the new AI-Prowler job is missing for scheduling and routing (2026-11-15, Jamie). A job with no street
+    address is left off every route without a word, and in Server mode a job with no crew is on nobody's route
+    (a blank route request means "my own jobs"). The crew isn't guessed: Estimator sign-in names aren't the
+    Jobs app's crew names."""
+    job = job_id or "The job"
+    out = []
+    if not (cust.get("address") or "").strip():
+        out.append(f"{job} has no street address, so it won't appear on any route. Add the address in the Jobs app.")
+    if ctx.mode == "server":
+        out.append(f"{job} has no crew yet, so it isn't on anyone's route. Assign a crew in the Jobs app.")
     return out
 
 
