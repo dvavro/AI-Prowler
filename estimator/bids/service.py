@@ -335,8 +335,11 @@ def _recurrence(conn, ctx, estimate_id: int, registry=None) -> str | None:
     return None
 
 
-def ensure_customer(cust: dict, customer_id: str | None = None) -> tuple[str, dict]:
-    """The AI-Prowler CustomerID for this customer, creating the customer there if needed (caller confirms first)."""
+def ensure_customer(cust: dict, customer_id: str | None = None, frequency: str | None = None) -> tuple[str, dict]:
+    """The AI-Prowler CustomerID for this customer, creating the customer there if needed (caller confirms first).
+    frequency (e.g. "Weekly" from a weekly pool quote) goes on a NEW customer's Frequency (2026-11-15, Jamie): the
+    daily recurring sweep and the next-job chain read the customer's Frequency, so without it a weekly customer
+    made from a quote got one follow-up job and then stopped. An existing customer's Frequency is left alone."""
     customer_id = customer_id or cust.get("customer_id")
     if customer_id:
         return customer_id, {}
@@ -355,6 +358,8 @@ def ensure_customer(cust: dict, customer_id: str | None = None) -> tuple[str, di
                      ("customer_type", "Customer Type Comm/Res")):
         if cust.get(src):
             updates[col] = cust[src]
+    if frequency:
+        updates["Frequency"] = frequency
     text = host.call("create_customer", updates=updates)
     new_id = host.extract_id(text, "CUST")
     if not new_id:
@@ -412,7 +417,8 @@ def convert_to_job(conn, ctx: RequestContext, bid_id: int, *, confirm: bool = Fa
     secs = b["snapshot"]["sections"]
     service_type = ", ".join(sec["title"] for sec in secs)[:80]
     details = "; ".join(f"{ln['description']} {ln['quantity']} {ln['unit']}" for sec in secs for ln in sec["lines"])
-    customer_id, created = ensure_customer(cust, customer_id)
+    recurrence = _recurrence(conn, ctx, b["estimate_id"], registry)
+    customer_id, created = ensure_customer(cust, customer_id, frequency=recurrence)
     name = cust.get("name") or customer_id
     totals = b["snapshot"]["totals"]
     quote_updates = {
@@ -433,7 +439,6 @@ def convert_to_job(conn, ctx: RequestContext, bid_id: int, *, confirm: bool = Fa
     }
     if service_date:
         job_updates.update({"Service Date": service_date, "Job Status": "Scheduled"})
-    recurrence = _recurrence(conn, ctx, b["estimate_id"], registry)
     if recurrence:
         job_updates["Recurrence"] = recurrence
         job_updates["Service Details / Notes"] = f"{recurrence} service. " + job_updates["Service Details / Notes"]

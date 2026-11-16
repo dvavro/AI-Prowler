@@ -157,6 +157,9 @@ def test_recurring_quote_becomes_repeating_job(db, fake_host):  # S6-C01
     job = fake_host.named("create_job")[0]["updates"]
     assert job["Recurrence"] == "Biweekly" and job["Service Details / Notes"].startswith("Biweekly service.")
     assert out["recurrence"] == "Biweekly"
+    # The new customer repeats too (2026-11-15, Jamie): the daily sweep and the next-job chain read the customer's
+    # Frequency, so without it the customer got one follow-up job and then stopped.
+    assert fake_host.named("create_customer")[0]["updates"]["Frequency"] == "Biweekly"
 
 
 def test_one_time_quote_has_no_recurrence(db, fake_host):  # S6-C02
@@ -165,6 +168,7 @@ def test_one_time_quote_has_no_recurrence(db, fake_host):  # S6-C02
     bids.send(db, CTX, b["id"], confirm=True)
     bids.convert_to_job(db, CTX, b["id"], confirm=True)
     assert "Recurrence" not in fake_host.named("create_job")[0]["updates"]
+    assert "Frequency" not in fake_host.named("create_customer")[0]["updates"]
 
 
 def test_bad_recurrence_blocks_rejected(tmp_path):  # S6-C03
