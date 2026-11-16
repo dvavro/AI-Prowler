@@ -1,7 +1,7 @@
 # Pool service: monthly maintenance price plus optional one-time work.
 id: pool_service
 name: Pool Service
-version: 0.1.0
+version: 0.1.1
 category: service
 path: quick_estimate
 description: Monthly pool maintenance priced by visits, pool size and spa, with chemicals, filter cleaning and green-pool cleanup.
@@ -46,10 +46,12 @@ questions:
 
 lines:
   - {id: service, description: "Monthly pool service (visits, size adjusted)", kind: other, unit: ea,
-     quantity: "visits * pool_type * size", price_key: ps_visit_ea}
+     quantity: "visits * pool_type * size", price_key: ps_visit_ea,
+     show: "visits", show_unit: visit}
   - {id: chemicals, description: "Chemicals", kind: material, unit: ea, quantity: "visits",
      price_key: ps_chemicals_ea, when: "chemicals"}
   - {id: filter, description: "Filter cleaning", kind: other, unit: ea, quantity: "1",
      price_key: ps_filter_ea, when: "filter_clean"}
   - {id: cleanup, description: "One-time pool cleanup", kind: other, unit: ea, quantity: "cleanup",
-     price_key: ps_cleanup_ea, when: "cleanup > 0"}
+     price_key: ps_cleanup_ea, when: "cleanup > 0",
+     show: "1", show_unit: cleanup}

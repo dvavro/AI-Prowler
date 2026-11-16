@@ -109,7 +109,7 @@ def test_E2E_S18_M2_tour_popup_positioning(page):
         assert box["y"] + box["height"] <= vh + 1, box
         if step < 4:
             tour_next(page)
-            page.wait_for_function(f"() => document.querySelector('#tour-count').textContent.includes('Step {step + 2} of')")
+            page.wait_for_function(f"() => document.querySelector('#tour-count')?.textContent.includes('Step {step + 2} of')")
     # A step near the bottom flips above its control instead of running off the page:
     # replay the dashboard tour in a short viewport and walk to the last step.
     page.click("#tour-skip")
@@ -180,7 +180,7 @@ def test_E2E_S18_M4_help_panel_search_escape(page):
     page.wait_for_function("() => document.querySelectorAll('#help-panel-list li a').length >= 1")
     assert page.locator("#help-panel-list li a").count() >= 1
     type_in(page, "#help-panel-find", "zzz-no-such-guide")
-    page.wait_for_function("() => document.querySelector('#help-panel-list').textContent.includes('Nothing matches')")
+    page.wait_for_function("() => document.querySelector('#help-panel-list')?.textContent.includes('Nothing matches')")
     page.keyboard.press("Escape")
     page.wait_for_selector("#help-panel", state="hidden")
     # The panel's link lands on the full Help screen.
@@ -245,7 +245,7 @@ def test_E2E_S18_M6_mobile_tour_reviews(phone, power_job):
     assert phone.url.endswith("#/m/reviews") or "#/m/reviews" in phone.url
     for want in ("One item at a time", "Approve or take out", "Not sure? Skip it"):
         tour_next(phone)
-        phone.wait_for_function(f"() => document.querySelector('#tour-title').textContent === '{want}'")
+        phone.wait_for_function(f"() => document.querySelector('#tour-title')?.textContent === '{want}'")
     assert phone.inner_text("#tour-next") == "Finish"
     tour_next(phone)
     phone.wait_for_selector("#tour-pop", state="hidden")

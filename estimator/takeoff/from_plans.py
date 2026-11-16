@@ -113,7 +113,9 @@ def propose(conn, ctx: RequestContext, estimate_id: int, module_id: str, *, plan
         elif old["status"] == "rejected":
             action = "rejected_before"
         elif Decimal(old["qty"]) == qty and old["unit"] == unit:
-            action = "unchanged"
+            # Flagged by a plan revision but the new plans give the same number (2026-11-15, Jamie): checked again,
+            # so the flag clears; before, "unchanged" left it flagged for good.
+            action = "rechecked" if old.get("needs_remeasure") else "unchanged"
         elif old["status"] == "approved":
             action = "same_suggestion" if old["suggested_qty"] is not None and \
                 Decimal(old["suggested_qty"]) == qty else "suggest"
@@ -127,13 +129,15 @@ def propose(conn, ctx: RequestContext, estimate_id: int, module_id: str, *, plan
         raise InvalidInput(f"the plans don't answer any {mod.name} quantities yet"
                            + (": " + "; ".join(found["notes"]) if found.get("notes") else ""),
                            module_id=module_id, notes=found.get("notes", []))
-    todo = [p for p in plan if p["action"] in ("new", "update", "suggest")]
+    todo = [p for p in plan if p["action"] in ("new", "update", "suggest", "rechecked")]
     counts = {a: sum(1 for p in plan if p["action"] == a) for a in
-              ("new", "update", "suggest", "unchanged", "same_suggestion", "rejected_before")}
+              ("new", "update", "suggest", "rechecked", "unchanged", "same_suggestion", "rejected_before")}
     if todo and not confirm:
         lines = [f"{p['label']}: {p['qty']} {p['unit']}" + {"new": "", "update": f" (was {p['was']})",
                                                               "suggest": f" (approved {p['was']}: as a suggested "
-                                                                         "change)"}[p["action"]] for p in todo]
+                                                                         "change)",
+                                                              "rechecked": " (the same on the revised plans)"
+                                                              }[p["action"]] for p in todo]
         raster = " (from scanned or photographed plans: check each one before approving)" if method == "raster" else ""
         raise ConfirmationRequired(
             f"Propose {mod.name} from {source}{raster}: " + "; ".join(lines) + ". Call again with confirm=true.",
@@ -165,6 +169,15 @@ def propose(conn, ctx: RequestContext, estimate_id: int, module_id: str, *, plan
                 row = m._load(conn, ctx, before["id"])
                 m._log(conn, ctx, row, "measurement_updated", {"qty": p["qty"], "from": source},
                        before={"qty": before["qty"]})
+            elif p["action"] == "rechecked":       # same number on the revised plans: clear the revision flag
+                row = m._load(conn, ctx, p["measurement_id"])
+                kept = json.loads(conn.execute("SELECT calc_json FROM measurements WHERE id = ?",
+                                               (row["id"],)).fetchone()[0] or "{}")
+                kept.update(plan_set_ids=plan_set_ids, model_key=model_key, rechecked_at=now)
+                conn.execute("UPDATE measurements SET needs_remeasure = 0, calc_json = ?, updated_at = ? WHERE id = ?",
+                             (json.dumps(kept), now, row["id"]))
+                m._log(conn, ctx, row, "measurement_rechecked", {"qty": p["qty"], "from": source})
+                row = m._load(conn, ctx, row["id"])
             else:                                   # approved and locked: a suggested change only a person accepts
                 row = m._load(conn, ctx, p["measurement_id"])
                 conn.execute("UPDATE measurements SET suggested_qty = ?, suggested_by = ?, suggested_reason = ?,"

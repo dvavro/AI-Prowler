@@ -234,7 +234,27 @@ def _measurement_effects(conn, ctx, old_ps: dict, diff: dict) -> tuple[list[dict
                 flag.append({"m": m, "why": ["sheet changed"]})
             else:
                 carry.append({"m": m, "ids": []})
+        else:
+            # Made from the plans' wall-and-room model (takeoff_propose / est_runner): no objects or sheet of its own,
+            # only the plan sets it was read from (2026-11-15, Jamie). These were skipped, so after a revision they
+            # kept the old numbers without a word. Any change on the set's sheets or schedules flags them.
+            calc = json.loads(m["calc_json"] or "{}")
+            if calc.get("from") != "plans" or old_ps["id"] not in (calc.get("plan_set_ids") or []):
+                continue
+            sch = diff.get("schedules") or {}
+            if diff["changed_sheets"] or diff.get("sheets_removed") or diff.get("sheets_added") \
+                    or any(sch.get(k) for k in ("added", "removed", "changed")):
+                flag.append({"m": m, "why": ["the plans changed: run the takeoff from the plans again"],
+                             "plan_sets": True})
+            else:
+                carry.append({"m": m, "ids": [], "plan_sets": True})
     return carry, flag
+
+
+def _move_plan_sets(calc: dict, old_id: int, new_id: int) -> None:
+    """A plans measurement now reads from the new set in place of the old one."""
+    ids = [new_id if i == old_id else i for i in (calc.get("plan_set_ids") or [])]
+    calc["plan_set_ids"] = list(dict.fromkeys(ids))
 
 
 def _load_report(conn, ctx, report_id: int) -> dict:
@@ -301,6 +321,8 @@ def compare(conn, ctx: RequestContext, new_plan_set_id: int | None = None, old_p
             m = c["m"]
             calc = json.loads(m["calc_json"] or "{}")
             calc["carried_over"] = {"from_plan_set": old_ps["id"], "to_plan_set": new_ps["id"], "at": now}
+            if c.get("plan_sets"):
+                _move_plan_sets(calc, old_ps["id"], new_ps["id"])
             new_sheet = diff["sheet_map"].get(m["sheet_id"]) if m["sheet_id"] else None
             new_vp = diff["vp_map"].get(m["viewport_id"]) if m["viewport_id"] else None
             if c["ids"] and new_sheet is None:
@@ -316,6 +338,8 @@ def compare(conn, ctx: RequestContext, new_plan_set_id: int | None = None, old_p
             m = f["m"]
             calc = json.loads(m["calc_json"] or "{}")
             calc["revision"] = {"plan_set": new_ps["id"], "why": f["why"], "at": now}
+            if f.get("plan_sets"):
+                _move_plan_sets(calc, old_ps["id"], new_ps["id"])
             conn.execute("UPDATE measurements SET needs_remeasure = 1, calc_json = ?, updated_at = ? WHERE id = ?",
                          (json.dumps(calc), now, m["id"]))
             service._log(conn, ctx, m["estimate_id"], "measurement_flagged",

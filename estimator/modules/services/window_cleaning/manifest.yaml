@@ -1,7 +1,7 @@
 # Window cleaning: quick estimate priced per window, with height, inside/outside and add-ons.
 id: window_cleaning
 name: Window Cleaning
-version: 0.1.0
+version: 0.1.1
 category: service
 path: quick_estimate
 description: Residential window cleaning priced per window, adjusted for stories and inside/outside, plus screens, skylights and hard-water treatment.
@@ -30,7 +30,8 @@ questions:
 
 lines:
   - {id: windows, description: "Window cleaning", kind: other, unit: ea,
-     quantity: "windows * sides * (1 + 0.2 * (stories - 1))", price_key: wc_window_ea}
+     quantity: "windows * sides * (1 + 0.2 * (stories - 1))", price_key: wc_window_ea,
+     show: "windows", show_unit: window}
   - {id: screens, description: "Screen cleaning", kind: other, unit: ea, quantity: "screens",
      price_key: wc_screen_ea, when: "screens > 0"}
   - {id: skylights, description: "Skylight cleaning", kind: other, unit: ea, quantity: "skylights",

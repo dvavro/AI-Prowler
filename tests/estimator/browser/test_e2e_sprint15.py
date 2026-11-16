@@ -52,7 +52,7 @@ def read_plan_set(page, plan_set_id, timeout=120000):
     except PlaywrightTimeoutError:
         pass
     page.wait_for_function("() => document.querySelector('#plan-say') && "
-                           "document.querySelector('#plan-say').innerText.startsWith('Read:')", timeout=timeout)
+                           "document.querySelector('#plan-say')?.innerText.startsWith('Read:')", timeout=timeout)
 
 
 def cell(page, trade, question):

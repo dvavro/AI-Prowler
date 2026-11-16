@@ -2323,7 +2323,8 @@ async function renderBid(main, id) {
     const conv = el("button", { class: "primary", type: "button", id: "bid-convert" }, "Make it a job in AI-Prowler…");
     conv.addEventListener("click", () => customerPicker(b.customer || {}, customer => askThen(msg, conv, "/bids/" + b.id + "/convert",
       { service_date: date.value || null, customer },
-      r => r.already_converted ? "Already a job: " + r.job_id : "Created " + Object.entries(r.created || {}).filter(([, v]) => v).map(([k, v]) => k.replace(/_/g, " ") + " " + v).join(", "))));
+      r => r.already_converted ? "Already a job: " + r.job_id : "Created " + Object.entries(r.created || {}).filter(([, v]) => v).map(([k, v]) => k.replace(/_/g, " ") + " " + v).join(", ")
+        + ((r.warnings || []).length ? ". " + r.warnings.join(" ") : ""))));   // 2026-11-15: no address / no crew
     acts.push(el("div", { class: "row" }, el("label", {}, "Service date (optional)", date), conv));
   }
   parts.push(el("div", { class: "card section", id: "bid-actions" }, acts.length ? acts : el("p", { class: "muted" }, "Nothing more to do on this quote.")), msg);

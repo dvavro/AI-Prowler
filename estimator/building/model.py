@@ -347,6 +347,7 @@ def build(conn, ctx: RequestContext, *, estimate_id: int | None = None, plan_set
             for rm in sheet_rooms:
                 if rm["id"] in sides:
                     rm["walls"].append(o["id"])
+        sheet_walls = _join_faces(sheet_walls, sheet_rooms)
         for w in sheet_walls:
             hs = [rm["height_ft"] for rm in sheet_rooms if rm["id"] in w["rooms"]]
             w["height_ft"] = _r(max(hs) if hs else default_h, 2)
@@ -449,6 +450,90 @@ def build(conn, ctx: RequestContext, *, estimate_id: int | None = None, plan_set
             "summary": (f"{len(out_rooms)} room(s), {totals['floor_sqft']:g} sq ft; walls {totals['exterior_wall_lf']:g} lf "
                         f"exterior and {totals['interior_wall_lf']:g} lf interior; {totals['doors']} door(s) and "
                         f"{totals['windows']} window(s).")}
+
+
+def _join_faces(walls: list[dict], rooms: list[dict]) -> list[dict]:
+    """Walls drawn as two lines, one per face (2026-11-15, Jamie). Each face of an inside wall has a room on one side
+    only, so both faces were taken for exterior walls: the Smith plan's 40 x 28 ft house gave 328 lf of exterior
+    wall, 0 lf interior and 2,624 sq ft of siding (about 136 lf and 1,088 sq ft really). Here:
+      - the same line drawn twice is kept once;
+      - two parallel straight faces about a wall's thickness apart, with a different room on each, are one interior
+        wall (the longer face's length, both rooms).
+    Exterior walls (a room on one face only) are left as they were, measured on the room side."""
+    def unit(w):
+        (ax, ay), (bx, by) = w["_pts"][0], w["_pts"][-1]
+        L = math.hypot(bx - ax, by - ay) or 1e-9
+        return (ax, ay), ((bx - ax) / L, (by - ay) / L), L
+
+    def drop(w, keep=None):
+        for rm in rooms:
+            if w["id"] in rm["walls"]:
+                rm["walls"].remove(w["id"])
+                if keep is not None and keep["id"] not in rm["walls"]:
+                    rm["walls"].append(keep["id"])
+
+    # A line already drawn by other pieces of the same line (exactly, or split at different points) counts once.
+    straight = sorted((w for w in walls if len(w["_pts"]) == 2), key=lambda w: -unit(w)[2])
+    out = [w for w in walls if len(w["_pts"]) != 2]
+    for w in straight:
+        pw, dw, lw = unit(w)
+        tol = (w["thickness_in"] / 12.0) / w["_f"] * 0.25
+        spans = []
+        for k in out:
+            if len(k["_pts"]) != 2 or k["_vp"] != w["_vp"]:
+                continue
+            pk, dk, lk = unit(k)
+            if abs(dw[0] * dk[1] - dw[1] * dk[0]) > 0.02:
+                continue
+            if abs((pk[0] - pw[0]) * -dw[1] + (pk[1] - pw[1]) * dw[0]) > tol:
+                continue
+            s0 = (pk[0] - pw[0]) * dw[0] + (pk[1] - pw[1]) * dw[1]
+            s1 = s0 + lk * (dw[0] * dk[0] + dw[1] * dk[1])
+            spans.append((max(0.0, min(s0, s1)), min(lw, max(s0, s1))))
+        covered, end = 0.0, 0.0
+        for a0, a1 in sorted(spans):
+            if a1 > end:
+                covered += a1 - max(a0, end)
+                end = a1
+        if covered >= 0.95 * lw:
+            drop(w)
+            continue
+        out.append(w)
+
+    faces = [w for w in out if len(w["_pts"]) == 2 and w["rooms"] and w["type"] == "exterior"]
+    gone: set[int] = set()
+    for i, a in enumerate(faces):
+        if a["id"] in gone:
+            continue
+        pa, da, la = unit(a)
+        t = (a["thickness_in"] / 12.0) / a["_f"]                  # the wall's thickness, in drawing units
+        best = None
+        for b in faces[i + 1:]:
+            if b["id"] in gone or b["_vp"] != a["_vp"] or set(b["rooms"]) & set(a["rooms"]):
+                continue
+            pb, db, lb = unit(b)
+            if abs(da[0] * db[1] - da[1] * db[0]) > 0.02:          # not parallel
+                continue
+            gap = abs((pb[0] - pa[0]) * -da[1] + (pb[1] - pa[1]) * da[0])
+            if not 0.4 * t <= gap <= 1.6 * t:
+                continue
+            s0 = (pb[0] - pa[0]) * da[0] + (pb[1] - pa[1]) * da[1]  # b's ends along a
+            s1 = s0 + lb * (da[0] * db[0] + da[1] * db[1])
+            overlap = min(la, max(s0, s1)) - max(0.0, min(s0, s1))
+            if overlap < 0.5 * min(la, lb):
+                continue
+            if best is None or abs(gap - t) < best[0]:
+                best = (abs(gap - t), b)
+        if best is None:
+            continue
+        b = best[1]
+        gone.add(b["id"])
+        a["type"] = "interior"
+        a["rooms"] = sorted(set(a["rooms"]) | set(b["rooms"]))
+        a["length_ft"] = max(a["length_ft"], b["length_ft"])
+        a["faces"] = [a["id"], b["id"]]
+        drop(b, keep=a)
+    return [w for w in out if w["id"] not in gone]
 
 
 def _sides(pts, half, rooms) -> int:

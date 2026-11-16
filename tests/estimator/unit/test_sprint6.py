@@ -157,6 +157,9 @@ def test_recurring_quote_becomes_repeating_job(db, fake_host):  # S6-C01
     job = fake_host.named("create_job")[0]["updates"]
     assert job["Recurrence"] == "Biweekly" and job["Service Details / Notes"].startswith("Biweekly service.")
     assert out["recurrence"] == "Biweekly"
+    # The new customer repeats too (2026-11-15, Jamie): the daily sweep and the next-job chain read the customer's
+    # Frequency, so without it the customer got one follow-up job and then stopped.
+    assert fake_host.named("create_customer")[0]["updates"]["Frequency"] == "Biweekly"
 
 
 def test_one_time_quote_has_no_recurrence(db, fake_host):  # S6-C02
@@ -165,6 +168,7 @@ def test_one_time_quote_has_no_recurrence(db, fake_host):  # S6-C02
     bids.send(db, CTX, b["id"], confirm=True)
     bids.convert_to_job(db, CTX, b["id"], confirm=True)
     assert "Recurrence" not in fake_host.named("create_job")[0]["updates"]
+    assert "Frequency" not in fake_host.named("create_customer")[0]["updates"]
 
 
 def test_bad_recurrence_blocks_rejected(tmp_path):  # S6-C03
@@ -189,3 +193,47 @@ def test_local_dates_from_utc_timestamps():  # S6-F04
     expected = datetime(2026, 11, 7, 1, 30, tzinfo=timezone.utc).astimezone().date()
     assert local_date(ts) == expected and local_date_text(ts) == expected.isoformat()
     assert local_date("2026-11-06") == date(2026, 11, 6) and local_date(None) is None and local_date("junk") is None
+
+
+# ---------------------------------------------------------------- what the customer's quote shows (2026-11-15, Jamie)
+
+def test_quote_shows_real_counts_not_size_factors(db, fake_host):  # S6-Q01
+    # Seen on the server: a large, heavy-condition SUV's quote said "Exterior detail 1.96 ea". The price is the
+    # same; the quote now says "1 vehicle", and the internal line keeps the factored quantity.
+    e = _approved(db, {"vehicles": 1, "vehicle_size": "large", "package": "full", "condition": "heavy",
+                       "shampoo": True}, "car_detailing")
+    ext = next(ln for sec in e["sections"] for ln in sec["lines"] if ln["calc"]["rule"] == "exterior")
+    assert ext["quantity"] == "1.96" and ext["total_cents"] > 0
+    b = bids.generate(db, CTX, e["id"], customer={"name": "Sam", "email": "s@x.com"})
+    pv = bids.preview(db, CTX, b["id"])
+    lines = {ln["description"]: ln for ln in pv["lines"]}
+    assert (lines["Exterior detail (size and condition adjusted)"]["quantity"],
+            lines["Exterior detail (size and condition adjusted)"]["unit"]) == ("1", "vehicle")
+    assert lines["Shampoo seats and carpets"]["unit"] == "vehicle"
+    assert pv["totals"]["total_cents"] == e["totals"]["total_cents"]      # price unchanged
+    text = pv["text"]
+    assert "1 vehicle" in text and "1.96" not in text
+
+
+def test_quote_counts_for_windows_and_pool_visits(db, fake_host):  # S6-Q02
+    e = _approved(db, {"windows": 10, "sides": "inside_and_out", "stories": 2}, "window_cleaning")
+    b = bids.generate(db, CTX, e["id"], customer={"name": "Wy", "email": "w@x.com"})
+    win = bids.preview(db, CTX, b["id"])["lines"][0]
+    assert (win["quantity"], win["unit"]) == ("10", "windows")
+    e = _approved(db, {"visits": "weekly", "pool_type": "pool_and_spa", "cleanup": "green"}, "pool_service")
+    b = bids.generate(db, CTX, e["id"], customer={"name": "Po", "email": "p@x.com"})
+    got = {ln["description"]: (ln["quantity"], ln["unit"]) for ln in bids.preview(db, CTX, b["id"])["lines"]}
+    assert got["Monthly pool service (visits, size adjusted)"] == ("4", "visits")
+    assert got["One-time pool cleanup"] == ("1", "cleanup")
+
+
+def test_show_needs_show_unit(tmp_path):  # S6-Q03
+    import shutil
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[3] / "estimator" / "modules" / "services" / "pool_service"
+    dst = tmp_path / "pool_service"
+    shutil.copytree(src, dst)
+    m = dst / "manifest.yaml"
+    m.write_text(m.read_text().replace(', show_unit: visit}', '}'))
+    with pytest.raises(ManifestError, match="show and show_unit together"):
+        load_module(dst)

@@ -128,7 +128,8 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
         if cust.get("customer_id") or {"first_name", "last_name", "company", "customer_type"} & set(cust):
             # A customer picked from AI-Prowler, or a new one filled in the popup, replaces the old one whole
             # (2026-11-14): merging kept an old customer_id, or an old company, on a different customer.
-            job["customer"] = cust
+            # Picked by ID alone, its name, email and address come from AI-Prowler (2026-11-15, Jamie).
+            job["customer"] = bids.fill_from_prowler(cust)
         else:
             job["customer"].update(cust)
         _tx(conn, lambda: jobstore.save_job(conn, ctx, job))
@@ -925,6 +926,11 @@ def _write_bid(conn, ctx, job, reg, stage, notes, inputs, **_):
         bid = bids._load(conn, ctx, made["id"])
     if bid["status"] != "draft":
         return True                                   # already sent
+    if inputs.get("outcome") in ("won", "lost") and not inputs.get("send"):
+        # The quote was handed over in person or by phone, not emailed (2026-11-15, Jamie): outcome=won before
+        # sending was silently ignored. Follow-up records the answer (and convert=true makes the job).
+        notes.append(f"Quote {bid['number']} wasn't emailed from here; recording the customer's answer as given.")
+        return True
     to = (inputs.get("send_to") or job["customer"].get("email") or "").strip()
     if inputs.pop("send", False):
         if not to:
@@ -972,6 +978,7 @@ def _follow_up(conn, ctx, job, reg, stage, notes, inputs, **_):
             _tx(conn, lambda: jobstore.log_step(conn, ctx, job["id"], stage.id, stage.agent, "done",
                                                 f"converted to job {done['job_id']}", done.get("created")))
             notes.append(f"Created in AI-Prowler: {', '.join(f'{k} {v}' for k, v in done['created'].items() if v)}.")
+            notes.extend(done.get("warnings") or [])
             return True
         _wait(conn, ctx, job, "waiting_on_user", "user", {
             "stage": stage.id, "agent": stage.agent,
@@ -1247,11 +1254,14 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
          ("Trades in this quote: " + ", ".join(name(t) for t in (want or trades)) if (want or trades) else
           "Pick the trades this project needs (one or more)"),
          "each trade is measured and priced on its own, then they go out together in one quote", f"#/projects/{eid}")
-    item("plans", have_plans or trades,
-         "Add the plans on the project page" + ("" if have_plans else " (or skip this and price the trades from typed "
-                                                                    "measurements)"),
-         "the quantities come from the plans; without plans, type the measurements into each trade",
-         f"#/projects/{eid}")
+    # Service-only projects (car detailing, pool, ...) have no plans to add (2026-11-15, Jamie).
+    services_only = bool(want) and all(t in reg.modules and reg.modules[t].category == "service" for t in want)
+    if not (services_only and not have_plans):
+        item("plans", have_plans or trades,
+             "Add the plans on the project page" + ("" if have_plans else " (or skip this and price the trades from "
+                                                                        "typed measurements)"),
+             "the quantities come from the plans; without plans, type the measurements into each trade",
+             f"#/projects/{eid}")
     # An uploaded plan set isn't read until someone starts it (📖 Read the plans on its page), so say that,
     # with a link straight to it; "wait" is only for a set that is actually being read (2026-11-15, David).
     if plans.get("uploaded"):

@@ -85,6 +85,22 @@ def _customer_view(r: dict) -> dict:
     return {k: str(v) for k, v in out.items()}
 
 
+def fill_from_prowler(cust: dict) -> dict:
+    """An existing AI-Prowler customer given by ID only gets its name, email, phone and address filled in from
+    AI-Prowler (2026-11-15, Jamie): picked by ID alone, the quote showed no name and the job's name was the ID.
+    Anything already given wins; with no customer list here (or no such customer) it comes back as it was."""
+    if not cust or not cust.get("customer_id") or cust.get("name"):
+        return cust
+    try:
+        found = host.find_customers(customer_id=cust["customer_id"], limit=1)
+    except host.HostUnavailable:
+        return cust
+    if not found:
+        return cust
+    view = {k: v for k, v in _customer_view(found[0]).items() if v and k in set(CUSTOMER_FIELDS)}
+    return {**view, **cust}
+
+
 def _company(conn, company_id: str) -> dict:
     row = conn.execute("SELECT * FROM company_profile WHERE company_id = ?", (company_id,)).fetchone()
     return dict(row) if row else {}
@@ -94,6 +110,17 @@ def _template(conn, company_id: str) -> dict:
     row = conn.execute("SELECT data_json FROM setup_progress WHERE company_id = ? AND step = 'bid_template'"
                        " AND status = 'done'", (company_id,)).fetchone()
     return json.loads(row["data_json"]) if row and row["data_json"] else {}
+
+
+def _shown(ln: dict) -> tuple:
+    """The count and unit the customer sees for a line (2026-11-15, Jamie): the module's `show` count ("1 vehicle")
+    when it has one and nobody changed the line by hand, else the priced quantity and unit."""
+    calc = ln.get("calc") or {}
+    if calc.get("show_quantity") and calc.get("show_unit") and not calc.get("override"):
+        q = calc["show_quantity"]
+        word = calc["show_unit"]
+        return q, word if q in ("1", "1.0") else word + "s"
+    return ln["quantity"], ln["unit"]
 
 
 def _snapshot(est: dict, registry=None) -> dict:
@@ -108,7 +135,8 @@ def _snapshot(est: dict, registry=None) -> dict:
             price = ln["calc"].get("price", {})
             ln_tax = int(price.get("tax_cents", 0))
             ln_total = int(ln["total_cents"] or 0)
-            lines.append({"description": ln["description"], "quantity": ln["quantity"], "unit": ln["unit"],
+            qty, unit = _shown(ln)
+            lines.append({"description": ln["description"], "quantity": qty, "unit": unit,
                           "price_cents": ln_total - ln_tax})
             line_sum += ln_total - ln_tax
             tax += ln_tax
@@ -319,8 +347,11 @@ def _recurrence(conn, ctx, estimate_id: int, registry=None) -> str | None:
     return None
 
 
-def ensure_customer(cust: dict, customer_id: str | None = None) -> tuple[str, dict]:
-    """The AI-Prowler CustomerID for this customer, creating the customer there if needed (caller confirms first)."""
+def ensure_customer(cust: dict, customer_id: str | None = None, frequency: str | None = None) -> tuple[str, dict]:
+    """The AI-Prowler CustomerID for this customer, creating the customer there if needed (caller confirms first).
+    frequency (e.g. "Weekly" from a weekly pool quote) goes on a NEW customer's Frequency (2026-11-15, Jamie): the
+    daily recurring sweep and the next-job chain read the customer's Frequency, so without it a weekly customer
+    made from a quote got one follow-up job and then stopped. An existing customer's Frequency is left alone."""
     customer_id = customer_id or cust.get("customer_id")
     if customer_id:
         return customer_id, {}
@@ -339,6 +370,8 @@ def ensure_customer(cust: dict, customer_id: str | None = None) -> tuple[str, di
                      ("customer_type", "Customer Type Comm/Res")):
         if cust.get(src):
             updates[col] = cust[src]
+    if frequency:
+        updates["Frequency"] = frequency
     text = host.call("create_customer", updates=updates)
     new_id = host.extract_id(text, "CUST")
     if not new_id:
@@ -380,6 +413,7 @@ def convert_to_job(conn, ctx: RequestContext, bid_id: int, *, confirm: bool = Fa
         cust = dict(b["customer"])
         cust.pop("customer_id", None) if picked else None
         cust.update(picked)
+        cust = fill_from_prowler(cust)
     customer_id = cust.get("customer_id") or (None if picked else b["customer_id"])
     if not customer_id and not cust.get("name"):
         raise InvalidInput("who is the customer? give at least their name (and email/phone/address if known)",
@@ -395,7 +429,8 @@ def convert_to_job(conn, ctx: RequestContext, bid_id: int, *, confirm: bool = Fa
     secs = b["snapshot"]["sections"]
     service_type = ", ".join(sec["title"] for sec in secs)[:80]
     details = "; ".join(f"{ln['description']} {ln['quantity']} {ln['unit']}" for sec in secs for ln in sec["lines"])
-    customer_id, created = ensure_customer(cust, customer_id)
+    recurrence = _recurrence(conn, ctx, b["estimate_id"], registry)
+    customer_id, created = ensure_customer(cust, customer_id, frequency=recurrence)
     name = cust.get("name") or customer_id
     totals = b["snapshot"]["totals"]
     quote_updates = {
@@ -416,7 +451,6 @@ def convert_to_job(conn, ctx: RequestContext, bid_id: int, *, confirm: bool = Fa
     }
     if service_date:
         job_updates.update({"Service Date": service_date, "Job Status": "Scheduled"})
-    recurrence = _recurrence(conn, ctx, b["estimate_id"], registry)
     if recurrence:
         job_updates["Recurrence"] = recurrence
         job_updates["Service Details / Notes"] = f"{recurrence} service. " + job_updates["Service Details / Notes"]
@@ -437,6 +471,21 @@ def convert_to_job(conn, ctx: RequestContext, bid_id: int, *, confirm: bool = Fa
     out = _public(_load(conn, ctx, b["id"]))
     out["created"] = dict(created, quote_id=quote_id, job_id=job_id)
     out["recurrence"] = recurrence
+    out["warnings"] = job_warnings(cust, ctx, job_id)
+    return out
+
+
+def job_warnings(cust: dict, ctx: RequestContext, job_id: str | None) -> list[str]:
+    """What the new AI-Prowler job is missing for scheduling and routing (2026-11-15, Jamie). A job with no street
+    address is left off every route without a word, and in Server mode a job with no crew is on nobody's route
+    (a blank route request means "my own jobs"). The crew isn't guessed: Estimator sign-in names aren't the
+    Jobs app's crew names."""
+    job = job_id or "The job"
+    out = []
+    if not (cust.get("address") or "").strip():
+        out.append(f"{job} has no street address, so it won't appear on any route. Add the address in the Jobs app.")
+    if ctx.mode == "server":
+        out.append(f"{job} has no crew yet, so it isn't on anyone's route. Assign a crew in the Jobs app.")
     return out
 
 

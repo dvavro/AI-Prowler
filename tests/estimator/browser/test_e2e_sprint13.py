@@ -262,13 +262,13 @@ def test_E2E_S13_M5_phone_measurement_locked_and_priced(page, phone, job):
     # Step to the room measurement (144.00 sqft KITCHEN), then approve it by thumb.
     if card_id(phone) != str(job["room_m"]):
         phone.tap("#mrev-next")
-        phone.wait_for_function("() => document.querySelector('#mrev-position').textContent === '2 of 2'")
+        phone.wait_for_function("() => document.querySelector('#mrev-position')?.textContent === '2 of 2'")
     assert card_id(phone) == str(job["room_m"])
     assert "144.00 sqft" in phone.inner_text("#mrev-card") and "KITCHEN" in phone.inner_text("#mrev-card")
     picture_loaded(phone)
     phone.tap("#mrev-approve")
     answer_yes(phone, "mrev")
-    phone.wait_for_function("() => document.querySelector('#mrev-position').textContent === '1 of 1'")
+    phone.wait_for_function("() => document.querySelector('#mrev-position')?.textContent === '1 of 1'")
     assert "1 measurement" in waiting(phone)
     # Locked on the desktop's Blueprint Review: the detail says approved and locked, and there's no Approve button.
     page.goto(page.base + f"#/takeoffs/{job['smith']}?m={job['room_m']}")
@@ -352,7 +352,7 @@ def test_E2E_S13_M7_field_symbols_only(phone, job):
         for k in range(1, 5):
             assert phone.get_attribute("#mrev-card", "data-kind") == "symbol"
             phone.tap("#mrev-next")
-            phone.wait_for_function(f"() => document.querySelector('#mrev-position').textContent === '{k + 1} of 5'")
+            phone.wait_for_function(f"() => document.querySelector('#mrev-position')?.textContent === '{k + 1} of 5'")
         assert phone.get_attribute("#mrev-card", "data-kind") == "symbol"
         assert position(phone) == "5 of 5"  # stepped through all five; nothing was decided
         # No buttons: field staff look only.

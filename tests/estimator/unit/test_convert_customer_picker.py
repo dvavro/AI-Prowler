@@ -116,3 +116,40 @@ def test_real_lookup_reads_the_jobs_database(tmp_path, monkeypatch):  # CP-06
     assert [r["customer_id"] for r in host.find_customers("shadow pines")] == ["CUST-2026-616"]
     assert host.find_customers(customer_id="CUST-2026-1")[0]["last_name"] == "Smith"
     assert host.find_customers(customer_id="CUST-2026") == []
+
+
+def test_quote_for_a_customer_picked_by_id_only_gets_their_details(db, picker_host):  # CP-07 (2026-11-15, Jamie)
+    # Seen on the server: the Director given customer={customer_id} made a quote with no name or address, and the
+    # job's customer name was the ID itself.
+    filled = bids.fill_from_prowler({"customer_id": "CUST-2026-616"})
+    assert filled["name"] == "AI Prowler LLC" and filled["email"] == "d@example.com"
+    assert filled["address"] == "1500 Shadow Pines Dr" and filled["customer_id"] == "CUST-2026-616"
+    assert bids.fill_from_prowler({"customer_id": "CUST-2026-616", "email": "new@x.com"})["email"] == "new@x.com"
+    assert bids.fill_from_prowler({"customer_id": "CUST-9999"}) == {"customer_id": "CUST-9999"}
+    b = _won(db, customer={"customer_id": "CUST-2026-616", "email": "d@example.com"})   # a bid made with the ID only
+    bids.convert_to_job(db, CTX, b["id"], confirm=True)
+    job = picker_host.named("create_job")[0]["updates"]
+    assert job["Customer Name / Company"] == "AI Prowler LLC" and job["Street Address"] == "1500 Shadow Pines Dr"
+    assert picker_host.named("create_customer") == []
+
+
+def test_director_fills_a_customer_picked_by_id(db, picker_host):  # CP-08 (2026-11-15, Jamie)
+    from estimator.director import engine
+    e = service.create_estimate(db, CTX, "Picked by id")
+    r = engine.adopt(db, CTX, e["id"], registry=REG)
+    r = engine.next_step(db, CTX, r["job"]["id"], customer={"customer_id": "CUST-2026-616"}, registry=REG)
+    cust = r["job"].get("customer") or engine.jobstore.load_job(db, CTX, r["job"]["id"])["customer"]
+    assert cust["name"] == "AI Prowler LLC" and cust["email"] == "d@example.com"
+
+
+def test_new_job_warns_about_missing_address_and_crew(db, picker_host):  # CP-09 (2026-11-15, Jamie)
+    # Seen on the server: JOB-2063 had no address and was left off the Nov 18 route without a word, and Estimator
+    # jobs have no crew, so in Server mode they're on nobody's route.
+    b = _won(db, customer={"name": "No Address", "email": "n@x.com"})
+    out = bids.convert_to_job(db, CTX, b["id"], confirm=True)
+    assert any("no street address" in w for w in out["warnings"])
+    assert not any("no crew" in w for w in out["warnings"])          # Personal mode: one route, no crews
+    from dataclasses import replace
+    server = replace(CTX, mode="server")
+    assert any("no crew" in w for w in bids.job_warnings({"address": "1 Main St"}, server, "JOB-1"))
+    assert bids.job_warnings({"address": "1 Main St"}, CTX, "JOB-1") == []

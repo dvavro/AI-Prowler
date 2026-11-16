@@ -15,6 +15,8 @@ reported and skipped; it never stops the other modules from loading.
 """
 from __future__ import annotations
 
+import re
+
 import csv
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -77,6 +79,11 @@ class LineRule:
     price_key: str
     when: str | None = None           # formula; line included when it evaluates non-zero
     waste: str = "0"
+    # What the CUSTOMER's quote shows (2026-11-15, Jamie): a size or condition factor multiplied into the quantity
+    # showed "1.96 ea" for one SUV. `show` is a formula for the count to print (e.g. "vehicles") and `show_unit`
+    # its word ("vehicle"). Pricing still uses `quantity`; only the quote and the job notes change.
+    show: str | None = None
+    show_unit: str | None = None
 
 
 @dataclass(frozen=True)
@@ -286,7 +293,13 @@ def load_module(folder: Path) -> TradeModule:
         qty = str(_req(lr, "quantity", lw))
         when = lr.get("when")
         waste = str(lr.get("waste", "0"))
-        for label, formula in (("quantity", qty), ("when", when), ("waste", waste)):
+        show = lr.get("show")
+        show_unit = lr.get("show_unit")
+        if (show is None) != (show_unit is None):
+            raise ManifestError(f"{lw}: give show and show_unit together")
+        if show_unit is not None and not re.fullmatch(r"[a-z][a-z ]{0,23}", str(show_unit)):
+            raise ManifestError(f"{lw}: show_unit must be a short lowercase word like 'vehicle'")
+        for label, formula in (("quantity", qty), ("when", when), ("waste", waste), ("show", show)):
             if formula is None:
                 continue
             try:
@@ -302,7 +315,8 @@ def load_module(folder: Path) -> TradeModule:
         if samples[key].unit != unit:
             raise ManifestError(f"{lw}: unit '{unit}' doesn't match price '{key}' unit '{samples[key].unit}'")
         lines.append(LineRule(lid, lr.get("description", lid), kind, unit, qty, key,
-                              str(when) if when is not None else None, waste))
+                              str(when) if when is not None else None, waste,
+                              str(show) if show is not None else None, show_unit))
     lids = [ln.id for ln in lines]
     if len(lids) != len(set(lids)):
         raise ManifestError(f"{where}: duplicate line ids")

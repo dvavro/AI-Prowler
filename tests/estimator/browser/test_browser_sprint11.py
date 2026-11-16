@@ -103,6 +103,7 @@ def test_add_a_missed_symbol_on_the_plan_then_find_similar(page, job):          
     # In Reviews, find the other two.
     page.goto(page.base + f"#/reviews/{job['plan_set_id']}?type=thermostat")
     wait_cards(page, 1)
+    dismiss_tour(page)  # the Reviews tour autostarts on first open; its pop-up covers the card (2026-11-15)
     card = page.locator("#symrev-grid .sym-card")
     assert card.get_attribute("data-status") == "approved" and "added by a person" in card.inner_text()
     card.click()

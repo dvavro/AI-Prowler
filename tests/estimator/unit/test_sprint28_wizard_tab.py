@@ -122,13 +122,13 @@ def test_modules_match_screenshot():  # S28-T09
         ("Roofing", "construction", "quick or plans", "0.1.0"),
         ("Siding", "construction", "quick or plans", "0.1.0"),
         ("Windows and Doors", "construction", "quick or plans", "0.1.0"),
-        ("Car Detailing", "service", "quick quote", "0.1.0"),          # 2026-11-14
+        ("Car Detailing", "service", "quick quote", "0.1.2"),          # 2026-11-14; 0.1.1-0.1.2 2026-11-15
         ("General Service Job", "service", "quick quote", "0.1.0"),
         ("House Cleaning", "service", "quick quote", "0.1.0"),
         ("Junk Removal", "service", "quick quote", "0.1.0"),
         ("Landscaping Maintenance", "service", "quick quote", "0.2.0"),
         ("Pest Control", "service", "quick quote", "0.1.0"),
-        ("Pool Service", "service", "quick quote", "0.1.0"),
+        ("Pool Service", "service", "quick quote", "0.1.1"),     # 0.1.1 2026-11-15: quote counts
         ("Pressure Washing", "service", "quick quote", "0.1.0"),
-        ("Window Cleaning", "service", "quick quote", "0.1.0"),
+        ("Window Cleaning", "service", "quick quote", "0.1.1"),  # 0.1.1 2026-11-15: quote counts
     ]
