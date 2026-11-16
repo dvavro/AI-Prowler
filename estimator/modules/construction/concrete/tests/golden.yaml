@@ -1,5 +1,6 @@
 # Golden cases: sample prices, no markups. Totals in cents.
 # 2026-11-14 (v0.2.0): leveling (grade_pad) is on by default - 400 sq ft x $0.30 = $120 more on the default cases.
+# 2026-11-15 (v0.3.0): footing_section_sqft (default 1.0 = 12 x 12 in) - the cases without it are unchanged.
 - name: 400 sq ft patio, defaults (4 in, mesh, broom, gravel base, pad leveled)
   answers: {area_sqft: 400}
   # grade 400 x $0.30; base 400 x $0.75; forms ceil(4 x sqrt 400) = 80 lf x $3.50; mesh 440 x $0.35;
@@ -28,6 +29,16 @@
                    footing_rebar_5: 11000, concrete: 186083, place_finish: 135000, stamped: 270000, joints: 9000,
                    pump: 65000}
   expected_total_cents: 996383
+- name: 600 sq ft stamped driveway, 40 ft footing with a 12 x 18 in cross-section below the slab
+  answers: {area_sqft: 600, thickness_in: "5", perimeter_lf: 110, reinforcement: rebar, finish: stamped,
+            remove_existing: true, footing_lf: 40, footing_section_sqft: 1.5, pump: true}
+  # 2026-11-15 (v0.3.0): the footing below the slab uses its own cross-section (12 x 18 in = 1.5 sq ft per foot)
+  # instead of a fixed 12 x 12: concrete (600 x 5 / 12 / 27 + 40 x 1.5 / 27) = 11.4815 cy x 1.05 x $165 = $1,989.17.
+  # Everything else as the first driveway case: 992863 - 186083 + 198917 = 1005697.
+  expected_lines: {removal: 120000, grade: 18000, base: 45000, forms: 38500, footing: 24000, rebar: 74800,
+                   footing_rebar_4: 7480, concrete: 198917, place_finish: 135000, stamped: 270000, joints: 9000,
+                   pump: 65000}
+  expected_total_cents: 1005697
 - name: 400 sq ft patio with 10 loads of fill dirt and pad grading
   answers: {area_sqft: 400, fill_loads: 10, grade_pad: true}
   # same as the first case plus fill 10 x $250 = $2,500

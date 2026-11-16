@@ -45,6 +45,9 @@ MAX_AI_DIMS = 4                      # dimensions the AI is asked for
 MAX_PINNED = 3                       # dimensions whose ends get close-ups (two AI calls each)
 CLOSEUP_HALF_IN = 0.6                # a close-up is 1.2" x 1.2" of paper around one end
 SNAP_IN = 0.05                       # snap an end to an extension line this close
+SNAP_CROWD = 3                       # ...unless this many parallel lines are that close (hatching): no snap
+PIN_DRIFT = 0.08                     # close-up ends that change the overview's length by more than this are distrusted
+AGREE_ROUGH = 0.03                   # ...and a dimension measured on the overview must agree with the others this closely
 MANUAL_HOW = ("Calibrate it by hand: open the sheet in Blueprint Review, pick 📏 Calibrate, click both ends of a "
               "dimension whose length is written on the plan (the longer the better) and type that length.")
 
@@ -186,17 +189,22 @@ def snap(end: list[float], other: list[float], segments: list) -> tuple[list[flo
     line crossing the end's height within SNAP_IN, for a vertical one the nearest horizontal line."""
     dx, dy = abs(other[0] - end[0]), abs(other[1] - end[1])
     horizontal = dx >= dy
-    best = None
+    near = []
     for (x0, y0), (x1, y1) in segments:
         if horizontal and abs(x0 - x1) < 0.005 and min(y0, y1) - 0.1 <= end[1] <= max(y0, y1) + 0.1:
             d = abs(x0 - end[0])
-            if d <= SNAP_IN and (best is None or d < best[0]):
-                best = (d, [x0, end[1]])
+            if d <= SNAP_IN:
+                near.append((d, round(x0, 3), [x0, end[1]]))
         elif not horizontal and abs(y0 - y1) < 0.005 and min(x0, x1) - 0.1 <= end[0] <= max(x0, x1) + 0.1:
             d = abs(y0 - end[1])
-            if d <= SNAP_IN and (best is None or d < best[0]):
-                best = (d, [end[0], y0])
-    return (best[1], True) if best else (end, False)
+            if d <= SNAP_IN:
+                near.append((d, round(y0, 3), [end[0], y0]))
+    # 2026-11-16 (David's footer detail): an end inside hatching has several parallel lines within reach - no single
+    # extension line to snap to, so the close-up point is kept as it is.
+    if len({k for _, k, _ in near}) >= SNAP_CROWD:
+        return end, False
+    best = min(near, key=lambda n: n[0]) if near else None
+    return (best[2], True) if best else (end, False)
 
 
 def ai_dimensions(conn, ctx, vp: dict, sheet: dict, cfg: dict, run_like: dict) -> tuple[list[dict], str]:
@@ -246,7 +254,16 @@ def ai_dimensions(conn, ctx, vp: dict, sheet: dict, cfg: dict, run_like: dict) -
             snapped += did
             ends.append(got)
         if len(ends) == 2:
-            d = _dim(text, real, ends[0], ends[1], "ai", snapped=snapped)
+            rough_len, pinned_len = _dist(p1, p2), _dist(ends[0], ends[1])
+            if rough_len and abs(pinned_len - rough_len) / rough_len > PIN_DRIFT:
+                # 2026-11-16 (David's footer detail): the close-ups put the ends of the 12" written inside the hatching
+                # ~20% closer together than the overview did - a close-up pin went to the wrong tick. The overview's
+                # ends are kept for that dimension (less exact, but not wrong); the cross-check against the other
+                # dimensions still decides whether it can be used.
+                d = _dim(text, real, p1, p2, "ai", snapped=0, pinned=False,
+                         drift_pct=round(abs(pinned_len - rough_len) / rough_len * 100, 1))
+            else:
+                d = _dim(text, real, ends[0], ends[1], "ai", snapped=snapped)
             if d:
                 out.append(d)
     return out, notes
@@ -373,8 +390,12 @@ def auto_calibrate(conn, ctx: RequestContext, viewport_id: int, *, confirm: bool
                        + (f" (the AI said: {notes})" if notes else "") + ".", notes=notes or None,
                        auto_run_id=run_like["id"])
     group = agreeing(dims, AGREE_AI)
+    if len(group) < 2 and any(d.get("pinned") is False for d in dims):
+        group = agreeing(dims, AGREE_ROUGH)       # an overview-only dimension is less exact: a little more slack
     if len(dims) >= 2 and len(group) < 2:
         listed = ", ".join(f"{d['label']} → 1:{d['ratio']:.1f}" for d in dims)
         return _manual(conn, ctx, vp, f"The written dimensions in {label} don't agree on one scale ({listed}), so "
                        "none can be trusted on its own.", notes=notes or None, auto_run_id=run_like["id"])
-    return _apply(conn, ctx, vp, group[0], group, "ai", notes=notes or None, auto_run_id=run_like["id"])
+    # The scale is set from a dimension whose ends were pinned in close-ups when there is one; the others check it.
+    used = next((d for d in group if d.get("pinned") is not False), group[0])
+    return _apply(conn, ctx, vp, used, group, "ai", notes=notes or None, auto_run_id=run_like["id"])

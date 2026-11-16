@@ -160,12 +160,21 @@ def test_no_candidates_llm_off_fails_fast_saying_the_ai_did_not_run(call, db, em
     assert row["status"] == "failed" and "did not run" in row["error"]
 
 
-def test_candidates_llm_on_still_uses_the_drawing(call, db, slab, agent_spawns, fake):
+def test_candidates_llm_on_sends_the_sheet_to_the_ai(call, db, slab, agent_spawns, fake):
+    """2026-11-15 (David): AI Auto Run - with LLM takeoff on and its key ready, the sheet goes to the AI (after
+    calibrating) even when the drawing has outlines."""
     _on(db)
     r = call("POST", f"{API}/auto-run", _body(slab))
     assert r.status == 200, r.json()
     assert r.json()["status"] == "running"
     assert len(agent_spawns.calls) == 1
+    assert agent_spawns.calls[0][0][1:3] == ["-m", "estimator.agents.llm_takeoff_runner"]
+
+
+def test_candidates_llm_off_uses_the_drawing(call, db, slab, agent_spawns, fake):
+    r = call("POST", f"{API}/auto-run", _body(slab))
+    assert r.status == 200, r.json()
+    assert r.json()["status"] == "running"
     assert agent_spawns.calls[0][0][1:3] == ["-m", "estimator.agents.concrete_autorun"]
 
 
@@ -230,6 +239,111 @@ def test_get_run_reports_the_source(call, db, empty):
                                  [{"id": "llm", "source": "llm", "label": "45'-7\" x 46'-7\" (read by the AI)"}])
     assert call("GET", f"{API}/auto-run/{geo}").json()["run"]["source"] == "geometry"
     assert call("GET", f"{API}/auto-run/{llm}").json()["run"]["source"] == "llm"
+
+
+# ---------------------------------------------------------------- AI Auto Run on the sheets that are ON (2026-11-15)
+
+def _off(db, sheet):
+    from estimator.takeoff import sheet_trades
+    sheet_trades.set_active(db, CTX, sheet, "concrete", False)
+
+
+def _second_sheet(db, seed, title, image=None):
+    ps = db.execute("SELECT plan_set_id FROM sheets WHERE id = ?", (seed["sheet"],)).fetchone()[0]
+    sheet = db.execute("INSERT INTO sheets (company_id, plan_set_id, page_no, sheet_no, title, image_path)"
+                       " VALUES ('default', ?, 2, 'A-1', ?, ?)", (ps, title, image)).lastrowid
+    vp = db.execute("INSERT INTO viewports (company_id, sheet_id, label, is_nts) VALUES ('default', ?, ?, 1)",
+                    (sheet, title)).lastrowid
+    return sheet, vp
+
+
+def test_auto_run_skips_a_switched_off_sheet_and_measures_the_one_that_is_on(call, db, empty, agent_spawns, fake,
+                                                                              tmp_path):
+    """David's NSB case: elevations switched off, the foundation sheet on. Asking from an elevation (or with no sheet)
+    measures the foundation sheet, on the slab plan's view."""
+    img = tmp_path / "s.png"
+    img.write_bytes(b"png")
+    db.execute("UPDATE sheets SET image_path = ? WHERE id = ?", (str(img), empty["sheet"]))
+    elev, elev_vp = _second_sheet(db, empty, "LEFT SIDE ELEVATION", str(img))
+    _off(db, elev)
+    _on(db)
+    r = call("POST", f"{API}/auto-run", {"estimate_id": empty["est"], "sheet_id": elev, "viewport_id": elev_vp,
+                                         "module_id": "concrete"})
+    assert r.status == 200, r.json()
+    row = db.execute("SELECT sheet_id, viewport_id FROM auto_runs WHERE id = ?", (r.json()["run_id"],)).fetchone()
+    assert (row["sheet_id"], row["viewport_id"]) == (empty["sheet"], empty["vp"])
+    r = call("POST", f"{API}/auto-run", {"estimate_id": empty["est"], "module_id": "concrete"})
+    assert r.status in (200, 400), r.json()          # 400 only because the first run is still going
+    # Every sheet off: refused, saying so.
+    _off(db, empty["sheet"])
+    db.execute("UPDATE auto_runs SET status = 'done'")
+    r = call("POST", f"{API}/auto-run", {"estimate_id": empty["est"], "module_id": "concrete"})
+    assert r.status == 400 and "switched off for Concrete" in r.json()["message"]
+
+
+def test_finished_run_lists_its_measurements_and_the_concrete_volume(call, db, empty):
+    run = autorun_api.create_run(db, CTX, empty["est"], empty["sheet"], empty["vp"], "concrete", [])
+    calc = {"source": "llm", "auto_run_id": run, "candidate_id": "llm", "footer_size": "12x20"}
+    a = _measurement(db, empty["est"], empty["sheet"], empty["vp"], qty="2123.42", calc=calc)
+    db.execute("UPDATE measurements SET feeds = 'area_sqft' WHERE id = ?", (a,))
+    f = _measurement(db, empty["est"], empty["sheet"], empty["vp"], kind="length", label="Footer (AI)", qty="184.33",
+                     unit="lf", calc=calc)
+    db.execute("UPDATE measurements SET feeds = 'footing_lf' WHERE id = ?", (f,))
+    autorun_api.update_run(db, run, status="done", step="done", measurement_ids=[a, f])
+    res = call("GET", f"{API}/auto-run/{run}").json()["run"]["results"]
+    assert [x["label"] for x in res["lines"]] == ["Slab (AI)", "Footer (AI)"]
+    c = res["concrete"]
+    # 2026-11-15: a run from before the footer detail was read: the footer size note 12x20 is 12 wide, 20 overall.
+    # The slab runs to the outside edge, so only 20 - 4 = 16 in of footer is below it: 12 x 16 = 192 sq in, along the
+    # middle line 184.33 - 4 x 1 = 180.33 lf -> 180.33 x 192 / 144 / 27 = 8.91 cu yd. Slab 2123.42 x 4 / 12 / 27 = 26.22.
+    assert c["slab_cuyd"] == "26.22" and c["footer_cuyd"] == "8.91" and c["total_cuyd"] == "35.13"
+    assert c["with_waste_cuyd"] == "36.89" and c["footer_size"] == "12x20" and c["thickness_in"] == "4.00"
+    assert c["footer_below_slab_in"] == "16" and c["footer_section_sqin"] == "192" and c["footer_lf"] == "180.33"
+    assert "footer size 12x20" in c["footer_from"]["outside_in"]
+    steps = {s["what"]: s for s in c["steps"]}
+    assert steps["Footer depth below the slab"]["formula"] == "20 in - 4 in slab"
+    assert steps["Footer cross-section"]["formula"] == "12 in x 16 in"
+    assert steps["Footer length (middle line)"]["result"] == "180.33 lf"
+    assert steps["Footer concrete"]["formula"] == "180.33 lf x 192 sq in ÷ 144 ÷ 27"
+    assert steps["Footer concrete"]["result"] == "8.91 cu yd"
+    assert steps["Slab concrete"]["formula"] == "2,123.42 sq ft x 4 in ÷ 12 ÷ 27"
+    assert steps["Total concrete"]["formula"] == "26.22 + 8.91" and steps["Order with waste"]["result"] == "36.89 cu yd"
+    # A thickness read off the plan is used instead of the default, and says so.
+    db.execute("UPDATE measurements SET calc_json = json_set(calc_json, '$.slab_thickness', '6\"') WHERE id = ?", (a,))
+    c6 = call("GET", f"{API}/auto-run/{run}").json()["run"]["results"]["concrete"]
+    assert c6["thickness_in"] == "6.00" and "6\"" in c6["thickness_from"] and c6["slab_cuyd"] == "39.32"
+    assert c6["footer_below_slab_in"] == "14"                    # the thicker slab covers more of the footer
+    db.execute("UPDATE measurements SET calc_json = json_remove(calc_json, '$.slab_thickness') WHERE id = ?", (a,))
+    # A person corrects the footer (David's NSB detail: 22 in outside face, a 4 x 2 in ledge): asks first, then the
+    # footer length and volume are worked out again, and a cross-section measurement is added for the price.
+    ask = call("POST", f"{API}/auto-run/{run}/footer", {"section": {"outside_in": 22, "ledge_w_in": 4, "ledge_d_in": 2}})
+    assert ask.json()["needs_confirmation"] and "208 sq in" in ask.json()["question"]
+    done = call("POST", f"{API}/auto-run/{run}/footer",
+                {"section": {"outside_in": 22, "ledge_w_in": 4, "ledge_d_in": 2}, "confirm": True}).json()
+    c2 = done["results"]["concrete"]
+    assert c2["footer_section_sqin"] == "208" and c2["footer_cuyd"] == "9.65" and c2["total_cuyd"] == "35.87"
+    assert c2["footer_from"]["outside_in"] == "entered by a person"
+    assert db.execute("SELECT qty FROM measurements WHERE id = ?", (f,)).fetchone()[0] == "180.33"
+    sec_m = db.execute("SELECT qty, unit FROM measurements WHERE estimate_id = ? AND feeds = 'footing_section_sqft'",
+                       (empty["est"],)).fetchone()
+    assert (sec_m[0], sec_m[1]) == ("1.4444", "sqft/lf")
+    bad = call("POST", f"{API}/auto-run/{run}/footer", {"section": {"outside_in": 2}, "confirm": True})
+    assert bad.status == 400 and "at least the slab thickness" in bad.json()["message"]
+    # A running run has no results yet.
+    other = autorun_api.create_run(db, CTX, empty["est"], empty["sheet"], empty["vp"], "concrete", [])
+    assert call("GET", f"{API}/auto-run/{other}").json()["run"]["results"] is None
+
+
+def test_review_data_has_the_projects_picked_trades_and_sheet_switches(call, db, empty):
+    """Blueprint Review knows a trade picked for the project before it is priced, and which sheets are off."""
+    from estimator.director import engine
+    engine.set_project_trades(db, CTX, empty["est"], ["concrete"])
+    elev, _ = _second_sheet(db, empty, "RIGHT SIDE ELEVATION")
+    _off(db, elev)
+    d = call("GET", f"{API}/estimates/{empty['est']}/takeoff").json()
+    assert [t["module_id"] for t in d["trades"]] == ["concrete"]
+    off = {s["id"]: s["inactive_trades"] for s in d["sheets"]}
+    assert off[elev] == ["concrete"] and off[empty["sheet"]] == []
 
 
 # ---------------------------------------------------------------- the page says the AI didn't run

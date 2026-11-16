@@ -47,7 +47,7 @@ const TOURS = [
     { sel: "#project-review", title: "Blueprint Review",
       body: "📏 Blueprint Review is where plans get measured and approved — only after the plans have been read." },
     { sel: "#plan-upload", title: "Upload the plans",
-      body: "Pick a file - a PDF, a photo, or a DXF/DWG - and press Upload and check. AI-Prowler reads the sheets and counts what is on them." },
+      body: "Pick a file - a PDF, a photo, or a DXF/DWG - and press Upload and read. One click: AI-Prowler adds it to the project, reads the sheets and counts what is on them." },
     { sel: "#trades", title: "Trades priced so far",
       body: "Each trade's subtotal and biggest lines. Nothing shows here until a trade is priced." },
   ]},

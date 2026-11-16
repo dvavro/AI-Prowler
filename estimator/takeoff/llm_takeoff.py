@@ -220,7 +220,8 @@ def parse_reading(text: str, sheet_id: int) -> dict:
         notes = (notes + f" (the AI named sheet {fid}, but it was shown sheet {sheet_id})").strip()
     return {"foundation_sheet_id": sheet_id, "slab_width_ft": _text("slab_width_ft"),
             "slab_length_ft": _text("slab_length_ft"), "footer_size": _text("footer_size"),
-            "footer_bar": _text("footer_bar"), "confidence": conf, "notes": notes[:500]}
+            "footer_bar": _text("footer_bar"), "slab_thickness": _text("slab_thickness"),
+            "confidence": conf, "notes": notes[:500]}
 
 
 def _call(conn, ctx: RequestContext, cfg: dict, run: dict, system: str, user: str,
@@ -391,42 +392,67 @@ def _slab_viewport(conn, sheet_id: int) -> int | None:
     return max(rows, key=score)["id"]
 
 
+SECTION_UNIT = "sqft/lf"            # the footer cross-section: square feet of concrete per foot of footer
+
+
 def create_measurements(conn, ctx: RequestContext, run: dict, reading: dict, quantities: dict,
-                        provider: str, model: str) -> list[int]:
+                        provider: str, model: str, footer: dict | None = None) -> list[int]:
     """Propose the slab, footer and form measurements from the quantities the app
-    computed. Proposed, never approved; the calc carries the full provenance."""
+    computed. Proposed, never approved; the calc carries the full provenance.
+
+    2026-11-15 (David): the footer length is along the footer's middle (the outside perimeter counts each corner
+    twice), and its cross-section below the slab - read off the footer detail and checked by the AI - is proposed
+    too, so the Concrete price uses the plan's footer instead of a fixed 12 x 12 in."""
+    from estimator.takeoff import footer_section as fs
     sheet_id = reading["foundation_sheet_id"]
     if run["sheet_id"] == sheet_id:
         viewport_id = run["viewport_id"]
     else:
         viewport_id = _slab_viewport(conn, sheet_id)
     dims = f"{reading['slab_width_ft']} x {reading['slab_length_ft']}"
-    footer = "".join(x for x in (f", footer {reading['footer_size']}" if reading["footer_size"] else "",
-                                 f" {reading['footer_bar']}" if reading["footer_bar"] else ""))
     conf = reading["confidence"]
     made = []
     now = _now()
+    sec = (footer or {}).get("section") or fs.from_read(None, reading.get("footer_size"), reading.get("slab_thickness"))
+    worked = fs.compute(sec, quantities["perimeter_lf"])
+    # 2026-11-16 (David): each measurement gets its place on the drawing - the slab slid onto the plan's drawn edges at
+    # the calibrated scale, the footer as a band inside it, the cross-section as the detail's frame - so clicking a
+    # formula in Blueprint Review highlights what it measured. Display only: the quantities stay the ones above.
+    from estimator.takeoff import takeoff_shapes as ts
+    shapes = ts.shapes_for(conn, ctx.company_id, sheet_id, viewport_id, quantities["width_in"],
+                           quantities["height_in"], sec.get("width_in"))
     planned = [
         ("area", "area_sqft", "Slab (AI)", quantities["area_sqft"], "sqft",
-         f"slab area from the dimensions the AI read ({dims})"),
-        ("length", "footing_lf", "Footer (AI)", quantities["perimeter_lf"], "lf",
-         f"footer length = slab perimeter from the dimensions the AI read ({dims})"),
+         f"slab area from the dimensions the AI read ({dims})", "slab"),
+        ("length", "footing_lf", "Footer (AI)", worked["length_lf"], "lf",
+         f"footer length along its middle = slab perimeter {quantities['perimeter_lf']} lf - 4 x"
+         f" {fs._n(fs._d(sec['width_in']))} in footer width (the dimensions the AI read: {dims})", "footer"),
+        ("area", "footing_section_sqft", "Footer cross-section (AI)", worked["section_sqft"], SECTION_UNIT,
+         f"footer below the slab: {worked['steps'][1]['formula']} = {worked['section_sqin']} sq in", "detail"),
         ("perimeter", "perimeter_lf", "Forms (AI)", quantities["perimeter_lf"], "lf",
-         f"form length = slab perimeter from the dimensions the AI read ({dims})"),
+         f"form length = slab perimeter from the dimensions the AI read ({dims})", "forms"),
     ]
     with service.transaction(conn):
-        for kind, feeds, label, qty, unit, how in planned:
+        for kind, feeds, label, qty, unit, how, shape_key in planned:
+            shape = shapes.get(shape_key)       # in sheet units, so it draws wherever its view is on the sheet
+            geometry = json.dumps({"type": shape["type"], "points": shape["points"]}) if shape else None
             calc = {"source": "llm", "auto_run_id": run["id"], "candidate_id": CANDIDATE_ID, "how": how,
                     "qty": qty, "slab_width": reading["slab_width_ft"],
                     "slab_length": reading["slab_length_ft"], "footer_size": reading["footer_size"],
-                    "footer_bar": reading["footer_bar"], "foundation_sheet_id": sheet_id,
+                    "footer_bar": reading["footer_bar"], "slab_thickness": reading.get("slab_thickness"),
+                    "perimeter_lf": quantities["perimeter_lf"], "footer_section": sec,
+                    "footer_read": (footer or {}).get("read"), "footer_check": (footer or {}).get("check"),
+                    "footer_error": (footer or {}).get("error"),
+                    "foundation_sheet_id": sheet_id, "area_read": quantities["area_sqft"],
+                    "slab_fit": shapes.get("slab_fit"),
                     "provider": provider, "model": model, "notes": reading["notes"]}
             mid = conn.execute(
                 "INSERT INTO measurements (company_id, estimate_id, module_id, feeds, sheet_id, viewport_id,"
-                " kind, label, qty, unit, source_object_ids, calc_json, method, confidence, status, locked,"
-                " proposed_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'[]',?,'ai',?,'proposed',0,?,?,?)",
+                " kind, label, qty, unit, source_object_ids, calc_json, geometry_json, method, confidence, status,"
+                " locked, proposed_by, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,'[]',?,?,'ai',?,'proposed',0,?,?,?)",
                 (ctx.company_id, run["estimate_id"], MODULE_ID, feeds, sheet_id, viewport_id, kind, label,
-                 qty, unit, json.dumps(calc), None if conf is None else str(conf), PROPOSED_BY, now, now)
+                 qty, unit, json.dumps(calc), geometry, None if conf is None else str(conf), PROPOSED_BY, now, now)
                 ).lastrowid
             service._log(conn, ctx, run["estimate_id"], "measurement_proposed",
                          {"measurement_id": mid, "qty": qty, "unit": unit, "feeds": feeds})
@@ -467,8 +493,16 @@ def run_llm_takeoff(conn, ctx: RequestContext, run: dict, on_step=None) -> dict:
     if not ranked:
         raise LlmTakeoffError("none of this plan set's sheets has a rendered image yet - the plan engine makes"
                               " them when it reads the plans")
+    # Only the sheets switched ON for Concrete are sent to the AI (2026-11-15, David: the Plans screen's switches).
+    from estimator.takeoff import sheet_trades
+    ranked = [s for s in ranked if sheet_trades.is_active(conn, ctx.company_id, s["id"], MODULE_ID)]
+    if not ranked:
+        raise LlmTakeoffError("every sheet of this plan set is switched off for Concrete - switch the foundation"
+                              " sheet on from the Plans screen")
     foundation = None
-    if ranked[0]["score"] > 0 and (len(ranked) == 1 or ranked[0]["score"] > ranked[1]["score"]):
+    if len(ranked) == 1:
+        foundation = ranked[0]          # one sheet switched on: that's the one, no classify call needed
+    elif ranked[0]["score"] > 0 and ranked[0]["score"] > ranked[1]["score"]:
         foundation = ranked[0]          # the sheet rules settle it: no classify call needed
     else:
         shown = ranked[:CLASSIFY_MAX_SHEETS]
@@ -514,7 +548,8 @@ def run_llm_takeoff(conn, ctx: RequestContext, run: dict, on_step=None) -> dict:
         + hint_text
         + " Reply with ONLY this JSON: {\"foundation_sheet_id\": " + str(foundation["id"])
         + ", \"slab_width_ft\": \"45'-7\\\"\", \"slab_length_ft\": \"46'-7\\\"\", \"footer_size\": \"12x20\","
-          " \"footer_bar\": \"#5\", \"confidence\": 0.9, \"notes\": \"one line\"}."
+          " \"footer_bar\": \"#5\", \"slab_thickness\": \"4\\\"\", \"confidence\": 0.9, \"notes\": \"one line\"}."
+          " slab_thickness is the slab's thickness as printed in a note or section (e.g. 4\") or null."
           " Rules: slab_width_ft and slab_length_ft are the dimension strings exactly as printed"
           " (feet'-inches\", e.g. 45'-7\"); if you cannot read a dimension clearly, put null for it and say"
           " so in notes - never guess, never compute, never invent. footer_size is the footing width x depth"
@@ -530,14 +565,102 @@ def run_llm_takeoff(conn, ctx: RequestContext, run: dict, on_step=None) -> dict:
     ai_log.set_parsed(conn, ctx.company_id, log_id, reading)
     quantities = quantities_from_reading(reading)
 
+    footer = _read_footer(conn, ctx, person_ctx, cfg, run, foundation, reading, step)
+    detail_calibration = _calibrate_detail(conn, ctx, run, foundation["id"], step)
+
     step("measuring")
-    measurement_ids = create_measurements(conn, ctx, run, reading, quantities, provider, model)
+    measurement_ids = create_measurements(conn, ctx, run, reading, quantities, provider, model, footer=footer)
     cand = llm_candidate(reading, quantities, provider, model)
     if calibration:
         cand["calibration"] = calibration
+    if detail_calibration:
+        cand["detail_calibration"] = detail_calibration
     return {"reading": reading, "quantities": quantities, "measurement_ids": measurement_ids,
             "provider": provider, "model": model, "foundation_sheet_id": foundation["id"],
-            "candidate": cand, "calibration": calibration}
+            "candidate": cand, "calibration": calibration, "detail_calibration": detail_calibration}
+
+
+def _calibrate_detail(conn, ctx: RequestContext, run: dict, sheet_id: int, step) -> dict | None:
+    """Calibrate the footer detail too (2026-11-16, David: "once it's calibrated then we have a scaling"). A detail is
+    drawn at its own, bigger scale (often marked NTS), so the plan's scale doesn't carry over; the auto calibrator
+    sets it from the detail's own written dimensions, so an area a person draws on it has a real size. Never fails the
+    run: a detail it can't do is marked "manual calibration required"."""
+    from estimator.takeoff import auto_calibrate
+    from estimator.takeoff import takeoff_shapes as ts
+    vp = ts.footer_viewport(conn, sheet_id)
+    if vp is None or (vp["scale_ratio"] and not vp["is_nts"]):
+        return None
+    step("calibrating the footer detail")
+    try:
+        got = auto_calibrate.auto_calibrate(conn, ctx, vp["id"], run=run)
+    except EstimatorError as exc:
+        got = {"status": "manual_required", "reason": exc.message, "how": auto_calibrate.MANUAL_HOW}
+    except Exception as exc:  # noqa: BLE001 - the detail's scale is a help for drawing on it; it never fails the run
+        got = {"status": "manual_required", "reason": f"the footer detail couldn't be calibrated automatically ({exc})",
+               "how": auto_calibrate.MANUAL_HOW}
+    return {k: got.get(k) for k in ("status", "scale_ratio", "reason", "how", "method", "check")
+            if got.get(k) is not None} | {"viewport_id": vp["id"], "view": vp["label"] or "footer detail"}
+
+
+def _footer_viewport(conn, sheet_id: int):
+    """The footer / footing section detail on the foundation sheet (its view's label names it), else None."""
+    rows = conn.execute("SELECT id, label, bbox_json FROM viewports WHERE sheet_id = ? ORDER BY id", (sheet_id,)).fetchall()
+    for words in (("FOOTER", "FOOTING"), ("SECTION", "DETAIL")):
+        for r in rows:
+            if any(w in (r["label"] or "").upper() for w in words) and r["bbox_json"]:
+                return r
+    return None
+
+
+def _prepare_detail(conn, person_ctx: RequestContext, sheet_id: int, provider: str) -> dict:
+    """A close-up of the footer detail (a crop, like a person zooming in), else the whole sheet."""
+    from estimator.drawing_model import crops
+    vp = _footer_viewport(conn, sheet_id)
+    if vp is not None:
+        try:
+            b = json.loads(vp["bbox_json"])
+            pad = 0.1
+            return crops.prepare(conn, person_ctx, sheet_id, bbox=[b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad],
+                                 purpose="LLM takeoff: read the footer section detail", provider=provider)
+        except (EstimatorError, ValueError, TypeError, IndexError):
+            pass                                    # too big to crop, or no picture of it: the whole sheet
+    return _prepare_image(conn, person_ctx, sheet_id, "LLM takeoff: read the footer section detail", provider)
+
+
+def _read_footer(conn, ctx: RequestContext, person_ctx: RequestContext, cfg: dict, run: dict, foundation: dict,
+                 reading: dict, step) -> dict:
+    """Read the footer section off its detail, then have the AI check that reading against the same picture
+    (2026-11-15, David: "is it possible that some AI checking itself against the plans be possible"). Never fails
+    the run: if either call fails, the footer falls back to the footer size in the plan's notes, and says why."""
+    from estimator.takeoff import footer_section as fs
+    out = {"read": None, "check": None, "error": None}
+    try:
+        step("reading the footer detail")
+        prep = _prepare_detail(conn, person_ctx, foundation["id"], cfg["provider"])
+        payload, ref = _image_payload(Path(prep["file_path"])), _image_ref(prep)
+        text, _, _, log_id = _call(conn, ctx, cfg, run, fs.READ_SYSTEM, fs.read_prompt(_sheet_label(foundation)),
+                                   [payload], purpose="LLM takeoff: read the footer section", images_refs=[ref])
+        try:
+            out["read"] = fs.parse_read(text)
+        except (ValueError, TypeError) as exc:
+            ai_log.set_error(conn, ctx.company_id, log_id, str(exc))
+            raise LlmTakeoffError(f"the AI's footer reading couldn't be used: {exc}") from None
+        ai_log.set_parsed(conn, ctx.company_id, log_id, out["read"])
+        step("checking the reading against the plan")
+        dims = f"{reading.get('slab_width_ft')} x {reading.get('slab_length_ft')}"
+        text, _, _, log_id = _call(conn, ctx, cfg, run, fs.CHECK_SYSTEM, fs.check_prompt(out["read"], dims),
+                                   [payload], purpose="LLM takeoff: check the footer reading against the plan",
+                                   images_refs=[ref], step="check")
+        try:
+            out["check"] = fs.parse_check(text)
+            ai_log.set_parsed(conn, ctx.company_id, log_id, out["check"])
+        except (ValueError, TypeError) as exc:
+            ai_log.set_error(conn, ctx.company_id, log_id, str(exc))
+            out["check"] = {"checks": [], "overall": "not checked", "notes": f"the check couldn't be read: {exc}"}
+    except LlmTakeoffError as exc:
+        out["error"] = str(exc)
+    out["section"] = fs.from_read(out["read"], reading.get("footer_size"), reading.get("slab_thickness"))
+    return out
 
 
 def _calibrate_if_needed(conn, ctx: RequestContext, run: dict, sheet_id: int, step) -> dict | None:

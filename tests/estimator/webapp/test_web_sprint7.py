@@ -314,8 +314,10 @@ def test_guide_starts_with_calibration_and_explains_edge_length():     # C2S7-W0
 def test_agent_auto_run_markers():                                              # C2S7-W04
     js = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
     for needed in (
-            "bp-auto-run", "Agent auto-run", "/auto-run", '"concrete"',
-            "bp-auto-slot", "bp-auto-status", "Agent finished", "timed out",
+            # 2026-11-15: the button is "AI Auto Run" and lists its measurements and the concrete volume.
+            "bp-auto-run", "AI Auto Run", "/auto-run", '"concrete"',
+            "bp-auto-slot", "bp-auto-status", "AI Auto Run finished", "timed out",
+            "bp-auto-results", "AI Auto Run measurements", "bp-auto-volume", "cu yd",
             "bp-auto-rerun", "Re-run agent", "/rerun",
             "concrete-agent", "bp-agent", "Show outline",
             "Change outline", "bp-retarget", "bp-retarget-select", "/retarget",

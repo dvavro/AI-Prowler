@@ -630,6 +630,8 @@ Source: "estimator\takeoff\__init__.py"; DestDir: "{app}\estimator\takeoff"; Fla
 Source: "estimator\takeoff\auto_calibrate.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\from_plans.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\llm_takeoff.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
+Source: "estimator\takeoff\footer_section.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
+Source: "estimator\takeoff\takeoff_shapes.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\measurements.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\plan_delete.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\reviews.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion

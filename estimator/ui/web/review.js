@@ -90,8 +90,9 @@ async function renderReview(main, estimateId) {
   RV.symbolId = +(q.get("symbol") || 0) || null;
   const lineSheet = RV.lineId ? (lineMeasurements(RV.lineId).find(m => m.sheet_id) || {}).sheet_id : null;
   const wanted = +(q.get("sheet") || 0) || lineSheet;
-  const firstSheet = d.sheets.find(s => s.id === wanted) || d.sheets.find(s => s.id === RV.sheetId) ||
-    d.sheets.find(s => s.objects) || d.sheets[0];
+  // 2026-11-15 (David): open on a sheet switched ON for the project's trades (Plans screen), not on one that's off.
+  const firstSheet = d.sheets.find(s => s.id === wanted) || d.sheets.find(s => s.id === RV.sheetId && sheetOn(s)) ||
+    d.sheets.find(s => sheetOn(s) && s.objects) || d.sheets.find(sheetOn) || d.sheets.find(s => s.objects) || d.sheets[0];
   const head = [el("p", {}, el("a", { href: "#/projects/" + estimateId }, "← " + d.estimate.title), " · ",
       el("a", { id: "bp-quantities", href: "#/quantities/" + estimateId }, "📐 Plan quantities")),
     el("div", { class: "page-head" }, el("h2", {}, "📏 Blueprint Review"), helpLink("takeoffs"))];
@@ -106,7 +107,8 @@ async function renderReview(main, estimateId) {
   }
   const sheetPick = el("select", { id: "review-sheet", "aria-label": "Sheet" },
     d.sheets.map(s => el("option", { value: s.id, selected: s.id === firstSheet.id },
-      (s.sheet_no || "Page " + s.page_no) + (s.title ? " — " + s.title : "") + (s.needs_scale ? " (needs a scale)" : ""))));
+      (sheetOn(s) ? "✅ " : "⛔ ") + (s.sheet_no || "Page " + s.page_no) + (s.title ? " — " + s.title : "") +
+      (sheetOn(s) ? "" : " (switched off)") + (s.needs_scale ? " (needs a scale)" : ""))));
   sheetPick.addEventListener("change", () => openSheet(+sheetPick.value, msg));
   const prev = el("button", { class: "button", type: "button", id: "review-prev", title: "Previous sheet" }, "◀");
   const next = el("button", { class: "button", type: "button", id: "review-next", title: "Next sheet" }, "▶");
@@ -331,9 +333,9 @@ function toolPalette(msg) {
     const hasConcrete = hasConcreteTrade();
     const run = el("button", { class: "button", type: "button", id: "bp-auto-run",
       disabled: !hasConcrete,
-      title: hasConcrete ? "Let the Concrete agent measure the slab on this sheet, then review what it proposes."
-        : "Add the Concrete trade to this estimate first — the agent only measures concrete slabs." },
-      "🤖 Agent auto-run");
+      title: hasConcrete ? "AI Auto Run: measure the concrete on the sheets switched on for Concrete, then review what it proposes."
+        : "Add the Concrete trade to this project first — AI Auto Run measures concrete slabs." },
+      "🤖 AI Auto Run");
     run.addEventListener("click", () => startAutoRun());
     box.append(run);
   }
@@ -341,6 +343,8 @@ function toolPalette(msg) {
 }
 function setTool(id, msg) {
   RV.tool = id;
+  RV.adjust = null;      // picking a tool by hand ends "draw an area to add / take away" (startAdjust sets it after this)
+  RV.placing = null;     // ...and "click the footer section's corner" (startPlaceSection sets it after this)
   // Switching tools never throws the unfinished line away: it stays drawn
   // (and keeps the tool it was started with) until it is finished or Esc.
   if (RV.viewer) RV.viewer.drawDraft();
@@ -405,6 +409,7 @@ async function openSheet(sheetId, msg) {
   RV.sheetId = sheetId;
   RV.selected = new Set();
   RV.draft = []; RV.draftTool = null;   // a half-drawn line belongs to its sheet
+  RV.adjust = null; RV.placing = null;  // ...and so do an area being drawn to add / take away and a section being placed
   RV.symbolList = []; RV.symbolPos = -1; RV.symbolType = null;      // the Symbols tab starts again on each sheet
   const [s, o] = await Promise.all([api("GET", "/sheets/" + sheetId), api("GET", "/sheets/" + sheetId + "/objects")]);
   RV.sheet = s.sheet; RV.viewports = s.viewports; RV.tiles = s.tiles;
@@ -423,6 +428,7 @@ async function openSheet(sheetId, msg) {
   drawLinesPanel();
   refreshList(msg);
   loadAutoCandidates();      // what the agent found on this sheet, in the background (never blocks the sheet)
+  loadLatestRun();           // a run still going, or the last run's results on this sheet (2026-11-15)
 }
 
 // ------------------------------------------------------------------ the viewer: tiles + SVG overlay
@@ -673,7 +679,7 @@ class Viewer {
     this.drawDraft(this.place(ev));
   }
   key(ev) {
-    if (ev.key === "Escape") { RV.draft = []; RV.draftTool = null; this.drawDraft(); this.clearZoomBox(); this.start = null; }
+    if (ev.key === "Escape") { RV.draft = []; RV.draftTool = null; RV.adjust = null; RV.placing = null; this.drawDraft(); this.clearZoomBox(); this.start = null; }
     else if ((ev.key === "Backspace" || ev.key === "Delete") && RV.draft.length) { RV.draft.pop(); this.drawDraft(); }
     else if (ev.key === "Enter") finishDraft(this.msg);
     else if (ev.key === "+" || ev.key === "=") this.zoomBy(1.5);
@@ -861,6 +867,7 @@ function drawMeasurements() {
     const n = g.ownerSVGElement.querySelector('[data-oid="' + id + '"]');
     if (n) n.classList.add("sel");
   }
+  drawHighlight(false);
 }
 
 // ------------------------------------------------------------------ selecting on the plan
@@ -922,6 +929,7 @@ function inside(p, poly) {
 
 // ------------------------------------------------------------------ drawing a measurement or calibrating
 function addDraftPoint(p, msg) {
+  if (RV.placing) { placeSectionAt(p); return; }     // 📍 the footer section's bottom outside corner (2026-11-16)
   const tool = RV.tool;
   if (!RV.draft.length) RV.draftTool = tool;   // the line keeps the tool it was started with
   const last = RV.draft[RV.draft.length - 1];
@@ -973,6 +981,7 @@ function previewText(shape) {
     let a2 = 0;
     const p = shape.points;
     for (let i = 0; i < p.length; i++) { const [x0, y0] = p[i], [x1, y1] = p[(i + 1) % p.length]; a2 += x0 * y1 - x1 * y0; }
+    if (RV.adjust && RV.adjust.target === "footer") return "≈ " + num(Math.abs(a2) / 2 * f * f * 144) + " sq in";   // a footer section is in sq in
     return "≈ " + num(Math.abs(a2) / 2 * f * f) + " sq ft";
   }
   let len = 0;
@@ -1005,6 +1014,7 @@ function finishDraft(msg) {
   if (tool === "calibrate") { calibrateForm(msg, shape.points); return; }
   const vp = viewportAt(shape.points[0]);
   if (!vp) { msg.replaceChildren(el("p", { class: "error" }, "That isn't inside a view on this sheet.")); return; }
+  if (RV.adjust && tool === "area") { adjustForm(msg, shape, vp); return; }   // the server checks the view's scale
   if (!feetPerUnit(vp)) {
     msg.replaceChildren(el("p", { class: "error", id: "bp-no-scale" }, (vp.is_nts ? "That view is marked not to scale (NTS)" : "That view has no scale yet") +
       " — set it with 📐 Calibrate (or on the Plans screen) first, then measure again."));
@@ -1171,6 +1181,14 @@ const AUTO = { runId: null, estimateId: null, sheetId: null, viewportId: null, t
 
 function hasConcreteTrade() { return !!(RV.data && RV.data.trades.some(t => t.module_id === "concrete")); }
 
+// A sheet is "on" when it isn't switched off (Plans screen) for every trade this project measures (2026-11-15).
+// With no trade to measure yet, every sheet counts as on.
+function sheetOn(s) {
+  const off = (s && s.inactive_trades) || [];
+  const mine = ((RV.data && RV.data.trades) || []).map(t => t.module_id);
+  return !mine.length || mine.some(t => !off.includes(t));
+}
+
 // The view the agent measures: the first scaled view on the sheet (a sheet's plan is usually one view; a
 // second view is a detail or an elevation). Unscaled views can't be measured, so they don't count — unless
 // the sheet has nothing scaled, in which case the first view is returned and the server says why it can't run.
@@ -1272,35 +1290,46 @@ function drawAutoRunStatus() {
   const slot = $("bp-auto-slot");
   if (!slot || !RV.data) return;
   const runBtn = $("bp-auto-run");
-  // A sheet switched off for Concrete can't run the agent — the button stays, disabled, with the reason.
+  // 2026-11-15 (David): AI Auto Run measures the sheets switched ON for Concrete, whichever sheet is open — so an
+  // open sheet that's switched off doesn't disable it; the run goes to the foundation sheet that is on.
   const offForConcrete = (RV.inactiveTrades || []).includes("concrete");
+  const anyOn = ((RV.data && RV.data.sheets) || []).some(s => !(s.inactive_trades || []).includes("concrete"));
   if (runBtn) {
-    runBtn.disabled = !hasConcreteTrade() || AUTO.status === "running" || offForConcrete;
-    runBtn.title = offForConcrete
-      ? "This sheet is switched off for Concrete — switch it back on from the Plans screen to run the agent."
-      : (hasConcreteTrade() ? "Let the Concrete agent measure the slab on this sheet, then review what it proposes."
-        : "Add the Concrete trade to this estimate first — the agent only measures concrete slabs.");
+    runBtn.disabled = !hasConcreteTrade() || AUTO.status === "running" || !anyOn;
+    runBtn.title = !anyOn
+      ? "Every sheet is switched off for Concrete — switch the foundation sheet on from the Plans screen."
+      : (hasConcreteTrade() ? "AI Auto Run: measure the concrete on the sheets switched on for Concrete, then review what it proposes."
+        : "Add the Concrete trade to this project first — AI Auto Run measures concrete slabs.");
   }
   const runHere = !!(AUTO.status && AUTO.sheetId === RV.sheetId);
   const parts = [];
   if (offForConcrete && hasConcreteTrade()) {
     const psId = RV.sheet && RV.sheet.plan_set_id;
-    parts.push(el("p", { class: "note warn", id: "bp-auto-off" }, "This sheet is switched off for Concrete — the agent skips it. ",
-      psId ? el("a", { href: "#/plan-sets/" + psId }, "Switch it back on from the Plans screen") : "Switch it back on from the Plans screen", "."));
+    parts.push(el("p", { class: "note warn", id: "bp-auto-off" }, "This sheet is switched off for Concrete — AI Auto Run skips it" +
+      (anyOn ? " and measures the sheets that are on. " : ". "),
+      psId ? el("a", { href: "#/plan-sets/" + psId }, "Change which sheets are on (Plans screen)") : "Change which sheets are on on the Plans screen", "."));
   }
-  if (runHere && AUTO.status === "running") {
-    parts.push(el("p", { class: "note", id: "bp-auto-status", role: "status" },
-      "🤖 Agent running" + (AUTO.step ? " — " + AUTO.step : "…")));
+  if (runBtn) {
+    // While a run works the button says so and can't be clicked again (2026-11-15, David almost clicked it twice).
+    const busy = AUTO.status === "running";
+    runBtn.textContent = busy ? "⏳ AI Auto Run working…" : "🤖 AI Auto Run";
+    runBtn.classList.toggle("bp-auto-run-busy", busy);
+    runBtn.setAttribute("aria-busy", busy ? "true" : "false");
+  }
+  if (AUTO.status === "running") {
+    parts.push(autoRunningBanner());
   } else if (runHere && AUTO.status === "done") {
     const n = (AUTO.measurementIds || []).length;
     const src = AUTO.source === "llm" ? " read from the plan by the AI" : "";
     parts.push(el("p", { class: "note", id: "bp-auto-status", role: "status" }, n
-      ? "Agent finished: " + n + " proposed measurement(s)" + src + " — review and approve them below."
-      : "Agent finished: no measurements proposed on this sheet."));
+      ? "AI Auto Run finished: " + n + " proposed measurement(s)" + src + " — review and approve them below."
+      : "AI Auto Run finished: no measurements proposed on this sheet."));
+    const res = autoResultsBox(AUTO.results);
+    if (res) parts.push(res);
     // The AI (API key) reads the dimensions written on the plan and the app does the maths: no scale, no
     // calibration - say so instead of naming a scale it never used (2026-11-13, David).
     if (AUTO.source === "llm") parts.push(el("p", { class: "muted small", id: "bp-auto-scale" },
-      "📐 The AI read the slab's written dimensions off the plan; the app worked out the quantities from them. No scale or calibration was used."));
+      "📐 The AI read the slab's written dimensions off the plan; the app worked out the quantities from them, so they don't depend on the sheet's scale."));
     else if (AUTO.scale) parts.push(el("p", { class: "muted small", id: "bp-auto-scale" }, autoScaleText(AUTO.scale)));
     // The run calibrated the view itself, or found it couldn't (2026-11-13): say which, and what to do.
     const cal = AUTO.calibration && autoCalText(AUTO.calibration);
@@ -1308,10 +1337,10 @@ function drawAutoRunStatus() {
       (AUTO.calibration.view || "the view") + ": " + cal[1]));
   } else if (runHere && AUTO.status === "failed") {
     parts.push(el("p", { class: "error", id: "bp-auto-status", role: "alert" },
-      "Agent run failed — " + (AUTO.error || "unknown error")));
+      "AI Auto Run failed — " + (AUTO.error || "unknown error")));
   } else if (runHere && AUTO.status === "timeout") {
     parts.push(el("p", { class: "error", id: "bp-auto-status", role: "alert" },
-      "Agent run timed out after 10 minutes — try re-running it."));
+      "AI Auto Run timed out after 10 minutes — try re-running it."));
   }
   const vp = autoRunViewport();
   if (vp && hasConcreteTrade() && AUTO.candidates.has(vp.id)) {
@@ -1345,6 +1374,441 @@ function drawAutoRunStatus() {
     el("a", { href: "#/agents/ai-log?auto_run_id=" + AUTO.runId }, "📋 AI Log — what the AI was given and what it returned for this run")));
   if (AUTO.status !== "running" && (runKnownHere || agentHere) && RV.data.can_measure) parts.push(rerunButton());
   slot.replaceChildren(...parts);
+}
+
+// "Please wait" while AI Auto Run works (2026-11-15, David): a spinner, the steps it goes through with the current one
+// marked, and how long it has been going — so nobody clicks it twice. The run's own step names come from the server
+// (llm_takeoff.run_llm_takeoff's on_step); an unknown step just shows as the current line.
+const AUTO_STEPS = [["starting", "Starting the run"], ["finding the foundation sheet", "Finding the foundation sheet (sheets switched on)"],
+  ["calibrating the sheet", "Calibrating the slab view"], ["reading the plan with the AI", "Sending the sheet to the AI to read the dimensions"],
+  ["reading the footer detail", "Reading the footer section detail (close-up)"],
+  ["checking the reading against the plan", "The AI checks its footer reading against the plan"],
+  ["calibrating the footer detail", "Calibrating the footer detail (it has its own scale)"],
+  ["measuring", "Working out the measurements and the concrete volume"]];
+let autoTick = null;
+function autoRunningBanner() {
+  const step = String(AUTO.step || "").toLowerCase().replace(/[.…]+$/, "");
+  let at = AUTO_STEPS.findIndex(([k]) => step.startsWith(k.toLowerCase()));
+  if (at < 0) at = step && step !== "starting" ? -1 : 0;
+  const secs = Math.max(0, Math.round((Date.now() - (AUTO.startedAt || Date.now())) / 1000));
+  const items = AUTO_STEPS.map(([, label], i) => el("li", { class: at < 0 ? "todo" : i < at ? "done" : i === at ? "now" : "todo" },
+    (at >= 0 && i < at ? "✓ " : at === i ? "▶ " : "") + label));
+  if (at < 0 && AUTO.step) items.push(el("li", { class: "now" }, "▶ " + AUTO.step));
+  if (!autoTick) {
+    autoTick = setInterval(() => {
+      const e = $("bp-auto-elapsed");
+      if (!e || AUTO.status !== "running") { clearInterval(autoTick); autoTick = null; return; }
+      e.textContent = Math.round((Date.now() - AUTO.startedAt) / 1000) + " s";
+    }, 1000);
+  }
+  return el("div", { class: "bp-running", id: "bp-auto-status", role: "status", "aria-live": "polite" },
+    el("div", { class: "bp-spinner", "aria-hidden": "true" }),
+    el("div", {},
+      el("strong", {}, "🤖 AI Auto Run is working — please wait"),
+      el("div", { class: "muted small" }, "This usually takes 1–2 minutes. You don't need to click again; the results show here when it's done. ",
+        "Running for ", el("span", { id: "bp-auto-elapsed" }, secs + " s"), "."),
+      el("ol", { id: "bp-auto-steps" }, items)));
+}
+
+// AI Auto Run measurements (2026-11-15, David): what the run measured, one row each, and the concrete it adds up to,
+// with every step of the volume worked out (formula = result) so a person can check it by hand. The server does the
+// maths (GET /auto-run/<id> results); nothing here is approved until a person approves it below.
+function autoResultsBox(r) {
+  if (!r || !(r.lines || []).length) return null;
+  const rows = r.lines.map(x => el("tr", { "data-measurement": x.id },
+    el("td", {}, x.label || x.feeds, x.how ? el("div", { class: "muted small" }, x.how) : null),
+    el("td", { class: "num" }, num(x.qty) + " " + (x.unit || "")),
+    el("td", {}, el("span", { class: "status" + (x.status === "approved" ? "" : " sample") }, words(x.status)))));
+  const parts = [el("strong", {}, "🤖 AI Auto Run measurements"),
+    el("table", { class: "list" }, el("thead", {}, el("tr", {}, el("th", {}, "What"), el("th", {}, "Quantity"), el("th", {}, "Status"))),
+      el("tbody", {}, rows))];
+  const c = r.concrete;
+  if (c) {
+    parts.push(el("div", { id: "bp-auto-volume" },
+      el("p", {}, el("strong", {}, "Concrete volume: " + num(c.total_cuyd) + " cu yd"),
+        " (" + num(c.with_waste_cuyd) + " cu yd with 5% waste) — slab " + num(c.slab_cuyd) + " + footer " + num(c.footer_cuyd) + " cu yd"),
+      el("p", { class: "muted small" }, "How it was worked out — check any line by hand:"),
+      slabFitNote(c),
+      el("table", { class: "list", id: "bp-auto-formulas" },
+        el("thead", {}, el("tr", {}, el("th", {}, "Step"), el("th", {}, "Formula"), el("th", {}, "Result"))),
+        el("tbody", {}, (c.steps || []).map(s => stepRow(s, c)))),
+      el("p", { class: "muted small" }, "1 cu yd = 27 cu ft. Thickness: " + num(c.thickness_in, 0) + " in (" + c.thickness_from + ").")));
+    const chk = footerCheckBox(c);
+    if (chk) parts.push(chk);
+    if (RV.data && RV.data.can_measure && c.footer_section) parts.push(footerEditForm(c));
+    const drawn = drawnAreasBox(c);
+    if (drawn) parts.push(drawn);
+  }
+  parts.push(el("p", { class: "muted small" }, "Approve the measurements below, then price Concrete from them (the thickness can be changed there)."));
+  return el("div", { class: "card section", id: "bp-auto-results" }, ...parts);
+}
+
+// The AI's own check of its footer reading against the plan (2026-11-15, David: "is it possible that some AI checking
+// itself against the plans"): agrees, or each item it disagrees on with what the drawing shows - never settled silently.
+function footerCheckBox(c) {
+  const k = c.footer_check;
+  if (c.footer_error) {
+    return el("p", { class: "note warn", id: "bp-footer-check" }, "⚠ The AI couldn't read the footer detail (" + c.footer_error +
+      ") — the footer below uses the plan's footer size note. Check it against the detail and correct it below.");
+  }
+  if (!k) return null;
+  const bad = (k.checks || []).filter(x => !x.agrees);
+  if (k.overall === "agrees" && !bad.length) {
+    return el("p", { class: "ok", id: "bp-footer-check" }, "🔎 The AI checked its footer reading against the plan: every value agrees (" +
+      (k.checks || []).length + " checked).");
+  }
+  if (k.overall === "not checked") {
+    return el("p", { class: "note warn", id: "bp-footer-check" }, "⚠ The footer reading wasn't checked" + (k.notes ? " (" + k.notes + ")" : "") +
+      " — check it against the detail before approving.");
+  }
+  return el("div", { class: "note warn", id: "bp-footer-check" },
+    el("strong", {}, "⚠ The AI's check disagrees with its own footer reading — confirm these against the detail:"),
+    el("ul", {}, bad.map(x => el("li", { "data-item": x.item }, words(x.item) + ": read " + (x.read || "—") + ", the drawing shows " +
+      (x.drawing_shows || "—") + (x.why ? " (" + x.why + ")" : "")))));
+}
+
+// Correct the footer section by hand (inches); the footer length, cross-section and volume are worked out again, and
+// the Concrete price uses them once approved. Asks first, like every other change.
+const FOOTER_FIELDS = [["outside_in", "Outside face height", "top of slab to bottom of footer"], ["slab_in", "Slab thickness", ""],
+  ["width_in", "Footer width", "bottom width"], ["ledge_w_in", "Ledge width", "notch at the top outside corner"],
+  ["ledge_d_in", "Ledge depth", ""], ["haunch_w_in", "Haunch width", "sloped inside face, if dimensioned"], ["haunch_h_in", "Haunch height", ""]];
+function footerEditForm(c) {
+  const sec = c.footer_section || {}, from = c.footer_from || {};
+  const inputs = {};
+  const rows = FOOTER_FIELDS.map(([k, label, hint]) => {
+    inputs[k] = el("input", { type: "number", step: "0.25", min: "0", id: "bp-footer-" + k, value: sec[k] === null || sec[k] === undefined ? "" : sec[k],
+      "aria-label": label + " (in)", class: "bp-footer-in" });     // a class, not style= (the CSP blocks inline styles)
+    return el("tr", {}, el("td", {}, label, hint ? el("div", { class: "muted small" }, hint) : null),
+      el("td", {}, inputs[k], " in"), el("td", { class: "muted small" }, from[k] || (sec[k] ? "" : "none")));
+  });
+  const out = el("div", { id: "bp-footer-message", role: "status" });
+  const save = el("button", { class: "button", type: "button", id: "bp-footer-save" }, "Recalculate the footer…");
+  save.addEventListener("click", () => {
+    const section = {};
+    for (const [k] of FOOTER_FIELDS) {                     // only what was changed: the rest keeps where it came from
+      const was = sec[k] === null || sec[k] === undefined ? "" : String(sec[k]);
+      if (inputs[k].value !== was) section[k] = inputs[k].value === "" ? 0 : +inputs[k].value;
+    }
+    if (!Object.keys(section).length) { out.replaceChildren(el("p", { class: "muted" }, "Nothing changed.")); return; }
+    reviewAsk(out, save, "/auto-run/" + AUTO.runId + "/footer", { section }, r => {
+      if (r.results) { AUTO.results = r.results; setTimeout(drawAutoRunStatus, 0); }
+      return "Footer recalculated: " + (r.results && r.results.concrete ? r.results.concrete.footer_cuyd + " cu yd" : "done");
+    }, "bp-footer");
+  });
+  return el("details", { class: "card section", id: "bp-footer-edit" },
+    el("summary", {}, "✏️ Footer section — check or correct it (below the slab: " + (c.footer_below_slab_in || "?") + " in, " +
+      (c.footer_section_sqin || "?") + " sq in)"),
+    el("p", { class: "muted small" }, "In inches, as on the footer detail. Where each number came from is on the right."),
+    el("table", { class: "list" }, el("tbody", {}, rows)), el("div", { class: "row" }, save), out);
+}
+
+// ------------------------------------------------------------------ formulas <-> the drawing (2026-11-16, David)
+// "When you click on the equations to compute the volume ... it would select it and highlight the area in the drawing
+// so that the user could visually inspect the area." Each formula row lists the shapes it measured (the server places
+// the slab on the plan's drawn edges at the calibrated scale; the footer is a band inside it; the cross-section is the
+// footer detail). Click a row: the drawing goes there and outlines them in red. Click it again to clear.
+function stepRow(s, c) {
+  const keys = (s.shapes || []).filter(k => c.shapes && c.shapes[k]);
+  const on = RV.highlight && RV.highlight.step === s.what;
+  const tr = el("tr", { class: (/^(Total|Order)/.test(s.what) ? "total" : "") + (keys.length ? " bp-step-link" : "") + (on ? " on" : ""),
+      "data-step": s.what, tabindex: keys.length ? "0" : null, title: keys.length ? "Show this on the drawing" : null },
+    el("td", {}, keys.length ? el("span", { class: "bp-step-eye", "aria-hidden": "true" }, "🔍 ") : null, s.what,
+      s.note ? el("div", { class: "muted small" }, s.note) : null),
+    el("td", { class: "formula" }, s.formula),
+    el("td", { class: "num" }, "= " + s.result));
+  if (keys.length) {
+    const go = () => toggleHighlight(s.what, keys, c.shapes);
+    tr.addEventListener("click", go);
+    tr.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+  }
+  return tr;
+}
+
+function slabFitNote(c) {
+  const f = c.slab_fit;
+  if (f && f.ok) return el("p", { class: "muted small", id: "bp-slab-fit" },
+    "🔍 Click a step to see it on the drawing. The slab is placed on the plan's own lines (" + f.cover_pct + "% of its outline lies on drawn edges).");
+  if (f && f.reason) return el("p", { class: "note warn", id: "bp-slab-fit" },
+    "⚠ The slab couldn't be outlined on the drawing: " + f.reason + ". The numbers don't depend on it — measure the outline with ▭ Area to check it.");
+  return null;
+}
+
+async function toggleHighlight(what, keys, all) {
+  if (RV.highlight && RV.highlight.step === what) { RV.highlight = null; drawHighlight(false); markStepRows(); return; }
+  const shapes = keys.map(k => all[k]).filter(s => s && (s.points || []).length);
+  if (!shapes.length) return;
+  RV.highlight = { step: what, shapes };
+  markStepRows();
+  const sid = shapes[0].sheet_id;
+  if (sid && sid !== RV.sheetId) {
+    if ($("review-sheet")) $("review-sheet").value = String(sid);
+    await openSheet(sid, $("review-message"));
+  }
+  drawHighlight(true);
+}
+
+function markStepRows() {
+  for (const tr of document.querySelectorAll("#bp-auto-formulas tr[data-step]"))
+    tr.classList.toggle("on", !!RV.highlight && tr.dataset.step === RV.highlight.step);
+}
+
+function drawHighlight(zoom) {
+  if (!RV.viewer || !RV.viewer.overlay) return;
+  const old = RV.viewer.overlay.querySelector("#bp-hl");
+  if (old) old.remove();
+  const h = RV.highlight;
+  if (!h) return;
+  const mine = h.shapes.filter(s => !s.sheet_id || s.sheet_id === RV.sheetId);
+  if (!mine.length) return;
+  const g = svg("g", { id: "bp-hl" });
+  for (const s of mine) {
+    const cls = "bp-hl" + (s.part === "slab" ? " inslab" : s.sign === -1 ? " minus" : s.sign === 1 ? " plus" : "");
+    g.append(svg(s.type === "polygon" ? "polygon" : "polyline", { points: s.points.map(p => p.join(",")).join(" "), class: cls,
+      "data-part": s.part || null }));
+  }
+  for (const s of mine.filter(x => x.label)) {          // the footer section's parts say what they are (2026-11-16)
+    const xs = s.points.map(p => p[0]), ys = s.points.map(p => p[1]);
+    const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
+    const t = svg("text", { x: (Math.max(...xs) + Math.min(...xs)) / 2, y: (Math.max(...ys) + Math.min(...ys)) / 2,
+      "font-size": Math.max(0.03, Math.min(bw / Math.max(6, s.label.length * 0.6), bh * 0.45)), class: "bp-hl-label" + (s.part === "slab" ? " inslab" : s.sign === -1 ? " minus" : s.sign === 1 ? " plus" : "") });
+    t.textContent = s.label;
+    g.append(t);
+  }
+  RV.viewer.overlay.append(g);
+  if (zoom) {
+    const pts = mine.flatMap(s => s.points), xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    RV.viewer.zoomToBox([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+  }
+}
+
+// ------------------------------------------------------------------ areas a person adds or takes away (2026-11-16)
+// "I want the user to be able to add area to be included in the calculation, for example the sloped edge ... by adding
+// three points and assuming to scale drawing" — and to take away an area the AI counted that shouldn't be. Click the
+// corners on the drawing (3 or more), Finish; the server works out the real area from the view's scale (a footer
+// detail has its own scale: AI Auto Run calibrates it; else 🤖 Auto-calibrate / 📏 Calibrate it), asks, and the
+// formulas above change.
+const ADJUST_WHAT = { footer: "the footer cross-section", slab: "the slab area" };
+function drawnAreasBox(c) {
+  const can = RV.data && RV.data.can_measure;
+  const list = c.drawn_areas || [];
+  if (!can && !list.length) return null;
+  const out = el("div", { id: "bp-adjust-message", role: "status" });
+  const rows = list.map(a => {
+    const show = el("button", { class: "button", type: "button", "data-show": a.id, title: "Show it on the drawing" }, "🔍");
+    show.addEventListener("click", () => toggleHighlight("area " + a.id, [a.key], c.shapes));
+    const rm = can ? el("button", { class: "button", type: "button", "data-remove": a.id }, "✖ Remove…") : null;
+    if (rm) rm.addEventListener("click", () => reviewAsk(out, rm, "/auto-run/" + AUTO.runId + "/adjust", { remove: a.id }, r => {
+      if (r.results) { AUTO.results = r.results; setTimeout(drawAutoRunStatus, 0); }
+      return "Removed " + a.amount + " (" + a.label + ")";
+    }, "bp-adjust"));
+    return el("tr", { "data-area": a.id },
+      el("td", {}, (a.sign > 0 ? "➕ " : "➖ ") + a.label, el("div", { class: "muted small" }, (a.sign > 0 ? "added to " : "taken from ") + ADJUST_WHAT[a.target] +
+        (a.view ? " · drawn on " + a.view : ""))),
+      el("td", { class: "num" }, (a.sign > 0 ? "+ " : "− ") + a.amount), el("td", {}, show, " ", rm));
+  });
+  const btn = (id, text, target, sign, title) => {
+    const b = el("button", { class: "button", type: "button", id, title }, text);
+    b.addEventListener("click", () => startAdjust(target, sign, c));
+    return b;
+  };
+  const noScale = sectionPlaceBox(c);
+  return el("div", { class: "card section", id: "bp-adjust" },
+    el("strong", {}, "✏️ Add or take away an area"),
+    el("p", { class: "muted small" }, "Something the AI left out (a sloped edge with no dimension) or counted that it shouldn't? " +
+      "Click its corners on the drawing — 3 or more points, then Finish (or click the first point again). The drawing's scale gives the real size."),
+    can ? el("div", { class: "row" },
+      btn("bp-adjust-footer-add", "➕ Add to the footer section", "footer", 1, "Draw it on the footer detail"),
+      btn("bp-adjust-footer-sub", "➖ Take from the footer section", "footer", -1, "Draw it on the footer detail"),
+      btn("bp-adjust-slab-add", "➕ Add slab area", "slab", 1, "Draw it on the foundation plan"),
+      btn("bp-adjust-slab-sub", "➖ Take away slab area", "slab", -1, "Draw it on the foundation plan")) : null,
+    noScale,
+    list.length ? el("table", { class: "list", id: "bp-adjust-list" }, el("tbody", {}, rows)) : null,
+    out);
+}
+
+// The footer section on its detail (2026-11-16, David: "put a red box around the cross section that the area
+// calculations are made from ... the user needs to see the area parts"). The detail needs its own scale (it is drawn
+// bigger than the plan); then one click on the footer's bottom outside corner places the parts — to scale — on it:
+// the part below the slab (red, what the footer volume counts), the top that is already in the slab (grey), the ledge
+// notch (orange), a dimensioned haunch (green). Parts that don't sit on the drawing show a number that is wrong.
+function sectionPlaceBox(c) {
+  const det = c.detail;
+  if (!det || !(RV.data && RV.data.can_measure)) return null;
+  if (!det.scaled) {
+    const why = det.calibration && det.calibration.status === "manual_required" && det.calibration.reason
+      ? " The automatic calibration couldn't do it: " + det.calibration.reason : "";
+    const cal = el("button", { class: "button", type: "button", id: "bp-detail-calibrate" }, "📏 Calibrate the footer detail");
+    cal.addEventListener("click", () => startDetailCalibrate(c));
+    return el("div", { class: "note warn", id: "bp-detail-noscale" },
+      el("p", {}, "The footer detail has no scale yet — it's drawn at its own (bigger) scale, so the plan's scale doesn't fit it." + why),
+      el("p", {}, "Calibrate it by hand: click both ends of the 12\" dimension under the footer, then type 12\". After that the " +
+        "section's parts can be shown on it, and areas drawn on it get their real size."),
+      el("div", { class: "row" }, cal, " ", detailCalButton(det)));
+  }
+  const place = el("button", { class: "button", type: "button", id: "bp-section-place-btn" },
+    det.placed ? "📍 Move the section" : "📍 Show the section's parts on the detail");
+  place.addEventListener("click", () => startPlaceSection(c));
+  const kids = [el("p", { class: "muted small" }, det.placed
+      ? "The parts are drawn to the detail's scale (1″ = " + num(det.scale_ratio, 1) + "″) from the corner you clicked — " +
+        "if they don't sit on the drawing, a number is off. Click 🔍 Footer cross-section above to see them."
+      : "One click on the footer's bottom outside corner on the detail, and the parts the cross-section is worked out from " +
+        "are drawn on it to scale."), highlightKey(), place];
+  if (det.placed) {
+    const flip = el("button", { class: "button", type: "button", id: "bp-section-flip" }, "⇄ The inside is the other way");
+    flip.addEventListener("click", () => saveSectionPlace(c, det.anchor.viewport_id, det.anchor.point, -det.anchor.dir));
+    kids.push(" ", flip);
+  }
+  return el("div", { id: "bp-section-place" }, ...kids);
+}
+
+// What the colours on the drawing mean (2026-11-16, David: a taken-away area looked red, not yellow).
+function highlightKey() {
+  return el("div", { class: "bp-hl-key", id: "bp-hl-key" },
+    el("span", { class: "k-below" }, "counted (below the slab)"), el("span", { class: "k-slab" }, "already in the slab"),
+    el("span", { class: "k-plus" }, "added"), el("span", { class: "k-minus" }, "taken away (ledge, drawn areas)"));
+}
+
+async function goToDetail(c) {
+  const det = c.shapes && c.shapes.detail;
+  if (!det) return;
+  if (det.sheet_id && det.sheet_id !== RV.sheetId) {
+    if ($("review-sheet")) $("review-sheet").value = String(det.sheet_id);
+    await openSheet(det.sheet_id, $("review-message"));
+  }
+  RV.highlight = { step: "detail", shapes: [det] };
+  markStepRows();
+  drawHighlight(true);
+}
+
+async function startDetailCalibrate(c) {
+  await goToDetail(c);
+  RV.draft = []; RV.draftTool = null;
+  setTool("calibrate", $("review-message"));
+  if ($("bp-tool-help")) $("bp-tool-help").textContent = "Calibrate the footer detail: click both ends of the 12\" dimension " +
+    "under the footer (zoom in for the exact ends), then type 12\". Esc cancels.";
+  toast("📏 Click both ends of the 12\" dimension on the footer detail.");
+}
+
+async function startPlaceSection(c) {
+  await goToDetail(c);
+  RV.draft = []; RV.draftTool = null;
+  setTool("count", $("review-message"));
+  RV.placing = { c };
+  if ($("bp-tool-help")) $("bp-tool-help").textContent = "Click the footer's bottom outside corner on the detail — where the " +
+    "outside face meets the bottom of the footer (it snaps to the drawing's corners; hold Alt to place it freely). Esc cancels.";
+  toast("📍 Click the footer's bottom outside corner on the detail.");
+}
+
+function placeSectionAt(p) {
+  const c = RV.placing.c;
+  RV.placing = null;
+  const vp = viewportAt(p);
+  const det = c.detail;
+  if (!vp || vp.id !== det.viewport_id) {
+    $("review-message").replaceChildren(el("p", { class: "error", id: "bp-place-error" }, "That's not on the footer detail — click the corner inside the detail."));
+    return;
+  }
+  // The inside of the footer is toward the middle of the detail (where the slab runs on); ⇄ flips it.
+  const box = vp.bbox || [p[0] - 1, 0, p[0] + 1, 0];
+  saveSectionPlace(c, vp.id, p, p[0] <= (box[0] + box[2]) / 2 ? 1 : -1);
+}
+
+async function saveSectionPlace(c, viewportId, point, dir) {
+  try {
+    const r = await api("POST", "/auto-run/" + AUTO.runId + "/section-place", { viewport_id: viewportId, point, dir });
+    setTool("select", $("review-message"));
+    if (r.results) { AUTO.results = r.results; drawAutoRunStatus(); }
+    const step = r.results && r.results.concrete && r.results.concrete.steps.find(s => s.what === "Footer cross-section");
+    if (step) { RV.highlight = null; toggleHighlight(step.what, step.shapes, r.results.concrete.shapes); }
+    toast("📍 The footer section's parts are on the detail.");
+  } catch (e) {
+    if (e.status !== 401) $("review-message").replaceChildren(errorBox(e));
+  }
+}
+
+function detailCalButton(det) {
+  const vp = (RV.viewports || []).find(v => v.id === det.viewport_id);
+  if (!vp || !(RV.data && RV.data.can_measure)) return el("span", {}, "Calibrate it with 📐 Calibrate on one of its written dimensions.");
+  const b = el("button", { class: "button", type: "button", id: "bp-detail-autocal" }, "🤖 Auto-calibrate the footer detail");
+  b.addEventListener("click", async () => {
+    await runAutoCalibrate(vp, b, false);
+    try {                                         // the run's results again: the detail now has a scale (or says why not)
+      const r = await api("GET", "/auto-run/" + AUTO.runId);
+      if (r.run && r.run.results) { AUTO.results = r.run.results; drawAutoRunStatus(); }
+    } catch (e) { /* the results box keeps what it showed */ }
+  });
+  return b;
+}
+
+async function startAdjust(target, sign, c) {
+  const where = target === "footer" ? c.shapes && c.shapes.detail : c.shapes && c.shapes.slab;
+  if (where && where.sheet_id && where.sheet_id !== RV.sheetId) {
+    if ($("review-sheet")) $("review-sheet").value = String(where.sheet_id);
+    await openSheet(where.sheet_id, $("review-message"));
+  }
+  RV.highlight = where ? { step: "adjust", shapes: [where] } : null;
+  drawHighlight(true);
+  RV.draft = []; RV.draftTool = null;
+  setTool("area", $("review-message"));
+  RV.adjust = { target, sign };
+  if ($("bp-tool-help")) $("bp-tool-help").textContent = "Click the corners of the area to " + (sign > 0 ? "add to " : "take from ") +
+    ADJUST_WHAT[target] + (target === "footer" ? " on the footer detail" : " on the plan") + " — 3 or more points, then Finish. Esc cancels.";
+  toast((sign > 0 ? "➕ " : "➖ ") + "Click the corners on the drawing, then Finish.");
+}
+
+function adjustForm(msg, shape, vp) {
+  const a = RV.adjust;
+  RV.adjust = null;
+  const label = el("input", { id: "bp-adjust-label", maxlength: 60, placeholder: a.target === "footer" ? "sloped edge" : "porch", "aria-label": "What it is" });
+  const save = el("button", { class: "primary", type: "button", id: "bp-adjust-save" }, (a.sign > 0 ? "Add" : "Take away") + " it…");
+  const out = el("div", { id: "bp-adjust-confirm" });
+  save.addEventListener("click", () => reviewAsk(out, save, "/auto-run/" + AUTO.runId + "/adjust",
+    { target: a.target, sign: a.sign > 0 ? "add" : "subtract", viewport_id: vp.id, points: shape.points, label: label.value.trim() },
+    r => {
+      if (r.results) { AUTO.results = r.results; setTimeout(drawAutoRunStatus, 0); }
+      RV.highlight = null; drawHighlight(false);
+      return (a.sign > 0 ? "Added to " : "Taken from ") + ADJUST_WHAT[a.target];
+    }, "bp-adjust"));
+  msg.replaceChildren(el("div", { class: "card section", id: "bp-adjust-box" },
+    el("p", {}, (a.sign > 0 ? "➕ Add" : "➖ Take away") + " this area " + (a.sign > 0 ? "to " : "from ") + ADJUST_WHAT[a.target] +
+      " (" + shape.points.length + " points, in " + (vp.label || "the view") + "). What is it?"),
+    el("div", { class: "row" }, el("label", {}, "What it is", label), save), out));
+  label.focus();
+}
+
+// What ran on this sheet before: a run still going is watched again (with its "please wait"), a finished one shows its
+// results — so a reload, or coming back to the sheet later, doesn't lose them (2026-11-15).
+async function loadLatestRun() {
+  if (!RV.data || !hasConcreteTrade() || (AUTO.status === "running")) return;
+  if (AUTO.runId && AUTO.sheetId === RV.sheetId && AUTO.status) {
+    // Same run: fetch its results again quietly — a new scale (the footer detail just calibrated) changes its shapes.
+    if (AUTO.status === "done") {
+      try {
+        const x = await api("GET", "/auto-run/" + AUTO.runId);
+        if (x.run && x.run.results && AUTO.status === "done") { AUTO.results = x.run.results; drawAutoRunStatus(); }
+      } catch (e) { /* keep what is shown */ }
+    }
+    return;
+  }
+  let r;
+  try { r = await api("GET", "/auto-run?estimate_id=" + RV.estimateId + "&sheet_id=" + RV.sheetId); }
+  catch (e) { return; }
+  const run = r && r.run;
+  if (!run || AUTO.status === "running") return;
+  if (run.status === "running") {
+    trackAutoRun(run.id, null);
+    AUTO.sheetId = run.sheet_id;
+    const t = Date.parse(run.created_at);
+    if (!isNaN(t)) AUTO.startedAt = Math.min(Date.now(), t);       // the elapsed time counts from the real start
+    drawAutoRunStatus();
+    return;
+  }
+  AUTO.runId = run.id; AUTO.sheetId = run.sheet_id; AUTO.estimateId = RV.estimateId;
+  AUTO.status = run.status === "done" ? "done" : "failed";
+  AUTO.error = run.error || null; AUTO.source = run.source || "geometry"; AUTO.scale = run.scale || null;
+  AUTO.calibration = run.calibration || null; AUTO.measurementIds = run.measurement_ids || [];
+  AUTO.results = run.results || null;
+  drawAutoRunStatus();
 }
 
 // Which scale the agent measured with, and who set it (2026-11-13): "The agent calibrated this sheet…" or "Measured
@@ -1396,14 +1860,25 @@ function pollAutoRun() {
     const run = r.run || {};
     AUTO.step = run.step || "";
     AUTO.source = run.source || "geometry";
+    // The server picks the sheet switched on for Concrete (2026-11-15): show that sheet while the run works on it.
+    if (run.sheet_id && run.sheet_id !== AUTO.sheetId) {
+      AUTO.sheetId = run.sheet_id;
+      AUTO.viewportId = run.viewport_id || null;
+      if (run.sheet_id !== RV.sheetId && $("review-sheet")) {
+        $("review-sheet").value = run.sheet_id;
+        await openSheet(run.sheet_id, $("review-message"));
+      }
+    }
     if (run.status === "done") {
       AUTO.status = "done";
       AUTO.scale = run.scale || null;
       AUTO.calibration = run.calibration || null;
       AUTO.measurementIds = run.measurement_ids || [];
+      AUTO.results = run.results || null;
       const n = AUTO.measurementIds.length;
       const src = AUTO.source === "llm" ? " (read from the plan by the AI)" : "";
-      toast(n ? "Agent finished: " + n + " proposed measurement(s)" + src + " to review." : "Agent finished: nothing proposed.");
+      const vol = AUTO.results && AUTO.results.concrete ? " — about " + num(AUTO.results.concrete.total_cuyd) + " cu yd of concrete" : "";
+      toast(n ? "AI Auto Run finished: " + n + " proposed measurement(s)" + src + vol + " to review." : "AI Auto Run finished: nothing proposed.");
       drawAutoRunStatus();
       await refreshData();
     } else if (run.status === "failed") {
@@ -1419,27 +1894,27 @@ function pollAutoRun() {
 
 async function startAutoRun() {
   if (AUTO.status === "running") return;
-  const vp = autoRunViewport();
-  if (!vp) {
-    AUTO.status = "failed";
-    AUTO.sheetId = RV.sheetId;
-    AUTO.error = "This sheet has no view to measure — read the plans first.";
-    drawAutoRunStatus();
-    return;
-  }
+  // 2026-11-15 (David): one click measures the project. The open sheet is sent only when it is switched on for
+  // Concrete; otherwise the server picks the foundation sheet that is on, and the slab plan's view on it.
+  const here = !(RV.inactiveTrades || []).includes("concrete");
   // Running from the click, not from the answer: a second click while the start is in flight is ignored.
   AUTO.status = "running";
   AUTO.sheetId = RV.sheetId;
   AUTO.estimateId = RV.estimateId;
-  AUTO.viewportId = vp.id;
+  AUTO.viewportId = null;
+  AUTO.results = null;
   AUTO.step = "Starting…";
   AUTO.error = null;
+  AUTO.startedAt = Date.now();
   drawAutoRunStatus();
+  toast("AI Auto Run started — please wait, it usually takes 1–2 minutes.");
+  const slot = $("bp-auto-slot");
+  if (slot && slot.scrollIntoView) slot.scrollIntoView({ block: "nearest", behavior: "smooth" });
   try {
-    const r = await api("POST", "/auto-run", { estimate_id: RV.estimateId, sheet_id: RV.sheetId,
-                                               viewport_id: vp.id, module_id: "concrete" });
-    if (!r.run_id) throw new Error("the agent didn't start (no run id)");
-    trackAutoRun(r.run_id, vp);
+    const r = await api("POST", "/auto-run", { estimate_id: RV.estimateId, sheet_id: here ? RV.sheetId : null,
+                                               module_id: "concrete" });
+    if (!r.run_id) throw new Error("AI Auto Run didn't start (no run id)");
+    trackAutoRun(r.run_id, null);
   } catch (e) {
     if (e.status === 401) { AUTO.status = null; AUTO.step = ""; drawAutoRunStatus(); }
     else { AUTO.status = "failed"; AUTO.error = e.message; drawAutoRunStatus(); }
@@ -1474,7 +1949,7 @@ async function rerunAutoRun(btn) {
   const id = await resolveRunIdForSheet();
   if (!id) {
     AUTO.status = "failed";
-    AUTO.error = "No agent run to re-run on this sheet yet — use 🤖 Agent auto-run first.";
+    AUTO.error = "No agent run to re-run on this sheet yet — use 🤖 AI Auto Run first.";
     drawAutoRunStatus();
     return;
   }

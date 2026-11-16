@@ -107,7 +107,7 @@ def test_cad_section_has_copy_download_link_button():  # S28-T08
 def test_modules_match_screenshot():  # S28-T09
     mods = model.modules()
     assert [(m["name"], m["category"], m["how"], m["version"]) for m in mods] == [
-        ("Concrete", "construction", "quick or plans", "0.2.0"),       # 2026-11-14: leveling on, excavation, vapor barrier
+        ("Concrete", "construction", "quick or plans", "0.3.0"),       # 2026-11-15: footing cross-section below the slab
         ("Demolition", "construction", "quick or plans", "0.1.0"),
         ("Drywall", "construction", "quick or plans", "0.1.0"),
         ("Electrical", "construction", "quick or plans", "0.1.0"),

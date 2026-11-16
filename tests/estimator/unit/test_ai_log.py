@@ -137,6 +137,11 @@ def _rows(db):
     return [dict(r) for r in db.execute("SELECT * FROM ai_log ORDER BY id")]
 
 
+def _plan_rows(db):
+    """The plan's own calls (classify, read) - not the footer detail read and its check (2026-11-15)."""
+    return [r for r in _rows(db) if "footer" not in (r["purpose"] or "")]
+
+
 # ------------------------------------------------------------------ the table (migration 22)
 
 
@@ -268,7 +273,10 @@ def test_llm_takeoff_read_call_is_logged(db, fake, plans):
     rid = _run(db, plans)
     out = lt.run_llm_takeoff(db, CTX, autorun_api._load_run(db, CTX, rid))
     assert out["quantities"]["area_sqft"] == "2123.42"
-    rows = _rows(db)
+    # 2026-11-15: the footer detail read and the AI's check of it are logged too (two more rows, after the read).
+    assert [r["purpose"] for r in _rows(db)][1:] == ["LLM takeoff: read the footer section",
+                                                     "LLM takeoff: check the footer reading against the plan"]
+    rows = _plan_rows(db)
     assert len(rows) == 1                       # the sheet rules settle it: no classify call
     r = rows[0]
     assert r["provider"] == "claude_api" and r["model"] == "claude-sonnet-5-5"
@@ -302,7 +310,7 @@ def test_llm_takeoff_classify_and_read_are_both_logged(db, fake, plans, tmp_path
     rid = _run_on_arch(db, plans)
     out = lt.run_llm_takeoff(db, CTX, autorun_api._load_run(db, CTX, rid))
     assert out["foundation_sheet_id"] == s3
-    rows = _rows(db)
+    rows = _plan_rows(db)
     assert len(rows) == 2
     classify, read = rows
     assert classify["purpose"] == "LLM takeoff: find the foundation sheet"
@@ -313,7 +321,7 @@ def test_llm_takeoff_classify_and_read_are_both_logged(db, fake, plans, tmp_path
     assert read["purpose"] == "LLM takeoff: read the slab dimensions"
     assert json.loads(read["images_json"])[0]["sheet_no"] == "S-2"
     assert all(r["auto_run_id"] == rid and r["ok"] == 1 for r in rows)
-    listed = ai_log.list_entries(db, CTX, auto_run_id=rid)["entries"]
+    listed = [e for e in ai_log.list_entries(db, CTX, auto_run_id=rid)["entries"] if "footer" not in e["purpose"]]
     assert [e["purpose"] for e in listed] == [read["purpose"], classify["purpose"]]   # newest first
 
 
@@ -324,7 +332,7 @@ def test_llm_takeoff_failed_call_is_logged(db, fake, plans):
     rid = _run(db, plans)
     out = lt.run_llm_takeoff(db, CTX, autorun_api._load_run(db, CTX, rid))
     assert out["provider"] == "grok_api"                           # the run still succeeds
-    rows = _rows(db)
+    rows = _plan_rows(db)
     assert len(rows) == 2
     failed, good = rows
     assert failed["provider"] == "claude_api" and failed["ok"] == 0

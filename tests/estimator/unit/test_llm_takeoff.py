@@ -123,8 +123,10 @@ def _reading(sheet_id, **over):
 def test_parse_reading_full():
     got = lt.parse_reading(_reading(4), 4)
     assert got == {"foundation_sheet_id": 4, "slab_width_ft": "45'-7\"", "slab_length_ft": "46'-7\"",
-                   "footer_size": "12x20", "footer_bar": "#5", "confidence": 0.9,
+                   "footer_size": "12x20", "footer_bar": "#5", "slab_thickness": None, "confidence": 0.9,
                    "notes": "dimensions clear on the plan"}
+    # 2026-11-15: the slab thickness printed on the plan is read too (the volume uses it).
+    assert lt.parse_reading(_reading(4, slab_thickness="4\""), 4)["slab_thickness"] == "4\""
 
 
 def test_parse_reading_fenced_with_nulls():
@@ -223,27 +225,47 @@ def test_pick_foundation_sheets_skips_sheets_without_images(db, plans):
 
 # ------------------------------------------------------------------ the whole fallback
 
+FOOTER_READ = json.dumps({"detail_found": True, "slab_thickness": "4\"", "outside_face": ["3-1/2\"", "6-1/2\"", "12\""],
+                          "footer_width": "12\"", "ledge_width": None, "ledge_depth": None, "inside_slope": True,
+                          "haunch_width": None, "haunch_height": None, "notes": "12x20 mono footer, base rail anchorage"})
+FOOTER_CHECK = json.dumps({"checks": [{"item": "slab_thickness", "read": "4\"", "drawing_shows": "4\"", "agrees": True},
+                                      {"item": "outside_face", "read": "3-1/2 + 6-1/2 + 12", "drawing_shows": "same",
+                                       "agrees": True}], "overall": "agrees", "notes": "matches"})
+
+
 def test_run_llm_takeoff_direct(db, fake, plans):
     _on(db)
-    fake.replies["claude_api"] = [_reading(plans["s1"])]
+    fake.replies["claude_api"] = [_reading(plans["s1"]), FOOTER_READ, FOOTER_CHECK]
     rid = _run(db, plans)
     steps = []
     out = lt.run_llm_takeoff(db, CTX, autorun_api._load_run(db, CTX, rid), on_step=steps.append)
-    assert len(fake.calls) == 1                       # the sheet rules settle it: no classify call
+    # The sheet rules settle the foundation sheet (no classify call); then the plan read, the footer detail read,
+    # and the AI checking its footer reading against the same picture (2026-11-15).
+    assert len(fake.calls) == 3
     assert fake.calls[0]["provider"] == "claude_api" and len(fake.calls[0]["images"]) == 1
     assert fake.calls[0]["images"][0]["media_type"] == "image/png"
-    assert steps == ["finding the foundation sheet", "reading the plan with the AI", "measuring"]
+    assert "footer" in fake.calls[1]["system"].lower() and "checking" in fake.calls[2]["system"].lower()
+    assert "3-1/2" in fake.calls[2]["user"]                     # the check is shown what was read
+    assert steps == ["finding the foundation sheet", "reading the plan with the AI", "reading the footer detail",
+                     "checking the reading against the plan", "measuring"]
     assert out["quantities"]["area_sqft"] == "2123.42" and out["quantities"]["perimeter_lf"] == "184.33"
     assert out["foundation_sheet_id"] == plans["s1"] and out["provider"] == "claude_api"
     assert out["candidate"]["id"] == "llm" and out["candidate"]["source"] == "llm"
     assert out["candidate"]["label"] == "45'-7\" x 46'-7\" (read by the AI)"
     rows = [dict(r) for r in db.execute("SELECT * FROM measurements WHERE estimate_id = ?"
                                         " ORDER BY id", (plans["est"],))]
-    assert len(rows) == 3
+    assert len(rows) == 4
     by_feeds = {r["feeds"]: r for r in rows}
     assert (by_feeds["area_sqft"]["qty"], by_feeds["area_sqft"]["unit"]) == ("2123.42", "sqft")
-    assert (by_feeds["footing_lf"]["qty"], by_feeds["footing_lf"]["unit"]) == ("184.33", "lf")
+    # The footer along its middle (184.33 - 4 x 1 ft), and its cross-section below the slab: 12 x (22 - 4) = 216 sq in.
+    assert (by_feeds["footing_lf"]["qty"], by_feeds["footing_lf"]["unit"]) == ("180.33", "lf")
+    assert (by_feeds["footing_section_sqft"]["qty"], by_feeds["footing_section_sqft"]["unit"]) == ("1.5000", "sqft/lf")
     assert (by_feeds["perimeter_lf"]["qty"], by_feeds["perimeter_lf"]["unit"]) == ("184.33", "lf")
+    calc = json.loads(by_feeds["footing_lf"]["calc_json"])
+    assert calc["footer_section"]["outside_in"] == 22.0 and calc["footer_section"]["slab_in"] == 4.0
+    assert calc["footer_check"]["overall"] == "agrees" and calc["footer_read"]["inside_slope"] is True
+    by_feeds.pop("footing_section_sqft")
+    rows = [r for r in rows if r["feeds"] != "footing_section_sqft"] + []
     for r in rows:
         assert r["proposed_by"] == "llm-takeoff" and r["method"] == "ai"
         assert r["status"] == "proposed" and r["locked"] == 0
@@ -254,13 +276,38 @@ def test_run_llm_takeoff_direct(db, fake, plans):
         assert calc["slab_width"] == "45'-7\"" and calc["slab_length"] == "46'-7\""
         assert calc["footer_size"] == "12x20" and calc["footer_bar"] == "#5"
         assert calc["provider"] == "claude_api" and calc["model"] == "claude-sonnet-5-5"
-    assert [m for m in out["measurement_ids"]] == [r["id"] for r in rows]
+    assert len(out["measurement_ids"]) == 4
     usage = [dict(r) for r in db.execute("SELECT * FROM agent_usage WHERE company_id = 'default'")]
-    assert len(usage) == 1 and usage[0]["role"] == "llm_takeoff" and usage[0]["task_id"] == rid
-    assert usage[0]["ok"] == 1 and usage[0]["cost_micros"] > 0
+    assert len(usage) == 3 and all(u["role"] == "llm_takeoff" and u["task_id"] == rid for u in usage)
+    assert all(u["ok"] == 1 and u["cost_micros"] > 0 for u in usage)
     sent = db.execute("SELECT COUNT(*) FROM ai_send_log WHERE company_id = 'default'"
                       " AND kind = 'full_sheet'").fetchone()[0]
-    assert sent == 1                                  # the read image, logged like every AI send
+    assert sent == 2              # the plan read and (no footer view to crop here) the footer read, logged like every send
+
+
+def test_footer_detail_is_cropped_and_a_disagreeing_check_is_kept(db, fake, plans):
+    """With a footer detail view on the sheet, the AI gets a close-up of it; when its check disagrees, that is kept
+    for a person to settle - never resolved silently. A failed footer read never fails the run."""
+    _on(db)
+    db.execute("UPDATE sheets SET image_path = image_path WHERE id = ?", (plans["s1"],))
+    db.execute("INSERT INTO viewports (company_id, sheet_id, label, bbox_json, is_nts) VALUES ('default', ?,"
+               " '12\"X20\" MONO. FOOTER BASE RAIL ANCHORAGE', '[0.5, 0.5, 1.5, 1.5]', 1)", (plans["s1"],))
+    bad = json.dumps({"checks": [{"item": "outside_face", "read": "3-1/2 + 6-1/2 + 12",
+                                  "drawing_shows": "3-1/2 + 4-1/2 + 12", "agrees": False, "why": "middle dimension"}],
+                      "overall": "disagrees"})
+    fake.replies["claude_api"] = [_reading(plans["s1"]), FOOTER_READ, bad]
+    out = lt.run_llm_takeoff(db, CTX, autorun_api._load_run(db, CTX, _run(db, plans)))
+    calc = json.loads(db.execute("SELECT calc_json FROM measurements WHERE id = ?",
+                                 (out["measurement_ids"][1],)).fetchone()[0])
+    assert calc["footer_check"]["overall"] == "disagrees"
+    assert calc["footer_check"]["checks"][0]["drawing_shows"] == "3-1/2 + 4-1/2 + 12"
+    # The footer read failing (the AI's answer isn't JSON) falls back to the plan's footer size note, and says so.
+    fake.replies["claude_api"] = [_reading(plans["s1"]), "no idea", "{}"]
+    out = lt.run_llm_takeoff(db, CTX, autorun_api._load_run(db, CTX, _run(db, plans)))
+    calc = json.loads(db.execute("SELECT calc_json FROM measurements WHERE id = ?",
+                                 (out["measurement_ids"][1],)).fetchone()[0])
+    assert calc["footer_error"] and calc["footer_section"]["outside_in"] == 20.0     # 12x20: 20 overall
+    assert "footer size 12x20" in calc["footer_section"]["from"]["outside_in"]
 
 
 def _run_on_arch(db, plans):
@@ -283,12 +330,12 @@ def test_run_llm_takeoff_classifies_when_the_rules_tie(db, fake, plans, tmp_path
     ]
     rid = _run_on_arch(db, plans)
     out = lt.run_llm_takeoff(db, CTX, autorun_api._load_run(db, CTX, rid))
-    assert len(fake.calls) == 2
+    assert len(fake.calls) == 4                       # classify, read, then the footer read and its check
     assert len(fake.calls[0]["images"]) == 3          # thumbnails of all three sheets
     assert all(im["media_type"] == "image/png" for im in fake.calls[0]["images"])
     assert out["foundation_sheet_id"] == s3
     assert db.execute("SELECT COUNT(*) FROM measurements WHERE estimate_id = ?",
-                      (plans["est"],)).fetchone()[0] == 3
+                      (plans["est"],)).fetchone()[0] == 4
 
 
 def test_run_llm_takeoff_fails_when_the_ai_cannot_find_the_foundation(db, fake, plans, tmp_path):
@@ -337,9 +384,10 @@ def test_run_llm_takeoff_tries_the_backup_provider(db, fake, plans):
     rid = _run(db, plans)
     out = lt.run_llm_takeoff(db, CTX, autorun_api._load_run(db, CTX, rid))
     assert out["provider"] == "grok_api" and out["model"] == "grok-4.3"
-    assert [c["provider"] for c in fake.calls] == ["claude_api", "grok_api"]
+    # The read fails over to Grok; the footer read and its check (2026-11-15) then go to Claude first again.
+    assert [c["provider"] for c in fake.calls][:2] == ["claude_api", "grok_api"]
     usage = [dict(r) for r in db.execute("SELECT provider, ok FROM agent_usage ORDER BY id")]
-    assert usage == [{"provider": "claude_api", "ok": 0}, {"provider": "grok_api", "ok": 1}]
+    assert usage[:2] == [{"provider": "claude_api", "ok": 0}, {"provider": "grok_api", "ok": 1}]
 
 
 def test_run_llm_takeoff_no_images_at_all(db, fake, plans):
@@ -388,7 +436,7 @@ def test_runner_marks_the_run_done(tmp_path, fake):
     cands = json.loads(row["candidates_json"])
     assert len(cands) == 1 and cands[0]["source"] == "llm"
     assert cands[0]["area_sqft"] == 2123.42 and cands[0]["foundation_sheet_id"] == seed["s1"]
-    assert len(json.loads(row["measurement_ids_json"])) == 3
+    assert len(json.loads(row["measurement_ids_json"])) == 4      # slab, footer, footer cross-section, forms
     conn.close()
 
 

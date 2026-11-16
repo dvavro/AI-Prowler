@@ -206,6 +206,45 @@ input.scale-note { width: 13em; }
 .cust-row { text-align: left; border: 1px solid #dde; border-radius: 6px; background: #fff; padding: 8px 10px; cursor: pointer; }
 .cust-row:hover, .cust-row:focus { background: #eef3ff; border-color: #2563eb; }
 .cust-row .small { display: block; }
+/* AI Auto Run (2026-11-15): a clear "working, please wait" banner, and the worked volume formulas. */
+.bp-running { display: flex; gap: 14px; align-items: flex-start; border: 2px solid #2563eb; background: #eef3ff;
+  border-radius: 8px; padding: 12px 16px; margin: 8px 0; }
+.bp-running .bp-spinner { flex: 0 0 auto; width: 26px; height: 26px; border: 4px solid #bfd0fb; border-top-color: #2563eb;
+  border-radius: 50%; animation: bp-spin 0.9s linear infinite; margin-top: 2px; }
+@keyframes bp-spin { to { transform: rotate(360deg); } }
+.bp-running ol { margin: 6px 0 0 18px; padding: 0; }
+.bp-running li.done { color: #15803d; }
+.bp-running li.now { font-weight: 600; }
+.bp-running li.todo { color: #888; }
+.bp-auto-run-busy { cursor: progress; }
+#bp-auto-formulas td.formula { font-family: Consolas, "Courier New", monospace; white-space: nowrap; }
+#bp-auto-formulas tr.total td { font-weight: 600; border-top: 2px solid #ccd; }
+#bp-footer-edit input.bp-footer-in { width: 6em; }
+/* 2026-11-16: a formula row shows what it measured on the drawing */
+#bp-auto-formulas tr.bp-step-link { cursor: pointer; }
+#bp-auto-formulas tr.bp-step-link:hover td, #bp-auto-formulas tr.bp-step-link:focus td { background: #fff5f5; }
+#bp-auto-formulas tr.bp-step-link.on td { background: #ffe3e3; }
+#bp-auto-formulas tr.bp-step-link:focus { outline: 2px solid #e03131; outline-offset: -2px; }
+.bp-hl { fill: none; stroke: #e03131; stroke-width: 4px; pointer-events: none; }
+polygon.bp-hl { fill: #e03131; fill-opacity: .22; }
+polygon.bp-hl.plus { stroke: #2b8a3e; fill: #2b8a3e; }
+/* 2026-11-16 (David): taken away is YELLOW - the old dark orange read as red next to the red part below the slab */
+polygon.bp-hl.minus { stroke: #e8a200; fill: #ffd43b; fill-opacity: .6; stroke-dasharray: 6 4; }
+#bp-adjust .row { flex-wrap: wrap; gap: .4em; }
+polygon.bp-hl.inslab { stroke: #868e96; fill: #868e96; fill-opacity: .25; stroke-dasharray: 3 3; }
+.bp-hl-label { fill: #c92a2a; font-weight: 700; font-family: Segoe UI, Arial, sans-serif; text-anchor: middle;
+  dominant-baseline: middle; paint-order: stroke; stroke: #fff; stroke-width: 3px; pointer-events: none; }
+.bp-hl-label.inslab { fill: #495057; }
+.bp-hl-label.minus { fill: #8a5a00; }
+.bp-hl-label.plus { fill: #2b8a3e; }
+#bp-section-place { margin: .4em 0; }
+.bp-hl-key { display: flex; flex-wrap: wrap; gap: .3em 1em; font-size: .85em; margin: .3em 0; }
+.bp-hl-key span::before { content: ""; display: inline-block; width: 1.1em; height: .8em; margin-right: .35em;
+  vertical-align: -.05em; border: 2px solid; }
+.bp-hl-key .k-below::before { background: rgba(224, 49, 49, .22); border-color: #e03131; }
+.bp-hl-key .k-slab::before { background: rgba(134, 142, 150, .25); border: 2px dashed #868e96; }
+.bp-hl-key .k-plus::before { background: rgba(43, 138, 62, .22); border-color: #2b8a3e; }
+.bp-hl-key .k-minus::before { background: rgba(255, 212, 59, .6); border: 2px dashed #e8a200; }
 .bp-stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; background: #fff; box-shadow: 0 1px 6px rgba(0, 0, 0, .15); }
 .bp-tiles, .bp-overlay { position: absolute; left: 0; top: 0; }
 .bp-tiles { width: 100%; height: 100%; }

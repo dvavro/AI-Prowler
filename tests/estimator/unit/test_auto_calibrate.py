@@ -120,6 +120,21 @@ def test_a_close_up_corrects_a_rough_end(db, fake, sheet):                      
     assert got["status"] == "calibrated" and abs(float(got["scale_ratio"]) - RATIO) < 0.05
 
 
+def test_close_ups_that_go_wrong_fall_back_to_the_overview(db, fake, sheet):                    # AC-02b
+    """2026-11-16, David's footer detail: the vertical 12" is written inside the blue hatching, and the close-ups put its
+    ends ~20% closer together than the overview did (1:13.2 against 1:11.0) - so the calibrator gave up. Now a pinned
+    length that drifts more than 8% from the overview isn't trusted: the overview's ends are used for that dimension, it
+    still has to agree with the others, and the scale comes from the dimension whose close-ups held."""
+    _ai_on(db)
+    fake.replies = [_found(("46'-7\"", V1, V2), ("45'-7\"", H1, H2)),
+                    {"x": 60, "y": 120}, {"x": 60, "y": 0},                    # both ends 0.6" too far in: 18% short
+                    _pin_centre(), _pin_centre()]
+    got = ac.auto_calibrate(db, CTX, sheet["vp"])
+    assert got["status"] == "calibrated" and abs(float(got["scale_ratio"]) - RATIO) < 0.15   # within the 1 px reads
+    assert got["used"]["label"] == "45'-7\""                                     # the one whose close-ups held
+    assert got["check"][0]["label"] == "46'-7\"" and got["check"][0]["off_pct"] < 1
+
+
 def test_dimensions_that_disagree_need_a_person(db, fake, sheet):                                # AC-03
     _ai_on(db)
     fake.replies = [_found(("45'-7\"", H1, H2), ("30'-0\"", V1, V2))] + [_pin_centre()] * 4
@@ -210,6 +225,9 @@ def test_snap_moves_an_end_onto_its_extension_line():                           
     segs = [((2.03, 8.0), (2.03, 9.0)), ((5.0, 8.0), (5.0, 9.0))]                # extension lines
     assert ac.snap([2.0, 8.5], [8.5, 8.5], segs) == ([2.03, 8.5], True)
     assert ac.snap([2.0, 8.5], [8.5, 8.5], [((2.2, 8.0), (2.2, 9.0))]) == ([2.0, 8.5], False)   # too far
+    # 2026-11-16: inside hatching, several parallel lines are within reach - no single extension line, so no snap.
+    hatch = [((x, 8.0), (x, 9.0)) for x in (1.97, 1.99, 2.02, 2.04)]
+    assert ac.snap([2.0, 8.5], [8.5, 8.5], hatch) == ([2.0, 8.5], False)
 
 
 def test_models_follow_the_step_groups(fake):                                                    # AC-13

@@ -127,17 +127,24 @@ def route(m: str, sub: str, req, ctx, conn):
         reg = get_registry()
         sheets = []
         sets = store.list_plan_sets(conn, ctx, eid)["plan_sets"]
+        from estimator.director import engine as director
+        from estimator.takeoff import sheet_trades
         for ps in sets:
             if ps["status"] != "processed":
                 continue
             for s in store.sheets(conn, ctx, ps["id"])["sheets"]:
-                sheets.append({**s, "plan_set_id": ps["id"], "file": ps.get("original_name")})
+                # 2026-11-15 (David): each sheet says which trades it is switched off for (Plans screen), so the
+                # review page can mark those sheets and open on one that is on.
+                sheets.append({**s, "plan_set_id": ps["id"], "file": ps.get("original_name"),
+                               "inactive_trades": sheet_trades.inactive_for_sheet(conn, ctx.company_id, s["id"])})
+        # The trades to measure: the ones already priced, then the ones picked for the project and not priced yet
+        # (2026-11-15: a picked trade is measured from the plans BEFORE it can be priced).
         mine, trades = set(), []
-        for sec in est["sections"]:
-            if sec["module_id"] in mine:
+        for module_id in [sec["module_id"] for sec in est["sections"]] + director.planned_trades(conn, ctx, eid):
+            if module_id in mine:
                 continue
             try:
-                mod = reg.get(sec["module_id"])
+                mod = reg.get(module_id)
             except Exception:  # noqa: BLE001 - a module that was removed
                 continue
             mine.add(mod.id)

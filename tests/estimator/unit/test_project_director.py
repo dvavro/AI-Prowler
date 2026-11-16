@@ -180,6 +180,26 @@ def test_project_trades_are_checked(db):  # PD-17
     assert r["next_step"]["trades_wanted"] == ["concrete", "framing"]
 
 
+def test_uploaded_plans_say_to_start_reading_not_wait(db):  # PD-18 (2026-11-15, David)
+    """Uploaded plans aren't read until someone clicks 📖 Read the plans, so the Director says to, with a link to the
+    plan set; "wait" is only for a set that is actually being read."""
+    est, _ = _project(db)
+    engine.set_project_trades(db, CTX, est["id"], ["concrete"], registry=REG)
+    ps = db.execute("INSERT INTO plan_sets (company_id, estimate_id, file_path, original_name, file_type,"
+                    " file_size, sha256, status, uploaded_by, created_at)"
+                    " VALUES ('default', ?, 'x.pdf', 'x.pdf', 'pdf', 1, 'aa', 'uploaded', 'owner', '2026-11-15T12:00:00+00:00')",
+                    (est["id"],)).lastrowid
+    db.commit()
+    ns = engine.adopt(db, CTX, est["id"], registry=REG)["next_step"]
+    read = next(t for t in ns["todo"] if t["key"] == "read")
+    assert read["link"] == f"#/plan-sets/{ps}" and f"#{ps}" in read["text"] and not read["done"]
+    assert ns["say"].startswith("Read the plans") and "reading" not in {t["key"] for t in ns["todo"]}
+    db.execute("UPDATE plan_sets SET status = 'processing' WHERE id = ?", (ps,))
+    db.commit()
+    ns = engine.adopt(db, CTX, est["id"], registry=REG)["next_step"]
+    assert ns["say"].startswith("Wait for the plans to be read") and "read" not in {t["key"] for t in ns["todo"]}
+
+
 def test_intake_service_is_a_quick_quote(db):  # PD-14
     r = engine.intake(db, CTX, "pressure wash the driveway", has_plans=False, customer={"name": "Sam"}, registry=REG)
     assert r["job"]["lane"] == "quick_quote" and r["route"] == f"#/jobs/{r['job']['id']}"

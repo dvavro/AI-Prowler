@@ -291,6 +291,20 @@ def test_E2E_S13_M5_phone_measurement_locked_and_priced(page, phone, job):
     lines = page.inner_text("#lines-flooring")
     assert "144" in lines
     assert "$0.00" not in lines  # a priced line, not a zero line
+    # The owner sees each line's cost and what the markups add on top, so qty x unit cost vs. price adds up.
+    assert "Cost" in lines and "Price (with markups)" in lines
+    note = page.locator("#lines-flooring [data-line-markup]").first.inner_text()
+    assert note.startswith("cost $")
+    # Adding a line by hand: picking a price book item brings its kind too (labor stays labor, not the default material).
+    page.click("#add-line summary")
+    kinds = page.evaluate("""() => {
+        const pick = document.querySelector('#line-pick'), kind = document.querySelector('#line-kind'), seen = [];
+        for (const o of [...pick.options].slice(1)) {
+            pick.value = o.value; pick.dispatchEvent(new Event('change')); seen.push(kind.value);
+        }
+        return seen;
+    }""")
+    assert "labor" in kinds and "material" in kinds
     assert "priced at 144 sqft" in page.inner_text("#sources-flooring")
 
 

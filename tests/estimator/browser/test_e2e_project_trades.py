@@ -24,12 +24,21 @@ def test_E2E_new_project_picks_its_trades(page):
     todo = page.inner_text("#director-todo")
     assert "Concrete" in todo and "Framing" in todo
     assert page.locator("#director-todo li[data-key='price_concrete'] a").count() == 1
-    # The trades can be changed later: take framing off.
+    # The Trades tile counts the picked trades, not only priced ones (2026-11-15, David).
+    assert page.inner_text("#tile-trades .num") == "2"
+    assert "0 priced" in page.inner_text("#tile-trades .lbl").lower()
+    # The trades can be changed later: take framing off, then add plumbing; the tile follows.
     page.click("#director-trades-edit > summary")
     page.uncheck("#director-trades input[data-trade='framing']")
     page.click("#director-trades-save")
     page.wait_for_function("() => !document.querySelector(\"#director-todo li[data-key='price_framing']\")")
     assert page.locator("#director-todo li[data-key='price_concrete']").count() == 1
+    assert page.inner_text("#tile-trades .num") == "1"
+    page.click("#director-trades-edit > summary")
+    page.check("#director-trades input[data-trade='plumbing']")
+    page.click("#director-trades-save")
+    page.wait_for_selector("#director-todo li[data-key='price_plumbing']")
+    assert page.inner_text("#tile-trades .num") == "2"
 
 
 def test_E2E_project_without_trades_asks_on_its_page(page, db):

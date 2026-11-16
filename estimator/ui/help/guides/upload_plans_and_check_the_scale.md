@@ -2,8 +2,8 @@
 <!-- screen: plans; words: upload, plans, pdf, sheets, scale, calibrate, viewport, read, blueprint, scan, photo, dwg, needs review -->
 The plan engine reads a PDF plan set: it splits it into sheets, reads each title block (sheet number, title, revision) and finds each view's scale. Check the scales before anything is measured.
 
-1. Open the project and, under **Plans**, choose the PDF (or a scan or photo) and click **Upload and check**, then **Attach**.
-2. Click the file name to open the plan set, then click **📖 Read the plans…** and **Yes**. The page updates by itself while it reads.
+1. Open the project and, under **Plans**, choose the PDF (or a scan or photo) and click **📖 Upload and read**. That one click checks the file, adds it to the project and starts reading it. It only stops to ask if the check finds a problem (for example a DWG with no converter on this PC).
+2. Click the file name to open the plan set. The page updates by itself while it reads. (To read a set again later, click **Read the plans again…** and **Yes**.)
 3. Look down the sheet list. Each sheet shows its number, title, discipline and the scales found. A yellow **needs a scale** means a view has no scale yet.
 4. Click a sheet. The views are outlined on the drawing: blue has a scale, dashed yellow has none, dotted grey is not to scale (NTS).
 5. To fix a scale, type it as written on the drawing (for example 1/4" = 1'-0") next to the view and click **Set…**, then **Yes**.

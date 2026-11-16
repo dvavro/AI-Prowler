@@ -31,21 +31,32 @@ from estimator.ui.model import tool_status
 SCAN = Path(__file__).parent / "fixtures" / "smith_residence_A101_scan.png"
 
 
-def upload_plan(page, estimate_id, path):
-    """Upload a plan on the project page; return the new plan set id."""
+def upload_plan(page, estimate_id, path, timeout=120000):
+    """Upload a plan on the project page with one click (📖 Upload and read, 2026-11-15): it is added and read
+    straight away. Waits until it is read; returns the new plan set id."""
     page.goto(page.base + f"#/projects/{estimate_id}")
     page.wait_for_selector("#plan-file")
     dismiss_tour(page)
     page.set_input_files("#plan-file", path)
     page.click("#plan-upload")
-    page.wait_for_selector("#plan-confirm")
-    page.click("#plan-attach")
     page.wait_for_selector("#plans tbody tr")
-    return int(page.locator("#plans tbody tr").first.locator("td").first.inner_text())
+    assert page.locator("#plan-confirm").count() == 0          # no warnings: nothing to ask
+    ps = int(page.locator("#plans tbody tr").first.locator("td").first.inner_text())
+    wait_read(page, ps, timeout)
+    return ps
+
+
+def wait_read(page, plan_set_id, timeout=120000):
+    """Open the plan set page and wait until it says it has been read."""
+    page.goto(page.base + f"#/plan-sets/{plan_set_id}")
+    page.wait_for_selector("#plan-say")
+    dismiss_tour(page)
+    page.wait_for_function("() => document.querySelector('#plan-say') && "
+                           "document.querySelector('#plan-say').innerText.startsWith('Read:')", timeout=timeout)
 
 
 def read_plan_set(page, plan_set_id, timeout=120000):
-    """Read the plan set on its page (handles the ask-first confirm)."""
+    """Read the plan set (again) on its page (handles the ask-first confirm)."""
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     page.goto(page.base + f"#/plan-sets/{plan_set_id}")
     page.wait_for_selector("#plan-read")
@@ -95,8 +106,7 @@ def assert_scan_sheet(page, ps):
 def test_E2E_S16_M2_scan_calibration(page, db, tmp_path):
     est = service.create_estimate(db, CTX, "Scan job")
     db.commit()
-    ps = upload_plan(page, est["id"], str(SCAN))
-    read_plan_set(page, ps)
+    ps = upload_plan(page, est["id"], str(SCAN))                 # added and read in one click
     # Before calibration the assumed 150 DPI overstates the rooms (~1,214 sq ft).
     assert 1150 <= _sqft(assert_scan_quantities(page, est["id"])) <= 1300
     # The sheet's viewport shows the assumed scale: 1/4" = 1'-0", 1" = 48".
@@ -133,8 +143,7 @@ def test_E2E_S16_M4_blueprint_inversion(page, db, tmp_path):
     ImageOps.invert(Image.open(SCAN).convert("RGB")).save(inverted, dpi=(200, 200))
     est = service.create_estimate(db, CTX, "Blueprint job")
     db.commit()
-    ps = upload_plan(page, est["id"], str(inverted))
-    read_plan_set(page, ps)
+    ps = upload_plan(page, est["id"], str(inverted))             # added and read in one click
     # The scan was read inverted: 8 walls and 2 rooms were found.
     page.goto(page.base + f"#/plan-sets/{ps}")
     page.wait_for_selector("#plan-say")
@@ -210,8 +219,7 @@ def test_E2E_S16_M6_dwg_without_converter_warns(page, db, tmp_path, monkeypatch)
 def test_E2E_S16_M8_reread_scan_notes(page, db, tmp_path):
     est = service.create_estimate(db, CTX, "Scan job")
     db.commit()
-    ps = upload_plan(page, est["id"], str(SCAN))
-    read_plan_set(page, ps)
+    ps = upload_plan(page, est["id"], str(SCAN))                 # added and read in one click
     first = assert_scan_quantities(page, est["id"])
     assert_scan_sheet(page, ps)
     read_plan_set(page, ps)

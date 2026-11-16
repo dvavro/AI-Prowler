@@ -1070,6 +1070,16 @@ def project_trades(job: dict) -> list[str]:
     return want
 
 
+def planned_trades(conn, ctx: RequestContext, estimate_id: int) -> list[str]:
+    """The trades picked for this project (its Director job's list), or [] when it has none. Read-only - it never
+    makes a job (2026-11-15: Blueprint Review uses it, so a picked trade can be measured before it is priced)."""
+    try:
+        job = project_job_for(conn, ctx, estimate_id)
+    except EstimatorError:
+        return []
+    return project_trades(job) if job else []
+
+
 def trade_choices(registry=None) -> list[dict]:
     """Every trade or service a project can quote, construction trades first (for the "which trades?" pickers)."""
     reg = _registry(registry)
@@ -1242,9 +1252,19 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
                                                                     "measurements)"),
          "the quantities come from the plans; without plans, type the measurements into each trade",
          f"#/projects/{eid}")
-    if plans.get("processing") or plans.get("uploaded"):
-        item("reading", False, "Wait for the plans to be read", "the sheets have to be read before they can be measured",
-             f"#/projects/{eid}")
+    # An uploaded plan set isn't read until someone starts it (📖 Read the plans on its page), so say that,
+    # with a link straight to it; "wait" is only for a set that is actually being read (2026-11-15, David).
+    if plans.get("uploaded"):
+        unread = [r["id"] for r in conn.execute(
+            "SELECT id FROM plan_sets WHERE company_id = ? AND estimate_id = ? AND status = 'uploaded' ORDER BY id",
+            (ctx.company_id, eid))]
+        sets = ", ".join(f"#{i}" for i in unread) or "the uploaded plans"
+        item("read", False, f"Read the plans: open plan set {sets} and click 📖 Read the plans",
+             "uploaded plans aren't read until you start the reading, and the sheets have to be read before they can be measured",
+             f"#/plan-sets/{unread[0]}" if unread else f"#/projects/{eid}")
+    if plans.get("processing"):
+        item("reading", False, "Wait for the plans to be read (it runs in the background)",
+             "the sheets have to be read before they can be measured", f"#/projects/{eid}")
     if plans.get("failed"):
         item("failed", False, f"{plans['failed']} plan set(s) couldn't be read: open the project and upload them again",
              "a plan set that wasn't read can't be measured", f"#/projects/{eid}")
@@ -1291,7 +1311,7 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
             notes.append("Not ready yet: " + ", ".join(name(t) for t in still) + " still to price (or take "
                          + ("it" if len(still) == 1 else "them") + " off this project's trades).")
         else:
-            left = [t["text"] for t in todo if not t["done"] and t["key"] in ("reading", "scale", "symbols", "measure")]
+            left = [t["text"] for t in todo if not t["done"] and t["key"] in ("read", "reading", "scale", "symbols", "measure")]
             if left:
                 notes.append("Moving on with things still open on the plans: " + "; ".join(left) + ".")
             _tx(conn, lambda: jobstore.log_step(conn, ctx, job["id"], stage.id, stage.agent, "done",

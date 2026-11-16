@@ -2,7 +2,7 @@
 # Plan takeoff (slab polygons, footing lines) plugs into the same questions in Phase 4.
 id: concrete
 name: Concrete
-version: 0.2.0
+version: 0.3.0
 category: construction
 path: both
 description: Slabs, driveways, patios and sidewalks priced from area, thickness and perimeter, with reinforcement, base, footings, finish, removal and pump.
@@ -60,7 +60,12 @@ questions:
   - {id: vapor_barrier, label: "Vapor barrier (10 mil poly) under the slab?", type: boolean, default: false,
      help: "For slabs under a building (house, garage, shed with a floor)."}
   - {id: remove_existing, label: "Remove existing concrete?", type: boolean, default: false}
-  - {id: footing_lf, label: "Thickened edge / footing (12 x 12 in)", type: number, unit: lf, default: 0, min: 0, max: 5000}
+  - {id: footing_lf, label: "Thickened edge / footing length", type: number, unit: lf, default: 0, min: 0, max: 5000,
+     help: "Along the footer's middle (the slab perimeter less 4 x the footer width)."}
+  # 2026-11-15 (David): the footer's own cross-section below the slab, instead of a fixed 12 x 12 in. 1.0 = 12 x 12 in.
+  # From the footer detail: width x (depth - slab thickness) - any ledge notch, / 144. AI Auto Run fills it in.
+  - {id: footing_section_sqft, label: "Footing cross-section below the slab (sq ft per foot)", type: number, default: 1,
+     min: 0, max: 20, help: "12 x 12 in = 1.0. Width x depth below the slab, less any ledge, in sq in / 144 - e.g. 12 x 18 = 1.5."}
   - id: footing_rebar_size
     label: "Footing rebar size"
     type: choice
@@ -101,9 +106,10 @@ lines:
      quantity: "footing_lf * 2", waste: "0.10", price_key: cc_rebar_lf, when: "footing_lf > 0 and footing_rebar_size == 4"}
   - {id: footing_rebar_5, description: "Footing rebar, 2 continuous #5 bars", kind: material, unit: lf,
      quantity: "footing_lf * 2", waste: "0.10", price_key: cc_rebar_lf_5, when: "footing_lf > 0 and footing_rebar_size == 5"}
-  # cubic yards = sq ft x thickness in / 12 / 27, plus 12 x 12 in footing = lf / 27
+  # cubic yards = sq ft x thickness in / 12 / 27, plus the footing below the slab = lf x cross-section sq ft / 27
   - {id: concrete, description: "Ready-mix concrete", kind: material, unit: cuyd,
-     quantity: "area_sqft * thickness_in / 12 / 27 + footing_lf / 27", waste: "0.05", price_key: cc_concrete_cy}
+     quantity: "area_sqft * thickness_in / 12 / 27 + footing_lf * footing_section_sqft / 27", waste: "0.05",
+     price_key: cc_concrete_cy}
   - {id: place_finish, description: "Place and finish concrete", kind: labor, unit: sqft, quantity: "area_sqft",
      price_key: cc_finish_sqft}
   - {id: stamped, description: "Stamped and coloured finish (extra)", kind: labor, unit: sqft, quantity: "area_sqft",
@@ -112,4 +118,5 @@ lines:
      price_key: cc_exposed_sqft, when: "finish == 3"}
   - {id: joints, description: "Saw-cut control joints", kind: labor, unit: sqft, quantity: "area_sqft",
      price_key: cc_joint_sqft}
-  - {id: pump, description: "Pump truck", kind: equipment, unit: ea, quantity: "1", price_key: cc_pump_ea, when: "pump"}
+  # a pump truck is usually hired with its operator, so it's a subcontract (not taxed as material)
+  - {id: pump, description: "Pump truck (subcontract)", kind: sub, unit: ea, quantity: "1", price_key: cc_pump_ea, when: "pump"}

@@ -15,21 +15,32 @@ from pdfmaker import make_pdf
 from test_plan_engine_sprint15 import read, yard
 
 
-def upload_plan(page, estimate_id, path):
-    """Upload a plan on the project page; return the new plan set id."""
+def upload_plan(page, estimate_id, path, timeout=120000):
+    """Upload a plan on the project page with one click (📖 Upload and read, 2026-11-15): it is added and read
+    straight away. Waits until it is read; returns the new plan set id."""
     page.goto(page.base + f"#/projects/{estimate_id}")
     page.wait_for_selector("#plan-file")
     dismiss_tour(page)
     page.set_input_files("#plan-file", path)
     page.click("#plan-upload")
-    page.wait_for_selector("#plan-confirm")
-    page.click("#plan-attach")
     page.wait_for_selector("#plans tbody tr")
-    return int(page.locator("#plans tbody tr").first.locator("td").first.inner_text())
+    assert page.locator("#plan-confirm").count() == 0          # no warnings: nothing to ask
+    ps = int(page.locator("#plans tbody tr").first.locator("td").first.inner_text())
+    wait_read(page, ps, timeout)
+    return ps
+
+
+def wait_read(page, plan_set_id, timeout=120000):
+    """Open the plan set page and wait until it says it has been read."""
+    page.goto(page.base + f"#/plan-sets/{plan_set_id}")
+    page.wait_for_selector("#plan-say")
+    dismiss_tour(page)
+    page.wait_for_function("() => document.querySelector('#plan-say') && "
+                           "document.querySelector('#plan-say').innerText.startsWith('Read:')", timeout=timeout)
 
 
 def read_plan_set(page, plan_set_id, timeout=120000):
-    """Read the plan set on its page (handles the ask-first confirm)."""
+    """Read the plan set (again) on its page (handles the ask-first confirm)."""
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     page.goto(page.base + f"#/plan-sets/{plan_set_id}")
     page.wait_for_selector("#plan-read")
@@ -88,8 +99,7 @@ def test_E2E_S15_M7_phone_yard_project_sections(phone, yard_est):
 def test_E2E_S15_M8_reread_adds_zones(page, db, tmp_path):
     est = service.create_estimate(db, CTX, "Yard job")
     db.commit()
-    ps = upload_plan(page, est["id"], str(make_pdf(tmp_path / "yard.pdf", [yard()])))
-    read_plan_set(page, ps)
+    ps = upload_plan(page, est["id"], str(make_pdf(tmp_path / "yard.pdf", [yard()])))   # added and read in one click
     assert_site_quantities(page, est["id"])
     read_plan_set(page, ps)
     assert_site_quantities(page, est["id"])

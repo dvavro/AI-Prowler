@@ -146,10 +146,13 @@ function sectionBlock(d, sec, tr, lineLinks, meas, focusLine, msg, book) {
   if (sec.id && d.can_options && sec.module_id !== "custom") box.append(optionsBlock(d, sec, msg));
   if (!sec.lines.length) { box.append(el("p", { class: "muted" }, "No lines priced for this trade yet.")); return box; }
   const see = d.see_margins;
-  const cols = 4 + (see ? 2 : 0) + (d.can_edit ? 1 : 0);
+  const cols = 4 + (see ? 3 : 0) + (d.can_edit ? 1 : 0);
   const tbl = el("table", { class: "list", id: "lines-" + sec.module_id },
     el("thead", {}, el("tr", {}, el("th", {}, "Line"), el("th", {}, "Quantity"), see ? el("th", {}, "Unit cost") : null,
-      see ? el("th", {}, "Waste") : null, el("th", {}, "Price"), el("th", {}, "From the plans"),
+      see ? el("th", {}, "Waste") : null,
+      see ? el("th", { title: "Quantity × unit cost, plus waste and labor burden" }, "Cost") : null,
+      el("th", see ? { title: "Cost plus overhead, profit and tax" } : {}, see ? "Price (with markups)" : "Price"),
+      el("th", {}, "From the plans"),
       d.can_edit ? el("th", {}, "") : null)));
   const body = el("tbody", {});
   for (const ln of sec.lines) {
@@ -169,7 +172,10 @@ function sectionBlock(d, sec, tr, lineLinks, meas, focusLine, msg, book) {
       el("td", {}, num2(ln.quantity) + " " + ln.unit),
       see ? el("td", { class: "money" }, ln.unit_cost_cents !== undefined ? money(ln.unit_cost_cents) : "—") : null,
       see ? el("td", {}, Math.round(parseFloat(ln.waste_pct || 0) * 1000) / 10 + "%") : null,
-      el("td", { class: "money" }, money(ln.total_cents || 0)),
+      see ? el("td", { class: "money", "data-line-cost": ln.id }, linePrice(ln) ? money(linePrice(ln).cost_cents || 0) : "—") : null,
+      el("td", Object.assign({ class: "money" }, see && linePrice(ln) ? { title: markupNote(linePrice(ln)) } : {}),
+        money(ln.total_cents || 0),
+        see && linePrice(ln) ? el("div", { class: "muted small", "data-line-markup": ln.id }, markupNote(linePrice(ln))) : null),
       el("td", {}, chip));
     body.append(row, sub);
     if (d.can_edit) {
@@ -187,6 +193,17 @@ function sectionBlock(d, sec, tr, lineLinks, meas, focusLine, msg, book) {
   tbl.append(body);
   box.append(tbl);
   return box;
+}
+
+function linePrice(ln) { return ln.calc && ln.calc.price ? ln.calc.price : null; }
+
+function markupNote(p) {
+  const parts = ["cost " + money(p.cost_cents || 0)];
+  if (p.burden_cents) parts.push("incl. labor burden " + money(p.burden_cents));
+  if (p.overhead_cents) parts.push("+ overhead " + money(p.overhead_cents));
+  if (p.profit_cents) parts.push("+ profit " + money(p.profit_cents));
+  if (p.tax_cents) parts.push("+ tax " + money(p.tax_cents));
+  return parts.join(" ");
 }
 
 function num2(v) { const n = parseFloat(v); return isNaN(n) ? String(v) : n.toLocaleString(undefined, { maximumFractionDigits: 2 }); }
@@ -272,6 +289,8 @@ function addLineForm(d, msg, book) {
       if (!picked) return;
       desc.value = picked.description; unit.value = picked.unit;
       cost.value = dollars(picked.cost_cents); key.value = picked.price_key;
+      // The item's own kind (a pump truck is equipment or a sub, not material), so labor and tax come out right.
+      if (picked.kind && d.line_kinds.includes(picked.kind)) kind.value = picked.kind;
     });
     // A hand-edited cost is a hand cost, not the price book's: drop the key so the typed cost is used.
     cost.addEventListener("input", () => {

@@ -367,7 +367,7 @@ async function renderProject(main, id) {
   if (est.editing_warning) parts.push(el("p", { class: "note warn" }, est.editing_warning));
   parts.push(el("div", { class: "tiles" },
     tile(money(st.estimate.total_cents), "total"),
-    tile(st.trades.length, "trades"),
+    Object.assign(tile(st.trades.length, "trades"), { id: "tile-trades" }),
     tile(p.plan_sets.length, "plan sets"),
     tile(est.due_date || "—", "due"),
     est.address ? tile(est.address, "address", "wide") : null));
@@ -499,12 +499,12 @@ function uploadBox(estimateId, planSets) {
   const replaces = el("select", { id: "plan-replaces", "aria-label": "Replaces" },
     el("option", { value: "" }, "New plan set"),
     planSets.map(ps => el("option", { value: ps.id }, "Revised set — replaces #" + ps.id + " " + ps.file)));
-  const send = el("button", { class: "primary", type: "submit", id: "plan-upload" }, "Upload and check");
+  const send = el("button", { class: "primary", type: "submit", id: "plan-upload" }, "📖 Upload and read");
   const bar = el("progress", { id: "plan-progress", max: 100, value: 0, hidden: true });
   const msg = el("div", { id: "plan-message", role: "status" });
   const box = el("form", { class: "card section", id: "upload-box" },
     el("strong", {}, "Upload plans"),
-    el("p", { class: "muted" }, "PDF, PNG, JPG, TIFF, DXF or DWG, up to 300 MB. The file is checked first; nothing is attached until you say so."),
+    el("p", { class: "muted" }, "PDF, PNG, JPG, TIFF, DXF or DWG, up to 300 MB. One click: the file is checked, added to the project and read. It only stops to ask if the check finds a problem."),
     el("div", { class: "row" }, el("label", {}, "File", file), planSets.length ? el("label", {}, "This is", replaces) : null, send),
     bar, msg);
   box.addEventListener("submit", async ev => {
@@ -574,18 +574,38 @@ function uploadPriceList(f) {
     x.send(f);
   });
 }
+// One click (2026-11-15, David): "Upload and read" attaches the checked file and starts reading it straight away.
+// It only stops to ask when the check found a problem (a warning); clicking the button is the go-ahead otherwise.
+async function attachAndRead(msg, estimateId, staged, replaces) {
+  const r = await api("POST", "/estimates/" + estimateId + "/plans/attach",
+    { stage_id: staged.stage_id, supersedes_plan_set_id: replaces || null });
+  try {
+    await api("POST", "/plan-sets/" + r.plan_set_id + "/process", { confirm: true });
+    toast("Added " + r.file + " as plan set " + r.plan_set_id + " — reading it now");
+  } catch (e) {
+    if (e.status === 401) return r;
+    toast("Added " + r.file + " as plan set " + r.plan_set_id + ", but reading didn't start");
+  }
+  return r;
+}
+
 function showConfirm(msg, estimateId, staged, replaces, done) {
   const d = staged.details || {};
-  const yes = el("button", { class: "primary", type: "button", id: "plan-attach" }, "Attach");
-  const no = el("button", { class: "button", type: "button", id: "plan-cancel" }, "Cancel");
   const finish = () => { state.busy = false; done(); };
+  if (!(d.warnings && d.warnings.length)) {
+    // Nothing to ask about: attach and read without a second click.
+    attachAndRead(msg, estimateId, staged, replaces)
+      .then(() => { finish(); route(); })
+      .catch(e => { finish(); if (e.status !== 401) msg.replaceChildren(errorBox(e)); });
+    return;
+  }
+  const yes = el("button", { class: "primary", type: "button", id: "plan-attach" }, "Add and read it anyway");
+  const no = el("button", { class: "button", type: "button", id: "plan-cancel" }, "Cancel");
   yes.addEventListener("click", async () => {
     yes.disabled = no.disabled = true;
     try {
-      const r = await api("POST", "/estimates/" + estimateId + "/plans/attach",
-        { stage_id: staged.stage_id, supersedes_plan_set_id: replaces || null });
+      await attachAndRead(msg, estimateId, staged, replaces);
       finish();
-      toast("Attached " + r.file + " as plan set " + r.plan_set_id);
       route();
     } catch (e) {
       finish();
@@ -2138,6 +2158,18 @@ function tradePicker(prefix, selected) {
   return { node: box, value: () => [...box.querySelectorAll("input[data-trade]:checked")].map(i => i.value) };
 }
 
+// The project page's Trades tile counts the trades in the quote (picked or priced), not only the
+// priced ones, and refreshes every time the Director panel reloads, e.g. after "Save the trades".
+function updateTradesTile(ns) {
+  const t = document.getElementById("tile-trades");
+  if (!t || (!Array.isArray(ns.trades_wanted) && !Array.isArray(ns.trades_priced))) return;
+  const priced = ns.trades_priced || [];
+  const all = new Set([...(ns.trades_wanted || []), ...priced]);
+  t.querySelector(".num").textContent = String(all.size);
+  t.querySelector(".lbl").textContent = all.size && priced.length < all.size
+    ? "trades (" + priced.length + " priced)" : "trades";
+}
+
 async function loadDirectorPanel(card, eid, notes) {
   let d;
   try { d = await api("POST", "/estimates/" + eid + "/director", {}); }
@@ -2149,6 +2181,7 @@ async function loadDirectorPanel(card, eid, notes) {
   if (!d.job) { card.replaceChildren(el("strong", {}, "🧭 Director"), el("p", { class: "muted" }, "This project is finished.")); return; }
   const j = { ...d, after: n => loadDirectorPanel(card, eid, n) };
   const ns = d.next_step || {};
+  updateTradesTile(ns);
   const done = d.job.state === "done" || d.job.state === "cancelled";
   const kids = [el("div", { class: "page-head" }, el("strong", {}, "🧭 Director — " + (done ? "finished" : "next step")),
     el("a", { href: "#/jobs/" + d.job.id, id: "director-job-link", class: "small" }, "Job " + d.job.id + " · all steps →"))];

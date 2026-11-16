@@ -11,7 +11,7 @@ cc_finish_sqft,Place and finish labor per sq ft (sample),labor,sqft,2.25
 cc_stamp_sqft,Stamped finish extra per sq ft (sample),labor,sqft,4.50
 cc_exposed_sqft,Exposed aggregate extra per sq ft (sample),labor,sqft,2.50
 cc_joint_sqft,Control joints per sq ft (sample),labor,sqft,0.15
-cc_pump_ea,Pump truck (sample),equipment,ea,650.00
+cc_pump_ea,Pump truck subcontract (sample),sub,ea,650.00
 cc_fill_load,Fill dirt delivered per truck load (sample),material,ea,250.00
 cc_grade_sqft,Spread level and compact pad per sq ft (sample),labor,sqft,0.30
 cc_excavate_cy,Excavate and haul away per cubic yard (sample),labor,cuyd,45.00

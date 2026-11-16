@@ -207,5 +207,6 @@ def test_plans_guide_names_real_buttons():
     g = guides.get_guide("upload_plans_and_check_the_scale")
     assert g["screen"] == "plans" and g["steps"] >= 6
     js = (router.WEB_DIR / "app.js").read_text(encoding="utf-8")
-    for label in ("Upload and check", "Attach", "📖 Read the plans…", "Set…", "📏 Calibrate…", "Set the scale…"):
+    # 2026-11-15: one click, "📖 Upload and read", replaces Upload and check -> Attach -> Read the plans.
+    for label in ("📖 Upload and read", "Read the plans again…", "Set…", "📏 Calibrate…", "Set the scale…"):
         assert label in js and label in g["text"], label
