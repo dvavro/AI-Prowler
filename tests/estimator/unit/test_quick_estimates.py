@@ -47,6 +47,35 @@ def test_every_shipped_module_has_golden_cases():  # S2-Q02
             assert (mod.folder / "tests" / "golden.yaml").exists(), mod.id
 
 
+def test_every_construction_trade_can_add_a_permit(db):  # S2-Q02b (2026-11-17, David: a permit item for all trades)
+    for mod in REG.list():
+        if mod.folder.parent.name != "construction":
+            continue
+        man = yaml.safe_load((mod.folder / "manifest.yaml").read_text(encoding="utf-8"))
+        assert any(q["id"] == "permit" for q in man["questions"]), mod.id
+        line = next(ln for ln in man["lines"] if ln["id"] == "permit")
+        csv = (mod.folder / "pricing_defaults.csv").read_text(encoding="utf-8")
+        assert line["price_key"].endswith("_permit_ea") and f"\n{line['price_key']}," in csv, mod.id
+        case = yaml.safe_load((mod.folder / "tests" / "golden.yaml").read_text(encoding="utf-8"))[0]
+        e = _answer(db, mod.id, {**case["answers"], "permit": True})
+        got = {ln["calc"]["rule"]: ln for ln in e["sections"][0]["lines"]}
+        assert got["permit"]["total_cents"] > 0 and got["permit"]["kind"] == "other", mod.id
+        assert "inspections" not in got                                      # none unless asked for
+        e = _answer(db, mod.id, {**case["answers"], "inspections": 2})
+        insp = next(ln for ln in e["sections"][0]["lines"] if ln["calc"]["rule"] == "inspections")
+        assert insp["kind"] == "other" and insp["total_cents"] == 20000, mod.id          # 2 x $100
+
+
+def test_site_trades_can_add_a_survey(db):  # S2-Q02c (2026-11-17, David: surveys)
+    for mid in ("concrete", "fencing", "framing", "landscaping"):
+        mod = REG.get(mid)
+        case = yaml.safe_load((mod.folder / "tests" / "golden.yaml").read_text(encoding="utf-8"))[0]
+        assert "survey" not in {ln["calc"]["rule"] for ln in _answer(db, mid, case["answers"])["sections"][0]["lines"]}
+        e = _answer(db, mid, {**case["answers"], "survey": True})
+        sv = next(ln for ln in e["sections"][0]["lines"] if ln["calc"]["rule"] == "survey")
+        assert sv["kind"] == "sub" and sv["total_cents"] == 45000, mid
+
+
 def test_questions_list(db):  # S2-Q03
     q = quick.questions("house_cleaning", REG)
     ids = [x["id"] for x in q["questions"]]

@@ -71,6 +71,11 @@ def detections_list(conn, ctx: RequestContext, plan_set_id: int | None = None, e
     rows = [dict(r) for r in conn.execute(sql, args)]
     if min_conf is not None:
         rows = [r for r in rows if r["confidence"] is not None and float(r["confidence"]) >= min_conf]
+    # Symbols of a trade switched off in AI-Prowler's 🏗 Estimator tab aren't shown or counted (2026-11-17, David).
+    from estimator.agent_manager.configs import symbol_trades_off
+    hidden = symbol_trades_off(conn, ctx.company_id)
+    if hidden:
+        rows = [r for r in rows if r["trade"] not in hidden]
     counts = _empty()
     for r in rows:
         key = r["item_type"] or "unknown"

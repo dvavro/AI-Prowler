@@ -191,53 +191,39 @@ def mark_step(step: str, status: str) -> tuple[bool, str]:
 
 
 def set_trade(module_id: str, enabled: bool) -> tuple[bool, str]:
+    """The master switch for a trade (2026-11-17, David): off = the company doesn't quote it - no AI takeoff, the
+    Director leaves it out, and the web app hides it from the trade pickers, the Price Book and the symbol screens."""
     from estimator.agent_manager import update_config
 
     def go():
         with _open() as conn:
             update_config(conn, _ctx(), module_id, {"enabled": bool(enabled)}, confirm=True, registry=_registry())
-        return f"{module_id.replace('_', ' ').title()} {'on' if enabled else 'off'}."
+        name = module_id.replace('_', ' ').title()
+        return f"{name} on." if enabled else f"{name} off - not quoted, measured or shown in the web app."
     return _try(go)
 
 
-def labor_rates() -> list[dict]:
-    """Every labor rate the Estimator knows: the company's own, or the module sample if none is saved yet.
-
-    Labor rates are the labor-kind prices in the price book (per hour, per sq ft, per linear ft, ...).
-    The web app Settings screen shows the same list; this is the desktop tab's copy of it.
-    """
-    from estimator.pricing import price_book
-
-    with _open() as conn:
-        rows = price_book.list_prices(conn, _ctx().company_id, registry=_registry())["prices"]
-    return [{"price_key": r["price_key"], "module_id": r.get("module_id"), "description": r["description"],
-             "unit": r["unit"], "cost_cents": r["cost_cents"], "sample": bool(r["sample"])}
-            for r in rows if r["kind"] == "labor"]
-
-
-def save_labor_rates(prices: dict) -> tuple[bool, str]:
-    """Set your own labor rates (dollars as text, e.g. {"hc_labor_hr": "55"}).
-
-    Only labor rates; anything else is refused (change those in the Price Book).
-    Saving also marks the "Labor rates" setup step done.
-    """
-    from estimator.errors import InvalidInput
-    from estimator.estimating import setup
-    from estimator.pricing import price_book
+def save_trade_agent(module_id: str, confidence: str, auto_advance: bool) -> tuple[bool, str]:
+    """A trade's takeoff agent: how sure it must be (0-100%) and whether confident quantities go through without a
+    person. Set here only - the web app's Agents screen shows them (2026-11-17, David)."""
+    from estimator.agent_manager import update_config
 
     def go():
+        text = str(confidence or "").strip().rstrip("%").strip()
+        if not text.isdigit() or not 0 <= int(text) <= 100:
+            raise EstimatorError("Sure enough at must be a whole number from 0 to 100")
         with _open() as conn:
-            labor = {r["price_key"] for r in price_book.list_prices(conn, _ctx().company_id, registry=_registry())["prices"]
-                     if r["kind"] == "labor"}
-            other = sorted(set(prices) - labor)
-            if other:
-                raise InvalidInput(f"these aren't labor rates: {', '.join(other)}; change them in the Price Book")
-            if not prices:
-                raise InvalidInput("change at least one labor rate")
-            price_book.update_prices(conn, _ctx(), prices, confirm=True, registry=_registry())
-            setup.setup_step(conn, _ctx(), "labor_rates", {"prices": prices})
-        return f"Labor rates saved ({len(prices)} rate(s)). New rates apply to new and re-priced estimates."
+            out = update_config(conn, _ctx(), module_id, {"confidence_threshold": int(text),
+                                                          "auto_advance": bool(auto_advance)},
+                                confirm=True, registry=_registry())
+        name = module_id.replace('_', ' ').title()
+        return (f"{name}: sure enough at {int(text)}%" + (", approves by itself." if auto_advance else ".")
+                if out["changed"] else f"{name}: nothing changed.")
     return _try(go)
+
+
+# Labor rates: set in the web app only (Settings -> Tax, markups and labor, or the Price Book) - 2026-11-17, David:
+# the desktop tab's copy (labor_rates / save_labor_rates) was removed so every setting lives in one place.
 
 
 def save_role(role: str, provider: str, model: str = "", fallback: str = "") -> tuple[bool, str]:
@@ -300,15 +286,28 @@ def modules() -> list[dict]:
 
 
 def services() -> list[dict]:
-    """Every service module (pressure washing, cleaning, pest, ...), for the Trades section.
-
-    Service quotes are always available for estimation (quick quotes, no plans needed);
-    unlike construction trades they have no takeoff task, so there is no on/off switch.
-    """
+    """Every service module (pressure washing, cleaning, pest, ...), for the Trades section, with whether the company
+    offers it. 2026-11-17 (David): services can be switched off like trades - not offered in the web app's quick
+    estimate, the Price Book or the Director, and not addable to an estimate; quotes that already have it keep working."""
+    from estimator.agent_manager.configs import trades_off
     reg = _registry()
-    return [{"id": m.id, "name": m.name, "version": m.version,
+    with _open() as conn:
+        off = trades_off(conn, _ctx().company_id)
+    return [{"id": m.id, "name": m.name, "version": m.version, "enabled": m.id not in off,
              "how": {"quick_estimate": "quick quote", "plan_takeoff": "plan takeoff", "both": "quick or plans"}.get(m.path, m.path)}
             for m in sorted((m for m in reg.list() if m.category == "service"), key=lambda m: m.name)]
+
+
+def set_service(module_id: str, enabled: bool) -> tuple[bool, str]:
+    """A service's on/off switch (the master setting, like a trade's)."""
+    from estimator.agent_manager.configs import set_offered
+
+    def go():
+        with _open() as conn:
+            set_offered(conn, _ctx(), module_id, bool(enabled), _registry())
+        name = _registry().get(module_id).name
+        return f"{name} on." if enabled else f"{name} off - not quoted or shown in the web app."
+    return _try(go)
 
 
 def practice_id() -> int | None:

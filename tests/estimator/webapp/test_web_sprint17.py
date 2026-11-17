@@ -393,7 +393,12 @@ def test_settings_audit_lists_changes(db, call):                                
     assert call("GET", f"{API}/settings/audit?estimate_id=abc").status == 400
 
 
-def test_settings_labor_rate_round_trip(call):                                  # C2S17-W24
+def test_settings_labor_rate_round_trip(call, db):                              # C2S17-W24
+    from estimator.context import personal_context
+    from estimator.estimating import setup
+
+    def step():
+        return next(s["status"] for s in setup.setup_status(db, personal_context())["steps"] if s["step"] == "labor_rates")
     labor = call("GET", f"{API}/settings").json()["labor_rates"]
     assert labor
     key, cur = labor[0]["price_key"], labor[0]["cost_cents"]
@@ -401,9 +406,11 @@ def test_settings_labor_rate_round_trip(call):                                  
     ask = call("POST", f"{API}/settings/labor_rates", {"data": {"prices": {key: new}}}).json()
     assert ask["needs_confirmation"] is True
     assert ask["changes"][0]["price_key"] == key and ask["changes"][0]["new_cents"] == cur + 100
+    assert step() != "done"                                       # asking changes nothing
     done = call("POST", f"{API}/settings/labor_rates",
                 {"data": {"prices": {key: new}}, "confirm": True}).json()
     assert done["section"] == "labor_rates" and done["changed"][0]["new_cents"] == cur + 100
+    assert step() == "done"        # 2026-11-17: labor rates are set only here now, so this ticks the setup step
     after = call("GET", f"{API}/settings").json()["labor_rates"]
     assert next(p for p in after if p["price_key"] == key)["cost_cents"] == cur + 100
     r = call("POST", f"{API}/settings/labor_rates", {"data": {"prices": {KEY: "1"}}})

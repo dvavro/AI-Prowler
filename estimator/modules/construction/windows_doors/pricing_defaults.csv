@@ -13,3 +13,4 @@ wd_sealant_ea,Sealant and shims per opening (sample),material,ea,8.00
 wd_hardware_ea,Door hardware (sample),material,ea,45.00
 wd_casing_lf,Casing supplied and installed per linear ft (sample),material,lf,2.75
 wd_permit_ea,Building permit (sample),other,ea,150.00
+wd_inspect_ea,Building inspection fee (sample),other,ea,100.00

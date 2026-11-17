@@ -45,6 +45,8 @@ questions:
       - {value: "2", label: "2 in", factor: "2"}
       - {value: "3", label: "3 in", factor: "3"}
       - {value: "5.5", label: "5.5 in (full 2x6)", factor: "5.5"}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 scenarios:
   - {id: good, label: "Good: R-30 attic", answers: {attic_r: "30"}}
@@ -72,3 +74,5 @@ lines:
      price_key: in_vapor_sqft, when: "vapor_barrier and wall_sqft > 0"}
   - {id: spray_foam, description: "Closed-cell spray foam (board feet = sq ft x inches)", kind: other, unit: sqft,
      quantity: "spray_foam_sqft * foam_inches", price_key: in_foam_bf, when: "spray_foam_sqft > 0"}
+  - {id: permit, description: "Permit", kind: other, unit: ea, quantity: "1", price_key: in_permit_ea, when: "permit"}
+  - {id: inspections, description: "Inspections", kind: other, unit: ea, quantity: "inspections", price_key: in_inspect_ea, when: "inspections > 0"}

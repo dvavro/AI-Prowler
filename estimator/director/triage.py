@@ -96,8 +96,11 @@ def _service_mods(registry):
     return [m for m in registry.list() if m.category == "service" and m.path in ("quick_estimate", "both")]
 
 
-def triage(request: str, registry, has_plans: bool = False, module_id: str | None = None) -> TriageResult:
-    quick_mods = _service_mods(registry)
+def triage(request: str, registry, has_plans: bool = False, module_id: str | None = None,
+           off=frozenset()) -> TriageResult:
+    """off: trades switched off in AI-Prowler's 🏗 Estimator tab (2026-11-17) - a request naming one gets no module, so
+    the Director says it's switched off instead of pricing it. A service that's off isn't matched at all."""
+    quick_mods = [m for m in _service_mods(registry) if m.id not in off]
     if module_id:
         mod = registry.get(module_id)   # raises NotFound with the list of modules
         if mod.category == "construction":
@@ -123,6 +126,16 @@ def triage(request: str, registry, has_plans: bool = False, module_id: str | Non
     trades = sorted(((_score(text, words) + bonus.get(t, 0), t) for t, words in trade_words.items()), reverse=True)
     trades = [(s, t) for s, t in trades if s > 0]
 
+    # A request for a service that's switched off: say so rather than guess another service (2026-11-17).
+    off_hits = sorted(((_score(text, list(m.keywords) + [m.name.lower(), m.id.replace("_", " ")]) + bonus.get(m.id, 0),
+                        m.id, m.name) for m in _service_mods(registry) if m.id in off), reverse=True)
+    if off_hits and off_hits[0][0] > 0 and off_hits[0][0] > max([s for s, _ in scored[:1]] + [s for s, _ in trades[:1]]
+                                                                + [0]):
+        return TriageResult(None, reason=f"request mentions {off_hits[0][2]}, which is switched off",
+                            candidates=[m.id for m in quick_mods],
+                            question=f"{off_hits[0][2]} is switched off in AI-Prowler's 🏗 Estimator tab (Trades) - turn "
+                                     "it on there to quote it. Services I can price now: "
+                                     + (", ".join(m.id.replace("_", " ") for m in quick_mods) or "none") + ".")
     if scored and (not trades or scored[0][0] >= trades[0][0]):
         if len(scored) > 1 and scored[1][0] == scored[0][0]:
             names = [mid for _, mid in scored if _ == scored[0][0]]
@@ -131,14 +144,15 @@ def triage(request: str, registry, has_plans: bool = False, module_id: str | Non
         return TriageResult("quick_quote", scored[0][1], reason=f"request mentions {scored[0][1].replace('_', ' ')}")
     if trades:
         trade = trades[0][1]
-        return TriageResult("standard_estimate", trade if trade in trade_mods else None, trade=trade,
-                            reason=f"request mentions {trade.replace('_', ' ')} work")
+        return TriageResult("standard_estimate", trade if trade in trade_mods and trade not in off else None,
+                            trade=trade, reason=f"request mentions {trade.replace('_', ' ')} work"
+                            + (" (switched off)" if trade in off else ""))
     names = [m.id for m in quick_mods]
     return TriageResult(None, reason="couldn't tell what kind of job this is", candidates=names,
                         question="What kind of job is this? Quick services I can price now: "
                                  + ", ".join(n.replace("_", " ") for n in names)
                                  + ". Construction trades from measurements: "
-                                 + (", ".join(sorted(trade_mods)) or "none yet")
+                                 + (", ".join(sorted(t for t in trade_mods if t not in off)) or "none yet")
                                  + ". Or attach plans.")
 
 

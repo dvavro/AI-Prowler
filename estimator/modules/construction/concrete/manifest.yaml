@@ -76,6 +76,9 @@ questions:
       - {value: "5", label: "#5 bar", factor: "5"}
   - {id: pump, label: "Pump truck needed?", type: boolean, default: false,
      help: "When the truck can't reach the pour."}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
+  - {id: survey, label: "Survey needed?", type: boolean, default: false, help: "A licensed surveyor locates the lines and stakes the work."}
 
 lines:
   - {id: removal, description: "Break out and haul away existing concrete", kind: labor, unit: sqft,
@@ -120,3 +123,6 @@ lines:
      price_key: cc_joint_sqft}
   # a pump truck is usually hired with its operator, so it's a subcontract (not taxed as material)
   - {id: pump, description: "Pump truck (subcontract)", kind: sub, unit: ea, quantity: "1", price_key: cc_pump_ea, when: "pump"}
+  - {id: permit, description: "Concrete permit", kind: other, unit: ea, quantity: "1", price_key: cc_permit_ea, when: "permit"}
+  - {id: inspections, description: "Inspections", kind: other, unit: ea, quantity: "inspections", price_key: cc_inspect_ea, when: "inspections > 0"}
+  - {id: survey, description: "Survey and stake-out (subcontract)", kind: sub, unit: ea, quantity: "1", price_key: cc_survey_ea, when: "survey"}

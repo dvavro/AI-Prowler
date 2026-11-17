@@ -56,6 +56,8 @@ questions:
       - {value: "24", label: "24 in", factor: "2"}
   - {id: house_wrap, label: "New house wrap or paper?", type: boolean, default: true}
   - {id: remove_old, label: "Remove the old siding?", type: boolean, default: true}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 scenarios:
   - {id: good, label: "Good: vinyl", answers: {material: vinyl}}
@@ -98,3 +100,5 @@ lines:
      price_key: sd_soffit_sqft, when: "eave_lf > 0"}
   - {id: fascia, description: "Fascia", kind: material, unit: lf, quantity: "eave_lf", waste: "0.05", price_key: sd_fascia_lf,
      when: "eave_lf > 0"}
+  - {id: permit, description: "Permit", kind: other, unit: ea, quantity: "1", price_key: sd_permit_ea, when: "permit"}
+  - {id: inspections, description: "Inspections", kind: other, unit: ea, quantity: "inspections", price_key: sd_inspect_ea, when: "inspections > 0"}

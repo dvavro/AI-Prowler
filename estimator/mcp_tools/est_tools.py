@@ -81,12 +81,17 @@ def _obj(value, name: str) -> dict:
 def est_list_modules(category: str = "") -> str:
     """List the Estimator's trade and service modules (id, name, category, quick-estimate or plan takeoff).
 
-    category: optional filter, "service" or "construction".
+    category: optional filter, "service" or "construction". Trades the company switched off (AI-Prowler's 🏗 Estimator
+    tab → Trades) aren't listed: the company doesn't quote them; they're named under switched_off.
     """
+    from estimator.agent_manager.configs import trades_off
     reg = get_registry()
-    mods = [m.summary() for m in reg.list() if not category or m.category == category]
-    return json.dumps({"ok": True, "count": len(mods), "modules": mods,
-                       "load_errors": reg.errors})
+
+    def go(c):
+        off = trades_off(c, _ctx().company_id)
+        mods = [m.summary() for m in reg.list() if (not category or m.category == category) and m.id not in off]
+        return {"ok": True, "count": len(mods), "modules": mods, "switched_off": sorted(off), "load_errors": reg.errors}
+    return _run(go)
 
 
 def est_create_estimate(title: str = "", customer_id: str = "", address: str = "", due_date: str = "") -> str:
@@ -270,7 +275,8 @@ def est_director_next(job_id: int, answers: dict | str | None = None, module_id:
                       revise: bool = False, change_summary: str = "", reprice: bool = False,
                       reviewed: bool = False, scenarios: bool = False, choose_scenario: str = "",
                       scenario_module: str = "", checklist_done: bool = False,
-                      trades: list | str | None = None, confirm: bool = False, ready: bool = False) -> str:
+                      trades: list | str | None = None, confirm: bool = False, ready: bool = False,
+                      without_scope: bool = False) -> str:
     """Continue a Director job with what it asked for:
     answers / module_id; approve=true at the approval checkpoint (only when the user clearly said yes;
     confirm_sample_prices=true only if they knowingly accept sample prices); customer={name, email, ...};
@@ -287,7 +293,8 @@ def est_director_next(job_id: int, answers: dict | str | None = None, module_id:
     person confirms the company's approval checklist. trades=["framing", "drywall", ...] says which trades are in a
     plan takeoff job (full_takeoff lane). ready=true on a project job (project lane: every project gets one) when the
     person says the estimate they built on the screens is complete: the Director then checks, approves and quotes it.
-    Returns the next step.
+    without_scope=true makes the quote without waiting for the Bid Writer's scope and Included / Not included lists
+    (only when the user says so). Returns the next step.
     """
     def go(c):
         return director.next_step(c, _ctx(), int(job_id), answers=_opt_obj(answers, "answers"),
@@ -300,7 +307,7 @@ def est_director_next(job_id: int, answers: dict | str | None = None, module_id:
                                   reviewed=bool(reviewed), scenarios=bool(scenarios),
                                   choose_scenario=choose_scenario or None, scenario_module=scenario_module or None,
                                   checklist_done=bool(checklist_done), trades=_list(trades, "trades"),
-                                  confirm=bool(confirm), ready=bool(ready))
+                                  confirm=bool(confirm), ready=bool(ready), without_scope=bool(without_scope))
     return _run(go)
 
 
@@ -649,7 +656,7 @@ def est_create_revision(estimate_id: int, change_summary: str) -> str:
 
 def runner_start(estimate_id: int, trades: list | str) -> str:
     """Start a multi-trade takeoff run on an estimate: one task per trade (e.g. ["framing", "drywall", "roofing"]).
-    Drywall, painting and insulation wait for framing. Trades turned off in Agent Manager are skipped. A Director plan
+    Drywall, painting and insulation wait for framing. Trades switched off in AI-Prowler's Estimator tab are skipped. A Director plan
     job starts its own run, so use this for estimates outside the Director."""
     return _run(lambda c: runner.start_run(c, _ctx(), int(estimate_id), _list(trades, "trades")))
 

@@ -251,6 +251,90 @@ def test_E2E_S17_M6_settings_ask_first_and_roles(page, db):
 
 # ------------------------------------------------------------------ M7: Price Book
 
+def test_E2E_S17_M7b_price_book_save_as_a_new_item(page, db):
+    """2026-11-17 (David): editing an item's description renamed and repriced the item every estimate uses, when a
+    second item was wanted. The Edit row warns, and Save as a new item keeps the original and adds a copy."""
+    from estimator.pricing.price_book import get_price
+    before = get_price(db, "default", KEY)
+    page.goto(page.base + "#/price_book?module=pressure_washing")
+    page.wait_for_selector("#prices")
+    dismiss_tour(page)
+    page.click(f"#prices [data-edit={KEY}]")
+    page.wait_for_selector("#pb-edit-desc")
+    assert page.locator("#pb-edit-rename-note").is_hidden()
+    page.fill("#pb-edit-desc", "Driveway cleaning premium per sq ft")
+    page.dispatch_event("#pb-edit-desc", "input")
+    assert page.locator("#pb-edit-rename-note").is_visible()             # renaming changes the item itself
+    type_in(page, "#pb-edit-cost", "0.40")
+    page.click("#pb-edit-save-new")
+    page.wait_for_selector("#pb-edit-new-key")
+    code = page.input_value("#pb-edit-new-key")
+    assert code.startswith("pw_") and code != KEY
+    page.click("#pb-edit-new-go")
+    page.wait_for_selector("#pb-confirm")
+    page.click("#pb-confirm")
+    page.wait_for_function(f"() => document.body.innerText.includes('New item {code} added')")
+    after = get_price(db, "default", KEY)
+    same = lambda p: p and (p.description, p.cost_cents)  # noqa: E731  (a trade's sample price isn't a row: None)
+    assert same(after) == same(before)                                   # the original stays as it was
+    new = get_price(db, "default", code)
+    assert new.description == "Driveway cleaning premium per sq ft" and new.cost_cents == 40
+
+
+def test_E2E_S17_M7c_edit_answers_keeps_every_saved_answer(page, db):
+    """2026-11-17 (David): Edit answers on a reopened concrete estimate showed the vapor barrier, pump and footing rebar
+    size blank - only the answers a line's quantity uses were filled in. Every saved answer must come back."""
+    saved = {"area_sqft": 1000, "thickness_in": "6", "footing_lf": 120, "footing_rebar_size": "5",
+             "vapor_barrier": True, "pump": True, "base": True}
+    e = service.create_estimate(db, CTX, "Edit answers keep")
+    e = quick.answer(db, CTX, e["id"], "concrete", saved, e["rev"], REG)
+    db.commit()
+    page.goto(page.base + f"#/estimates/{e['id']}")
+    page.wait_for_selector("#edit-answers-concrete")
+    dismiss_tour(page)
+    page.click("#edit-answers-concrete")
+    form = "#edit-answers-form-concrete"
+    page.wait_for_selector(form)
+    for box in ("vapor_barrier", "pump", "base"):
+        assert page.is_checked(f"{form} #q-{box}"), box
+    assert not page.is_checked(f"{form} #q-remove_existing")
+    assert page.input_value(f"{form} #q-footing_rebar_size") == "5"
+    assert page.input_value(f"{form} #q-thickness_in") == "6"
+    page.click("#edit-answers-price-concrete")
+    page.wait_for_function("() => document.body.innerText.includes('Concrete priced again')")
+    after = service.get_estimate(db, CTX, e["id"])["sections"][0]
+    assert after["answers"]["vapor_barrier"] is True and str(after["answers"]["footing_rebar_size"]) == "5"
+    assert {"vapor_barrier", "pump", "footing_rebar_5"} <= {ln["calc"]["rule"] for ln in after["lines"]}
+
+
+def test_E2E_S17_M7d_trade_switched_off_is_not_offered(page, db):
+    """2026-11-17 (David): a trade switched off in AI-Prowler's 🏗 Estimator tab (the master setting) isn't offered in
+    the web app - not in the quick estimate, the Price Book or the Agents screen's settings."""
+    from estimator import agent_manager
+    agent_manager.update_config(db, CTX, "concrete", {"enabled": False}, confirm=True, registry=REG)
+    agent_manager.set_offered(db, CTX, "pest_control", False, REG)          # services switch off the same way
+    db.commit()
+    page.goto(page.base + "#/quick")
+    page.wait_for_selector("#quick-module")
+    dismiss_tour(page)
+    opts = page.eval_on_selector_all("#quick-module option", "os => os.map(o => o.value)")
+    assert "concrete" not in opts and "roofing" in opts
+    assert "pest_control" not in opts and "pressure_washing" in opts
+    agent_manager.set_offered(db, CTX, "pest_control", True, REG)
+    db.commit()
+    page.goto(page.base + "#/price_book")
+    page.wait_for_selector("#prices")
+    dismiss_tour(page)
+    shown = page.eval_on_selector_all("#pb-module option", "os => os.map(o => o.value)")
+    assert "concrete" not in shown and "framing" in shown
+    assert page.locator("#prices tr[data-key^=cc_]").count() == 0
+    page.goto(page.base + "#/agents")
+    page.wait_for_selector("#agents-settings-where")
+    assert "Concrete" in page.inner_text("#agents-settings-where")
+    agent_manager.update_config(db, CTX, "concrete", {"enabled": True}, confirm=True, registry=REG)
+    db.commit()
+
+
 def test_E2E_S17_M7_price_book_history_markups_import(page, db):
     page.goto(page.base + "#/price_book?module=pressure_washing")
     page.wait_for_selector("#prices")

@@ -220,6 +220,10 @@ input.scale-note { width: 13em; }
 #bp-auto-formulas td.formula { font-family: Consolas, "Courier New", monospace; white-space: nowrap; }
 #bp-auto-formulas tr.total td { font-weight: 600; border-top: 2px solid #ccd; }
 #bp-footer-edit input.bp-footer-in { width: 6em; }
+/* 2026-11-16: the estimate's total at the bottom of the page */
+#estimate-totals tr.subtotal th, #estimate-totals tr.subtotal td { border-top: 1px solid #ccd; }
+#estimate-totals tr.total th, #estimate-totals tr.total td { font-weight: 700; font-size: 1.1em; border-top: 2px solid #ccd; }
+#since-approval ul { margin: .4em 0 .4em 1.2em; }
 /* 2026-11-16: a formula row shows what it measured on the drawing */
 #bp-auto-formulas tr.bp-step-link { cursor: pointer; }
 #bp-auto-formulas tr.bp-step-link:hover td, #bp-auto-formulas tr.bp-step-link:focus td { background: #fff5f5; }

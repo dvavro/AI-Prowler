@@ -42,6 +42,19 @@ def _registry(registry=None):
     return registry or get_registry()
 
 
+def _off(conn, ctx) -> set[str]:
+    """Trades switched off in AI-Prowler's 🏗 Estimator tab (Trades): not quoted (2026-11-17, David)."""
+    from estimator.agent_manager.configs import trades_off
+    return trades_off(conn, ctx.company_id)
+
+
+def _refuse_off(conn, ctx, module_id, reg) -> None:
+    if module_id and module_id in _off(conn, ctx):
+        mod = reg.modules.get(module_id)
+        raise InvalidInput(f"{mod.name if mod else module_id} is switched off - turn it on in AI-Prowler's 🏗 Estimator "
+                           "tab (Trades) to quote it", module_id=module_id)
+
+
 def _tx(conn, fn):
     with service.transaction(conn):
         return fn()
@@ -79,7 +92,8 @@ def start(conn, ctx: RequestContext, request: str, *, customer_id: str | None = 
         cust["customer_id"] = customer_id
     if address and not cust.get("address"):
         cust["address"] = address
-    tri = triage(request, reg, has_plans=has_plans, module_id=module_id or None)
+    _refuse_off(conn, ctx, module_id, reg)
+    tri = triage(request, reg, has_plans=has_plans, module_id=module_id or None, off=_off(conn, ctx))
     title = _job_title(request, tri, reg, address)
     est = service.create_estimate(conn, ctx, title, customer_id=customer_id, address=address, due_date=due_date)
     pb = playbook_for_lane(tri.lane) if tri.lane else None
@@ -105,7 +119,7 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
               revise: bool = False, change_summary: str | None = None, reprice: bool = False,
               reviewed: bool = False, scenarios: bool = False, choose_scenario: str | None = None,
               scenario_module: str | None = None, checklist_done: bool = False, trades=None,
-              confirm: bool = False, ready: bool = False, registry=None) -> dict:
+              confirm: bool = False, ready: bool = False, without_scope: bool = False, registry=None) -> dict:
     """Give the Director what it asked for (answers, a module choice, the trades in a plan takeoff, an approval, a
     send, the customer's answer) and get the next step. send=true and convert=true reach outside the Estimator
     (an email to the customer; a customer, quote and job in AI-Prowler), so they ask first: without confirm=true
@@ -165,6 +179,7 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
     if (job["lane"] is None or job["module_id"] is None) and (module_id or answers):
         if not module_id:
             raise InvalidInput("which service is this? give module_id", candidates=[m.id for m in reg.list()])
+        _refuse_off(conn, ctx, module_id, reg)
         tri = triage(job["request_text"], reg, module_id=module_id)
         if job["lane"] == "full_takeoff":
             tri.lane = "full_takeoff"
@@ -231,7 +246,7 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
                            jobstore.save_job(conn, ctx, job)))
 
     inputs = {"approve": approve, "confirm_sample_prices": confirm_sample_prices, "send": send, "reviewed": reviewed,
-              "checklist_done": checklist_done, "ready": ready,
+              "checklist_done": checklist_done, "ready": ready, "without_scope": without_scope,
               "send_to": send_to, "outcome": outcome, "convert": convert, "service_date": service_date}
     out = _run(conn, ctx, job["id"], reg, inputs=inputs)
     if scenarios:
@@ -452,7 +467,7 @@ def _run(conn, ctx, job_id: int, reg, inputs: dict | None = None, triage_info: d
     for _ in range(20):   # a playbook has a handful of stages; this only guards against a loop
         job = jobstore.load_job(conn, ctx, job_id)
         if job["lane"] is None:
-            _wait(conn, ctx, job, "waiting_on_user", "user", _triage_step(job, reg))
+            _wait(conn, ctx, job, "waiting_on_user", "user", _triage_step(job, reg, _off(conn, ctx)))
             break
         # A job with a lane but no playbook (older jobs, or ones made outside start()) runs its lane's playbook
         # (2026-11-13: KeyError None on the project page's Director call).
@@ -466,12 +481,16 @@ def _run(conn, ctx, job_id: int, reg, inputs: dict | None = None, triage_info: d
                 "tools": ["est_add_line_item", "est_calculate"]})
             break
         if job["module_id"] is None and job["lane"] == "standard_estimate":
-            trade = triage(job["request_text"], reg).trade or "this"
-            have = sorted(m.id for m in reg.list() if m.category == "construction")
+            off = _off(conn, ctx)
+            trade = triage(job["request_text"], reg, off=off).trade or "this"
+            have = sorted(m.id for m in reg.list() if m.category == "construction" and m.id not in off)
+            why = (f"{trade.replace('_', ' ').title()} is switched off in AI-Prowler's 🏗 Estimator tab (Trades) - turn "
+                   "it on there to quote it" if trade in off else
+                   f"The {trade.replace('_', ' ')} module comes later")
             _wait(conn, ctx, job, "waiting_on_feature", "feature", {
                 "stage": job["stage"], "agent": "director",
                 "say": f"This is a {trade.replace('_', ' ')} job. I can price these trades from measurements now: "
-                       + ", ".join(have) + f". The {trade.replace('_', ' ')} module comes later; the estimate is "
+                       + ", ".join(have) + f". {why}; the estimate is "
                        "created, so you can add line items by hand (est_add_line_item) and price them (est_calculate), "
                        "or tell me which trade module to use (module_id).",
                 "ask": have, "tools": ["est_director_next(job_id, module_id=...)", "est_add_line_item", "est_calculate"]})
@@ -528,8 +547,8 @@ def _voice(ctx) -> str:
     return "customer" if ctx.role in CUSTOMER_FACING_ROLES else "estimator"
 
 
-def _triage_step(job, reg) -> dict:
-    tri = triage(job["request_text"], reg)
+def _triage_step(job, reg, off=frozenset()) -> dict:
+    tri = triage(job["request_text"], reg, off=off)
     return {"stage": "triage", "agent": "director", "say": tri.question, "ask": tri.candidates,
             "tools": ["est_director_next(job_id, module_id=...)"],
             "why": tri.reason}
@@ -707,6 +726,17 @@ def _approve(conn, ctx, job, reg, stage, notes, inputs, **_):
                "An owner or reviewer needs to check and approve it.")
     else:
         say = f"The {money} estimate is checked and ready. An owner or reviewer approves it (approve=true)."
+    # Reopened after an approval: the approver only needs to check what changed since (2026-11-16, David).
+    from estimator.estimating import reopen as _reopen
+    since = _reopen.changes_since_approval(conn, ctx, est["id"], registry=reg)
+    if since:
+        items = ([f"{a['trade']}: {a['label']} {a['from'] if a['from'] is not None else 'none'} → {a['to']}"
+                  for a in since["answers"]]
+                 + [f"{ln['trade']}: {ln['description']} {ln['change']} ({ln['from'] or '—'} → {ln['to'] or '—'})"
+                    for ln in since["lines"]])
+        say += (" " + since["summary"] + "." + (" Check only these: " + "; ".join(items[:12])
+                                                + ("; …" if len(items) > 12 else "") + "." if items else "")
+                + (f" The other {since['unchanged_lines']} line(s) are as approved." if since["unchanged_lines"] else ""))
     if checklist:
         say += " Before approving, confirm: " + "; ".join(checklist) + " (checklist_done=true)."
     mods_with_options = [m for m in mods if m in reg.modules and reg.modules[m].scenarios]
@@ -718,7 +748,7 @@ def _approve(conn, ctx, job, reg, stage, notes, inputs, **_):
     _wait(conn, ctx, job, "waiting_on_user", "approver" if not one_tap else "user", {
         "stage": stage.id, "agent": stage.agent, "say": say, "total_cents": total,
         "approval": "one_tap" if one_tap else "full", "approver_roles": list(roles),
-        "sample_prices": sorted(set(samples)), "checklist": checklist,
+        "sample_prices": sorted(set(samples)), "checklist": checklist, "since_approval": since,
         "tools": ["est_director_next(job_id, approve=true)", "est_get_estimate(estimate_id)"],
         "why": "money and anything sent to a customer need a person's OK"})
     return False
@@ -786,7 +816,7 @@ def _collect_trades(conn, ctx, job, reg, stage, notes, **_):
         off = [t for t in found if t not in enabled]
         found = [t for t in found if t in enabled]
         if off:
-            notes.append("Left out (turned off in Agent Manager): " + ", ".join(off) + ".")
+            notes.append("Left out (switched off in AI-Prowler's 🏗 Estimator tab): " + ", ".join(off) + ".")
         if not found:
             have = sorted(enabled)
             _wait(conn, ctx, job, "waiting_on_user", "user", {
@@ -912,7 +942,23 @@ def _write_bid(conn, ctx, job, reg, stage, notes, inputs, **_):
         return False
     if bid is None:
         from estimator.agents import queue as agent_queue
-        draft = agent_queue.latest_draft(conn, ctx, job["estimate_id"])
+        # Ask the Bid Writer for the scope and the Included / Not included lists first (2026-11-17, David: the quote
+        # was made a second after approval, before the Bid Writer was asked, so it went out with neither list).
+        try:
+            got = {} if inputs.get("without_scope") else agent_queue.draft_now(conn, ctx, job["estimate_id"], job["id"],
+                                                                             registry=reg)
+        except Exception as exc:                  # the AI couldn't be reached: make the quote, and say so
+            got = {}
+            notes.append(f"The Bid Writer couldn't write the scope ({str(exc)[:160]}); the quote lists the lines only.")
+        if got.get("waiting"):
+            _wait(conn, ctx, job, "waiting_on_user", "user", {
+                "stage": stage.id, "agent": stage.agent,
+                "say": f"Approved. The Bid Writer is writing the scope and the Included / Not included lists for the quote: "
+                       f"{got['waiting']}. Or make the quote without them (without_scope=true).",
+                "tools": ["est_agent_next()", "est_director_next(job_id, without_scope=true)"],
+                "why": "the quote should say what's included and what isn't before it goes to the customer"})
+            return False
+        draft = got.get("draft")
         scope = {k: draft.get(k) for k in ("scope_text", "inclusions", "exclusions")} if draft else {}
         made = bids.generate(conn, ctx, job["estimate_id"], customer=job["customer"], registry=reg,
                              **{k: v for k, v in scope.items() if v})
@@ -980,10 +1026,14 @@ def _follow_up(conn, ctx, job, reg, stage, notes, inputs, **_):
             notes.append(f"Created in AI-Prowler: {', '.join(f'{k} {v}' for k, v in done['created'].items() if v)}.")
             notes.extend(done.get("warnings") or [])
             return True
+        co = bid["snapshot"].get("change_order") or {}
         _wait(conn, ctx, job, "waiting_on_user", "user", {
             "stage": stage.id, "agent": stage.agent,
-            "say": f"The customer accepted {bid['number']} ({format_cents(bid['total_cents'])}). Make it a job in "
-                   "AI-Prowler? (convert=true, confirm=true once they say yes, optionally service_date=YYYY-MM-DD)",
+            "say": (f"The customer accepted change order {co.get('n')} ({bid['number']}, "
+                    f"{format_cents(bid['total_cents'])}). Add it to job {co['job_id']} in AI-Prowler? (convert=true, "
+                    "confirm=true once they say yes)") if co.get("job_id") else
+                   (f"The customer accepted {bid['number']} ({format_cents(bid['total_cents'])}). Make it a job in "
+                    "AI-Prowler? (convert=true, confirm=true once they say yes, optionally service_date=YYYY-MM-DD)"),
             "tools": ["est_director_next(job_id, convert=true, confirm=true, service_date=...)"],
             "why": "creating customers, quotes and jobs needs a person's OK"})
         return False
@@ -1143,6 +1193,13 @@ def set_project_trades(conn, ctx: RequestContext, estimate_id: int, trades, regi
     if job is None:
         raise NotEditable(f"project {est['id']} has no Director job ({est['status']})", estimate_id=est["id"])
     job = jobstore.load_job(conn, ctx, job["id"])
+    # A trade switched off in AI-Prowler's 🏗 Estimator tab can't be added; one the project already has can stay.
+    from estimator.agent_manager.configs import trades_off
+    have = set(project_trades(job)) | {s["module_id"] for s in est["sections"]}
+    refused = [t for t in order if t in trades_off(conn, ctx.company_id) and t not in have]
+    if refused:
+        raise InvalidInput(f"{', '.join(reg.modules[t].name for t in refused)} is switched off - turn it on in "
+                           "AI-Prowler's 🏗 Estimator tab (Trades) first", field="trades", trades_off=refused)
     job["answers"]["_trades"] = order
     if order:
         job["answers"]["_trade"] = order[0]
@@ -1171,7 +1228,8 @@ def intake(conn, ctx: RequestContext, request: str, *, has_plans: bool | None = 
     if not text and not module_id:
         raise InvalidInput("tell me what the job is, e.g. \"pour a 30 x 70 ft shed slab\" or \"wash a driveway\"",
                            field="request")
-    tri = triage(text, reg, module_id=module_id or None)
+    _refuse_off(conn, ctx, module_id, reg)
+    tri = triage(text, reg, module_id=module_id or None, off=_off(conn, ctx))
     mod = reg.modules.get(tri.module_id) if tri.module_id else None
     kind = "service" if tri.lane == "quick_quote" else "trade" if mod is not None else "unknown"
     name = mod.name if mod else None
@@ -1341,6 +1399,10 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
         why = "I check and approve only when you say the estimate is complete, so a half-built price never goes out"
         if not has_customer:
             say += " Add the customer's name and email too: the quote is sent to them."
+        from estimator.estimating import reopen as _reopen
+        since = _reopen.changes_since_approval(conn, ctx, eid, registry=reg)
+        if since:
+            say = "Reopened for changes. " + since["summary"] + ". " + say
     _wait(conn, ctx, job, "waiting_on_user", "user", {
         "stage": stage.id, "agent": stage.agent, "say": say, "why": why, "todo": todo, "estimate_id": eid,
         "total_cents": total, "ready_ok": total > 0 and not still, "needs_customer": not has_customer,

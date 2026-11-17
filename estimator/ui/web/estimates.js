@@ -50,10 +50,35 @@ async function renderEstimate(main, id) {
     el("div", { class: "page-head" }, el("h2", {}, "🧮 " + est.title + (est.revision > 1 ? " (v" + est.revision + ")" : "")),
       el("div", { class: "row" }, el("span", { class: "status big" }, words(est.status)), helpLink("estimates")))];
   if (est.editing_warning) parts.push(el("p", { class: "note warn" }, est.editing_warning));
-  if (est.change_summary) parts.push(el("p", { class: "muted" }, "What changed in this version: " + est.change_summary));
+  // A change order: which accepted quote it adds to (2026-11-16, David).
+  const co = d.change_order;
+  if (co) {
+    parts.push(el("div", { class: "card section note", id: "change-order-of" },
+      el("strong", {}, "➕ Change order " + co.n), " to ",
+      el("a", { href: "#/estimates/" + co.of_estimate_id }, co.of_title),
+      co.of_number ? " (accepted quote " + co.of_number + ", " + money(co.of_total_cents) + ")" : "",
+      co.job_id ? " · job " + co.job_id : "",
+      co.summary ? el("p", { class: "muted" }, "For: " + co.summary) : null,
+      el("p", { class: "muted small" }, "Price only the extra or changed work here. Its quote tells the customer it's in addition to the accepted one; when they accept it, the job's amount goes up by it.")));
+  } else if (est.change_summary) parts.push(el("p", { class: "muted" }, "What changed in this version: " + est.change_summary));
+  // "Other lines" (lines added by hand) is a section but not a trade, so it isn't counted as one (2026-11-16, David).
+  const tradeCount = est.sections.filter(s => s.module_id !== "custom").length;
+  const handLines = est.sections.filter(s => s.module_id === "custom").reduce((n, s) => n + s.lines.length, 0);
   parts.push(el("div", { class: "tiles" }, tile(money(t.total_cents || 0), "total"),
     d.see_margins && t.margin_pct !== undefined ? tile(Math.round(parseFloat(t.margin_pct) * 1000) / 10 + "%", "margin") : null,
-    tile(est.sections.length, "trades"), tile(links.measurements.filter(m => m.status === "approved").length, "approved measurements")));
+    Object.assign(tile(tradeCount, tradeCount === 1 ? "trade" : "trades"), { id: "tile-est-trades" }),
+    handLines ? tile(handLines, handLines === 1 ? "line added by hand" : "lines added by hand") : null,
+    tile(links.measurements.filter(m => m.status === "approved").length, "approved measurements")));
+  // Reopened after approval: what changed since, so the next approval only checks that (2026-11-16, David).
+  if (d.since_approval) parts.push(sinceApprovalCard(d.since_approval));
+  if ((d.change_orders || []).length) {
+    parts.push(el("div", { class: "card section", id: "change-orders" }, el("h3", {}, "➕ Change orders"),
+      el("table", { class: "list" },
+        el("thead", {}, el("tr", {}, el("th", {}, "#"), el("th", {}, "For"), el("th", {}, "Status"), el("th", {}, "Total"))),
+        el("tbody", {}, d.change_orders.map(c => el("tr", { "data-change-order": c.id },
+          el("td", {}, el("a", { href: "#/estimates/" + c.id }, "Change order " + c.n)), el("td", {}, c.summary || ""),
+          el("td", {}, words(c.status)), el("td", { class: "money" }, money(c.total_cents || 0))))))));
+  }
   // The project's Director: what to do next and why, and the Approve / Send buttons (2026-11-12, David).
   if (!est.practice && typeof directorPanel === "function") parts.push(directorPanel(est.id));
   parts.push(estimateActions(d, msg), msg);
@@ -70,6 +95,7 @@ async function renderEstimate(main, id) {
       : ["Ask an estimator to price it."];
     parts.push(el("div", { class: "card empty", id: "estimate-empty" }, "No trades priced yet. ", ...next));
   }
+  if (est.sections.length) parts.push(totalsCard(d, links));
   if (d.can_edit) parts.push(addLineForm(d, msg, book));
   main.replaceChildren(...parts);
   if (focusLine) {
@@ -104,6 +130,43 @@ function estimateActions(d, msg) {
       catch (e) { if (e.status !== 401) out.replaceChildren(errorBox(e)); }
     });
     row.append(hist);
+  }
+  // An approved or sent estimate (not won) can be reopened in place (same plans and measurements); the next approval
+  // shows only what changed, and a sent quote is replaced by one saying what changed (2026-11-16, David).
+  if (d.can_reopen) {
+    const ro = el("button", { class: "button", type: "button", id: "estimate-reopen" }, "✏️ Reopen for changes…");
+    ro.addEventListener("click", () => {
+      const why = el("input", { id: "reopen-why", maxlength: 500, placeholder: "Why? e.g. revise the footer answers", "aria-label": "Why reopen" });
+      const goBtn = el("button", { class: "primary", type: "button", id: "reopen-go" }, "Reopen it…");
+      const ask = el("div", {});
+      out.replaceChildren(el("div", { class: "card section" },
+        el("p", { class: "muted small" }, "It goes back to draft so you can change answers and lines. When it's approved again, only what changed needs checking."
+          + (est.status !== "approved" ? " The quote the customer was sent is kept on record as replaced, and the updated quote tells them what changed." : "")),
+        el("div", { class: "row" }, el("label", {}, "Why (optional)", why), goBtn), ask));
+      why.focus();
+      goBtn.addEventListener("click", () => askThen(ask, goBtn, "/estimates/" + est.id + "/reopen", { rev: est.rev, reason: why.value.trim() },
+        () => { setTimeout(route, 0); return "Reopened for changes"; }, "reopen"));
+    });
+    row.append(ro);
+  }
+  // The customer accepted, then wants more or different work: a change order, priced and quoted on its own.
+  if (d.can_change_order) {
+    const cb = el("button", { class: "button", type: "button", id: "estimate-change-order" }, "➕ Change order…");
+    cb.addEventListener("click", () => {
+      const why = el("input", { id: "change-order-why", maxlength: 500, placeholder: "What does the customer want? e.g. extend the patio 10 ft", "aria-label": "What's added or changed" });
+      const goBtn = el("button", { class: "primary", type: "button", id: "change-order-go" }, "Make the change order…");
+      const ask = el("div", {});
+      out.replaceChildren(el("div", { class: "card section" },
+        el("p", { class: "muted small" }, "A new estimate just for the extra or changed work. The accepted quote stays as signed; when the customer accepts the change order, the job's amount goes up by it."),
+        el("div", { class: "row" }, el("label", {}, "What's added or changed", why), goBtn), ask));
+      why.focus();
+      goBtn.addEventListener("click", () => {
+        if (!why.value.trim()) { why.focus(); return; }
+        askThen(ask, goBtn, "/estimates/" + est.id + "/change-order", { change_summary: why.value.trim() },
+          r => { setTimeout(() => go("#/estimates/" + r.id), 0); return "Change order " + ((r.change_order || {}).n || "") + " made"; }, "change-order");
+      });
+    });
+    row.append(cb);
   }
   if (d.can_revise) {
     const rev = el("button", { class: "button", type: "button", id: "estimate-revise" }, "New version…");
@@ -204,6 +267,49 @@ function markupNote(p) {
   if (p.profit_cents) parts.push("+ profit " + money(p.profit_cents));
   if (p.tax_cents) parts.push("+ tax " + money(p.tax_cents));
   return parts.join(" ");
+}
+
+// The whole estimate at the bottom: each trade and the lines added by hand, then the markups and the total
+// (2026-11-16, David).
+function totalsCard(d, links) {
+  const est = d.estimate, t = est.totals || {}, see = d.see_margins;
+  const nameOf = s => {
+    const tr = links.trades.find(x => x.module_id === s.module_id);
+    return tr ? tr.name : (s.module_id === "custom" ? "Other lines (added by hand)" : words(s.module_id));
+  };
+  const costOf = s => s.lines.reduce((n, ln) => n + ((linePrice(ln) || {}).cost_cents || 0), 0);
+  const row = (label, cost, price, cls) => el("tr", cls ? { class: cls } : {}, el("th", {}, label),
+    see ? el("td", { class: "money" }, cost === null ? "" : money(cost)) : null, el("td", { class: "money" }, price === null ? "" : money(price)));
+  const rows = est.sections.map(s => row(nameOf(s), costOf(s), s.subtotal_cents || 0));
+  rows.forEach((r, i) => r.setAttribute("data-section", est.sections[i].module_id));
+  const sum = est.sections.reduce((n, s) => n + (s.subtotal_cents || 0), 0);
+  rows.push(row("Subtotal", see ? (t.cost_cents || 0) : null, sum, "subtotal"));
+  if (see) {
+    rows.push(el("tr", { class: "muted" }, el("th", {}, "Of which: overhead"), el("td", {}, ""), el("td", { class: "money" }, money(t.overhead_cents || 0))));
+    rows.push(el("tr", { class: "muted" }, el("th", {}, "Of which: profit"), el("td", {}, ""), el("td", { class: "money" }, money(t.profit_cents || 0))));
+    rows.push(el("tr", { class: "muted" }, el("th", {}, "Of which: tax"), el("td", {}, ""), el("td", { class: "money" }, money(t.tax_cents || 0))));
+  }
+  if (t.minimum_charge_adjustment_cents) rows.push(row("Minimum charge adjustment", null, t.minimum_charge_adjustment_cents));
+  if (t.rounding_adjustment_cents) rows.push(row("Rounding", null, t.rounding_adjustment_cents));
+  rows.push(row("Total", null, t.total_cents || 0, "total"));
+  return el("div", { class: "card section", id: "estimate-totals" }, el("h3", {}, "Estimate total"),
+    el("table", { class: "list totals" },
+      el("thead", {}, el("tr", {}, el("th", {}, "Trade / section"), see ? el("th", {}, "Cost") : null, el("th", {}, "Price (with markups)"))),
+      el("tbody", {}, rows)));
+}
+
+// What changed since the estimate was last approved (it was reopened): only these need checking again.
+function sinceApprovalCard(s) {
+  const items = s.answers.map(a => el("li", {}, el("strong", {}, a.trade + ": "), a.label + " ",
+      el("span", { class: "muted" }, (a.from === null ? "none" : a.from) + " → "), a.to === null ? "none" : a.to))
+    .concat(s.lines.map(l => el("li", {}, el("strong", {}, l.trade + ": "), l.description + " ",
+      el("span", { class: "muted" }, l.change + (l.fields ? " (" + l.fields.join(", ").replace(/_/g, " ") + ")" : "") + ", "),
+      (l.from || "—") + " → " + (l.to || "—"))));
+  return el("div", { class: "card section note", id: "since-approval" },
+    el("h3", {}, "✏️ Changed since it was approved"),
+    el("p", {}, s.summary + "."),
+    items.length ? el("ul", {}, items) : null,
+    s.unchanged_lines ? el("p", { class: "muted small" }, "The other " + s.unchanged_lines + " line(s) are as approved; only the changes above need checking.") : null);
 }
 
 function num2(v) { const n = parseFloat(v); return isNaN(n) ? String(v) : n.toLocaleString(undefined, { maximumFractionDigits: 2 }); }
@@ -394,8 +500,26 @@ function lineEditRow(d, sec, ln, cols, close, book) {
   fields.push(el("label", {}, "Reason", reason));
   const note = pick && fromAssembly ? el("p", { class: "muted small" },
     "The item you pick stays on this line when this trade is priced again.") : null;
+  // The line's own price book item changed since the line was priced (2026-11-17, David): picking it again does
+  // nothing (it's already the one selected), so say what the price book has now and fill it in with one click.
+  const mine = prices.find(p => p.price_key === ln.price_key);
+  let drift = null;
+  // A trade's lines are named by the trade ("Place and finish concrete"), not by their price book item, so for them
+  // only a different cost counts; a line added by hand is named after its item, so a new name counts too.
+  if (mine && ((see && mine.cost_cents !== ln.unit_cost_cents) || (!fromAssembly && mine.description !== ln.description))) {
+    const useIt = el("button", { class: "button", type: "button", id: "line-edit-use-book-" + ln.id }, "Use the price book's");
+    useIt.addEventListener("click", () => {
+      desc.value = mine.description;
+      if (see) cost.value = dollars(mine.cost_cents);
+      picked = mine;
+      useIt.disabled = true;
+    });
+    drift = el("p", { class: "note", "data-line-drift": ln.id },
+      "The price book's " + ln.price_key + " is now “" + mine.description + "”" + (see ? " at " + money(mine.cost_cents) + " / " + mine.unit : "")
+      + "; this line still has “" + ln.description + "”" + (see ? " at " + money(ln.unit_cost_cents) : "") + ". ", useIt);
+  }
   return el("tr", { class: "line-edit" }, el("td", { colspan: cols },
-    el("div", { class: "qgrid" }, ...fields), note, el("div", { class: "row" }, save, cancel), ask));
+    drift, el("div", { class: "qgrid" }, ...fields), note, el("div", { class: "row" }, save, cancel), ask));
 }
 
 // Take one priced line off: the reason comes first (the trade's assembly made it), then the server asks.
@@ -426,7 +550,10 @@ async function editAnswers(d, sec, tr, form) {
   let q;
   try { q = await api("GET", "/modules/" + encodeURIComponent(sec.module_id) + "/questions"); }
   catch (e) { if (e.status !== 401) form.replaceChildren(errorBox(e)); return; }
+  // Every saved answer comes from the trade's section: tr.questions only lists the questions a line's quantity
+  // formula uses, so yes/no and choice answers (vapor barrier, rebar size, pump...) came back blank (2026-11-17, David).
   const current = new Map((tr.questions || []).map(x => [x.id, x.answer]));
+  for (const [k, v] of Object.entries(sec.answers || {})) current.set(k, v);
   for (const qq of q.questions) {
     if (current.has(qq.id) && current.get(qq.id) !== null && current.get(qq.id) !== undefined) qq.default = current.get(qq.id);
   }

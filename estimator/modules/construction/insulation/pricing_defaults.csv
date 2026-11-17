@@ -9,3 +9,5 @@ in_r19_sqft,R-19 batts per sq ft (sample),material,sqft,1.00
 in_batt_lab_sqft,Batt install labor per sq ft (sample),labor,sqft,0.45
 in_vapor_sqft,Vapor barrier per sq ft (sample),material,sqft,0.15
 in_foam_bf,Spray foam installed per board foot (sample),other,sqft,1.20
+in_permit_ea,Insulation permit (sample),other,ea,75.00
+in_inspect_ea,Insulation inspection fee (sample),other,ea,100.00

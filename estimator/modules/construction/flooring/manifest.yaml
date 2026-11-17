@@ -47,6 +47,8 @@ questions:
   - {id: baseboard_lf, label: "New baseboard", type: number, unit: lf, default: 0, min: 0, max: 10000}
   - {id: stairs, label: "Stairs (steps)", type: integer, default: 0, min: 0, max: 100}
   - {id: transitions, label: "Transition strips", type: integer, default: 0, min: 0, max: 100}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 lines:
   - {id: remove_soft, description: "Remove old carpet / vinyl", kind: labor, unit: sqft, quantity: "area_sqft",
@@ -87,3 +89,5 @@ lines:
      when: "stairs > 0"}
   - {id: transitions, description: "Transition strips", kind: material, unit: ea, quantity: "transitions",
      price_key: fl_transition_ea, when: "transitions > 0"}
+  - {id: permit, description: "Permit", kind: other, unit: ea, quantity: "1", price_key: fl_permit_ea, when: "permit"}
+  - {id: inspections, description: "Inspections", kind: other, unit: ea, quantity: "inspections", price_key: fl_inspect_ea, when: "inspections > 0"}

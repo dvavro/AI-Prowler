@@ -502,8 +502,10 @@ Source: "estimator\drawing_model\uploads.py"; DestDir: "{app}\estimator\drawing_
 Source: "estimator\errors.py"; DestDir: "{app}\estimator"; Flags: ignoreversion
 Source: "estimator\estimating\__init__.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\assemblies.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
+Source: "estimator\estimating\change_orders.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\project_admin.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\quick.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
+Source: "estimator\estimating\reopen.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\scenarios.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\service.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\setup.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
@@ -647,6 +649,7 @@ Source: "estimator\ui\help\guides\check_symbol_counts.md"; DestDir: "{app}\estim
 Source: "estimator\ui\help\guides\count_symbols_from_the_legend.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\manage_the_symbol_library.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\manage_trade_agents.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
+Source: "estimator\ui\help\guides\work_on_an_estimate.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\measure_and_approve_on_the_plans.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\plan_quantities.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\quote_a_service_job.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion

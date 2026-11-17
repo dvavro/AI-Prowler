@@ -38,6 +38,7 @@ questions:
   - {id: casing, label: "New interior casing (trim)?", type: boolean, default: true}
   - {id: remove_old, label: "Remove the old units?", type: boolean, default: true}
   - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+  - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 scenarios:
   - {id: good, label: "Good: vinyl windows", answers: {window_grade: vinyl}}
@@ -82,3 +83,4 @@ lines:
      when: "casing and windows_small + windows_large + patio_doors + exterior_doors + interior_doors > 0"}
   - {id: permit, description: "Building permit", kind: other, unit: ea, quantity: "1", price_key: wd_permit_ea,
      when: "permit"}
+  - {id: inspections, description: "Inspections", kind: other, unit: ea, quantity: "inspections", price_key: wd_inspect_ea, when: "inspections > 0"}

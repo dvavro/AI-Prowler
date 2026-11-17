@@ -10,3 +10,6 @@ fr_subfloor_ea,Subfloor sheet 3/4 in (sample),material,ea,32.00
 fr_lab_floor_sqft,Floor framing labor per sq ft (sample),labor,sqft,2.00
 fr_truss_ea,Roof truss (sample),material,ea,165.00
 fr_lab_truss_ea,Truss setting labor (sample),labor,ea,45.00
+fr_permit_ea,Building permit for framing (sample),other,ea,250.00
+fr_inspect_ea,Framing inspection fee (sample),other,ea,100.00
+fr_survey_ea,Foundation and setback survey (sample),sub,ea,450.00

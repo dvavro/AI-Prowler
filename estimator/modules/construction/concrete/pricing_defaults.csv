@@ -17,3 +17,6 @@ cc_grade_sqft,Spread level and compact pad per sq ft (sample),labor,sqft,0.30
 cc_excavate_cy,Excavate and haul away per cubic yard (sample),labor,cuyd,45.00
 cc_lump_dollar,Lump sum per dollar (the amount typed is the price),sub,ea,1.00
 cc_vapor_sqft,Vapor barrier 10 mil poly per sq ft (sample),material,sqft,0.20
+cc_permit_ea,Concrete or flatwork permit (sample),other,ea,150.00
+cc_inspect_ea,Concrete inspection fee (sample),other,ea,100.00
+cc_survey_ea,Survey and stake-out by a licensed surveyor (sample),sub,ea,450.00

@@ -217,28 +217,24 @@ def test_E2E_S11_M5_library_export_import(page, job, db, tmp_path):
 # ------------------------------------------------------------------ M6: agent trade off, start run, skipped with warning
 
 def test_E2E_S11_M6_agent_trade_off_run_skipped(page, db):
+    from estimator import agent_manager
+    from estimator.modules.registry import ModuleRegistry
     est = service.create_estimate(db, CTX, "Jones house")
     runner.start_run(db, CTX, est["id"], ["framing", "drywall"])
+    # 2026-11-17: a trade is switched off in AI-Prowler's 🏗 Estimator tab (Trades) - the web app only shows it.
+    agent_manager.update_config(db, CTX, "framing", {"enabled": False}, confirm=True, registry=ModuleRegistry().load())
     db.commit()
     page.goto(page.base + "#/agents")
-    page.wait_for_selector("#agents-list tr[data-module=framing] input[type=checkbox]")
+    page.wait_for_selector("#agents-settings-where")
     dismiss_tour(page)
-    # Turn framing off in the Agent Manager (asks first).
-    page.uncheck("#agents-list tr[data-module=framing] input[type=checkbox] >> nth=0")
-    page.click("#agents-list [data-save=framing]")
-    page.wait_for_selector("#agents-confirm")
-    page.click("#agents-confirm")
-    # The save is async: the checkbox is already unchecked from the uncheck above,
-    # so waiting on it alone passes before the save lands and the next start_run
-    # reads the old setting. Wait for the confirm box to go away - askThen only
-    # re-renders after the save POST finishes - then check the saved state.
-    page.wait_for_selector("#agents-confirm", state="detached")
-    page.wait_for_function("() => document.querySelector('#agents-list tr[data-module=framing] input[type=checkbox]')?.checked === false")
+    where = page.inner_text("#agents-settings-where")
+    assert "Estimator tab" in where and "Switched off" in where and "Framing" in where
+    assert page.locator("#agents-list, [data-save]").count() == 0            # no settings to change here
     # Start a run on a second estimate: framing is skipped, with the warning.
     est2 = service.create_estimate(db, CTX, "Smith house")
     out = runner.start_run(db, CTX, est2["id"], ["framing", "drywall"])
     db.commit()
-    assert any("Skipped (turned off in Agent Manager)" in w and "framing" in w for w in out["warnings"])
+    assert any("Skipped (switched off in AI-Prowler's 🏗 Estimator tab)" in w and "framing" in w for w in out["warnings"])
     assert [t["module_id"] for t in out["tasks"]] == ["drywall"]
     # The page is already on #/agents, so goto to the same hash is a no-op -
     # it would show the runs list from before the Smith run was created.

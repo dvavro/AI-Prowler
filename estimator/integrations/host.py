@@ -16,7 +16,8 @@ import sys
 
 from estimator.errors import EstimatorError
 
-HOST_TOOLS = ("create_customer", "create_quote", "create_job", "send_email")
+HOST_TOOLS = ("create_customer", "create_quote", "create_job", "send_email",
+              "update_job_spreadsheet")   # a change order raises the existing job's amount (2026-11-16)
 _HOST: dict = {}
 
 

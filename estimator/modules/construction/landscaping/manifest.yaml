@@ -35,6 +35,9 @@ questions:
   - {id: drip_zones, label: "Drip zones", type: integer, default: 0, min: 0, max: 40}
   - {id: sprinkler_zones, label: "Sprinkler zones", type: integer, default: 0, min: 0, max: 40}
   - {id: edging_lf, label: "Landscape edging or curbing", type: number, unit: lf, default: 0, min: 0, max: 10000}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
+  - {id: survey, label: "Survey needed?", type: boolean, default: false, help: "A licensed surveyor locates the lines and stakes the work."}
 
 lines:
   - {id: clearing, description: "Clear and haul away", kind: other, unit: sqft, quantity: "clear_sqft",
@@ -76,3 +79,6 @@ lines:
      when: "drip_zones + sprinkler_zones > 0"}
   - {id: edging, description: "Edging or curbing", kind: other, unit: lf, quantity: "edging_lf", price_key: ls_edging_lf,
      when: "edging_lf > 0"}
+  - {id: permit, description: "Permit", kind: other, unit: ea, quantity: "1", price_key: ls_permit_ea, when: "permit"}
+  - {id: inspections, description: "Inspections", kind: other, unit: ea, quantity: "inspections", price_key: ls_inspect_ea, when: "inspections > 0"}
+  - {id: survey, description: "Survey and stake-out (subcontract)", kind: sub, unit: ea, quantity: "1", price_key: ls_survey_ea, when: "survey"}

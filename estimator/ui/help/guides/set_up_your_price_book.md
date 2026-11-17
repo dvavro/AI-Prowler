@@ -8,6 +8,16 @@ Each trade and service comes with sample prices so you can try it out. Put in yo
 4. Type your cost, and optionally pick the date it **Takes effect**. Happy with a sample's price as it is? Just untick **Sample** — it becomes your own price and the "(sample)" tag comes off.
 5. Click **Save…**, check the list of changes, then click **Yes, save**.
 
+## Add a new item based on one you have
+Want a second item (for example a smooth finish next to the broom finish) instead of changing the one you have? Changing an item's description renames that item for every estimate that uses it — the Edit row warns you when you do.
+1. Click **✏️ Edit** on the item that's closest, and change the description, cost or kind.
+2. Click **Save as a new item…**. A code is suggested from the trade and the new description; change it if you like.
+3. Click **Add the new item…**, check it, then click **Yes, save**. The original item stays as it was.
+4. On an estimate, click **Edit…** on a line and pick the new item under **Price book item** — every field of the line changes to it.
+
+## Permits, inspections and surveys
+Every construction trade has a permit and an inspection fee item (and concrete, fencing, framing and landscaping a survey, priced as a subcontract). They start with sample prices — put in your city's fees and your surveyor's price. On an estimate they're added by answering **Pull a permit?**, **Inspections to schedule** and **Survey needed?**.
+
 ## Import a supplier price list
 1. Copy the rows from your supplier's spreadsheet, header row first.
 2. Open **Import a supplier price list (paste CSV)** at the bottom and paste them in.

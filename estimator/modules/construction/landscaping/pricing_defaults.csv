@@ -18,3 +18,6 @@ ls_emitter_ea,Emitter (sample),material,ea,3.00
 ls_spr_zone_ea,Sprinkler zone installed (sample),other,ea,550.00
 ls_controller_ea,Irrigation timer (sample),material,ea,180.00
 ls_edging_lf,Edging or curbing per linear ft (sample),other,lf,8.00
+ls_permit_ea,Landscaping or irrigation permit (sample),other,ea,100.00
+ls_inspect_ea,Landscaping inspection fee (sample),other,ea,100.00
+ls_survey_ea,Survey and stake-out by a licensed surveyor (sample),sub,ea,450.00

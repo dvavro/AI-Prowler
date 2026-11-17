@@ -542,11 +542,16 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
 
     # ---------------------------------------------------------- Sprint 2: quick estimate screen
     if sub == "/modules" and m == "GET":
+        from estimator.agent_manager.configs import trades_off
         from estimator.modules import get_registry
         reg = get_registry()
         want = (req.query.get("path") or "").strip()
-        mods = [x.summary() for x in reg.list()
-                if not want or (want == "quick" and x.path in QUICK_PATHS) or x.path == want]
+        # Trades switched off in AI-Prowler's 🏗 Estimator tab aren't offered (2026-11-17, David); all=1 lists them too,
+        # marked off, for a page that must still show a trade a project already has.
+        off, every = trades_off(conn, ctx.company_id), req.query.get("all") == "1"
+        mods = [{**x.summary(), "off": x.id in off} for x in reg.list()
+                if (not want or (want == "quick" and x.path in QUICK_PATHS) or x.path == want)
+                and (every or x.id not in off)]
         mods.sort(key=lambda x: (x["category"] != "service", x["name"].lower()))
         return _ok(modules=mods, count=len(mods))
 
@@ -715,8 +720,15 @@ def _price_book(m: str, sub: str, req: Request, ctx, conn) -> Response:
     if not nav.can_open(ctx.role, "price_book"):
         raise _Refuse(403, "permission_denied", "your role can't see the price book")
     if sub == "/price-book" and m == "GET":
+        from estimator.agent_manager.configs import trades_off
         out = price_book.list_prices(conn, ctx.company_id, (req.query.get("module_id") or "").strip() or None,
                                      req.query.get("samples_only", "") in ("1", "true", "yes"))
+        # A trade switched off in AI-Prowler's 🏗 Estimator tab isn't offered: its items are left out (2026-11-17, David).
+        off = trades_off(conn, ctx.company_id)
+        if off:
+            out["prices"] = [p for p in out["prices"] if p.get("module_id") not in off]
+            out.update(count=len(out["prices"]), samples_left=sum(1 for p in out["prices"] if p["sample"]),
+                       trades_off=sorted(off))
         return _json(200, out)
     if sub == "/price-book" and m == "POST":
         b = _body(req)
@@ -844,7 +856,8 @@ _BID = re.compile(r"^/bids/(\d+)$")
 _BID_ACT = re.compile(r"^/bids/(\d+)/(send|status|convert|file)$")
 _GUIDE = re.compile(r"^/help/guides/([a-z0-9_]{1,64})$")
 # What the page may hand est_director_next. Flags must be literal true/false (never "yes" or 1).
-NEXT_FLAGS = ("approve", "confirm_sample_prices", "checklist_done", "reviewed", "send", "convert", "ready")
+NEXT_FLAGS = ("approve", "confirm_sample_prices", "checklist_done", "reviewed", "send", "convert", "ready",
+              "without_scope")
 NEXT_TEXT = ("module_id", "send_to", "outcome", "service_date")
 NEXT_KEYS = set(NEXT_FLAGS) | set(NEXT_TEXT) | {"answers", "customer", "rev", "confirm"}
 # Where the bid files live on the PC or server: the browser gets them through /bids/<id>/file, never the path.

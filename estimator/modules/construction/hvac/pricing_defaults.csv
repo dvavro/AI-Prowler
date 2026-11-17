@@ -14,3 +14,4 @@ hv_return_ea,Return grille and filter box (sample),material,ea,60.00
 hv_seal_sqft,Duct sealing per sq ft served (sample),labor,sqft,0.50
 hv_thermostat_ea,Thermostat (sample),material,ea,180.00
 hv_permit_ea,Mechanical permit (sample),other,ea,300.00
+hv_inspect_ea,Mechanical inspection fee (sample),other,ea,100.00

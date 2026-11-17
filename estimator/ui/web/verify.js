@@ -5,7 +5,7 @@
  *         #/reviews/<plan set id>   the detection panel: thumbnails, filters, select, approve / take out / relabel,
  *                                   find similar, open on the plan; ?type=<item type> opens one type
  *         #/symbol_library          the company library and AI-Prowler's standard one, by trade; define, export, import
- *         #/agents                  Agent Manager (each trade agent's settings) and the takeoff runs
+ *         #/agents                  the takeoff runs and the AI Log (trade settings: AI-Prowler's Estimator tab)
  * Every change asks first (askThen). Field staff can look; only owner, estimator and reviewer decide, never an agent.
  */
 "use strict";
@@ -290,21 +290,21 @@ function defineForm(trades, dfn) {
     el("p", { class: "small muted" }, "Its shape is learned from symbols you approve or relabel in Reviews. Saving a new version doesn't change counts already approved."), ask);
 }
 
-// ------------------------------------------------------------------ Agents: Agent Manager and the takeoff runs
+// ------------------------------------------------------------------ Agents: the takeoff runs and the AI Log
+// 2026-11-17 (David): the trade settings (on/off, how sure, approve by itself) are set once, in AI-Prowler's
+// 🏗 Estimator tab → 🏗 Trades - the master switch for which trades the company quotes. This screen only shows them.
 async function renderAgents(main, screen) {
   const r = await api("GET", "/agents");
   const msg = el("div", { id: "agents-message", role: "status" });
   const parts = [el("div", { class: "page-head" }, el("h2", {}, screen.label), helpLink("agents")),
-    el("p", { class: "muted" }, "Each trade has a takeoff agent. Turn trades off, set how sure an agent must be before its quantities can go through, and watch the takeoff runs."),
-    msg];
-  if (!r.can_configure) parts.push(el("p", { class: "note" }, "Only the owner changes these settings."));
+    el("p", { class: "muted" }, "Watch the takeoff runs and see what was sent to the AI."), msg];
+  const off = (r.agents || []).filter(a => !a.enabled).map(a => a.name);
+  parts.push(el("p", { class: "note", id: "agents-settings-where" },
+    "Which trades you quote, how sure each trade's takeoff agent must be and whether it approves by itself are set in AI-Prowler's 🏗 Estimator tab → 🏗 Trades. ",
+    off.length ? "Switched off (not quoted, not measured): " + off.join(", ") + "." : "Every trade is on."));
   // 2026-11-13: the AI agents (which AI runs them, what each step does, the budget) are set on the desktop.
   parts.push(el("p", { class: "muted small", id: "agents-ai-settings-where" },
     "Which AI runs the agents, what each one does (AI takeoff, Reviewer, Bid writer, Follow-up …) and the AI budget are set in AI-Prowler's 🏗 Estimator tab → 🤖 AI agents and budget; the models come from the top of the 🏢 Small Business tab."));
-  parts.push(r.agents.length ? el("table", { class: "list", id: "agents-list" },
-    el("thead", {}, el("tr", {}, el("th", {}, "Trade"), el("th", {}, "On"), el("th", {}, "Sure enough at"), el("th", {}, "Approve by itself"), el("th", {}, "Reads sheets"), el("th", {}, ""))),
-    el("tbody", {}, r.agents.map(a => agentRow(a, r.can_configure, msg))))
-    : el("div", { class: "card empty", id: "agents-empty" }, "No takeoff agents yet. Ask your AI to set up the trades - each trade gets an agent."));
 
   // Runs.
   parts.push(el("h3", {}, "Takeoff runs"));
@@ -317,27 +317,6 @@ async function renderAgents(main, screen) {
   parts.push(el("p", {}, el("a", { href: "#/agents/ai-log", id: "agents-ai-log-link" }, "📋 What was sent to the AI and what came back"),
     " — every LLM call (the LLM takeoff reading a plan, the Reviewer, Bid Writer and Follow-up agents), newest first, with the prompt, the plan images, the reply and the cost."));
   main.replaceChildren(...parts);
-}
-
-function agentRow(a, canConfigure, msg) {
-  const on = el("input", { type: "checkbox", checked: a.enabled, disabled: !canConfigure, "aria-label": a.name + " on" });
-  const thr = el("input", { type: "number", min: "0", max: "100", step: "1", value: a.confidence_threshold, disabled: !canConfigure, class: "narrow", "aria-label": a.name + " confidence" });
-  const auto = el("input", { type: "checkbox", checked: a.auto_advance, disabled: !canConfigure, "aria-label": a.name + " approves by itself" });
-  const save = canConfigure ? el("button", { class: "button small", type: "button", "data-save": a.module_id }, "Save…") : null;
-  const rules = a.sheet_rules || {};
-  if (save) save.addEventListener("click", () => {
-    const changes = {};
-    if (on.checked !== a.enabled) changes.enabled = on.checked;
-    if (+thr.value !== a.confidence_threshold) changes.confidence_threshold = +thr.value;
-    if (auto.checked !== a.auto_advance) changes.auto_advance = auto.checked;
-    if (!Object.keys(changes).length) { msg.replaceChildren(el("p", { class: "muted" }, "Nothing changed for " + a.name + ".")); return; }
-    askThen(msg, save, "/agents/" + a.module_id, { changes }, () => a.name + " saved", "agents");
-  });
-  return el("tr", { "data-module": a.module_id, class: a.enabled ? "" : "muted" },
-    el("td", {}, el("strong", {}, a.name), a.changed ? el("span", { class: "small muted" }, " · changed") : null),
-    el("td", {}, on), el("td", {}, thr, "%"), el("td", {}, auto),
-    el("td", { class: "small" }, [(rules.prefixes || []).join(", "), (rules.titles || []).join(", ")].filter(Boolean).join(" · ") || "—"),
-    el("td", {}, save));
 }
 
 function runCard(run, canStart, msg) {

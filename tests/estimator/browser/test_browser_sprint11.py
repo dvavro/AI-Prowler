@@ -177,12 +177,10 @@ def test_agents_settings_and_runs(page, db):                                    
     runner.start_run(db, CTX, est["id"], ["framing", "drywall"])
     db.commit()
     page.goto(page.base + "#/agents")
-    num = "#agents-list tr[data-module=framing] input[type=number]"
-    page.wait_for_selector(num)
-    type_in(page, num, "90")
-    page.click("#agents-list [data-save=framing]")
-    answer_yes(page, "agents")
-    page.wait_for_function(f"() => document.querySelector('{num}') && document.querySelector('{num}').value === '90'")
+    # 2026-11-17: the trade settings are set in AI-Prowler's 🏗 Estimator tab; this screen says where.
+    page.wait_for_selector("#agents-settings-where")
+    assert "Estimator tab" in page.inner_text("#agents-settings-where")
+    assert page.locator("#agents-list").count() == 0
     page.click("#runs-list details summary")
     page.wait_for_selector("#runs-list tr[data-task]")
     states = page.inner_text("#runs-list .run-tasks")

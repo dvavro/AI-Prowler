@@ -44,6 +44,9 @@ questions:
   - {id: floor_sqft, label: "Floor to frame (joists and subfloor)", type: number, unit: sqft, default: 0, min: 0,
      max: 100000}
   - {id: trusses, label: "Roof trusses to set", type: integer, default: 0, min: 0, max: 500}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
+  - {id: survey, label: "Survey needed?", type: boolean, default: false, help: "A licensed surveyor locates the lines and stakes the work."}
 
 lines:
   # stud lumber in linear feet so taller walls cost more: studs x wall height
@@ -75,3 +78,6 @@ lines:
      when: "trusses > 0"}
   - {id: truss_labor, description: "Set and brace trusses", kind: labor, unit: ea, quantity: "trusses",
      price_key: fr_lab_truss_ea, when: "trusses > 0"}
+  - {id: permit, description: "Building permit", kind: other, unit: ea, quantity: "1", price_key: fr_permit_ea, when: "permit"}
+  - {id: inspections, description: "Inspections", kind: other, unit: ea, quantity: "inspections", price_key: fr_inspect_ea, when: "inspections > 0"}
+  - {id: survey, description: "Foundation and setback survey (subcontract)", kind: sub, unit: ea, quantity: "1", price_key: fr_survey_ea, when: "survey"}

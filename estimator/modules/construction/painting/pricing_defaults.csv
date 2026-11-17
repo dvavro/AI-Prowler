@@ -12,3 +12,5 @@ pt_lab_ceiling_sqft,Ceiling painting labor per sq ft per coat (sample),labor,sqf
 pt_lab_ext_sqft,Exterior painting labor per sq ft per coat (sample),labor,sqft,0.70
 pt_trim_lf,Trim painting per linear ft (sample),labor,lf,1.50
 pt_door_ea,Door painting (sample),labor,ea,65.00
+pt_permit_ea,Painting permit (sample),other,ea,50.00
+pt_inspect_ea,Painting inspection fee (sample),other,ea,100.00

@@ -19,9 +19,9 @@ agents never approve symbols; the services check each role again.
   GET  /symbol-library/export                the company library as a file (ai-prowler-symbol-library)
   POST /symbol-library/import {data, confirm?}
 
-  Agents (owner, estimator; only the owner changes settings):
-  GET  /agents                               agent_config_get for every trade, recent takeoff runs
-  POST /agents/<module_id> {changes, confirm?}   agent_config_update
+  Agents (owner, estimator):
+  GET  /agents                               agent_config_get for every trade (read only), recent takeoff runs
+  POST /agents/<module_id>                   refused: trade settings are set in AI-Prowler's 🏗 Estimator tab (2026-11-17)
   GET  /runs/<id>                            runner_status
   POST /runs {estimate_id, trades, confirm?} runner_start (asks first here; the tool starts at once)
   POST /runner-tasks/<id>/retry {confirm?}   runner_retry_task
@@ -209,29 +209,14 @@ def route(m: str, sub: str, req, ctx, conn):
             prog = round(sum(t["progress"] or 0 for t in tasks) / len(tasks)) if tasks else 0
             runs.append({**dict(r), "estimate_title": r["title"], "progress": prog, "tasks": tasks})
         return _ok(agents=cfg["agents"], enabled=cfg["enabled"], turned_off=cfg["turned_off"], runs=runs,
-                   task_states=list(runner.TASK_STATES), can_configure=ctx.role == "owner" and not ctx.agent,
+                   task_states=list(runner.TASK_STATES), can_configure=False,
+                   settings_where="AI-Prowler's 🏗 Estimator tab → 🏗 Trades",
                    can_start=ctx.role in runner.START_ROLES)
 
     mm = _AGENT.match(sub)
     if mm and m == "POST":
-        _need(ctx, "agents", "Agent Manager")
-        from estimator import agent_manager
-        from estimator.api.router import _question
-        from estimator.modules import get_registry
-        b = _body(req)
-        changes = b.get("changes")
-        if not isinstance(changes, dict) or not changes:
-            raise _refuse('changes is an object, e.g. {"enabled": false}')
-        out = agent_manager.update_config(conn, ctx, mm.group(1), changes, confirm=b.get("confirm") is True,
-                                          registry=get_registry())
-        if not out.get("confirmed"):
-            diff = out["would_change"]
-            if not diff:
-                return _ok(changed={}, config=out["current"], message="Nothing to change.")
-            words = ", ".join(f"{k.replace('_', ' ')} to {json.dumps(v)}" for k, v in diff.items())
-            return _ok(needs_confirmation=True, question=_question(f"Set {out['current']['name']} {words}"),
-                       would_change=diff, current=out["current"])
-        return _ok(changed=out["changed"], config=out["config"])
+        # 2026-11-17 (David): the trade settings live in one place - AI-Prowler's 🏗 Estimator tab (Trades).
+        raise _refuse("trade settings are changed in AI-Prowler's 🏗 Estimator tab → 🏗 Trades", 403, "permission_denied")
 
     mm = _RUN.match(sub)
     if mm and m == "GET":

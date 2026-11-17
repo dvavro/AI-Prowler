@@ -66,6 +66,46 @@ def _options_html(snap: dict) -> str:
             f'<table>{rows}</table>')
 
 
+def _change_word(c: dict) -> str:
+    if c["change"] == "added":
+        return f"added ({format_cents(c['to_cents'])})"
+    if c["change"] == "removed":
+        return f"removed (was {format_cents(c['from_cents'])})"
+    return f"{format_cents(c['from_cents'])} → {format_cents(c['to_cents'])}"
+
+
+def notice_lines(snap: dict) -> tuple[str, list[str]]:
+    """What the customer is told first on an updated quote or a change order (2026-11-16, David): the headline and
+    the lines under it. ("", []) for an ordinary quote."""
+    rep, co = snap.get("replaces"), snap.get("change_order")
+    if co:
+        head = (f"Change order {co['n']} to your accepted quote {co['of_number']} ({format_cents(co['of_total_cents'])})."
+                " This price is in addition to that quote")
+        head += (f"; with it the job comes to {format_cents(co['job_total_cents'])}." if co.get("job_total_cents")
+                 else ".")
+        return head, ([co["summary"]] if co.get("summary") else [])
+    if rep:
+        head = (f"Updated quote: this replaces quote {rep['number']}" + (f" sent on {rep['sent_on']}" if rep.get("sent_on")
+                                                                         else "")
+                + f" ({format_cents(rep['total_cents'])}).")
+        what = [f"{c['title']}: {c['description']} {_change_word(c)}" for c in rep.get("changes") or []]
+        if rep["total_cents"] != snap["totals"]["total_cents"]:
+            what.append(f"Total: {format_cents(rep['total_cents'])} → {format_cents(snap['totals']['total_cents'])}")
+        return head, what
+    return "", []
+
+
+def _notice_html(snap: dict) -> str:
+    head, what = notice_lines(snap)
+    if not head:
+        return ""
+    items = "".join(f"<li>{_e(w)}</li>" for w in what)
+    label = "What changed" if snap.get("replaces") else ""
+    return (f'<div class="notice"><b>{_e(head)}</b>'
+            + (f'<div class="muted">{label}</div>' if label and items else "")
+            + (f"<ul>{items}</ul>" if items else "") + "</div>")
+
+
 def bid_html(bid: dict, company: dict, customer: dict) -> str:
     snap = bid["snapshot"]
     rows = []
@@ -106,13 +146,16 @@ def bid_html(bid: dict, company: dict, customer: dict) -> str:
  tr.sec td{{font-weight:600;background:#f3f6fa}} tr.total td{{font-weight:700;font-size:17px;border-top:2px solid #1d2433;border-bottom:none}}
  .meta td{{border:none;padding:2px 0;font-size:13px;white-space:nowrap}} .sign{{margin-top:36px;display:flex;gap:32px}}
  ul.scope{{margin:4px 0 0;padding-left:18px;color:#5b6475;font-size:13px}}
+ .notice{{margin:20px 0 0;padding:12px 14px;border:1px solid #f0c36d;background:#fff8e6;border-radius:6px;font-size:14px}}
+ .notice ul{{margin:6px 0 0;padding-left:18px}}
  .sign div{{flex:1;border-top:1px solid #1d2433;padding-top:6px;font-size:12px;color:#5b6475}}
  @media print{{.page{{padding:0}}}}
 </style></head><body><div class="page">
 <header><div><h1>{_e(company.get('name') or 'Quote')}</h1><div class="muted">{comp_lines}</div></div>
-<div><table class="meta"><tr><td><b>Quote</b></td><td>&nbsp;{_e(bid['number'])}</td></tr>
+<div><table class="meta"><tr><td><b>{'Change order' if snap.get('change_order') else 'Quote'}</b></td><td>&nbsp;{_e(bid['number'])}</td></tr>
 <tr><td><b>Date</b></td><td>&nbsp;{_e(bid['date'])}</td></tr>
 <tr><td><b>Valid until</b></td><td>&nbsp;{_e(bid['valid_until'])}</td></tr></table></div></header>
+{_notice_html(snap)}
 <h2>Prepared for</h2><div class="muted">{cust_lines or '&nbsp;'}</div>
 <h2>Scope of work</h2>{_paras(bid.get('scope_text'))}
 <h2>Price</h2>
@@ -127,7 +170,12 @@ def bid_html(bid: dict, company: dict, customer: dict) -> str:
 
 def bid_text(bid: dict, company: dict, customer: dict) -> str:
     snap = bid["snapshot"]
-    lines = [f"{company.get('name') or 'Quote'} — Quote {bid['number']}", f"Valid until {bid['valid_until']}", ""]
+    kind = "Change order" if snap.get("change_order") else "Quote"
+    lines = [f"{company.get('name') or 'Quote'} — {kind} {bid['number']}", f"Valid until {bid['valid_until']}", ""]
+    head, what = notice_lines(snap)
+    if head:
+        lines += [head] + ([("What changed:" if snap.get("replaces") else "")] if what and snap.get("replaces") else []) \
+            + [f"- {w}" for w in what] + [""]
     if customer.get("name"):
         lines.append(f"Prepared for: {customer['name']}")
     lines.append("")

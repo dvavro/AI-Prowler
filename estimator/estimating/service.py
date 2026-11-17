@@ -98,7 +98,10 @@ def _check_writable(conn, ctx: RequestContext, estimate_id: int, rev: int, roles
     _require_edit_role(ctx, roles)
     row = _load_row(conn, ctx, estimate_id)
     if row["status"] not in EDITABLE_STATUSES:
-        raise NotEditable(f"estimate {estimate_id} is {row['status']} and can't be changed",
+        how = (": reopen it for changes first (✏️ Reopen for changes on the estimate page)"
+               if row["status"] in ("approved", "sent", "lost", "expired")
+               else ": for more or different work make a change order (➕ Change order…)" if row["status"] == "won" else "")
+        raise NotEditable(f"estimate {estimate_id} is {row['status']} and can't be changed{how}",
                           estimate_id=estimate_id, status=row["status"])
     if rev is None or int(rev) != int(row["rev"]):
         raise StaleRevision(
@@ -198,6 +201,10 @@ def add_trade(conn, ctx: RequestContext, estimate_id: int, module_id: str, rev: 
         _check_writable(conn, ctx, estimate_id, rev)
         if _section_id(conn, ctx, estimate_id, module_id, create=False) is not None:
             raise InvalidInput(f"estimate {estimate_id} already has a '{module_id}' section", module_id=module_id)
+        from estimator.agent_manager.configs import trades_off          # 2026-11-17: a trade switched off isn't quoted
+        if module_id in trades_off(conn, ctx.company_id):
+            raise InvalidInput(f"{module_id.replace('_', ' ')} is switched off - turn it on in AI-Prowler's 🏗 Estimator "
+                               "tab (Trades) to quote it", module_id=module_id)
         _section_id(conn, ctx, estimate_id, module_id, version)
         _log(conn, ctx, estimate_id, "trade_added", {"module_id": module_id})
         _recalculate(conn, ctx, estimate_id)

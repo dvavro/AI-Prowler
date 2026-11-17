@@ -12,3 +12,4 @@ pl_wh_tank_ea,50 gal water heater with fittings (sample),material,ea,1100.00
 pl_wh_tankless_ea,Tankless water heater with venting (sample),material,ea,2400.00
 pl_gas_lf,Gas line installed per linear ft (sample),other,lf,14.00
 pl_permit_ea,Plumbing permit (sample),other,ea,250.00
+pl_inspect_ea,Plumbing inspection fee (sample),other,ea,100.00

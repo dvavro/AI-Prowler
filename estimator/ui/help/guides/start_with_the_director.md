@@ -14,5 +14,7 @@ The Director asks what the job is, then walks you through every step to sending 
 - Every project gets its own Director job, even one made on the **Projects** screen; older projects get one the first time you open them.
 - Hand-added lines (fill dirt, extras) stay on the estimate when a trade is priced again.
 - You can still change the estimate after it's checked; it's checked again when you approve.
+- Need a change after approving or sending? **✏️ Reopen for changes…** on the estimate takes the job back to its first step; the Director says "Reopened for changes" and the next approval lists only what changed. After the customer says yes, use **➕ Change order…** instead.
+- If the **Bid Writer** agent is on, the quote waits for its scope and **Included** / **Not included** lists after you approve.
 - The job is on the **📋 Jobs board** under **Projects**, with all its steps.
 - Tired of the guided tours popping up? Click **Don't show tours** on any tour, or untick it in **Settings → 🎓 Guided tours**. You can still replay a tour from **❓ Help**.

@@ -18,3 +18,5 @@ fl_diagonal_sqft,Diagonal layout extra labor per sq ft (sample),labor,sqft,0.75
 fl_baseboard_lf,Baseboard supplied and installed per linear ft (sample),material,lf,3.25
 fl_stair_ea,Stair step (sample),labor,ea,60.00
 fl_transition_ea,Transition strip (sample),material,ea,25.00
+fl_permit_ea,Flooring permit (sample),other,ea,75.00
+fl_inspect_ea,Flooring inspection fee (sample),other,ea,100.00

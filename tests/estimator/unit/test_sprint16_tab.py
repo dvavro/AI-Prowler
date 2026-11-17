@@ -148,8 +148,8 @@ def test_tab_is_added_with_its_sections(root, db_home, switch, wizard):  # S16-G
     frame = build_estimator_tab(app)
     assert frame is not None and app.notebook.tab(1, "text") == model.TAB_TITLE
     tab = app._estimator_tab
-    assert set(tab.sections) == {"setup", "company", "labor", "trades", "agents", "director", "modules", "data", "sync",
-                                 "cad", "phone", "help"}
+    assert set(tab.sections) == {"setup", "company", "trades", "agents", "director", "modules", "data", "sync",
+                                 "cad", "phone", "help"}           # no "labor": labor rates are in the web app (2026-11-17)
     texts = _texts(frame)
     assert any("🧭 Estimator setup" in t for t in texts)                  # Setup AI-Prowler scrolls to this
     assert any("The Estimator is ON" in t for t in texts) and any("Setup checklist: 0 of 10" in t for t in texts)
@@ -187,6 +187,43 @@ def test_trade_checkbox_saves(root, db_home, switch, wizard):  # S16-G04
     tab = app._estimator_tab
     _find(tab.sections["trades"], "Fencing").invoke()
     assert next(t for t in model.trades() if t["module_id"] == "fencing")["enabled"] is False
+    assert any("not quoted" in t for t in _texts(tab.sections["trades"]))
+
+
+def test_service_checkbox_saves(root, db_home, switch, wizard):  # S16-G04c (2026-11-17, David: limit services too)
+    from estimator.ui.gui_tab import build_estimator_tab
+    app = FakeApp(root)
+    build_estimator_tab(app)
+    tab = app._estimator_tab
+    assert tab.service_vars["pest_control"].get() is True
+    _find(tab.sections["trades"], "Pest Control  (quick quote)").invoke()
+    assert next(s for s in model.services() if s["id"] == "pest_control")["enabled"] is False
+    assert any("Pest Control off" in t for t in _texts(tab.sections["trades"]))
+    assert not any("always available" in t for t in _texts(tab.sections["trades"]))
+    _find(tab.sections["trades"], "Pest Control  (quick quote)").invoke()
+    assert next(s for s in model.services() if s["id"] == "pest_control")["enabled"] is True
+
+
+def test_trade_takeoff_settings_live_in_the_tab(root, db_home, switch, wizard):  # S16-G04b (2026-11-17, David)
+    """How sure each trade's takeoff agent must be and whether it approves by itself are set here (the web app's
+    Agents screen only shows them). Only the rows changed are saved; a bad number is refused."""
+    from estimator.ui.gui_tab import build_estimator_tab
+    app = FakeApp(root)
+    build_estimator_tab(app)
+    tab = app._estimator_tab
+    assert len(tab.trade_conf_vars) == 15 and tab.trade_conf_vars["framing"].get() == "85"
+    assert tab.trade_auto_vars["framing"].get() is False
+    tab.trade_conf_vars["framing"].set("90")
+    tab.trade_auto_vars["framing"].set(True)
+    _find(tab.sections["trades"], "💾 Save takeoff settings").invoke()
+    got = {t["module_id"]: t for t in model.trades()}
+    assert got["framing"]["confidence_threshold"] == 90 and got["framing"]["auto_advance"] is True
+    assert got["roofing"]["confidence_threshold"] == 85 and got["roofing"]["changed"] is False     # untouched
+    assert any("sure enough at 90%" in t for t in _texts(tab.sections["trades"]))
+    tab.trade_conf_vars["roofing"].set("abc")
+    _find(tab.sections["trades"], "💾 Save takeoff settings").invoke()
+    assert any("whole number from 0 to 100" in t for t in _texts(tab.sections["trades"]))
+    assert {t["module_id"]: t for t in model.trades()}["roofing"]["confidence_threshold"] == 85
 
 
 def test_tab_never_breaks_the_gui(root, monkeypatch, switch, wizard):  # S16-G05
@@ -278,34 +315,19 @@ def _leaders(widget):
     return out
 
 
-def test_labor_section_lists_labor_rates(root, db_home, switch, wizard):  # S16-G10 (tab bug 7)
+def test_labor_rates_live_in_the_web_app_only(root, db_home, switch, wizard):  # S16-G10 (2026-11-17, David)
+    """Labor rates are set in one place - the web app (Settings → Tax, markups and labor, or the Price Book). The tab
+    has no Labor rates section; the checklist's Labor rates step opens the web app's Settings there."""
     from estimator.ui.gui_tab import build_estimator_tab
     app = FakeApp(root)
     build_estimator_tab(app)
     tab = app._estimator_tab
-    assert "labor" in tab.sections
-    assert tab._section_title["labor"] == "💰 Labor rates"
-    assert "hc_labor_hr" in tab.labor_vars and tab.labor_vars["hc_labor_hr"].get() == "50.00"
-    rates = model.labor_rates()
-    assert rates and all(r["price_key"] for r in rates)
-    assert any(r["price_key"] == "hc_labor_hr" for r in rates)
-
-
-def test_labor_rates_save_marks_step_done(root, db_home, switch, wizard):  # S16-G11 (tab bug 7)
-    from estimator.ui.gui_tab import build_estimator_tab
-    app = FakeApp(root)
-    build_estimator_tab(app)
-    tab = app._estimator_tab
-    tab.labor_vars["hc_labor_hr"].set("55")
-    _find(tab.sections["labor"], "💾 Save labor rates").invoke()
-    got = next(r for r in model.labor_rates() if r["price_key"] == "hc_labor_hr")
-    assert got["cost_cents"] == 5500 and got["sample"] is False
-    assert any("1 of 10" in t for t in _texts(tab.check_frame))
-
-
-def test_labor_rates_save_refuses_non_labor(db_home, switch):  # S16-G12 (tab bug 7)
-    ok, msg = model.save_labor_rates({"pw_driveway_sqft": "0.20"})
-    assert ok is False and "aren't labor rates" in msg
+    assert "labor" not in tab.sections and not hasattr(tab, "labor_vars")
+    assert not hasattr(model, "labor_rates") and not hasattr(model, "save_labor_rates")
+    opened = []
+    tab._open_web = opened.append
+    _setup_buttons(tab.check_frame)[3].invoke()                      # steps: company, services, tax, labor rates
+    assert opened == ["#/settings?section=money"]
 
 
 def test_checklist_has_setup_for_every_step(root, db_home, switch, wizard):  # S16-G13 (tab bug 1)
@@ -420,48 +442,23 @@ def test_checklist_rows_have_leader_lines(root, db_home, switch, wizard):  # S16
     assert rows.columnconfigure(1)["weight"] == 1
 
 
-def test_labor_rate_lines_do_not_say_sample(root, db_home, switch, wizard):  # S16-G20
-    """No labor-rate line says 'sample' — the description's own '(sample)' and the
-    flag's '— sample' suffix doubled it on every line."""
-    from estimator.ui.gui_tab import build_estimator_tab
-    app = FakeApp(root)
-    build_estimator_tab(app)
-    tab = app._estimator_tab
-    labels = []
-
-    def walk(w):
-        for c in w.winfo_children():
-            try:
-                txt = str(c.cget("text"))
-            except tk.TclError:
-                txt = ""
-            if "(per " in txt:
-                labels.append(txt)
-            walk(c)
-
-    walk(tab.sections["labor"])
-    assert labels, "no labor rate rows found"
-    for txt in labels:
-        assert "sample" not in txt.lower(), txt
-
-
 def test_section_title_collapses_and_expands(root, db_home, switch, wizard):  # S16-G21
     """Selecting a section title collapses it; selecting it again expands it."""
     from estimator.ui.gui_tab import build_estimator_tab
     app = FakeApp(root)
     build_estimator_tab(app)
     tab = app._estimator_tab
-    body = tab.sections["labor"]
-    header = tab._section_header["labor"]
+    body = tab.sections["company"]
+    header = tab._section_header["company"]
     assert header.bind("<Button-1>"), "title has no click binding"
     assert body.winfo_manager() == "pack"
-    tab._toggle_section("labor")
+    tab._toggle_section("company")
     assert body.winfo_manager() == ""
-    assert tab._section_collapsed["labor"] is True
+    assert tab._section_collapsed["company"] is True
     assert header.cget("text").startswith("▶ ")
-    tab._toggle_section("labor")
+    tab._toggle_section("company")
     assert body.winfo_manager() == "pack"
-    assert tab._section_collapsed["labor"] is False
+    assert tab._section_collapsed["company"] is False
     assert header.cget("text").startswith("▼ ")
 
 
@@ -486,14 +483,14 @@ def test_collapsed_section_shrinks_to_its_title(root, db_home, switch, wizard): 
     build_estimator_tab(app)
     tab = app._estimator_tab
     root.update_idletasks()
-    outer = tab._section_box["labor"]
+    outer = tab._section_box["company"]
     before = outer.winfo_reqheight()
-    assert before > 200, f"labor section should be tall when expanded, got {before}"
-    tab._toggle_section("labor")
+    assert before > 200, f"company section should be tall when expanded, got {before}"
+    tab._toggle_section("company")
     root.update_idletasks()
     after = outer.winfo_reqheight()
     assert after < before // 3, f"collapsed {after} vs expanded {before}"
-    tab._toggle_section("labor")
+    tab._toggle_section("company")
     root.update_idletasks()
     assert outer.winfo_reqheight() == before
 
@@ -526,8 +523,8 @@ def test_scrollbar_reaches_bottom_after_collapse_all_and_expand(root, db_home, s
         if not tab._section_collapsed[k]:
             tab._toggle_section(k)
     check("collapse-all")
-    tab._toggle_section("labor")
-    check("expand labor")
+    tab._toggle_section("agents")
+    check("expand agents")
     for k in ("setup", "company", "trades"):
         tab._toggle_section(k)
     check("expand setup+company+trades")

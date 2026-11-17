@@ -261,6 +261,47 @@ def test_bid_writer_draft_applied_later(db, fake):  # S15-B02
         queue.apply_draft(db, CTX, tid)
 
 
+def test_bid_writer_runs_before_the_quote_is_made(db, fake):  # S15-B03 (Q-0006-1 went out with no lists)
+    _on(db, "bid_writer")
+    r = _approved_job(db)
+    fake.replies["claude_api"] = [say({"action": "draft_bid", "scope_text": "Re-roof 20 squares.",
+                                       "inclusions": "Cleanup", "exclusions": "Rotten decking"})]
+    r = engine.next_step(db, CTX, r["job"]["id"], approve=True, confirm_sample_prices=True, registry=REG)  # no queue.run
+    bid = bids.latest_for_estimate(db, CTX, r["estimate"]["id"])
+    assert bid["scope_text"] == "Re-roof 20 squares." and bid["exclusions"] == "Rotten decking"
+    assert bid["inclusions"] == "Cleanup" and any("Bid Writer" in n for n in r["notes"])
+
+
+def test_bid_writer_failure_still_makes_the_quote(db, fake):  # S15-B04
+    _on(db, "bid_writer")
+    r = _approved_job(db)
+    fake.replies["claude_api"] = [providers.ProviderError("HTTP 529: overloaded")]
+    r = engine.next_step(db, CTX, r["job"]["id"], approve=True, confirm_sample_prices=True, registry=REG)
+    assert bids.latest_for_estimate(db, CTX, r["estimate"]["id"]) is not None
+
+
+def test_chat_only_bid_writer_holds_the_quote(db, fake):  # S15-B05
+    _on(db, "bid_writer", provider="chat_only")
+    r = _approved_job(db)
+    r = engine.next_step(db, CTX, r["job"]["id"], approve=True, confirm_sample_prices=True, registry=REG)
+    eid = r["estimate"]["id"]
+    assert bids.latest_for_estimate(db, CTX, eid) is None and "without_scope=true" in r["next_step"]["say"]
+    nxt = queue.next_task(db, CTX)
+    assert nxt["task"]["role"] == "bid_writer"
+    queue.submit(db, CTX, nxt["task"]["task_id"], [{"action": "draft_bid", "scope_text": "Re-roof it.",
+                                                    "exclusions": "Permits"}])
+    r = engine.next_step(db, CTX, r["job"]["id"], registry=REG)
+    assert bids.latest_for_estimate(db, CTX, eid)["exclusions"] == "Permits"
+
+
+def test_quote_without_waiting_for_the_scope(db, fake):  # S15-B06
+    _on(db, "bid_writer", provider="chat_only")
+    r = _approved_job(db)
+    r = engine.next_step(db, CTX, r["job"]["id"], approve=True, confirm_sample_prices=True, registry=REG)
+    r = engine.next_step(db, CTX, r["job"]["id"], without_scope=True, registry=REG)
+    assert bids.latest_for_estimate(db, CTX, r["estimate"]["id"]) is not None
+
+
 def test_follow_up_draft_and_send(db, fake, fake_host):  # S15-F01
     e = service.create_estimate(db, CTX, "Smith clean")
     e = quick.answer(db, CTX, e["id"], "house_cleaning", {"bedrooms": 3, "bathrooms": 2, "sqft": 1800}, e["rev"], REG)

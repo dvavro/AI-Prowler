@@ -36,6 +36,8 @@ questions:
     choices:
       - {value: standard, label: "Standard", factor: "1"}
       - {value: premium, label: "Premium", factor: "2"}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 scenarios:
   - {id: good, label: "Good: standard paint, 1 coat", answers: {grade: standard, coats: "1"}}
@@ -76,3 +78,5 @@ lines:
      when: "trim_lf > 0"}
   - {id: doors, description: "Paint doors", kind: labor, unit: ea, quantity: "doors", price_key: pt_door_ea,
      when: "doors > 0"}
+  - {id: permit, description: "Permit", kind: other, unit: ea, quantity: "1", price_key: pt_permit_ea, when: "permit"}
+  - {id: inspections, description: "Inspections", kind: other, unit: ea, quantity: "inspections", price_key: pt_inspect_ea, when: "inspections > 0"}

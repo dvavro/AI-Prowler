@@ -935,6 +935,12 @@ CREATE TABLE project_sync (
 );
 CREATE INDEX ix_project_sync_estimate ON project_sync (company_id, estimate_id)
 """),
+    # 2026-11-16 (David): a change order is its own estimate (priced, approved and quoted on its own) for more or
+    # different work after the customer accepted; it points at the accepted estimate it adds to.
+    (26, "change orders", """
+ALTER TABLE estimates ADD COLUMN change_order_of INTEGER;
+CREATE INDEX ix_estimates_change_order_of ON estimates (change_order_of)
+"""),
 ]
 
 

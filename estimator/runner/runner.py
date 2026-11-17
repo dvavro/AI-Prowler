@@ -142,7 +142,7 @@ def _insert_tasks(conn, ctx, run_id: int, estimate_id: int, trades: list[str], s
 
 def start_run(conn, ctx: RequestContext, estimate_id: int, trades, *, job_id: int | None = None,
               plan_set_id: int | None = None, registry=None) -> dict:
-    """Start a takeoff run: one task per trade. Trades the owner turned off in Agent Manager are skipped."""
+    """Start a takeoff run: one task per trade. Trades the owner switched off in AI-Prowler's 🏗 Estimator tab are skipped."""
     if ctx.role not in START_ROLES:
         raise PermissionDenied(f"role '{ctx.role}' can't start a takeoff run", role=ctx.role)
     reg = _registry(registry)
@@ -156,7 +156,7 @@ def start_run(conn, ctx: RequestContext, estimate_id: int, trades, *, job_id: in
                            "check it with runner_status", run_id=open_run["id"])
     keep, off = _clean_trades(conn, ctx, trades, reg)
     if not keep:
-        raise InvalidInput("every trade asked for is turned off in Agent Manager: " + ", ".join(off), turned_off=off)
+        raise InvalidInput("every trade asked for is switched off in AI-Prowler's 🏗 Estimator tab: " + ", ".join(off), turned_off=off)
     now = _now()
     with service.transaction(conn):
         cur = conn.execute(
@@ -169,7 +169,7 @@ def start_run(conn, ctx: RequestContext, estimate_id: int, trades, *, job_id: in
         _advance(conn, ctx, run_id, reg)
     out = run_status(conn, ctx, run_id=run_id)
     if off:
-        out["warnings"].append("Skipped (turned off in Agent Manager): " + ", ".join(off) + ".")
+        out["warnings"].append("Skipped (switched off in AI-Prowler's 🏗 Estimator tab): " + ", ".join(off) + ".")
     return out
 
 
@@ -194,7 +194,7 @@ def add_trades(conn, ctx: RequestContext, run_id: int, trades, registry=None) ->
     out = run_status(conn, ctx, run_id=run["id"])
     out["added"] = new
     if off:
-        out["warnings"].append("Skipped (turned off in Agent Manager): " + ", ".join(off) + ".")
+        out["warnings"].append("Skipped (switched off in AI-Prowler's 🏗 Estimator tab): " + ", ".join(off) + ".")
     return out
 
 

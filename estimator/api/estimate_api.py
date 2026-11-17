@@ -26,7 +26,8 @@ import re
 from estimator.api import nav
 
 _DETAIL = re.compile(r"^/estimates/(\d+)/(detail|validate|history)$")
-_ACTION = re.compile(r"^/estimates/(\d+)/(options|options/choose|lines|calculate|revision|use-measurements)$")
+_ACTION = re.compile(r"^/estimates/(\d+)/(options|options/choose|lines|calculate|revision|reopen|change-order"
+                     r"|use-measurements)$")
 _LINE = re.compile(r"^/estimates/(\d+)/lines/(\d+)$")
 
 
@@ -106,9 +107,16 @@ def route(m: str, sub: str, req, ctx, conn, see: bool):
     eid, what = int(mm.group(1)), mm.group(2)
 
     if what == "detail" and m == "GET":
+        from estimator.estimating import reopen
         est = service.get_estimate(conn, ctx, eid)
         editable = est["status"] in service.EDITABLE_STATUSES
+        since = reopen.changes_since_approval(conn, ctx, eid) if editable else None
+        from estimator.estimating import change_orders
+        can_reopen = ctx.role in service.EDIT_ROLES and reopen.can_reopen(conn, est)
         return _ok(estimate=redact(est, see), links=links.estimate_links(conn, ctx, eid, est),
+                   since_approval=redact(since, see) if since else None, can_reopen=can_reopen,
+                   change_order=change_orders.info(conn, ctx, eid), change_orders=change_orders.list_for(conn, ctx, eid),
+                   can_change_order=change_orders.can_make(conn, ctx, est),
                    options=redact(scenarios.list_options(conn, ctx, eid), see), see_margins=see,
                    can_edit=editable and ctx.role in service.EDIT_ROLES,
                    can_options=editable and ctx.role in service.QUICK_ROLES,
@@ -169,6 +177,26 @@ def route(m: str, sub: str, req, ctx, conn, see: bool):
             return _asked(f"Make version {est['revision'] + 1 if est.get('revision') else 2} of “{est['title']}” to "
                           "change it? This one stays as it is, and its open quotes are voided.")
         return _json(200, redact(service.create_revision(conn, ctx, eid, summary), see))
+
+    if what == "reopen":
+        from estimator.api.router import _question
+        from estimator.errors import ConfirmationRequired
+        from estimator.estimating import reopen
+        try:
+            out = reopen.reopen(conn, ctx, eid, _rev(b), reason=_text(b, "reason", 500) or "", confirm=confirm)
+        except ConfirmationRequired as e:
+            return _asked(_question(e.message), **e.details)
+        return _json(200, redact(out, see))
+
+    if what == "change-order":
+        from estimator.api.router import _question
+        from estimator.errors import ConfirmationRequired
+        from estimator.estimating import change_orders
+        try:
+            out = change_orders.create(conn, ctx, eid, _text(b, "change_summary", 500) or "", confirm=confirm)
+        except ConfirmationRequired as e:
+            return _asked(_question(e.message), **e.details)
+        return _json(200, redact(out, see))
 
     if what == "use-measurements":
         module_id = _text(b, "module_id", 64)

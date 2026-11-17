@@ -178,6 +178,8 @@ def list_library(conn, ctx: RequestContext, level: str | None = None, trade: str
     with service.transaction(conn):
         ensure_standard(conn, ctx.company_id)
         ensure_company(conn, ctx.company_id)
+    from estimator.agent_manager.configs import symbol_trades_off
+    hidden = symbol_trades_off(conn, ctx.company_id)
     libs = []
     for lib in conn.execute("SELECT * FROM symbol_libraries WHERE company_id = ? ORDER BY CASE level"
                             " WHEN 'company' THEN 0 WHEN 'firm' THEN 1 ELSE 2 END, id", (ctx.company_id,)):
@@ -192,14 +194,15 @@ def list_library(conn, ctx: RequestContext, level: str | None = None, trade: str
         if trade:
             sql += " AND f.trade = ?"
             args.append(trade)
-        defs = [_def_out(dict(r)) for r in conn.execute(sql + " ORDER BY f.trade, f.item_type", args)]
+        defs = [d for d in (_def_out(dict(r)) for r in conn.execute(sql + " ORDER BY f.trade, f.item_type", args))
+                if d["trade"] not in hidden]          # a trade switched off in the Estimator tab (2026-11-17)
         by_trade: dict[str, list] = {}
         for d in defs:
             by_trade.setdefault(d["trade"] or "other", []).append(d)
         libs.append({"id": lib["id"], "level": lib["level"], "firm_name": lib["firm_name"], "version": lib["version"],
                      "updated_at": lib["updated_at"], "count": len(defs), "by_trade": by_trade})
     return {"ok": True, "libraries": libs, "can_define": ctx.role in DEFINE_ROLES and not getattr(ctx, "agent", None),
-            "trades": list(TRADES)}
+            "trades": [t for t in TRADES if t not in hidden]}
 
 
 def _def_out(r: dict) -> dict:

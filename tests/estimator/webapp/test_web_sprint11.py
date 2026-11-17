@@ -149,24 +149,24 @@ def test_symbol_library_roles(call, session_for):                               
 
 # ---------------------------------------------------------------- Agents                          C2S11-W08..W09
 
-def test_agent_manager_settings_ask_first(call, session_for):                       # C2S11-W08
+def test_agents_screen_shows_trade_settings_read_only(call, session_for):          # C2S11-W08 (2026-11-17)
+    """The trade settings are set in AI-Prowler's 🏗 Estimator tab (Trades) only; the web app shows them and refuses
+    changes, for every role."""
     r = call("GET", f"{API}/agents").json()
     framing = next(a for a in r["agents"] if a["module_id"] == "framing")
-    assert framing["enabled"] is True and r["can_configure"] is True and r["runs"] == []
-    ask = call("POST", f"{API}/agents/framing", {"changes": {"confidence_threshold": 90}}).json()
-    assert ask["needs_confirmation"] is True and ask["would_change"] == {"confidence_threshold": 90}
+    assert framing["enabled"] is True and framing["confidence_threshold"] == 85 and r["runs"] == []
+    assert r["can_configure"] is False and "Estimator tab" in r["settings_where"]
+    for body in ({"changes": {"confidence_threshold": 90}}, {"changes": {"enabled": False}, "confirm": True}):
+        got = call("POST", f"{API}/agents/framing", body)
+        assert got.status == 403 and "Estimator tab" in got.json()["message"]
     assert call("GET", f"{API}/agents").json()["agents"][[a["module_id"] for a in r["agents"]].index("framing")][
-        "confidence_threshold"] == 85
-    done = call("POST", f"{API}/agents/framing", {"changes": {"confidence_threshold": 90}, "confirm": True}).json()
-    assert done["config"]["confidence_threshold"] == 90 and done["changed"] == {"confidence_threshold": 90}
+        "confidence_threshold"] == 85                                       # nothing changed
     est = call("GET", f"{API}/agents", headers=session_for("estimator")).json()
     assert est["can_configure"] is False and est["can_start"] is True
-    assert call("POST", f"{API}/agents/framing", {"changes": {"enabled": False}, "confirm": True},
-                headers=session_for("estimator")).status == 403
     for role in ("reviewer", "field", "office"):
         assert call("GET", f"{API}/agents", headers=session_for(role)).status == 403
-    assert call("POST", f"{API}/agents/framing", {"changes": {"colour": "red"}}).status == 400
-    assert call("POST", f"{API}/agents/spaceship", {"changes": {"enabled": False}}).status == 404
+    js = (WEB / "verify.js").read_text(encoding="utf-8")
+    assert 'id: "agents-settings-where"' in js and "agentRow" not in js
 
 
 def test_takeoff_runs_start_status_retry(call, db):                                 # C2S11-W09

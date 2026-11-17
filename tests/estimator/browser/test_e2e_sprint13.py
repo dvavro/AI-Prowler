@@ -256,7 +256,7 @@ def test_E2E_S13_M4_phone_relabel_desktop_agrees(page, phone, flags_only):
 
 # ------------------------------------------------------------------ M5: phone measurement approval
 
-def test_E2E_S13_M5_phone_measurement_locked_and_priced(page, phone, job):
+def test_E2E_S13_M5_phone_measurement_locked_and_priced(page, phone, job, db):
     open_reviews(phone, "?kind=measurement")
     assert position(phone) == "1 of 2"
     # Step to the room measurement (144.00 sqft KITCHEN), then approve it by thumb.
@@ -295,6 +295,8 @@ def test_E2E_S13_M5_phone_measurement_locked_and_priced(page, phone, job):
     assert "Cost" in lines and "Price (with markups)" in lines
     note = page.locator("#lines-flooring [data-line-markup]").first.inner_text()
     assert note.startswith("cost $")
+    # The trades tile counts trades only ("Other lines" added by hand isn't a trade).
+    assert " ".join(page.inner_text("#tile-est-trades").split()).lower() == "1 trade"
     # Adding a line by hand: picking a price book item brings its kind too (labor stays labor, not the default material).
     page.click("#add-line summary")
     kinds = page.evaluate("""() => {
@@ -306,6 +308,58 @@ def test_E2E_S13_M5_phone_measurement_locked_and_priced(page, phone, job):
     }""")
     assert "labor" in kinds and "material" in kinds
     assert "priced at 144 sqft" in page.inner_text("#sources-flooring")
+    # The estimate's total at the bottom: each trade, then the total, the same as the total tile at the top.
+    est = service.get_estimate(db, CTX, job["smith"])
+    total = "${:,.2f}".format(est["totals"]["total_cents"] / 100)
+    totals = page.inner_text("#estimate-totals")
+    assert "Flooring" in totals and total in page.inner_text("#estimate-totals tr.total")
+    # Approved, then reopened for changes in place: it asks first, goes back to draft, and lists what changed.
+    service.set_status(db, CTX, job["smith"], est["rev"], "approved")
+    db.commit()
+    page.reload()
+    page.wait_for_selector("#estimate-reopen")
+    dismiss_tour(page)
+    assert page.locator("#add-line").count() == 0                       # approved: no editing until it's reopened
+    page.click("#estimate-reopen")
+    page.fill("#reopen-why", "revise the answers")
+    page.click("#reopen-go")
+    answer_yes(page, "reopen")
+    page.wait_for_selector("#since-approval")
+    assert "Nothing has changed since it was approved" in page.inner_text("#since-approval")
+    assert page.locator("#add-line").count() == 1 and page.locator("#estimate-reopen").count() == 0
+    # The line's own price book item changes (2026-11-17, David): editing the line says so and fills it in on a click.
+    from estimator.pricing.price_book import set_price
+    est = service.get_estimate(db, CTX, job["smith"])
+    ln = next(x for s in est["sections"] if s["module_id"] == "flooring" for x in s["lines"] if x["price_key"])
+    set_price(db, "default", ln["price_key"], description="Flooring item, new price", kind=ln["kind"], unit=ln["unit"],
+              cost_cents=ln["unit_cost_cents"] + 100, actor="owner")
+    db.commit()
+    page.reload()
+    page.wait_for_selector(f"[data-line-edit='{ln['id']}']")
+    dismiss_tour(page)
+    page.click(f"[data-line-edit='{ln['id']}']")
+    page.wait_for_selector(f"[data-line-drift='{ln['id']}']")
+    page.click(f"#line-edit-use-book-{ln['id']}")
+    new_cost = "{:.2f}".format((ln["unit_cost_cents"] + 100) / 100)
+    assert page.input_value("tr.line-edit input[aria-label='Unit cost in dollars']") == new_cost
+    page.click("tr.line-edit button:has-text('Cancel')")
+    # Approved again and the customer accepted the quote; then they want more: a change order, on its own page.
+    from estimator.bids import service as bids
+    service.set_status(db, CTX, job["smith"], service.get_estimate(db, CTX, job["smith"])["rev"], "approved")
+    quote = bids.generate(db, CTX, job["smith"], customer={"name": "Smith", "email": "smith@example.com"})
+    bids.set_status(db, CTX, quote["id"], "won")
+    db.commit()
+    page.reload()
+    page.wait_for_selector("#estimate-change-order")
+    dismiss_tour(page)
+    assert page.locator("#estimate-reopen").count() == 0                # accepted: a change order, not a reopen
+    page.click("#estimate-change-order")
+    page.fill("#change-order-why", "add the hallway")
+    page.click("#change-order-go")
+    answer_yes(page, "change-order")
+    page.wait_for_selector("#change-order-of")
+    banner = page.inner_text("#change-order-of")
+    assert "Change order 1" in banner and quote["number"] in banner and "add the hallway" in banner
 
 
 # ------------------------------------------------------------------ M6: tablet portrait + landscape

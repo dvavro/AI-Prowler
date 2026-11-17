@@ -9,3 +9,5 @@ dw_ceiling_sqft,Ceiling hanging extra per sq ft (sample),labor,sqft,0.25
 dw_finish3_sqft,Finish level 3 per sq ft (sample),labor,sqft,0.50
 dw_finish4_sqft,Finish level 4 per sq ft (sample),labor,sqft,0.65
 dw_finish5_sqft,Finish level 5 per sq ft (sample),labor,sqft,0.95
+dw_permit_ea,Drywall permit (sample),other,ea,100.00
+dw_inspect_ea,Drywall inspection fee (sample),other,ea,100.00

@@ -151,7 +151,7 @@ def test_tour_ids_match_the_api():                                        # C2S1
 def test_every_tour_step_names_a_real_control():                          # C2S18-W12
     src = _web_text()
     steps = _steps()
-    assert len(steps) == 87
+    assert len(steps) == 90          # 2026-11-17: the Estimate tour gains Reopen, Change order and the total
     screens = {s["id"] for s in nav.SCREENS}
     for sel, _go, title, body in steps:
         assert title.strip() and body.strip(), sel
@@ -252,7 +252,7 @@ def test_new_guides_are_served_for_their_screens(call):                 # C2S18-
 def test_empty_states_name_the_next_step():                              # C2S18-W20
     cases = [
         ("review.js", ["takeoffs-empty", "No plans or measurements yet.", "Open Projects", "#/projects"]),
-        ("verify.js", ["agents-empty", "No takeoff agents yet.", "Ask your AI to set up the trades"]),
+        ("verify.js", ["runs-empty", "No takeoff runs yet.", "a project's estimate"]),   # 2026-11-17: no agents table
         ("estimates.js", ["estimates-empty", "No estimates", "Create one from Projects"]),
         ("app.js", ["No trades priced yet.", "Open the estimate", "start a quick estimate",
                     "No projects yet — create one to start."]),

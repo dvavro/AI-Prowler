@@ -12,3 +12,4 @@ el_lv_drop_ea,Low-voltage drop installed (sample),other,ea,85.00
 el_subpanel_ea,Subpanel installed (sample),other,ea,1200.00
 el_panel_upgrade_ea,200 A panel upgrade installed (sample),other,ea,3500.00
 el_permit_ea,Electrical permit (sample),other,ea,200.00
+el_inspect_ea,Electrical inspection fee (sample),other,ea,100.00

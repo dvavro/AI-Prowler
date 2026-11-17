@@ -41,6 +41,7 @@ questions:
       - {value: subpanel, label: "Add a subpanel", factor: "1"}
       - {value: upgrade, label: "Upgrade to 200 A service", factor: "2"}
   - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+  - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 lines:
   # hours per device: outlet 0.5, switch 0.5, GFCI 0.75, light 0.75, fan 1.5
@@ -76,3 +77,4 @@ lines:
      price_key: el_panel_upgrade_ea, when: "panel == 2"}
   - {id: permit, description: "Electrical permit", kind: other, unit: ea, quantity: "1", price_key: el_permit_ea,
      when: "permit"}
+  - {id: inspections, description: "Inspections", kind: other, unit: ea, quantity: "inspections", price_key: el_inspect_ea, when: "inspections > 0"}

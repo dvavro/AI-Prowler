@@ -163,8 +163,10 @@ def enqueue_due(conn, ctx: RequestContext, today: date | None = None) -> list[in
                 t = _enqueue(conn, ctx, "reviewer", f"review:{j['estimate_id']}:{j['rev']}",
                              estimate_id=j["estimate_id"], job_id=j["id"])
             else:
-                t = _enqueue(conn, ctx, "bid_writer", f"bid:{j['estimate_id']}", estimate_id=j["estimate_id"],
-                             job_id=j["id"])
+                # One draft per estimate version (2026-11-17, David): after a reopen and a new approval the scope is
+                # written again for what's priced now - "bid:<id>" alone allowed only one draft per estimate ever.
+                t = _enqueue(conn, ctx, "bid_writer", f"bid:{j['estimate_id']}:{j['rev']}",
+                             estimate_id=j["estimate_id"], job_id=j["id"])
             if t:
                 made.append(t)
         for f in followups_due(conn, ctx, today=today)["follow_ups"]:
@@ -444,15 +446,57 @@ def submit(conn, ctx: RequestContext, task_id: int, actions, summary: str = "", 
 
 
 def latest_draft(conn, ctx, estimate_id: int) -> dict | None:
-    """The newest unused Bid Writer draft for an estimate (the Director puts it on the bid)."""
+    """The newest unused Bid Writer draft for an estimate (the Director puts it on the bid) - only one written for the
+    estimate as it is now. 2026-11-17 (David): a draft written before the estimate was reopened and changed went onto
+    the new quote, so the quote listed "Vapor barrier" as not included while the estimate priced it."""
     row = conn.execute("SELECT * FROM agent_tasks WHERE company_id = ? AND role = 'bid_writer' AND estimate_id = ?"
                        " AND state = 'done' AND applied_at IS NULL ORDER BY id DESC LIMIT 1",
                        (ctx.company_id, estimate_id)).fetchone()
-    if row is None:
+    if row is None or is_stale(conn, ctx, row):
         return None
     acts = json.loads(row["result_json"] or "{}").get("actions", [])
     draft = next((a for a in acts if a["action"] == "draft_bid"), None)
     return {"task_id": row["id"], **draft} if draft else None
+
+
+def draft_now(conn, ctx, estimate_id: int, job_id: int | None = None, registry=None) -> dict:
+    """Get the Bid Writer's scope for an estimate before its quote is made (2026-11-17, David: Q-0006-1 went out with
+    no Included / Not included lists - the quote was made a second after approval, before the Bid Writer was even
+    asked). Returns {"draft": ...} when there is one, {"waiting": why} when it has to be run from chat or the budget is
+    used up, or {} when the Bid Writer is off or couldn't write it (the quote is then made without it)."""
+    draft = latest_draft(conn, ctx, estimate_id)
+    if draft:
+        return {"draft": draft}
+    cfg = _role_provider(conn, ctx.company_id, "bid_writer")
+    if cfg["provider"] == "off":
+        return {}
+    rev = conn.execute("SELECT rev FROM estimates WHERE id = ?", (estimate_id,)).fetchone()[0]
+    with service.transaction(conn):
+        _enqueue(conn, ctx, "bid_writer", f"bid:{estimate_id}:{rev}", estimate_id=estimate_id, job_id=job_id)
+    row = conn.execute("SELECT * FROM agent_tasks WHERE company_id = ? AND role = 'bid_writer' AND estimate_id = ?"
+                       " ORDER BY id DESC LIMIT 1", (ctx.company_id, estimate_id)).fetchone()
+    task = dict(row) if row else None
+    if task is None or task["state"] in ("cancelled", "failed"):
+        return {}
+    if cfg["provider"] == "chat_only" or task["state"] == "waiting_for_ai":
+        return {"waiting": "the Bid Writer runs from chat: ask the AI to do the next agent task (est_agent_next)"}
+    ok_budget, why = roles.budget_left(conn, ctx.company_id, None)
+    if not ok_budget:
+        return {"waiting": f"the AI agents are paused: {why}"}
+    if task["state"] in ("queued", "paused"):
+        _run_one(conn, ctx, task, cfg, _registry(registry))
+    draft = latest_draft(conn, ctx, estimate_id)
+    return {"draft": draft} if draft else {}
+
+
+def is_stale(conn, ctx, task) -> bool:
+    """A draft is stale once the estimate it was written for has been reopened since: what it describes may no
+    longer be what's priced."""
+    if not task["estimate_id"]:
+        return False
+    return conn.execute("SELECT 1 FROM estimate_events WHERE company_id = ? AND estimate_id = ? AND action = 'reopened'"
+                        " AND at > ? LIMIT 1", (ctx.company_id, task["estimate_id"], task["created_at"])).fetchone() \
+        is not None
 
 
 def mark_applied(conn, task_id: int) -> None:
@@ -472,6 +516,9 @@ def apply_draft(conn, ctx: RequestContext, task_id: int, *, confirm: bool = Fals
         raise InvalidInput(f"agent task {task['id']} has no draft yet ({task['state']})", task_id=task["id"])
     if task["applied_at"]:
         raise InvalidInput(f"the draft from agent task {task['id']} was already used", task_id=task["id"])
+    if task["role"] == "bid_writer" and is_stale(conn, ctx, task):
+        raise InvalidInput(f"the draft from agent task {task['id']} was written before the estimate was reopened and "
+                           "changed, so it may not match what's priced now", task_id=task["id"])
     acts = json.loads(task["result_json"])["actions"]
     if task["role"] == "bid_writer":
         d = next((a for a in acts if a["action"] == "draft_bid"), None)

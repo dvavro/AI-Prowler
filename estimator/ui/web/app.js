@@ -993,8 +993,16 @@ function priceEdit(row, p, modules) {
   cost.addEventListener("input", () => { if (cost.value.trim() !== startCost.trim()) sample.checked = false; });
   const eff = el("input", { type: "date", id: "pb-edit-effective", "aria-label": "Takes effect" });
   const save = el("button", { class: "primary", type: "button", id: "pb-edit-save" }, "Save…");
+  // 2026-11-17 (David): editing "Place and finish labor" into "Place and finish smooth labor" renamed and repriced the
+  // item every estimate uses, when a second item was wanted. Save as a new item keeps this one and adds a copy.
+  const saveNew = el("button", { class: "button", type: "button", id: "pb-edit-save-new" }, "Save as a new item…");
   const cancel = el("button", { class: "button", type: "button", id: "pb-edit-cancel" }, "Cancel");
   const msg = el("div", { id: "pb-edit-message", role: "status" });
+  const renameNote = el("p", { class: "note warn", id: "pb-edit-rename-note", hidden: true },
+    "Changing the description changes this item itself: every estimate priced with " + p.price_key +
+    " will use the new name and cost. For a different item, use Save as a new item… instead.");
+  desc.addEventListener("input", () => { renameNote.hidden = desc.value.trim() === p.description; });
+  const newBox = el("div", {});
   const cell = el("td", { colspan: 7 },
     el("div", { class: "row filters" },
       el("label", {}, "Item ", el("span", { class: "muted" }, p.price_key)),
@@ -1006,23 +1014,53 @@ function priceEdit(row, p, modules) {
       el("label", {}, "Takes effect (optional)", eff),
       el("label", { class: "check", title: "A sample is a placeholder shipped with the trade. Untick to keep this price as your own." },
         sample, " Sample (placeholder)"),
-      el("span", {}, save, " ", cancel)),
+      el("span", {}, save, " ", saveNew, " ", cancel)),
     p.sample ? el("p", { class: "muted small" }, "Happy with this price? Untick Sample and click Save… to keep it as your own.") : null,
-    msg);
+    renameNote, newBox, msg);
   row.after(el("tr", { class: "pb-edit", "data-edit-for": p.price_key }, cell));
   cancel.addEventListener("click", () => cell.closest("tr").remove());
+  const checked = () => {
+    const d = desc.value.trim(), u = unit.value.trim(), c = cost.value.trim().replace(/^\$/, "").replace(/,/g, "");
+    if (!d) { msg.replaceChildren(errorBox({ message: "Give the item a description." })); return null; }
+    if (!u) { msg.replaceChildren(errorBox({ message: "Give the item a unit, e.g. sqft." })); return null; }
+    if (c === "" || isNaN(Number(c)) || Number(c) < 0) { msg.replaceChildren(errorBox({ message: "Give the cost as dollars, e.g. 250.00." })); return null; }
+    return { d, u, c };
+  };
   save.addEventListener("click", async () => {
     msg.replaceChildren();
-    const d = desc.value.trim(), u = unit.value.trim(), c = cost.value.trim().replace(/^\$/, "").replace(/,/g, "");
-    if (!d) { msg.replaceChildren(errorBox({ message: "Give the item a description." })); return; }
-    if (!u) { msg.replaceChildren(errorBox({ message: "Give the item a unit, e.g. sqft." })); return; }
-    if (c === "" || isNaN(Number(c)) || Number(c) < 0) { msg.replaceChildren(errorBox({ message: "Give the cost as dollars, e.g. 250.00." })); return; }
+    const v = checked();
+    if (!v) return;
     cancel.disabled = true;
     await askThenSave(msg, save, "/price-book/" + encodeURIComponent(p.price_key) + "/edit",
-      { description: d, kind: kind.value, unit: u, module_id: trade.value || null, cost: c, sample: sample.checked,
+      { description: v.d, kind: kind.value, unit: v.u, module_id: trade.value || null, cost: v.c, sample: sample.checked,
         effective_date: eff.value || null },
       () => "Price updated.");
     cancel.disabled = false;
+  });
+  saveNew.addEventListener("click", () => {
+    msg.replaceChildren();
+    // A code for the copy, made from its description: "Place and finish smooth labor" -> cc_place_and_finish_smooth_labor.
+    const prefix = (p.price_key.match(/^[a-z]+_/) || [""])[0];
+    const slug = desc.value.trim().toLowerCase().replace(/ per [a-z ]+$/, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 48);
+    const code = el("input", { type: "text", id: "pb-edit-new-key", "aria-label": "New item code",
+      value: (slug && prefix + slug !== p.price_key ? prefix + slug : p.price_key + "_2") });
+    const go = el("button", { class: "primary", type: "button", id: "pb-edit-new-go" }, "Add the new item…");
+    newBox.replaceChildren(el("div", { class: "row filters" },
+      el("label", {}, "New item code", code), go,
+      el("span", { class: "muted small" }, p.price_key + " stays as it is; a new item is added with this code and the details above.")));
+    code.focus();
+    go.addEventListener("click", async () => {
+      const v = checked(), k = code.value.trim();
+      if (!v) return;
+      if (!/^[A-Za-z0-9_.-]{1,64}$/.test(k)) { msg.replaceChildren(errorBox({ message: "Give the new item a code using letters, numbers, _ . or -." })); return; }
+      if (k === p.price_key) { msg.replaceChildren(errorBox({ message: "Use a different code from " + p.price_key + " for the new item." })); return; }
+      const q = s => { s = String(s); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+      const csv = "Item code,Description,Unit,Cost,Kind\n" + [k, v.d, v.u, v.c, kind.value].map(q).join(",") + "\n";
+      await askThenSave(msg, go, "/price-book/import",
+        { csv_text: csv, mapping: { price_key: "Item code", description: "Description", unit: "Unit", cost: "Cost", kind: "Kind" },
+          add_new: true, module_id: trade.value || null },
+        r => (r.saved ? "New item " + k + " added." : "Not added: " + ((r.skipped_rows || [])[0] || {}).reason));
+    });
   });
 }
 
@@ -2149,10 +2187,11 @@ function tradePicker(prefix, selected) {
   (async () => {
     try {
       if (!TRADE_LIST) {
-        const r = await api("GET", "/modules");
-        TRADE_LIST = r.modules.filter(m => m.id !== "custom").map(m => ({ id: m.id, name: m.name, category: m.category }));
+        const r = await api("GET", "/modules?all=1");
+        TRADE_LIST = r.modules.filter(m => m.id !== "custom").map(m => ({ id: m.id, name: m.name, category: m.category, off: !!m.off }));
       }
-      fill(TRADE_LIST);
+      // A trade switched off in AI-Prowler's Estimator tab isn't offered, unless this quote already has it (2026-11-17).
+      fill(TRADE_LIST.filter(m => !m.off || chosen.has(m.id)));
     } catch (e) { if (e.status !== 401) box.replaceChildren(errorBox(e)); }
   })();
   return { node: box, value: () => [...box.querySelectorAll("input[data-trade]:checked")].map(i => i.value) };

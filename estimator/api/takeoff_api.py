@@ -151,8 +151,10 @@ def route(m: str, sub: str, req, ctx, conn):
             t = _trade(mod)
             if t["questions"]:
                 trades.append(t)
-        others = sorted((t for t in (_trade(x) for x in reg.list() if x.id not in mine) if t["questions"]),
-                        key=lambda t: t["name"].lower())
+        from estimator.agent_manager.configs import trades_off     # 2026-11-17: switched off = not offered
+        off = trades_off(conn, ctx.company_id)
+        others = sorted((t for t in (_trade(x) for x in reg.list() if x.id not in mine and x.id not in off)
+                         if t["questions"]), key=lambda t: t["name"].lower())
         listing = ms.list_measurements(conn, ctx, eid)
         shapes = {r[0]: json.loads(r[1]) for r in conn.execute(
             "SELECT id, geometry_json FROM measurements WHERE company_id = ? AND estimate_id = ?"

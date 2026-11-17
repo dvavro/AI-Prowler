@@ -229,6 +229,9 @@ def save(conn, ctx, section: str, data: dict, confirm: bool) -> dict:
         if other:
             raise _refuse(f"these aren't labor rates: {', '.join(other)}; change them in the Price Book")
         out = price_book.update_prices(conn, ctx, {str(k): str(v) for k, v in prices.items()}, confirm=confirm)
+        # Labor rates are set here only now (2026-11-17, David: the desktop tab's copy was removed), so saving them
+        # ticks the "Labor rates" setup step, as the tab did (no prices passed: they're saved just above).
+        setup.setup_step(conn, ctx, "labor_rates", {})
         return {**out, "section": section}
     if section == "company_profile":
         bad = sorted(set(data) - set(PROFILE))

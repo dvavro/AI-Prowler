@@ -17,3 +17,4 @@ rf_starter_lf,Starter strip per linear ft (sample),material,lf,1.20
 rf_ridge_lf,Ridge cap per linear ft (sample),material,lf,3.50
 rf_access_sq,Two-story access per square (sample),labor,sq,25.00
 rf_permit_ea,Roofing permit (sample),other,ea,350.00
+rf_inspect_ea,Roofing inspection fee (sample),other,ea,100.00

@@ -69,6 +69,7 @@ questions:
       - {value: one, label: "One story", factor: "1"}
       - {value: two, label: "Two or more stories", factor: "2"}
   - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+  - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 lines:
   - {id: tearoff, description: "Tear off and haul away old roofing (per layer)", kind: labor, unit: sq,
@@ -108,3 +109,4 @@ lines:
   - {id: two_story, description: "Two-story access and safety", kind: labor, unit: sq,
      quantity: "roof_area_sqft * pitch / 100", price_key: rf_access_sq, when: "stories == 2"}
   - {id: permit, description: "Permit", kind: other, unit: ea, quantity: "1", price_key: rf_permit_ea, when: "permit"}
+  - {id: inspections, description: "Inspections", kind: other, unit: ea, quantity: "inspections", price_key: rf_inspect_ea, when: "inspections > 0"}

@@ -60,7 +60,8 @@ class FakeHost:
         return {"create_customer": self._make("create_customer", "CUST"),
                 "create_quote": self._make("create_quote", "QTE"),
                 "create_job": self._make("create_job", "JOB"),
-                "send_email": self._make("send_email", None)}
+                "send_email": self._make("send_email", None),
+                "update_job_spreadsheet": self._make("update_job_spreadsheet", None)}   # change orders (2026-11-16)
 
     def named(self, name):
         return [kw for n, kw in self.calls if n == name]

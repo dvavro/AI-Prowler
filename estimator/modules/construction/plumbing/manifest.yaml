@@ -44,6 +44,7 @@ questions:
   - {id: gas_line_lf, label: "Gas line", type: number, unit: lf, default: 0, min: 0, max: 2000}
   - {id: supply_fixtures, label: "Supply the fixtures (not the customer)?", type: boolean, default: false}
   - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+  - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 lines:
   - {id: removal, description: "Remove old fixtures", kind: labor, unit: hr,
@@ -87,3 +88,4 @@ lines:
      price_key: pl_gas_lf, when: "gas_line_lf > 0"}
   - {id: permit, description: "Plumbing permit", kind: other, unit: ea, quantity: "1", price_key: pl_permit_ea,
      when: "permit"}
+  - {id: inspections, description: "Inspections", kind: other, unit: ea, quantity: "inspections", price_key: pl_inspect_ea, when: "inspections > 0"}

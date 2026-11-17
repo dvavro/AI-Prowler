@@ -276,14 +276,12 @@ def test_E2E_S18_M7_empty_states_links(page, db):
     page.click("#estimates-empty a")
     page.wait_for_url("**#/projects")
     page.goto(page.base + "#/agents")
-    page.wait_for_selector("#agents-list, #agents-empty")
+    page.wait_for_selector("#runs-list, #runs-empty")
     dismiss_tour(page)
-    # A fresh company already has one agent per construction trade
-    # (list_configs builds one per registry trade), so the Agents screen
-    # shows the list, not the empty state; the empty-state wording itself
-    # is covered statically by test_web_sprint18 W20.
-    assert page.locator("#agents-list").count() == 1
-    assert page.locator("#agents-list tr[data-module=roofing]").count() == 1
+    # 2026-11-17: the trade settings are set in AI-Prowler's Estimator tab; the Agents screen says where, and its
+    # empty state (no takeoff runs yet) names the next step.
+    assert "Estimator tab" in page.inner_text("#agents-settings-where")
+    assert "No takeoff runs yet" in page.inner_text("#runs-empty")
     page.goto(page.base + "#/jobs")
     page.wait_for_selector("#jobs-empty")
     dismiss_tour(page)
@@ -327,7 +325,7 @@ def test_E2E_S18_M8_tour_per_user_progress(browser, site):
             p2.wait_for_selector("#tour-pop", state="hidden")
             # "?" opens the panel on a screen each role can open.
             p2.goto(p2.base + "#/agents")
-            p2.wait_for_selector("#agents-list, #agents-empty")
+            p2.wait_for_selector("#runs-list, #runs-empty")
             p2.wait_for_timeout(400)
             if p2.locator("#tour-pop:visible").count():
                 p2.click("#tour-skip")

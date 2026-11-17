@@ -73,6 +73,54 @@ def get_config(conn, company_id: str, module_id: str, registry) -> dict:
     return _shape(module_id, trades[module_id], row)
 
 
+def trades_off(conn, company_id: str) -> set[str]:
+    """The construction trades the company switched off (the master Trades switch in AI-Prowler's 🏗 Estimator tab).
+    2026-11-17, David: off means "we don't do this trade" - no AI takeoff, the Director leaves it out, and it's hidden
+    from the trade pickers, the Price Book and the symbol screens. Estimates that already have it keep working."""
+    try:
+        return {r[0] for r in conn.execute("SELECT module_id FROM agent_configs WHERE company_id = ? AND enabled = 0",
+                                           (company_id,))}
+    except Exception:  # noqa: BLE001 - an old database without agent_configs: every trade is on
+        return set()
+
+
+def set_offered(conn, ctx: RequestContext, module_id: str, on: bool, registry) -> dict:
+    """Switch a service (pressure washing, cleaning, pest...) on or off - the same master switch as a trade's, kept in
+    the same table so trades_off() covers both (2026-11-17, David: "we should be able to limit services as well").
+    A construction trade goes through update_config (it has takeoff settings too)."""
+    if ctx.role not in CONFIG_ROLES:
+        raise PermissionDenied("only the owner can choose the services and trades the company quotes", role=ctx.role)
+    mod = registry.modules.get(module_id)
+    if mod is None or module_id == "custom":
+        raise NotFound(f"no service called '{module_id}'", module_id=module_id)
+    if mod.category == "construction":
+        return update_config(conn, ctx, module_id, {"enabled": bool(on)}, confirm=True, registry=registry)
+    before = module_id not in trades_off(conn, ctx.company_id)
+    with service.transaction(conn):
+        conn.execute(
+            "INSERT INTO agent_configs (company_id, module_id, enabled, confidence_threshold, auto_advance,"
+            " sheet_rules_json, defaults_json, updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
+            " ON CONFLICT (company_id, module_id) DO UPDATE SET enabled = excluded.enabled,"
+            " updated_by = excluded.updated_by, updated_at = excluded.updated_at",
+            (ctx.company_id, module_id, int(bool(on)), DEFAULTS["confidence_threshold"], 0, None, None, ctx.actor,
+             _now()))
+        if before != bool(on):
+            service._log(conn, ctx, None, "service_switched", {"module_id": module_id, "enabled": bool(on)},
+                         {"module_id": module_id, "enabled": before})
+    return {"ok": True, "module_id": module_id, "enabled": bool(on), "changed": before != bool(on)}
+
+
+# Plan symbols carry a discipline, not a trade module: the ones that belong to one trade (2026-11-17).
+SYMBOL_TRADE_MODULE = {"electrical": "electrical", "plumbing": "plumbing", "mechanical": "hvac",
+                       "landscape": "landscaping"}
+
+
+def symbol_trades_off(conn, company_id: str) -> set[str]:
+    """The symbol disciplines whose trade is switched off: their symbols aren't shown or counted."""
+    off = trades_off(conn, company_id)
+    return {disc for disc, mod in SYMBOL_TRADE_MODULE.items() if mod in off}
+
+
 def list_configs(conn, company_id: str, registry) -> dict:
     trades = _trades(registry)
     rows = {r["module_id"]: r for r in conn.execute("SELECT * FROM agent_configs WHERE company_id = ?", (company_id,))}

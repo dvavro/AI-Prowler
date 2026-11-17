@@ -16,3 +16,5 @@ sd_jchannel_lf,J-channel and opening trim per linear ft (sample),material,lf,3.5
 sd_bead_lf,Casing bead per linear ft (sample),material,lf,2.00
 sd_soffit_sqft,Soffit supplied and installed per sq ft (sample),material,sqft,9.00
 sd_fascia_lf,Fascia supplied and installed per linear ft (sample),material,lf,8.00
+sd_permit_ea,Siding permit (sample),other,ea,150.00
+sd_inspect_ea,Siding inspection fee (sample),other,ea,100.00

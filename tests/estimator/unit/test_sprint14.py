@@ -203,7 +203,7 @@ def test_turned_off_trades_are_skipped(db):  # S14-A02
     agent_manager.update_config(db, CTX, "roofing", {"enabled": False}, confirm=True, registry=REG)
     out = _start(db, ["roofing", "framing"])
     assert [x["module_id"] for x in out["tasks"]] == ["framing"] and "roofing" in out["warnings"][0]
-    with pytest.raises(InvalidInput, match="turned off"):
+    with pytest.raises(InvalidInput, match="switched off"):
         _start(db, ["roofing"])
 
 
@@ -296,7 +296,7 @@ def test_turned_off_trade_left_out_of_plan_job(db):  # S14-D06
     agent_manager.update_config(db, CTX, "drywall", {"enabled": False}, confirm=True, registry=REG)
     r = engine.start(db, CTX, "bid the plans: framing and drywall", has_plans=True, registry=REG)
     assert [x["module_id"] for x in r["next_step"]["tasks"]] == ["framing"]
-    assert "turned off" in " ".join(r["notes"])
+    assert "switched off" in " ".join(r["notes"])
 
 
 # ---------------------------------------------------------------- MCP tools

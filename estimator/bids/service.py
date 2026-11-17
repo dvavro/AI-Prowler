@@ -177,6 +177,60 @@ def latest_for_estimate(conn, ctx, estimate_id: int) -> dict | None:
     return _row_to_bid(row) if row else None
 
 
+_NOT_NAMES = {"the", "and", "for", "with", "unless", "added", "writing", "other", "than", "such", "including", "beyond",
+              "listed", "their", "fees", "existing", "any", "all", "work", "per", "not", "included", "extra"}
+
+
+def _words(text: str) -> set:
+    import re
+    return {w for w in re.findall(r"[a-z]{3,}", (text or "").lower()) if w not in _NOT_NAMES}
+
+
+def drop_priced_exclusions(exclusions: str | None, snap: dict) -> tuple[str | None, list[str]]:
+    """Take off the "Not included" list anything the quote prices (2026-11-17, David: "Vapor barrier" was listed as not
+    included while the estimate priced a vapor barrier line). A short exclusion (one to three key words) is dropped
+    when every one of its words is in one priced line's description. Returns (exclusions, what was dropped)."""
+    if not exclusions:
+        return exclusions, []
+    priced = [_words(ln["description"]) for sec in snap["sections"] for ln in sec["lines"]]
+    keep, dropped = [], []
+    for raw in exclusions.splitlines():
+        item = raw.strip().lstrip("-•*").strip()
+        key = _words(item)
+        if item and 1 <= len(key) <= 3 and any(key <= p for p in priced):
+            dropped.append(item)
+        else:
+            keep.append(raw)
+    return "\n".join(keep).strip() or None, dropped
+
+
+def replaced_quote(conn, ctx, estimate_id: int, snap: dict) -> dict | None:
+    """The last quote the customer was sent for this estimate, if it was replaced (the estimate was reopened):
+    its number, when it was sent, its total, and what changed line by line, in the customer's words."""
+    row = conn.execute("SELECT * FROM bids WHERE estimate_id = ? AND company_id = ? AND sent_at IS NOT NULL"
+                       " ORDER BY version DESC LIMIT 1", (estimate_id, ctx.company_id)).fetchone()
+    if row is None or row["status"] != "void":
+        return None
+    old = json.loads(row["snapshot_json"])
+    key = lambda sec, ln: (sec["title"], ln["description"])  # noqa: E731
+    was = {key(s, ln): ln for s in old["sections"] for ln in s["lines"]}
+    now = {key(s, ln): ln for s in snap["sections"] for ln in s["lines"]}
+    changes = []
+    for k in [*was, *[k for k in now if k not in was]]:
+        a, b = was.get(k), now.get(k)
+        if a is None:
+            changes.append({"title": k[0], "description": k[1], "change": "added", "from_cents": None,
+                            "to_cents": b["price_cents"]})
+        elif b is None:
+            changes.append({"title": k[0], "description": k[1], "change": "removed", "from_cents": a["price_cents"],
+                            "to_cents": None})
+        elif a["price_cents"] != b["price_cents"] or str(a["quantity"]) != str(b["quantity"]):
+            changes.append({"title": k[0], "description": k[1], "change": "changed", "from_cents": a["price_cents"],
+                            "to_cents": b["price_cents"]})
+    return {"number": row["number"], "sent_on": local_date_text(row["sent_at"]), "total_cents": row["total_cents"],
+            "changes": changes}
+
+
 def generate(conn, ctx: RequestContext, estimate_id: int, *, customer: dict | None = None,
              scope_text: str | None = None, inclusions: str | None = None, exclusions: str | None = None,
              terms: str | None = None, valid_days: int | None = None, price_detail: str | None = None,
@@ -206,6 +260,15 @@ def generate(conn, ctx: RequestContext, estimate_id: int, *, customer: dict | No
                        for o in scenarios.list_options(conn, ctx, est["id"])]
     if not snap["sections"]:
         raise InvalidInput("the estimate has no line items to put on a bid", estimate_id=est["id"])
+    # An updated quote says which quote it replaces and what changed for the customer; a change order says which
+    # accepted quote it adds to (2026-11-16, David).
+    rep = replaced_quote(conn, ctx, est["id"], snap)
+    if rep:
+        snap["replaces"] = rep
+    from estimator.estimating import change_orders
+    co = change_orders.quote_info(conn, ctx, est, snap["totals"]["total_cents"])
+    if co:
+        snap["change_order"] = co
     if scope_text is None:
         scope_text = "\n".join(f"{ln['description']} ({ln['quantity']} {ln['unit']})"
                                for sec in snap["sections"] for ln in sec["lines"])
@@ -213,10 +276,10 @@ def generate(conn, ctx: RequestContext, estimate_id: int, *, customer: dict | No
     version = conn.execute("SELECT COALESCE(MAX(version), 0) + 1 FROM bids WHERE estimate_id = ?",
                            (est["id"],)).fetchone()[0]
     number = f"Q-{est['id']:04d}-{version}"
+    excl, dropped = drop_priced_exclusions(exclusions if exclusions is not None else tpl.get("exclusions"), snap)
     bid = {"number": number, "version": version, "date": today.isoformat(), "valid_until": valid_until,
            "scope_text": scope_text, "inclusions": inclusions if inclusions is not None else tpl.get("inclusions"),
-           "exclusions": exclusions if exclusions is not None else tpl.get("exclusions"), "terms": terms,
-           "snapshot": snap}
+           "exclusions": excl, "terms": terms, "snapshot": snap}
     company = _company(conn, ctx.company_id)
     folder = config.data_dir() / "projects" / f"estimate_{est['id']:04d}" / "bids"
     folder.mkdir(parents=True, exist_ok=True)
@@ -238,7 +301,8 @@ def generate(conn, ctx: RequestContext, estimate_id: int, *, customer: dict | No
         service._log(conn, ctx, est["id"], "bid_generated",
                      {"bid_id": bid_id, "number": number, "total_cents": snap["totals"]["total_cents"]})
     out = _public(_load(conn, ctx, bid_id))
-    out["warnings"] = [pdf_problem] if pdf_problem else []
+    out["warnings"] = ([pdf_problem] if pdf_problem else []) + (
+        [f"Taken off “Not included” because this quote prices it: {'; '.join(dropped)}."] if dropped else [])
     return out
 
 
@@ -279,7 +343,9 @@ def send(conn, ctx: RequestContext, bid_id: int, *, to: str | None = None, confi
     view = dict(b, date=local_date_text(b["created_at"]))
     body = ((message.strip() + "\n\n") if message else "") + render.bid_text(view, company, b["customer"])
     body_html = (f"<p>{render._e(message)}</p>" if message else "") + render.bid_html(view, company, b["customer"])
-    subject = f"Your quote from {company.get('name') or 'us'} — {b['number']} ({format_cents(b['total_cents'])})"
+    kind = ("change order" if b["snapshot"].get("change_order") else
+            "updated quote" if b["snapshot"].get("replaces") else "quote")
+    subject = f"Your {kind} from {company.get('name') or 'us'} — {b['number']} ({format_cents(b['total_cents'])})"
     warnings = []
     kwargs = dict(to=to, subject=subject, body=body, body_html=body_html)
     if b["pdf_path"]:
@@ -391,6 +457,16 @@ def convert_to_job(conn, ctx: RequestContext, bid_id: int, *, confirm: bool = Fa
     if b["status"] not in ("sent", "viewed", "won"):
         raise NotEditable(f"bid {b['number']} is {b['status']}; only a sent or won bid can become a job",
                           bid_id=b["id"], status=b["status"])
+    # A change order adds to the job the accepted quote already made (2026-11-16, David): an approved quote for it,
+    # and the job's amount goes up - no second job.
+    if (b["snapshot"].get("change_order") or {}).get("job_id"):
+        from estimator.estimating import change_orders
+        done = change_orders.accept(conn, ctx, b, confirm=confirm)
+        out = _public(_load(conn, ctx, b["id"]))
+        out["created"] = {"quote_id": done["quote_id"], "job_id": None}
+        out["change_order"] = done
+        out["warnings"] = []
+        return out
     if service_date:
         try:
             date.fromisoformat(service_date)

@@ -228,6 +228,19 @@ def _carry_swap(conn, ctx, line_id: int, rule, planned_line: dict, price, swap: 
                   ctx.actor, swap["reason"] or "kept from before", now, now, line_id))
 
 
+def _refuse_trade_off(conn, ctx, estimate_id: int, mod) -> None:
+    """A trade switched off in AI-Prowler's 🏗 Estimator tab (2026-11-17, David: "we don't do this trade") can't be
+    added to an estimate. One the estimate already has can still be priced again (Edit answers keeps working)."""
+    from estimator.agent_manager.configs import trades_off
+    if mod.id not in trades_off(conn, ctx.company_id):
+        return
+    if conn.execute("SELECT 1 FROM trade_sections WHERE estimate_id = ? AND module_id = ?",
+                    (int(estimate_id), mod.id)).fetchone():
+        return
+    raise InvalidInput(f"{mod.name} is switched off - turn it on in AI-Prowler's 🏗 Estimator tab (Trades) to quote it",
+                       module_id=mod.id)
+
+
 def answer(conn, ctx: RequestContext, estimate_id: int, module_id: str, answers: dict, rev: int,
            registry=None) -> dict:
     """Price a quick estimate from answers, replacing that module's section on the estimate."""
@@ -235,6 +248,7 @@ def answer(conn, ctx: RequestContext, estimate_id: int, module_id: str, answers:
     mod = reg.get(module_id)
     if mod.path not in ("quick_estimate", "both"):
         raise InvalidInput(f"module '{module_id}' doesn't support quick estimates", module_id=module_id)
+    _refuse_trade_off(conn, ctx, estimate_id, mod)
     stored, variables = resolve_answers(mod, answers)
     planned = build_lines(mod, variables)
     warnings: list[str] = []

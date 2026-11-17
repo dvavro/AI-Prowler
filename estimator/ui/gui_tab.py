@@ -6,7 +6,7 @@ to, so keep the first words stable):
 
     🧭 Estimator setup        on/off, what's installed, the setup checklist
     🏢 Company and pricing    name, phone, license, sales tax, overhead, profit, minimum charge
-    💰 Labor rates            what your crew's time costs, per hour or per unit
+    (Labor rates and the Price Book are set in the web app only: the checklist's step opens them there.)
     🏗 Trades                 which construction trades the Estimator runs takeoffs for
     🤖 AI agents and budget   which AI runs each agent, its backup, the daily and monthly budget
     🧑‍💼 Director              review limit, quick-send limit, follow-ups, daily briefing, watcher
@@ -57,7 +57,7 @@ class EstimatorTab:
         self._section_header = {}
         self._section_collapsed = {}
         self._setup_section()
-        for build in (self._company_section, self._labor_section, self._trades_section, self._agents_section,
+        for build in (self._company_section, self._trades_section, self._agents_section,
                       self._director_section, self._modules_section, self._data_section, self._sync_section,
                       self._cad_section,
                       self._phone_section, self._help_section):
@@ -204,10 +204,11 @@ class EstimatorTab:
         icons = {"done": "✅", "skipped": "⏭", "not_started": "⬜"}
         quick = {"company_profile": "🏢 Company and pricing", "tax": "🏢 Company and pricing",
                  "markups": "🏢 Company and pricing", "services": "🏗 Trades", "team_approvals": "🧑‍💼 Director",
-                 "ai_check": "🤖 AI agents and budget", "labor_rates": "💰 Labor rates"}
-        # Steps with no section in this tab: the Price Book and the bid template live in the web app,
-        # and a sample quote is the practice project.
+                 "ai_check": "🤖 AI agents and budget"}
+        # Steps with no section in this tab: the Price Book, labor rates and the bid template live in the web app
+        # (2026-11-17, David: labor rates in one place only), and a sample quote is the practice project.
         actions = {"price_book_review": lambda: self._open_web("#/price_book"),
+                   "labor_rates": lambda: self._open_web("#/settings?section=money"),
                    "bid_template": lambda: self._open_web("#/settings"),
                    "sample_quote": self._sample_quote_setup}
         rows = ttk.Frame(self.check_frame)
@@ -338,78 +339,82 @@ class EstimatorTab:
         ttk.Button(b, text="💾 Save company and pricing", command=save).pack(side="left")
         msg = self._note(box, "")
 
-    # ------------------------------------------------------------ 💰 labor rates
+    # Labor rates are set in the web app only (Settings → Tax, markups and labor, or the Price Book) - 2026-11-17,
+    # David: all the settings in one place. The setup checklist's "Labor rates" step opens that screen.
 
-    def _labor_section(self):
-        ttk = self.ttk
-        box = self._box("💰 Labor rates", "labor")
-        self._note(box, "What your crew's time costs. These rates price the labor lines in every estimate. "
-                        "Sample rates are placeholders \u2014 set your own before sending real bids.", GREY, 8)
-        grid = ttk.Frame(box)
-        grid.pack(fill="x", pady=(6, 0))
-        msg = None
-        self.labor_vars = {}
-        rates = model.labor_rates()
-        by_mod = {}
-        for r in rates:
-            by_mod.setdefault(r.get("module_id") or "other", []).append(r)
-        row = 0
-        for mod_id in sorted(by_mod):
-            ttk.Label(grid, text=mod_id.replace("_", " ").title(), font=("Arial", 9, "bold")
-                      ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(6, 1))
-            row += 1
-            for r in by_mod[mod_id]:
-                # The description already ends in " (sample)" for sample rates, and the
-                # flag would add it a second time — show neither. The section note
-                # already says sample rates are placeholders.
-                desc = r["description"]
-                if desc.lower().endswith(" (sample)"):
-                    desc = desc[: -len(" (sample)")].rstrip()
-                label = f"{desc}  (per {r['unit']})"
-                ttk.Label(grid, text=label).grid(row=row, column=0, sticky="w", padx=(0, 6), pady=1)
-                var = self.tk.StringVar(value=f"{r['cost_cents'] / 100:.2f}")
-                ttk.Entry(grid, textvariable=var, width=10).grid(row=row, column=1, sticky="w", pady=1)
-                self.labor_vars[r["price_key"]] = var
-                row += 1
-        if not rates:
-            self._note(box, "No labor rates yet.", GREY, 8)
-        b = ttk.Frame(box)
-        b.pack(fill="x", pady=(6, 0))
-
-        def save():
-            prices = {k: v.get().strip() for k, v in self.labor_vars.items() if v.get().strip()}
-            if self._say(msg, model.save_labor_rates(prices)):
-                self.refresh_setup()
-        ttk.Button(b, text="💾 Save labor rates", command=save).pack(side="left")
-        msg = self._note(box, "")
 
     # ------------------------------------------------------------ 🏗 trades
 
     def _trades_section(self):
+        """🏗 Trades - the master setting (2026-11-17, David: set once, here only). A trade that's off isn't quoted: no
+        AI takeoff, the Director leaves it out, and the web app hides it from the trade pickers, the Price Book and
+        the symbol screens (estimates that already have it keep working). Each trade's takeoff agent - how sure it
+        must be, and whether it approves by itself - is set here too; the web app's Agents screen only shows them."""
         ttk = self.ttk
         box = self._box("🏗 Trades", "trades")
-        self._note(box, "Trades that are on can be estimated and get a takeoff task in plan jobs. Service quotes "
-                        "(pressure washing, cleaning, pools, pest, junk, windows, lawn care, other services) are "
-                        "always available.", GREY, 8)
+        self._note(box, "The trades and services you quote. One that's off isn't offered anywhere in the Estimator web "
+                        "app (trade pickers, quick estimate, Price Book, plan symbols), the AI takeoff doesn't measure it "
+                        "and the Director leaves it out; estimates that already have it keep working. Sure enough at: how "
+                        "sure a trade's AI takeoff must be before its quantities can go through; Approve by itself lets "
+                        "those go through without a person (leave it off until you trust that trade).", GREY, 8)
         grid = ttk.Frame(box)
         grid.pack(fill="x", pady=(6, 0))
         msg = None
-        self.trade_vars = {}
-        for i, t in enumerate(model.trades()):
+        self.trade_vars, self.trade_conf_vars, self.trade_auto_vars, self._trade_saved = {}, {}, {}, {}
+        rows = model.trades()
+        half = (len(rows) + 1) // 2
+        for side in (0, 1):
+            c = side * 4
+            for j, text in enumerate(("Trade", "Sure enough at", "Approve by itself")):
+                ttk.Label(grid, text=text, font=("Arial", 9, "bold")).grid(row=0, column=c + j, sticky="w",
+                                                                            padx=(0, 10))
+        for i, t in enumerate(rows):
+            mid, r, c = t["module_id"], 1 + i % half, (i // half) * 4
             var = self.tk.BooleanVar(value=t["enabled"])
-            self.trade_vars[t["module_id"]] = var
+            conf = self.tk.StringVar(value=str(t["confidence_threshold"]))
+            auto = self.tk.BooleanVar(value=t["auto_advance"])
+            self.trade_vars[mid], self.trade_conf_vars[mid], self.trade_auto_vars[mid] = var, conf, auto
+            self._trade_saved[mid] = (conf.get(), auto.get())
             ttk.Checkbutton(grid, text=t["name"], variable=var,
-                            command=lambda m=t["module_id"], v=var: self._say(msg, model.set_trade(m, v.get()))
-                            ).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 16), pady=1)
+                            command=lambda m=mid, v=var: self._say(msg, model.set_trade(m, v.get()))
+                            ).grid(row=r, column=c, sticky="w", padx=(0, 10), pady=1)
+            cell = ttk.Frame(grid)
+            cell.grid(row=r, column=c + 1, sticky="w", padx=(0, 10))
+            ttk.Entry(cell, textvariable=conf, width=4).pack(side="left")
+            ttk.Label(cell, text="%").pack(side="left")
+            ttk.Checkbutton(grid, variable=auto).grid(row=r, column=c + 2, sticky="w", padx=(0, 28))
+
+        def save_agents():
+            changed = [m for m in self.trade_conf_vars
+                       if (self.trade_conf_vars[m].get().strip(), self.trade_auto_vars[m].get()) != self._trade_saved[m]]
+            if not changed:
+                self._say(msg, (True, "Nothing changed."))
+                return
+            said = []
+            for m in changed:
+                ok, text = model.save_trade_agent(m, self.trade_conf_vars[m].get(), self.trade_auto_vars[m].get())
+                if not ok:
+                    self._say(msg, (False, text))
+                    return
+                self._trade_saved[m] = (self.trade_conf_vars[m].get().strip(), self.trade_auto_vars[m].get())
+                said.append(text)
+            self._say(msg, (True, " ".join(said)))
+        b = ttk.Frame(box)
+        b.pack(fill="x", pady=(6, 0))
+        ttk.Button(b, text="💾 Save takeoff settings", command=save_agents).pack(side="left")
         svc = ttk.Frame(box)
         svc.pack(fill="x", pady=(10, 0))
-        ttk.Label(svc, text="Services (always available for estimation \u2014 quick quotes, no plans needed)",
-                  font=("Arial", 9, "bold")).pack(anchor="w")
+        ttk.Label(svc, text="Services (quick quotes, no plans needed)", font=("Arial", 9, "bold")).pack(anchor="w")
         sgrid = ttk.Frame(svc)
         sgrid.pack(fill="x", pady=(4, 0))
+        # 2026-11-17 (David): services switch on and off like the trades (they were always on).
+        self.service_vars = {}
         for i, m in enumerate(model.services()):
-            ttk.Label(sgrid, text=f"\u2705  {m['name']}  ({m['how']})", font=("Arial", 9)
-                      ).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 16), pady=1)
+            var = self.tk.BooleanVar(value=m["enabled"])
+            self.service_vars[m["id"]] = var
+            ttk.Checkbutton(sgrid, text=f"{m['name']}  ({m['how']})", variable=var,
+                            command=lambda s=m["id"], v=var: self._say(msg, model.set_service(s, v.get()))
+                            ).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 16), pady=1)
         msg = self._note(box, "")
 
     # ------------------------------------------------------------ 🤖 agents

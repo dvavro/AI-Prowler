@@ -43,6 +43,7 @@ questions:
   - {id: protection, label: "Dust walls and floor protection?", type: boolean, default: true}
   - {id: hazard_test, label: "Asbestos and lead test first?", type: boolean, default: false}
   - {id: permit, label: "Pull a demolition permit?", type: boolean, default: false}
+  - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 lines:
   - {id: hazard_test, description: "Asbestos and lead testing", kind: other, unit: ea, quantity: "1", price_key: dm_test_ea,
@@ -70,3 +71,4 @@ lines:
      price_key: dm_dumpster_ea}
   - {id: permit, description: "Demolition permit", kind: other, unit: ea, quantity: "1", price_key: dm_permit_ea,
      when: "permit"}
+  - {id: inspections, description: "Inspections", kind: other, unit: ea, quantity: "inspections", price_key: dm_inspect_ea, when: "inspections > 0"}

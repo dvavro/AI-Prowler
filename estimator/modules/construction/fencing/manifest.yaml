@@ -39,6 +39,8 @@ questions:
   - {id: drive_gates, label: "Drive (double) gates", type: integer, default: 0, min: 0, max: 10}
   - {id: remove_old, label: "Remove the old fence?", type: boolean, default: false}
   - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
+  - {id: survey, label: "Survey needed?", type: boolean, default: false, help: "A licensed surveyor locates the lines and stakes the work."}
 
 scenarios:
   - {id: good, label: "Good: wood privacy", answers: {material: wood}}
@@ -78,3 +80,5 @@ lines:
      price_key: fn_labor_hr, when: "walk_gates + drive_gates > 0"}
   - {id: permit, description: "Fence or wall permit", kind: other, unit: ea, quantity: "1", price_key: fn_permit_ea,
      when: "permit"}
+  - {id: inspections, description: "Inspections", kind: other, unit: ea, quantity: "inspections", price_key: fn_inspect_ea, when: "inspections > 0"}
+  - {id: survey, description: "Boundary survey and line stakes (subcontract)", kind: sub, unit: ea, quantity: "1", price_key: fn_survey_ea, when: "survey"}

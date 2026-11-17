@@ -7,3 +7,4 @@ dm_concrete_ton,Concrete haul and dump per ton (sample),other,ton,40.00
 dm_structure_sqft,Structure demolition per sq ft (sample),other,sqft,6.00
 dm_dumpster_ea,20 cu yd dumpster (sample),other,ea,550.00
 dm_permit_ea,Demolition permit (sample),other,ea,200.00
+dm_inspect_ea,Demolition inspection fee (sample),other,ea,100.00

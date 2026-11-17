@@ -24512,6 +24512,25 @@ def _is_path_under_tracked_roots(target_path: str) -> tuple[bool, str]:
     return (False, "not under any tracked root or access-only folder")
 
 
+def _estimator_quote_file(filepath: str) -> Optional[str]:
+    """The one exception to the attachment allowlist (2026-11-16, David): a quote the Estimator made, i.e. a .pdf or
+    .html directly in <Estimator data>/projects/estimate_NNNN/bids/. Nothing else under the Estimator's data folder
+    (its database, plans, backups) and nothing outside it. Returns the resolved path, or None."""
+    try:
+        from estimator import config as _est_config
+        root = (Path(_est_config.data_dir()) / "projects").resolve()
+        p = Path(filepath).resolve(strict=True)
+        parts = p.relative_to(root).parts
+    except Exception:
+        return None
+    import re as _re
+    if (len(parts) != 3 or not _re.fullmatch(r"estimate_\d+", parts[0]) or parts[1] != "bids"
+            or p.suffix.lower() not in (".pdf", ".html") or not p.is_file()):
+        return None
+    blocked, _reason = _is_blocked_path(str(p))
+    return None if blocked else str(p)
+
+
 def _resolve_allowlisted_path(filepath: str) -> tuple[Optional[str], Optional[str]]:
     """
     Wrap _is_path_under_tracked_roots for tool use.
@@ -29733,7 +29752,11 @@ def send_email(to: str, subject: str, body: str,
     if attachment_path and attachment_path.strip():
         resolved_attach, err = _resolve_allowlisted_path(attachment_path.strip())
         if err:
-            return f"❌ Attachment: {err}"
+            # A quote PDF the Estimator wrote into its own bids folder may always be attached (2026-11-16, David):
+            # the Estimator's data folder isn't a tracked root, so every emailed quote went out without its PDF.
+            resolved_attach = _estimator_quote_file(attachment_path.strip())
+            if resolved_attach is None:
+                return f"❌ Attachment: {err}"
         attach = resolved_attach
 
     # R-053: server mode ignores from_account — every user sends from the

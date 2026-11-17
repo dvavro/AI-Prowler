@@ -13,3 +13,5 @@ fn_block_lab_sqft,Block laying labor per sq ft (sample),labor,sqft,9.00
 fn_walk_gate_ea,Walk gate (sample),material,ea,250.00
 fn_drive_gate_ea,Drive gate (sample),material,ea,900.00
 fn_permit_ea,Fence or wall permit (sample),other,ea,150.00
+fn_inspect_ea,Fence inspection fee (sample),other,ea,100.00
+fn_survey_ea,Boundary survey and line stakes (sample),sub,ea,450.00
