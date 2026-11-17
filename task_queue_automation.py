@@ -10,7 +10,7 @@ and the Claude CLI token are removed (re-entered by hand in 🔑 Agent API Key);
 How a run works now
   * The key is the agents' key — 🔑 Agent API Key at the top of the Small Business tab
     (desk_agent_providers.load_agent_key). Claude → the agents' "complex & customer" model; Grok → the
-    agents' Grok model.
+    agents' Grok model; Muse → the agents' Muse model.
   * AI-Prowler's own background scheduler (start_scheduler, started inside the running AI-Prowler's
     local server, personal installs only) wakes once a minute. At each check time it first looks at the
     queue itself — free, no AI call — and only calls the AI when something is due.
@@ -22,7 +22,7 @@ How a run works now
 
 Kept from the old module (other code uses them): load_config/save_config (the agents' model settings
 live in the same file), purge_old_jobs, rotate_audit_log, read_audit_log_tail, retire_cli_ai_routing,
-compute_next_checker_run, _HttpMCPClient, GROK_MODEL, XAI_API_URL.
+compute_next_checker_run, _HttpMCPClient, GROK_MODEL, XAI_API_URL, MUSE_MODEL, MUSE_API_URL.
 """
 
 from __future__ import annotations
@@ -81,8 +81,8 @@ LEGACY_FILES = (
 )
 LEGACY_DIRS = ("manual_run", "single_run")
 
-PROVIDERS = {"claude": "claude_api", "grok": "grok_api"}            # Task Queue choice → agents' runner
-PROVIDER_LABELS = {"claude": "Claude (Anthropic)", "grok": "Grok (xAI)"}
+PROVIDERS = {"claude": "claude_api", "grok": "grok_api", "muse": "muse_api"}  # Task Queue choice → agents' runner
+PROVIDER_LABELS = {"claude": "Claude (Anthropic)", "grok": "Grok (xAI)", "muse": "Muse (Meta)"}
 
 TASK_RUN_PROMPT = (
     "Run this AI-Prowler analysis task now. Its name is \"{label}\".\n\n"
@@ -102,7 +102,7 @@ QUEUE_RUNNER_PROMPT = TASK_RUN_PROMPT              # older name
 
 DEFAULT_CONFIG = {
     "paused": False,                 # True = no task runs on its own (the master switch)
-    "provider": "claude",            # "claude" | "grok" — the default AI for tasks that don't pick one
+    "provider": "claude",            # "claude" | "grok" | "muse" — the default AI for tasks that don't pick one
     "notify_on_complete": False,
     "notify_method": "sms",          # "sms" | "whatsapp"
     "web_search": True,              # Claude runs may use Anthropic's web search ($10 per 1,000 searches)
@@ -179,14 +179,14 @@ def _audit(text: str) -> None:
 
 def runner(cfg: dict | None = None, task: dict | None = None) -> str:
     """The agents' runner name for a task: its own AI if it picked one, else the default —
-    'claude_api' | 'grok_api'."""
+    'claude_api' | 'grok_api' | 'muse_api'."""
     p = (task or {}).get("ai_provider") or _migrate(dict(cfg if cfg is not None else load_config())).get("provider")
     return PROVIDERS.get(p, "claude_api")
 
 
 def model_for(cfg: dict | None = None, task: dict | None = None) -> str:
     """The task's own model if it picked one; else Claude → the agents' "complex & customer" model,
-    Grok → the agents' Grok model."""
+    Grok → the agents' Grok model, Muse → the agents' Muse model."""
     import desk_agent_providers as prov
     cfg = cfg if cfg is not None else load_config()
     if task and task.get("ai_provider") and task.get("ai_model"):
@@ -514,6 +514,8 @@ CLAUDE_URL = "https://api.anthropic.com/v1/messages"
 XAI_API_URL = "https://api.x.ai/v1/chat/completions"
 XAI_MODELS_URL = "https://api.x.ai/v1/models"
 GROK_MODEL = "grok-4.3"
+MUSE_API_URL = "https://api.meta.ai/v1/chat/completions"
+MUSE_MODEL = "muse-spark-1.3"
 HTTP_TIMEOUT = 300
 MAX_ROUNDS = 40
 QUEUE_DEADLINE = 30 * 60
@@ -689,6 +691,56 @@ def _grok_loop(key, model, prompt, tools, client, spend, deadline) -> tuple:
     return False, f"stopped after {MAX_ROUNDS} tool rounds without a final summary"
 
 
+def _muse_loop(key, model, prompt, tools, client, spend, deadline) -> tuple:
+    """Meta Model API chat-completions function-calling loop. Returns (ok, summary)."""
+    fns = [{"type": "function", "function": {"name": t["name"],
+                                              "description": str(t.get("description") or "")[:1000],
+                                              "parameters": _schema(t)}} for t in tools]
+    headers = {"Content-Type": "application/json", "Authorization": "Bearer " + key}
+    messages = [{"role": "system", "content": SYSTEM_TEXT}, {"role": "user", "content": prompt}]
+    for _round in range(MAX_ROUNDS):
+        if time.time() > deadline:
+            return False, "stopped: the run's time limit was reached before the queue finished"
+        if spend.over():
+            return False, f"stopped: the run reached its spending limit (${spend.ceiling:.2f})"
+        body = {"model": model, "messages": messages, "tool_choice": "auto"}
+        if fns:
+            body["tools"] = fns
+        try:
+            data = _post_json(MUSE_API_URL, body, headers)
+        except RunError as e:
+            return False, f"Meta Model API call failed: {e}"
+        u = data.get("usage") or {}
+        spend.add(input=u.get("prompt_tokens"), output=u.get("completion_tokens"))
+        msg = ((data.get("choices") or [{}])[0]).get("message") or {}
+        calls = msg.get("tool_calls") or []
+        am = {"role": "assistant"}
+        if msg.get("content"):
+            am["content"] = msg["content"]
+        if calls:
+            am["tool_calls"] = [{"id": c.get("id"), "type": "function",
+                                 "function": {"name": (c.get("function") or {}).get("name", ""),
+                                              "arguments": (c.get("function") or {}).get("arguments") or "{}"}}
+                                for c in calls]
+        messages.append(am)
+        if not calls:
+            return True, (msg.get("content") or "Run finished.").strip()[:4000]
+        for c in calls:
+            fn = c.get("function") or {}
+            raw = fn.get("arguments") or "{}"
+            try:
+                args = json.loads(raw) if isinstance(raw, str) else dict(raw)
+            except Exception:  # noqa: BLE001
+                args = {}
+            _audit(f"[muse] tool_call {fn.get('name')}")
+            try:
+                out = client.call_tool(fn.get("name", ""), args)
+            except Exception as e:  # noqa: BLE001
+                out = f"ERROR calling {fn.get('name')}: {e}"
+            messages.append({"role": "tool", "tool_call_id": c.get("id"), "content": str(out)[:20000]})
+    return False, f"stopped after {MAX_ROUNDS} tool rounds without a final summary"
+
+
 # ── one task run (2026-11-01: every task has its own schedule — no queue) ────────────
 
 LOCK_STALE_SEC = QUEUE_DEADLINE + 10 * 60
@@ -802,6 +854,8 @@ def run_task(task_id: str, trigger: str = "manual", timeout_sec: int | None = No
             if rn == "claude_api":
                 ok, detail = _claude_loop(key, model, text, tools, client, spend, deadline,
                                           bool(cfg.get("web_search", True)))
+            elif rn == "muse_api":
+                ok, detail = _muse_loop(key, model, text, tools, client, spend, deadline)
             else:
                 ok, detail = _grok_loop(key, model, text, tools, client, spend, deadline)
         except Exception as e:  # noqa: BLE001

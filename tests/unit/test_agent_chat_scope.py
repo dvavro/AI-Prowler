@@ -197,7 +197,9 @@ def test_no_key_nothing_is_queued_and_the_status_says_why(env, monkeypatch):
 
 
 @pytest.mark.no_agent_key
-@pytest.mark.parametrize("saved,want", [({"claude_api"}, "claude_api"), ({"grok_api"}, "grok_api"), ({"claude_api", "grok_api"}, "claude_api")])
+@pytest.mark.parametrize("saved,want", [({"claude_api"}, "claude_api"), ({"grok_api"}, "grok_api"), ({"muse_api"}, "muse_api"),
+                              ({"claude_api", "grok_api"}, "claude_api"), ({"grok_api", "muse_api"}, "grok_api"),
+                              ({"claude_api", "muse_api"}, "claude_api")])
 def test_a_saved_key_is_all_it_takes(env, monkeypatch, saved, want):
     import desk_agent as ag
     import desk_agent_providers as prov

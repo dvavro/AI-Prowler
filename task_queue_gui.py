@@ -33,8 +33,8 @@ INTRO = ("Each task runs on its own schedule. With ⏱ Auto-run on, AI-Prowler r
          "a few cents a run, counted in the agents' monthly budget. Tasks with Auto-run off run from a chat: "
          "📋 Copy for chat, or ask Claude, Muse or Grok to \"run my due analysis tasks\". Claude, Muse or Grok "
          "can also create and change these tasks from a chat.")
-AI_CHOICES = (("", "Default AI"), ("claude", "Claude"), ("grok", "Grok"))
-_RUNNERS = {"claude": "claude_api", "grok": "grok_api"}
+AI_CHOICES = (("", "Default AI"), ("claude", "Claude"), ("grok", "Grok"), ("muse", "Muse"))
+_RUNNERS = {"claude": "claude_api", "grok": "grok_api", "muse": "muse_api"}
 
 
 # ── text helpers (no Tk) ───────────────────────────────────────────────────────────────
@@ -193,7 +193,7 @@ def build_section(parent, root=None, messagebox=None, run_fn=None, legacy_check_
     btn_toggle.pack(side="left", padx=(0, 10))
     tk.Label(r1, text="Default AI:", bg=BB, fg=DIM, font=("Arial", 9)).pack(side="left")
     provider_var = tk.StringVar(value=cfg.get("provider", "claude"))
-    for val, lab in (("claude", "Claude"), ("grok", "Grok")):
+    for val, lab in (("claude", "Claude"), ("grok", "Grok"), ("muse", "Muse")):
         tk.Radiobutton(r1, text=lab, variable=provider_var, value=val, bg=BB, fg=FG, selectcolor=BB,
                        activebackground=BB, font=("Arial", 9)).pack(side="left", padx=(4, 0))
     key_var = tk.StringVar()

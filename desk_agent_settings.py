@@ -28,6 +28,7 @@ from pathlib import Path
 PROVIDERS = (
     ("claude_api", "Claude API key — runs on its own when tickets arrive"),
     ("grok_api", "Grok bot (xAI API key) — runs on its own when tickets arrive"),
+    ("muse_api", "Muse API key — runs on its own when tickets arrive"),
 )
 # David 2026-11-01: "Remove CLI everywhere" — the Claude subscription (Claude CLI) runner is gone on
 # every install. It can't be saved. F-26, 2026-11-05 (David: agents and AI tasks only run on API keys): an old saved
@@ -35,7 +36,7 @@ PROVIDERS = (
 REMOVED_PROVIDERS = ("claude_code",)
 NOT_ON_SERVER = REMOVED_PROVIDERS            # kept for older callers
 CLI_REMOVED_MSG = ("the Claude subscription (Claude CLI) runner was removed — the agents run on an API key: "
-                   "choose the Claude API key or the Grok bot and save the key in 🔑 Agent API Key at the top "
+                   "choose the Claude API key, the Grok bot or the Muse API key and save the key in 🔑 Agent API Key at the top "
                    "of the Small Business tab")
 CLI_ON_SERVER_MSG = CLI_REMOVED_MSG
 # David 2026-11-01: "note that all agents need an API key, remove the Paste AI into a chat method"
@@ -45,8 +46,9 @@ CLI_ON_SERVER_MSG = CLI_REMOVED_MSG
 # David 2026-11-05, final: an agent needs a saved key, on every install, or it doesn't run. Without one the four apps work
 # as they did before the agents: the apps, and a chat using the normal tools. "chat_only" now only means "no key saved".
 HIDDEN_ON_SERVER = ()
-CHAT_ON_SERVER_MSG = ("every agent runs on its own with an API key — choose the Claude API key "
-                      "or the Grok bot (the key goes in 🔑 Agent API Key at the top of the Small Business tab)")
+CHAT_ON_SERVER_MSG = ("every agent runs on its own with an API key — choose the Claude API key, "
+                      "the Grok bot or the Muse API key (the key goes in 🔑 Agent API Key at the top "
+                      "of the Small Business tab)")
 
 # Plain-English help shown under each stage, as hover text, and in the flow diagram.
 STAGE_SHORT = {"intake": "Intake", "first_reply": "First reply", "resolution": "Resolution help",
@@ -343,14 +345,14 @@ def ask_context_text(db_path: str, max_chars: int = ASK_CONTEXT_MAX_CHARS) -> st
 
 
 def providers_for(edition: str | None) -> list:
-    """The runners any install may use: a Claude or a Grok API key."""
+    """The runners any install may use: a Claude, a Grok or a Muse API key."""
     return list(PROVIDERS)
 
 
 def runner_for_removed() -> str:
     """An old saved value (claude_code, chat_only) or none: the saved key's runner, Claude first. "chat_only" with no key."""
     import desk_agent_providers as prov
-    for p in ("claude_api", "grok_api"):
+    for p in ("claude_api", "grok_api", "muse_api"):
         if prov._key(p):
             return p
     return "chat_only"
@@ -917,10 +919,10 @@ HR_INCIDENTS = (("type_only", "Type only — it sees that a report came in and i
 HR_INCIDENTS_HELP = ("\"Type only\": the AI is told a report arrived, its type (injury, safety, conduct, other) and "
                      "its dates — never what it says. \"Read the report\": it also reads the text so it can judge "
                      "urgency and deadlines. Either way it never investigates or contacts anyone named in it.")
-HR_RUNNER_HELP = ("HR data only goes to an AI that runs on its own with a key you control: a Claude API key or the "
-                  "Grok bot (xAI API key). It never runs from a chat (Claude.ai, Muse, Grok.com): with Chat chosen "
-                  "for the other agents, HR still runs on the saved key.")
-HR_RUNNERS = ("claude_api", "grok_api")
+HR_RUNNER_HELP = ("HR data only goes to an AI that runs on its own with a key you control: a Claude API key, the "
+                  "Grok bot (xAI API key) or the Muse API key. It never runs from a chat (Claude.ai, Muse, "
+                  "Grok.com): with Chat chosen for the other agents, HR still runs on the saved key.")
+HR_RUNNERS = ("claude_api", "grok_api", "muse_api")
 
 DEFAULTS.update({
     "agent_hr_enabled": False,               # its own on/off
@@ -979,7 +981,7 @@ def hr_runner(settings: dict, edition: str | None) -> tuple:
         p = runner_for_removed()
     if p in HR_RUNNERS:
         return p, ""
-    return "", ("HR data only goes to an AI with a key you control — save a Claude or Grok key in 🔑 Agent API Key "
+    return "", ("HR data only goes to an AI with a key you control — save a Claude, Grok or Muse key in 🔑 Agent API Key "
                 "at the top of the Small Business tab. It never runs from a chat.")
 
 

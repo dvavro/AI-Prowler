@@ -52,6 +52,10 @@ def test_prices_are_current():
     assert prov.price_for("claude-opus-5-5", {}) == [4.0, 20.0]
     assert prov.price_for("grok-4.3", {}) == [1.25, 2.50]
     assert prov.price_for("grok-9", {}) == [1.25, 2.50]                  # any other grok-* model
+    assert prov.price_for("muse-spark-1.3", {}) == [1.25, 4.25]      # Muse, checked 2026-11-17 (Meta Standard tier)
+    assert prov.price_for("muse-wonder-1.0", {}) == [4.0, 20.0]
+    assert prov.price_for("muse-ember-1.0", {}) == [0.10, 0.50]
+    assert prov.price_for("muse-9", {}) == [1.25, 4.25]              # any other muse-* model
     assert prov.cost("claude-haiku-5-5", {"input": 3000, "output": 400}, {}) == pytest.approx(0.0005)
     assert prov.price_for("claude-sonnet-5-5", {"agent_prices": {"claude-sonnet-5-5": [1, 2]}}) == [1, 2]
 

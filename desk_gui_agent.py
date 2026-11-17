@@ -162,7 +162,9 @@ def live_sync(widget, v: dict, stored, on_change=None) -> dict:
 KEY_PROVIDERS = (                                   # (provider, label, what the key looks like)
     ("anthropic", "Claude API key", "sk-ant-api03-…  (console.anthropic.com → API Keys)"),
     ("grok", "Grok API key", "xai-…  (console.x.ai → API Keys)"),
+    ("muse", "Muse API key", "(dev.meta.ai → API Keys)"),
 )
+_PROVIDER_NAMES = {"anthropic": "Claude", "grok": "Grok", "muse": "Muse"}
 KEYS_WHERE = "Small Business tab → Service Desk Agent → 🔑 AI keys for the agents"
 
 
@@ -173,7 +175,7 @@ def key_status(provider: str) -> str:
 
 
 def save_agent_key(provider: str, key: str) -> tuple[bool, str]:
-    """Save a Claude / Grok API key for the agents (2026-11-01, David). The agents use ONLY these keys —
+    """Save a Claude / Grok / Muse API key for the agents (2026-11-01, David). The agents use ONLY these keys —
     their own files (desk_agent_providers.agent_key_path), not the Task Queue's keys."""
     import desk_agent_providers as prov
     key = (key or "").strip()
@@ -187,7 +189,7 @@ def save_agent_key(provider: str, key: str) -> tuple[bool, str]:
     if provider == "grok" and key.startswith("sk-ant-"):
         return False, "That looks like a Claude key — paste it in the Claude row."
     prov.store_agent_key(key, provider)
-    return True, ("Claude" if provider == "anthropic" else "Grok") + " API key saved for the agents."
+    return True, _PROVIDER_NAMES.get(provider, provider) + " API key saved for the agents."
 
 
 def clear_agent_key(provider: str) -> tuple[bool, str]:
@@ -195,18 +197,18 @@ def clear_agent_key(provider: str) -> tuple[bool, str]:
     if not prov.has_agent_key(provider):
         return True, "No key was saved."
     prov.delete_agent_key(provider)
-    return True, ("Claude" if provider == "anthropic" else "Grok") + " API key removed from this PC."
+    return True, _PROVIDER_NAMES.get(provider, provider) + " API key removed from this PC."
 
 
 AGENT_KEY_TITLE = "🔑 Agent API Key"
-AGENT_KEY_NOTE = ("The agents (Service Desk, Jobs App and HR) need a saved API key, and run on their own with it; "
-                  "without one they don't run. Save the key for the AI chosen in Service Desk "
+AGENT_KEY_NOTE = ("The agents (Service Desk, Jobs App and HR) need a saved API key (Claude, Grok or Muse), and run "
+                  "on their own with it; without one they don't run. Save the key for the AI chosen in Service Desk "
                   "Agent & settings → 🤖 Agent → \"Which AI runs it\". Billed by the AI company per use (the "
                   "agents' monthly budget caps it). Kept on this PC only; never shown again after saving.")
 
 
-AGENT_KEY_NOTE_PERSONAL = ("Needed when an agent (Service Desk, Jobs App) runs on its own on the Claude API or the "
-                           "Grok bot — chosen in Service Desk Agent & settings → 🤖 Agent → \"Which AI runs it\" — and "
+AGENT_KEY_NOTE_PERSONAL = ("Needed when an agent (Service Desk, Jobs App) runs on its own on the Claude API, the "
+                           "Grok bot or Muse — chosen in Service Desk Agent & settings → 🤖 Agent → \"Which AI runs it\" — and "
                            "for the 🤖 Autonomous AI Task Queue, which runs on these same keys. Not needed "
                            "for chat runs. Billed by the AI company per use. Kept on this PC only; never shown again "
                            "after saving.")
@@ -214,7 +216,7 @@ BUDGET_HELP = ("AI-Prowler's own monthly cap for every agent together (Service D
                "Task Queue. When this month's estimated API spend reaches it, they stop running on their own until next "
                "month; 0 = they don't run on their own. It's worked out from the tokens each run used, so it's an "
                "estimate — for a hard stop also set a spend limit with the AI company (Claude Console → Billing → Spend "
-               "limits; xAI console → Billing). Runs from a chat don't count.")
+               "limits; xAI console → Billing; dev.meta.ai → Billing). Runs from a chat don't count.")
 
 
 def load_agent_budget() -> tuple:
@@ -308,7 +310,7 @@ def alert_recipients_text(edition: str | None) -> str:
 
 
 def build_agent_key_section(parent, edition: str | None = None):
-    """🔑 Agent API Key at the TOP of the Small Business tab: the agents' Claude / Grok keys and the monthly
+    """🔑 Agent API Key at the TOP of the Small Business tab: the agents' Claude / Grok / Muse keys and the monthly
     dollar limit every agent shares, on a server and on a personal install. The agents use only these keys, and don't
     run without one (David 2026-11-05)."""
     import tkinter as tk
@@ -364,6 +366,8 @@ def build_agent_key_section(parent, edition: str | None = None):
               "the stronger model. " + prov.COMPLEX_HELP)
     model_row("Grok model", "grok_api", prov.model_choices("grok_api"), prov.model_for("grok_api"),
               lambda m: prov.set_agent_model("grok_api", m), "The model the agents use with the Grok key.")
+    model_row("Muse model", "muse_api", prov.model_choices("muse_api"), prov.model_for("muse_api"),
+              lambda m: prov.set_agent_model("muse_api", m), "The model the agents use with the Muse key.")
     row = model_row.n
 
     # ── monthly budget + warn-at % + forecast
@@ -429,7 +433,7 @@ def build_agent_key_section(parent, edition: str | None = None):
                     "cost): this month's pace, when the budget runs out at that pace, and about how many tokens are "
                     "left on the chosen model. Shared by every agent — they stop running on their own at 100%. For a "
                     "hard stop, also set a spend limit with the AI company: Claude Console → Billing → Spend limits, "
-                    "or the xAI console → Billing. " + alert_recipients_text(edition))
+                    "the xAI console → Billing, or dev.meta.ai → Billing. " + alert_recipients_text(edition))
               ).grid(row=row, column=0, columnspan=5, sticky="w", pady=(2, 0))
     # 2026-11-03 (David: "check if the spent this much value is real time updated, because I dont see these cost
     # added to the number"): the line was worked out once when the tab was built and only again after a model
@@ -461,6 +465,31 @@ def _money(x) -> str:
     if x is None:
         return "—"
     return f"${x:,.2f}" if x >= 1 else (f"${x:.3f}" if x >= 0.01 else f"${x:.4f}")
+
+
+_RUNNER_KEY = {"claude_api": "anthropic", "grok_api": "grok", "muse_api": "muse"}
+
+
+def _live_runner(edition: str | None) -> str | None:
+    """The runner a live cost analysis tests: the AI the agents are set to use (Service Desk Agent & settings →
+    🤖 Agent → "Which AI runs it") when it has a saved key, else any provider with a key — Claude first, then
+    Grok, then Muse. None when no key is saved."""
+    import desk_agent_providers as prov
+    try:
+        import desk_db
+        chosen = das.effective_provider(desk_db.get_settings(desk_db.default_db_path()), edition)
+    except Exception:  # noqa: BLE001 — no settings yet: the saved keys decide
+        chosen = "chat_only"
+    for runner in dict.fromkeys([chosen, "claude_api", "grok_api", "muse_api"]):
+        key_provider = _RUNNER_KEY.get(runner)
+        if not key_provider:
+            continue
+        try:
+            if prov.has_agent_key(key_provider):
+                return runner
+        except Exception:  # noqa: BLE001 — a provider the host layer doesn't know yet has no key
+            continue
+    return None
 
 
 def open_cost_analysis(parent, edition: str | None, on_close=None, *, analysis_fn=None, sample_fn=None,
@@ -508,7 +537,7 @@ def open_cost_analysis(parent, edition: str | None, on_close=None, *, analysis_f
     btns = ttk.Frame(win)
     btns.pack(fill="x", padx=10, pady=8)
     status = tk.StringVar()
-    has_key = prov.has_agent_key("anthropic")
+    has_key = _live_runner(edition) is not None
 
     def fill():
         try:
@@ -564,8 +593,12 @@ def open_cost_analysis(parent, edition: str | None, on_close=None, *, analysis_f
                 if not samples:
                     res = {"rows": [], "per_model": {}, "cost": 0.0, "none": True}
                 else:
-                    models = list(dict.fromkeys([prov.model_for("claude_api"),
-                                                 prov.light_model() or "claude-haiku-5-5"]))
+                    runner = _live_runner(edition) or "claude_api"
+                    if runner == "claude_api":           # the two Claude models: complex & customer, internal steps
+                        models = list(dict.fromkeys([prov.model_for("claude_api"),
+                                                     prov.light_model() or "claude-haiku-5-5"]))
+                    else:                                # Grok / Muse: one model for every step
+                        models = [prov.model_for(runner)]
                     res = measure_fn(models, system, samples)
             except Exception as e:  # noqa: BLE001
                 res = {"rows": [], "per_model": {}, "cost": 0.0, "error": str(e)}
@@ -606,7 +639,7 @@ def open_cost_analysis(parent, edition: str | None, on_close=None, *, analysis_f
     live_btn.pack(side="left", padx=(8, 0))
     if not has_key:
         live_btn.state(["disabled"])
-        status.set("Save a Claude API key above to run a live analysis.")
+        status.set("Save a Claude, Grok or Muse API key above to run a live analysis.")
 
     def close():
         if on_close:
@@ -854,7 +887,7 @@ def build_agent_settings(app, parent, on_saved=None) -> dict:
     ttk.Label(parent, font=small, foreground="gray", wraplength=900, justify="left",
               text=((("On a server these settings are set here only. " if edition == "business" else "")
                      + ("Works new tickets for you — sorts them, drafts replies, finds past fixes. Nothing "
-                     "reaches a customer until you allow it. It runs on its own with a saved Claude or Grok key "
+                     "reaches a customer until you allow it. It runs on its own with a saved Claude, Grok or Muse key "
                      "(🔑 Agent API Key at the top of this tab), and its suggestions wait in the Service "
                      "Desk app's 🤖 Agent tab. With no key saved it doesn't run. "
                      "Same settings as the Service Desk app → Settings → 🤖 Agent. "))
@@ -1568,7 +1601,7 @@ def build_hr_section(outer, modes, edition, scale, db: str | None = None, shared
     cb = ttk.Checkbutton(row, text="Acknowledge sensitive messages", variable=v["agent_hr_ack_sensitive"])
     cb.pack(side="left"); _tooltip(cb, "A message about something sensitive (injury, harassment, medical, pay "
                                        "dispute…) gets \"Thanks — HR will get back to you\" and goes to a person.")
-    w = ttk.Label(left, text="Runs only on a Claude API key or the Grok bot — never from a chat.",
+    w = ttk.Label(left, text="Runs only on a Claude API key, the Grok bot or the Muse API key — never from a chat.",
                   font=small, foreground="gray")
     w.pack(anchor="w", pady=(4, 0)); _tooltip(w, das.HR_RUNNER_HELP)
 

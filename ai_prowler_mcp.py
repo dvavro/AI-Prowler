@@ -30432,7 +30432,7 @@ def create_analysis_task(
         run_time (HH:MM, default 09:00) on their day — so "every Monday at 8am" works: weekly,
         schedule_day_of_week=0, run_time "08:00".
       • schedule_day_of_week pins weekly / biweekly / monthly to a weekday (0=Mon … 6=Sun).
-      • ai_provider "" = the default AI (the agents' complex & customer model); or "claude" / "grok" with
+      • ai_provider "" = the default AI (the agents' complex & customer model); or "claude" / "grok" / "muse" with
         an optional ai_model.
       • More runs cost more: mention it if the user sets times_per_day high and hasn't brought up cost.
       • schedule is one of: none, daily, weekly, biweekly, monthly. If not "none", first_due (YYYY-MM-DD)
@@ -30476,7 +30476,7 @@ def create_analysis_task(
                           Agent API Key; False = a chat runs it.
         run_time:         HH:MM time of day for weekly / biweekly / monthly
                           (and one-off) tasks. Default "09:00".
-        ai_provider:      "" (default AI), "claude" or "grok".
+        ai_provider:      "" (default AI), "claude", "grok" or "muse".
         ai_model:         Optional model for that provider ("" = its default).
 
     Returns:
@@ -30982,7 +30982,7 @@ def update_analysis_task(
 
     2026-11-01 (no queue — every task has its own schedule): auto_run — AI-Prowler runs the task on its
     own when it's due, on the Agent API Key; run_time — HH:MM a weekly / every-2-weeks / monthly task runs
-    (daily tasks use daily_start_time); ai_provider "" (the default AI) / "claude" / "grok", and ai_model
+    (daily tasks use daily_start_time); ai_provider "" (the default AI) / "claude" / "grok" / "muse", and ai_model
     (one of that AI's models, or "" for the agents' default model).
 
     Only fields you actually pass are changed — everything else on the

@@ -15901,8 +15901,8 @@ or from the Help menu."""
         # ── 0. 🔑 Agent API Key — server only (2026-11-01, David: "put the API keys entry at
         # the top of the small business tab in the server and label Agent API Key"). A server has no
         # Task Queue tab, and every agent there runs on an API key. Personal (same day): here too, with
-        # the monthly dollar limit every agent shares. The agents use only these keys (own files) — the
-        # Task Queue keeps its own CLI token / API key in Task Queue → Auth.
+        # the monthly dollar limit every agent shares. The agents use only these keys (own files) — and
+        # the Task Queue runs on these same keys (the old CLI token and Task Queue → Auth are gone).
         try:
             import desk_gui_agent as _dga_key
             self._agent_key_panel = _dga_key.build_agent_key_section(f)

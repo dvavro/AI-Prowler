@@ -116,6 +116,7 @@ def test_TQ_01_default_ai_is_the_agents_complex_model_on_the_agent_key(home):
     cfg = {"provider": "claude", "agent_claude_model": "claude-opus-5-5", "agent_claude_model_light": "claude-haiku-5-5"}
     assert tqa.runner(cfg) == "claude_api" and tqa.model_for(cfg) == "claude-opus-5-5"   # never the light model
     assert tqa.model_for({"provider": "grok"}) == "grok-4.3"
+    assert tqa.model_for({"provider": "muse"}) == "muse-spark-1.3"
     assert not tqa.has_key(cfg)
     prov.store_agent_key("sk-ant-api03-agents", "anthropic")
     assert tqa.has_key(cfg) and tqa._load_key(cfg) == "sk-ant-api03-agents"
@@ -126,10 +127,16 @@ def test_TQ_01_default_ai_is_the_agents_complex_model_on_the_agent_key(home):
 def test_TQ_02_a_task_can_override_the_ai(home):
     cfg = {"provider": "claude"}
     assert tqa.runner(cfg, {"ai_provider": "grok"}) == "grok_api"
+    assert tqa.runner(cfg, {"ai_provider": "muse"}) == "muse_api"
+    assert tqa.provider_of(cfg, {"ai_provider": "muse"}) == "muse"
     assert tqa.model_for(cfg, {"ai_provider": "claude", "ai_model": "claude-opus-5-5"}) == "claude-opus-5-5"
     assert tqa.model_for(cfg, {"ai_provider": ""}) == tqa.model_for(cfg)            # "" = the default
     tid = _task(ai_provider="grok")
     assert _get(tid)["ai_provider"] == "grok" and ctm.ai_label(_get(tid)) == "Grok"
+    mid = _task(label="Muse task", ai_provider="muse", ai_model="muse-ember-1.0")
+    assert _get(mid)["ai_provider"] == "muse" and ctm.ai_label(_get(mid)) == "Muse Ember"
+    with pytest.raises(ValueError):
+        _task(label="bad muse model", ai_provider="muse", ai_model="gpt-9")
     with pytest.raises(ValueError):
         _task(label="bad", ai_provider="claude", ai_model="gpt-9")
     with pytest.raises(ValueError):
@@ -140,6 +147,9 @@ def test_TQ_03_why_not_ready_names_what_is_missing(home, monkeypatch):
     assert "Agent API Key" in tqa.why_not_ready({"provider": "claude"})
     prov.store_agent_key("xai-k", "grok")
     assert tqa.why_not_ready({"provider": "grok"}) == ""
+    assert "Muse (Meta)" in tqa.why_not_ready({"provider": "muse"})        # no Muse key yet
+    prov.store_agent_key("meta-k", "muse")
+    assert tqa.why_not_ready({"provider": "muse"}) == ""
     assert "Agent API Key" in tqa.why_not_ready({"provider": "grok"}, {"ai_provider": "claude"})   # the task's AI
     monkeypatch.setattr(tqa, "budget_left", lambda now=None: (0.0, 20.0))
     assert "used up" in tqa.why_not_ready({"provider": "grok"})
@@ -252,6 +262,50 @@ def test_TQ_09_grok_task_on_a_claude_default(home, monkeypatch):
     assert ok and "Done." in detail
     assert seen[0][0] == tqa.XAI_API_URL and seen[0][1]["Authorization"] == "Bearer xai-k"
     assert FakeClient.calls == [("search_documents", {"query": "AR"})]
+
+
+def test_TQ_09b_muse_task_on_a_claude_default(home, monkeypatch):
+    prov.store_agent_key("meta-k", "muse")
+    tid = _task(ai_provider="muse")
+    monkeypatch.setattr(tqa, "_HttpMCPClient", FakeClient)
+    replies = [
+        {"choices": [{"message": {"tool_calls": [{"id": "c1", "function": {
+            "name": "search_documents", "arguments": '{"query": "AR"}'}}]}}],
+         "usage": {"prompt_tokens": 1000, "completion_tokens": 50}},
+        {"choices": [{"message": {"content": "Done."}}], "usage": {"prompt_tokens": 1200, "completion_tokens": 40}},
+    ]
+    seen = []
+
+    def post(url, body, headers):
+        seen.append((url, json.loads(json.dumps(body)), headers))
+        return replies[len(seen) - 1]
+    monkeypatch.setattr(tqa, "http_post", post)
+    ok, detail = tqa.run_task(tid)
+    assert ok and "Done." in detail
+    url, body, headers = seen[0]
+    assert url == tqa.MUSE_API_URL and headers["Authorization"] == "Bearer meta-k"
+    assert body["model"] == "muse-spark-1.3"
+    assert body["messages"][0] == {"role": "system", "content": tqa.SYSTEM_TEXT}
+    assert "Weekly AR check" in json.dumps(body["messages"])
+    names = [t["function"]["name"] for t in body["tools"]]
+    assert names == ["search_documents", "record_learning"]
+    assert FakeClient.calls == [("search_documents", {"query": "AR"})]
+    expect = (2200 * 1.25 + 90 * 4.25) / 1_000_000        # Muse Spark 1.3: $1.25 / $4.25 per 1M
+    con = sqlite3.connect(tqa.runs_db_path())
+    row = con.execute("SELECT provider, model, items, ok, cost_usd FROM agent_runs").fetchone()
+    con.close()
+    assert row[:4] == ("muse_api", "muse-spark-1.3", 1, 1) and row[4] == pytest.approx(expect, abs=1e-5)
+    t = _get(tid)
+    assert t["last_status"] == "completed" and t["last_cost_usd"] == pytest.approx(expect, abs=1e-5)
+
+
+def test_TQ_09c_muse_task_with_no_muse_key_skips_and_stays_due(home):
+    tid = _task(ai_provider="muse")
+    ok, why = tqa.run_task(tid, "schedule")
+    assert not ok and "Muse (Meta)" in why and "Agent API Key" in why
+    assert tqa.load_last_run()["status"] == "skipped"
+    t = _get(tid)
+    assert t["next_due"] == "2026-10-05" and ctm.skipped_recently(t)
 
 
 # ── AI-Prowler's own scheduler ───────────────────────────────────────────────────────
@@ -441,6 +495,50 @@ def test_TQ_15_one_section_no_queue_no_cli_and_the_key_line(home, tkroot):
     assert "Claude Sonnet 5.5" in p["key_var"].get()
     p["toggle"]()
     assert tqa.load_config()["paused"] is True and "PAUSED" in p["btn_toggle"].cget("text")
+
+
+def test_TQ_15b_muse_is_a_default_ai_choice_and_its_key_line(home, tkroot):
+    import tkinter as tk
+    import task_queue_gui as tqg
+    assert dict(tqg.AI_CHOICES).get("muse") == "Muse"
+    assert tqg.models_for("muse")[0][0] == "muse-spark-1.3"
+    p, _, _ = _section(tkroot)
+    found = []
+
+    def walk(w):
+        found.append(w)
+        for c in w.winfo_children():
+            walk(c)
+    walk(p["banner"])
+    radios = [w for w in found if isinstance(w, tk.Radiobutton)]
+    assert {"Claude", "Grok", "Muse"} <= {w.cget("text") for w in radios}
+    p["provider_var"].set("muse")
+    tkroot.update()
+    assert "No Muse (Meta) API key saved" in p["key_var"].get()
+    assert tqa.load_config()["provider"] == "muse"
+    prov.store_agent_key("meta-k", "muse")
+    p["refresh"]()
+    assert "Muse Spark 1.3" in p["key_var"].get()
+
+
+def test_TQ_16b_a_task_can_pick_muse_and_its_model(home, tkroot):
+    import task_queue_gui as tqg
+    p, mb, _ = _section(tkroot)
+    ed = p["open_editor"](tqg.starter_task_fields(tqg.STARTERS[0]))
+    ed["ai_var"].set("Muse")
+    tkroot.update()
+    assert "Muse Spark 1.3" in ed["model_combo"].cget("values")
+    assert "Muse Ember" in ed["model_combo"].cget("values")
+    ed["model_var"].set("Muse Ember")
+    ed["sched_var"].set("Weekly")
+    ed["due_var"].set("2027-01-04")
+    ed["dow_var"].set("Monday")
+    ed["run_time_var"].set("08:00")
+    assert ed["save"]() and not mb.said
+    (t,) = ctm.load_custom_tasks()
+    assert t["ai_provider"] == "muse" and t["ai_model"] == "muse-ember-1.0"
+    assert ctm.ai_label(t) == "Muse Ember"
+    assert "Muse Ember" in " ".join(_texts(p["list_frame"]))
 
 
 def test_TQ_16_a_starter_opens_a_prefilled_editor_and_saves_a_scheduled_task(home, tkroot):

@@ -421,8 +421,9 @@ class EstimatorTab:
 
     def _agents_section(self):
         """🤖 AI agents (2026-11-13, David): set up like the Service Desk, Jobs and HR agents - each step's mode, the
-        group it's in and so the model it uses (the two Claude models at the top of the Small Business tab), one AI
-        and a backup for all of them, the flow picture coloured by each step's mode (hover for details), the budget.
+        group it's in and so the model it uses (the models at the top of the Small Business tab - Claude, Grok or
+        Muse), one AI and a backup for all of them, the flow picture coloured by each step's mode (hover for details),
+        the budget.
         Saves as you change it. The Estimator's web page shows these settings but no longer changes them."""
         tk, ttk = self.tk, self.ttk
         from estimator.agents import providers
@@ -438,7 +439,8 @@ class EstimatorTab:
         krow = ttk.Frame(box)
         krow.pack(fill="x")
         ttk.Label(krow, text=("Agent API keys:  Claude " + ("✅ saved" if keys.get("claude_api") else "— not saved")
-                              + "   ·   Grok " + ("✅ saved" if keys.get("grok_api") else "— not saved"))
+                              + "   ·   Grok " + ("✅ saved" if keys.get("grok_api") else "— not saved")
+                              + "   ·   Muse " + ("✅ saved" if keys.get("muse_api") else "— not saved"))
                   ).pack(side="left")
         ttk.Button(krow, text="🔑 Open Agent API Key", command=lambda: self._go_to_tab("🏢 Small Business")
                    ).pack(side="left", padx=10)
@@ -451,7 +453,7 @@ class EstimatorTab:
 
         roles_by = {r["role"]: r for r in ov["roles"]}
         first_api = next((r for r in ov["roles"] if r["provider"] in providers.API_PROVIDERS), None)
-        runners = {"claude_api": "Claude (API key)", "grok_api": "Grok (API key)"}
+        runners = {"claude_api": "Claude (API key)", "grok_api": "Grok (API key)", "muse_api": "Muse (API key)"}
         back_runner = {v: k for k, v in runners.items()}
         v = {"runner": tk.StringVar(value=runners[(first_api or {}).get("provider") or "claude_api"]),
              "backup": tk.StringVar(value=runners.get((first_api or {}).get("fallback_provider") or "", "None"))}
@@ -687,9 +689,12 @@ class EstimatorTab:
     # ------------------------------------------------------------ 📦 modules
 
     def _modules_section(self):
+        """📦 Modules: reference only - every installed trade and service, how it's priced and its version (what support
+        asks for). Nothing to set here, so it starts folded up; click its title to open it (2026-11-17, David)."""
         ttk = self.ttk
         box = self._box("📦 Modules", "modules")
-        self._note(box, "Each trade and service is a module with its own questions, formulas and sample prices.", GREY, 8)
+        self._note(box, "Each trade and service is a module with its own questions, formulas and sample prices. "
+                        "For reference: which ones are installed, how each is priced and its version.", GREY, 8)
         grid = ttk.Frame(box)
         grid.pack(fill="x", pady=(6, 0))
         for c, h in enumerate(("Module", "Kind", "Priced by", "Version")):
@@ -697,6 +702,7 @@ class EstimatorTab:
         for i, m in enumerate(model.modules(), start=1):
             for c, v in enumerate((m["name"], m["category"], m["how"], m["version"])):
                 ttk.Label(grid, text=v, font=("Arial", 8)).grid(row=i, column=c, sticky="w", padx=(0, 18))
+        self._toggle_section("modules")                     # starts hidden
 
     # ------------------------------------------------------------ 💾 data
 

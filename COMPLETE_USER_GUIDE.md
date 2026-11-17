@@ -84,7 +84,7 @@ Beyond core document search, AI-Prowler includes:
 
 **Removed: the Claude CLI "🧠 Run AI Route"** — in personal and server mode. It needed the Claude Code CLI and a Claude token per person (a new token could cancel another computer's), ran in the background for minutes with nothing to watch, and could start a second copy of AI-Prowler. Gone with it: the Jobs app's "Connect your Claude account" screens, the Small Business tab's **🧭 AI Route Optimizer Task** / **Set Up On-Demand AI Routing**, and on servers the Admin tab's **🧠 AI Route runner** panel, **🤖 AI Route Token** button and **AI Route** column — **an admin no longer manages any Claude passwords.** AI-Prowler removes the old "AI Route Optimizer (full reasoning)" custom analysis, its Windows task and the saved per-person tokens automatically the first time the new version starts.
 
-**AI analyses always use the AI-Prowler that's already running** — every Autonomous AI Task Queue run (Claude or Grok, scheduled or ▶ NOW) talks to this PC's running AI-Prowler and never starts a second copy. It needs remote access (a Bearer Token); if AI-Prowler isn't running when a scheduled run fires, the run starts the normal app and waits, or skips and says why (see **Section 12 → Autonomous AI Task Queue**).
+**AI analyses always use the AI-Prowler that's already running** — every Autonomous AI Task Queue run (Claude, Grok or Muse, scheduled or ▶ NOW) talks to this PC's running AI-Prowler and never starts a second copy. It needs remote access (a Bearer Token); if AI-Prowler isn't running when a scheduled run fires, the run starts the normal app and waits, or skips and says why (see **Section 12 → Autonomous AI Task Queue**).
 
 **Jobs app**
 - **Version badge** (top-right of the Jobs, Remote, HR Admin, HR Portal and Service Desk apps) — tap it to see whether your phone has the latest app (green) or a newer one is waiting (red — tap again to load it).
@@ -2119,7 +2119,8 @@ Optional — MCP finds AI-Prowler's tools on its own. To check the connection, c
 - **⏱ Auto-run off:** the task is run from a chat. When it's due, ask Claude, Muse or Grok to **"run my due analysis tasks"** (the chat calls `get_pending_analysis_tasks()`), or use the task's **📋 Copy for chat** button and paste it into a chat. Use this with Muse, which has no API key yet.
 - **A missed run** (AI-Prowler was closed) runs once when it next starts. Missed runs never pile up — the task then moves to its next time.
 - **A run that can't start** (no key saved, budget used up, AI-Prowler's local connection off) isn't counted: the task stays due and AI-Prowler tries again an hour later. The task row shows **"waiting: …"** with the reason.
-- **Which AI:** each task uses the **Default AI** (Claude or Grok, chosen in the Automatic runs bar — Claude runs use the agents' **complex & customer** model) unless the task picks its own AI and model.
+- **Which AI:** each task uses the **Default AI** (Claude, Grok or Muse, chosen in the Automatic runs bar — Claude runs use the agents' **complex & customer** model) unless the task picks its own AI and model.
+- **Muse key:** a Muse API key comes from dev.meta.ai → API Keys (Meta Model API, Standard tier — no free tier, billing required). Save it in **🔑 Agent API Key** at the top of the Small Business tab, next to the Claude and Grok keys.
 - **One budget.** Every run's cost is recorded on the task (**Last: ✅ Nov 1 9:00 AM · $0.0123**), counts in the agents' **Monthly budget** and shows in **📊 Cost analysis…** as "Task Queue". A run doesn't start when the budget is used up, and a single run stops at $1.00.
 - **Tools:** the AI uses AI-Prowler's own tools over this PC's local connection (`localhost:8000`, with this install's Bearer Token — **Settings → Remote Access** must be set up). It's never offered tools that write files, run scripts or change tasks. Claude runs may use web search (1¢ per search).
 
@@ -2128,7 +2129,7 @@ Optional — MCP finds AI-Prowler's tools on its own. To check the connection, c
 | Control | What it does |
 |---|---|
 | **🟢 Automatic runs ON / ⏸ PAUSED** | Pauses or resumes every auto-run task at once. The status line shows how many tasks run on their own and which is next, or **"but nothing can run yet: …"** when something is missing. |
-| **Default AI** | Claude or Grok — the AI tasks use unless they pick their own. The line under it says whether that key is saved and which model runs. |
+| **Default AI** | Claude, Grok or Muse — the AI tasks use unless they pick their own. The line under it says whether that key is saved and which model runs. |
 | **Text me when a run finishes** | Optional SMS/WhatsApp summary after each run. |
 | **Claude may search the web** | Untick to turn web search off. |
 | **📄 Run log / 🗑 Clear log** | **Run log** shows the newest 300 lines: each task run's start, tool calls, cost and result — plus a line for every AI-Prowler tool any of your apps used (Claude Desktop, the phone, the Jobs app). It looks after its own size: past 512 KB it starts a new file and keeps the 2 before it, so it never takes more than about 1.5 MB. **Clear log** asks first, then empties it and its 2 older files; your tasks, schedules and results aren't changed. |
@@ -2154,7 +2155,7 @@ The four starter buttons — **📊 Analyze My Business**, **💡 Weekly Busines
 | **Time of day / Day** (weekly, every 2 weeks, monthly) | When it runs (24-hour `HH:MM`, default 09:00) and, optionally, which weekday — e.g. *every Monday at 08:00*. |
 | **Start time / End time / Times per day** (daily) | 1 = once a day at Start time; more spreads the runs evenly from Start to End (max 24 — 24× from 00:00 to 23:00 is hourly). A live **"Runs at: …"** line shows the result. More runs cost more. |
 | **⏱ Auto-run** | AI-Prowler runs it when due on the Agent API Key. Off = a chat runs it. |
-| **AI / Model** | Default AI, or Claude / Grok with an optional model just for this task. |
+| **AI / Model** | Default AI, or Claude / Grok / Muse with an optional model just for this task. |
 | **Output** | 💡 Learnings, 📄 Word document (.docx), ✉️ Email — at least one. |
 | **Report folder** | Where `.docx` reports go (default `~/Documents/AI-Prowler_tasks_reports`). |
 

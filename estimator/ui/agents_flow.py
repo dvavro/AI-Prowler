@@ -70,7 +70,9 @@ def mode_of(provider: str | None) -> str:
 GROUP_DEFAULT = "Its group's model"           # the model choice that follows the top of the Small Business tab
 _FALLBACK_MODELS = {"claude_api": (("claude-haiku-5-5", "Claude Haiku 5.5"), ("claude-sonnet-5-5", "Claude Sonnet 5.5"),
                                    ("claude-opus-5-5", "Claude Opus 5.5")),
-                    "grok_api": (("grok-4.3", "Grok 4.3"),)}
+                    "grok_api": (("grok-4.3", "Grok 4.3"),),
+                    "muse_api": (("muse-spark-1.3", "Muse Spark 1.3"), ("muse-wonder-1.0", "Muse Wonder"),
+                                 ("muse-ember-1.0", "Muse Ember"))}
 
 
 def model_choices(runner: str) -> list[tuple[str, str]]:
@@ -95,7 +97,8 @@ def model_line(role: str, runner: str, pinned: str | None = None) -> str:
 
 def _nice(model: str) -> str:
     names = {"claude-haiku-5-5": "Claude Haiku 5.5", "claude-sonnet-5-5": "Claude Sonnet 5.5",
-             "claude-opus-5-5": "Claude Opus 5.5", "grok-4.3": "Grok 4.3"}
+             "claude-opus-5-5": "Claude Opus 5.5", "grok-4.3": "Grok 4.3",
+             "muse-spark-1.3": "Muse Spark 1.3", "muse-wonder-1.0": "Muse Wonder", "muse-ember-1.0": "Muse Ember"}
     return names.get(model, model or "AI-Prowler's choice")
 
 

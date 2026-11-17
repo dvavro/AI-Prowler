@@ -9,10 +9,11 @@ The AI never gets tools that could change anything, so it can't reach around the
     claude_api   Anthropic Messages API with the agents' own Claude API key — 🔑 Agent API Key at the top of the Small Business tab
                  (~/.ai-prowler/agent_claude_api_key.txt). The Task Queue runs on this same key.
     grok_api     the xAI API with the agents' own Grok key (same box; agent_grok_api_key.txt)
+    muse_api     the Meta Model API with the agents' own Muse key (same box; agent_muse_api_key.txt)
     chat_only    no API key is saved: the agents don't run
 
 Models and prices are in ~/.ai-prowler/task_automation_config.json ("agent_claude_model",
-"agent_grok_model", "agent_prices" = {model: [usd per 1M input, usd per 1M output]}).
+"agent_grok_model", "agent_muse_model", "agent_prices" = {model: [usd per 1M input, usd per 1M output]}).
 """
 from __future__ import annotations
 
@@ -24,15 +25,25 @@ from pathlib import Path
 
 CLAUDE_URL = "https://api.anthropic.com/v1/messages"
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-5-5"
+MUSE_URL = "https://api.meta.ai/v1/chat/completions"
+DEFAULT_MUSE_MODEL = "muse-spark-1.3"
 DEFAULT_PRICES = {                       # USD per 1M tokens [input, output]; override in config "agent_prices"
     # Checked 2026-11-01 against published API prices (Anthropic: Sonnet 5.5 $2/$10, Haiku 5.5 $0.10/$0.50 for
     # prompts up to 100K tokens, Opus 5.5 $4/$20; xAI: Grok 4.3 $1.25/$2.50). The old $3/$15 and $1/$5 made the
     # budget meter read about 1.5x (Sonnet) and 10x (Haiku) high, so agents stopped early.
+    # Muse prices checked 2026-11-17 (Meta Model API, Standard tier — no Contributor tier: it lets Meta train on
+    # prompts, and unattended runs need Standard): Spark 1.3 $1.25/$4.25, Wonder 1.0 $4/$20, Ember 1.0 $0.10/$0.50.
+    # Cached input (Spark $0.15, Wonder $0.20, Ember $0.004 per 1M) is priced by cost() at 0.1x input by default,
+    # close enough — no Muse-specific cache logic.
     "claude-haiku-5-5": [0.10, 0.50],
     "claude-sonnet-5-5": [2.0, 10.0],
     "claude-opus-5-5": [4.0, 20.0],
     "grok-4.3": [1.25, 2.50],
     "grok": [1.25, 2.50],                # any other grok-* model
+    "muse-spark-1.3": [1.25, 4.25],
+    "muse-wonder-1.0": [4.0, 20.0],
+    "muse-ember-1.0": [0.10, 0.50],
+    "muse": [1.25, 4.25],                # any other muse-* model
 }
 # Prompt caching (2026-11-03, live cost test: AI-Prowler recorded 6-25 % more than the API charged because cached
 # tokens were priced as plain input). Cache writes (5-minute) cost 1.25x input; cache reads 0.1x input — except
@@ -74,14 +85,16 @@ def _cfg() -> dict:
 
 
 AGENT_KEY_DIR = Path.home() / ".ai-prowler"
-AGENT_KEY_FILES = {"anthropic": "agent_claude_api_key.txt", "grok": "agent_grok_api_key.txt"}
+AGENT_KEY_FILES = {"anthropic": "agent_claude_api_key.txt", "grok": "agent_grok_api_key.txt",
+                   "muse": "agent_muse_api_key.txt"}
 
 
 def agent_key_path(provider: str) -> Path:
     """The agents' own key files (2026-11-01, David: "the Agents use the API Keys in the small business tab
     only"). Separate from the Task Queue's claude_api_key.txt / grok_api_key.txt — those, and the
     ANTHROPIC_API_KEY / XAI_API_KEY environment variables, are never used by the agents."""
-    p = {"claude": "anthropic", "claude_api": "anthropic", "xai": "grok", "grok_api": "grok"}.get(provider, provider)
+    p = {"claude": "anthropic", "claude_api": "anthropic", "xai": "grok", "grok_api": "grok",
+         "muse": "muse", "muse_api": "muse"}.get(provider, provider)
     if p not in AGENT_KEY_FILES:
         raise ValueError(f"Unknown agent key provider: {provider!r}")
     return Path(AGENT_KEY_DIR) / AGENT_KEY_FILES[p]
@@ -121,6 +134,8 @@ def _key(provider: str) -> str:
         return load_agent_key("anthropic")
     if provider == "grok_api":
         return load_agent_key("grok")
+    if provider == "muse_api":
+        return load_agent_key("muse")
     return ""
 
 
@@ -135,6 +150,8 @@ def model_for(provider: str, cfg: dict | None = None) -> str:
         except Exception:  # noqa: BLE001
             default = "grok-4.3"
         return (cfg.get("agent_grok_model") or cfg.get("grok_model") or default).strip()
+    if provider == "muse_api":
+        return (cfg.get("agent_muse_model") or DEFAULT_MUSE_MODEL).strip()
     return ""
 
 
@@ -142,12 +159,12 @@ def ready(provider: str, edition: str | None = None) -> tuple:
     """(True, '') when this runner can work now, else (False, what's missing in plain words)."""
     if provider == "chat_only":
         return False, ("no API key is saved, so the agents don't run — the apps and your chat work as usual. To turn "
-                       "them on, save a Claude or Grok key in 🔑 Agent API Key at the top of the Small Business tab")
-    if provider in ("claude_api", "grok_api"):
+                       "them on, save a Claude, Grok or Muse key in 🔑 Agent API Key at the top of the Small Business tab")
+    if provider in ("claude_api", "grok_api", "muse_api"):
         if not _key(provider):
             where = "🔑 Agent API Key at the top of the Small Business tab"
-            return False, (f"no Claude API key saved ({where})" if provider == "claude_api"
-                           else f"no Grok API key saved ({where})")
+            label = {"claude_api": "Claude", "grok_api": "Grok", "muse_api": "Muse"}[provider]
+            return False, f"no {label} API key saved ({where})"
         return True, ""
     return False, f"unknown runner {provider}"
 
@@ -158,8 +175,12 @@ AGENT_MODELS = {
                    ("claude-sonnet-5-5", "Claude Sonnet 5.5 — recommended"),
                    ("claude-opus-5-5", "Claude Opus 5.5 — most capable, costs more")),
     "grok_api": (("grok-4.3", "Grok 4.3 — recommended"),),
+    "muse_api": (("muse-spark-1.3", "Muse Spark 1.3 — recommended"),
+                 ("muse-wonder-1.0", "Muse Wonder — most capable, costs more"),
+                 ("muse-ember-1.0", "Muse Ember — cheapest, for simple steps")),
 }
-MODEL_CFG_KEY = {"claude_api": "agent_claude_model", "grok_api": "agent_grok_model"}
+MODEL_CFG_KEY = {"claude_api": "agent_claude_model", "grok_api": "agent_grok_model",
+                 "muse_api": "agent_muse_model"}
 
 
 LIGHT_CFG_KEY = "agent_claude_model_light"
@@ -266,7 +287,13 @@ def price_for(model: str, cfg: dict | None = None):
     """[usd per 1M input, usd per 1M output] or None."""
     cfg = cfg if cfg is not None else _cfg()
     prices = dict(DEFAULT_PRICES, **(cfg.get("agent_prices") or {}))
-    return prices.get(model) or (prices["grok"] if (model or "").startswith("grok") else None)
+    if prices.get(model):
+        return prices[model]
+    if (model or "").startswith("grok"):
+        return prices["grok"]
+    if (model or "").startswith("muse"):
+        return prices["muse"]
+    return None
 
 
 def token_cost(model: str, new_input: int, cache_write: int, cache_read: int, output: int,
@@ -302,6 +329,8 @@ def ask(provider: str, system: str, user: str, *, model: str = "") -> tuple:
         return _claude_api(system, user, model)
     if provider == "grok_api":
         return _grok_api(system, user, model)
+    if provider == "muse_api":
+        return _muse_api(system, user, model)
     raise ProviderError(f"{provider} doesn't run on its own")
 
 
@@ -322,6 +351,8 @@ def ask_vision(provider: str, system: str, user: str, images, *, model: str = ""
         return _claude_api(system, user, model, images)
     if provider == "grok_api":
         return _grok_api(system, user, model, images)
+    if provider == "muse_api":
+        return _muse_api(system, user, model, images)
     raise ProviderError(f"{provider} doesn't run on its own")
 
 
@@ -379,6 +410,27 @@ def _grok_api(system, user, model, images=None):
     else:
         content = user                           # text-only calls send exactly what they sent before
     data = _post(url, {"model": model, "messages": [{"role": "system", "content": system},
+                                                    {"role": "user", "content": content}]},
+                 {"Content-Type": "application/json", "Authorization": "Bearer " + key})
+    ch = (data.get("choices") or [{}])[0].get("message") or {}
+    u = data.get("usage") or {}
+    return str(ch.get("content") or ""), {"input": int(u.get("prompt_tokens", 0)),
+                                          "output": int(u.get("completion_tokens", 0))}
+
+
+# The Meta Model API is OpenAI-compatible, like xAI — same shape as _grok_api. The URL is the MUSE_URL
+# module constant (the Task Queue has its own MUSE_API_URL constant for its Muse runner).
+def _muse_api(system, user, model, images=None):
+    key = _key("muse_api")
+    if not key:
+        raise ProviderError("no Muse API key saved")
+    if images:                                   # vision: image_url parts, then the text
+        content = [{"type": "image_url",
+                    "image_url": {"url": f"data:{im['media_type']};base64,{im['data']}"}} for im in images]
+        content.append({"type": "text", "text": user})
+    else:
+        content = user                           # text-only calls send exactly what they sent before
+    data = _post(MUSE_URL, {"model": model, "messages": [{"role": "system", "content": system},
                                                     {"role": "user", "content": content}]},
                  {"Content-Type": "application/json", "Authorization": "Bearer " + key})
     ch = (data.get("choices") or [{}])[0].get("message") or {}

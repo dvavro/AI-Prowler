@@ -38,8 +38,8 @@ from tkinter import filedialog, messagebox, ttk  # noqa: E402
 
 LABEL = das.STAGE_MODE_LABELS
 REAL = Path.home() / ".ai-prowler"
-REAL_FILES = [REAL / n for n in ("agent_claude_api_key.txt", "agent_grok_api_key.txt", "task_automation_config.json",
-                                 "agent_budget_alerts.json")]
+REAL_FILES = [REAL / n for n in ("agent_claude_api_key.txt", "agent_grok_api_key.txt", "agent_muse_api_key.txt",
+                                 "task_automation_config.json", "agent_budget_alerts.json")]
 
 
 def _fingerprint():
@@ -173,9 +173,11 @@ def keys(env):
 @pytest.mark.parametrize("provider,good,other_kind", [
     ("anthropic", "sk-ant-api03-ZAGdesktop", "xai-ZAGwrongrow"),
     ("grok", "xai-ZAGdesktop", "sk-ant-api03-ZAGwrongrow"),
+    # Muse keys have no format check, so there is no wrong-row paste to refuse — "" repeats the blank check
+    ("muse", "muse-ZAGdesktop", ""),
 ])
 def test_key_01_02_save_masked_remove(env, keys, provider, good, other_kind):
-    row, runner = keys.panel[provider], {"anthropic": "claude_api", "grok": "grok_api"}[provider]
+    row, runner = keys.panel[provider], {"anthropic": "claude_api", "grok": "grok_api", "muse": "muse_api"}[provider]
     assert row["status"].get() == "Not saved"
     assert row["entry"].cget("show") == "•"
     assert prov.ready(runner, env.edition)[0] is False
@@ -209,6 +211,7 @@ def test_key_01_subscription_token_refused(env, keys):
     ("claude_api", lambda: prov.model_for("claude_api")),
     ("claude_light", lambda: prov.light_model()),
     ("grok_api", lambda: prov.model_for("grok_api")),
+    ("muse_api", lambda: prov.model_for("muse_api")),
 ])
 def test_key_03_04_05_every_listed_model(keys, runner, read):
     m = keys.panel["models"][runner]

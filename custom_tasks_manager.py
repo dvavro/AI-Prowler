@@ -156,7 +156,7 @@ DOW_ELIGIBLE_SCHEDULES = {"weekly", "biweekly", "monthly"}
 # 2026-11-01 (David: "get rid of the task queue and make every task have its own schedule"): the time of
 # day a weekly / every-2-weeks / monthly task runs (daily tasks have their own start time), and which AI.
 DEFAULT_RUN_TIME = "09:00"
-AI_PROVIDERS = ("", "claude", "grok")          # "" = the agents' default
+AI_PROVIDERS = ("", "claude", "grok", "muse")  # "" = the agents' default
 
 
 def _valid_run_time(value) -> str:
@@ -170,16 +170,16 @@ def _valid_run_time(value) -> str:
 
 def _valid_ai(provider, model) -> tuple:
     p = (provider or "").strip().lower()
-    p = {"anthropic": "claude", "xai": "grok"}.get(p, p)
+    p = {"anthropic": "claude", "xai": "grok", "meta": "muse"}.get(p, p)
     if p not in AI_PROVIDERS:
-        raise ValueError("ai_provider must be '' (default), 'claude' or 'grok'.")
+        raise ValueError("ai_provider must be '' (default), 'claude', 'grok' or 'muse'.")
     m = (model or "").strip()
     if not p:
         return "", ""
     if m:
         try:
             import desk_agent_providers as _prov
-            ok = {x for x, _ in _prov.AGENT_MODELS[{"claude": "claude_api", "grok": "grok_api"}[p]]}
+            ok = {x for x, _ in _prov.AGENT_MODELS[{"claude": "claude_api", "grok": "grok_api", "muse": "muse_api"}[p]]}
         except Exception:  # noqa: BLE001
             ok = {m}
         if m not in ok:
@@ -622,7 +622,7 @@ def create_task(label: str,
     2026-11-01 (no more queue): auto_run — AI-Prowler runs the task itself when it's due, on the Agent
     API Key; run_time — the time of day a weekly / every-2-weeks / monthly task runs (daily tasks use
     daily_start_time); ai_provider / ai_model — "" = the agents' default (complex & customer model),
-    or "claude" / "grok" and one of that AI's models.
+    or "claude" / "grok" / "muse" and one of that AI's models.
 
     Args:
         label:            User-facing name (max 60 chars).
@@ -1281,10 +1281,10 @@ def ai_label(task: dict) -> str:
         return "Default AI"
     m = task.get("ai_model") or ""
     if not m:
-        return "Claude" if p == "claude" else "Grok"
+        return {"claude": "Claude", "grok": "Grok", "muse": "Muse"}.get(p, "Grok")
     try:                                  # the friendly name (Claude Opus 5.5), not the API id (claude-opus-5-5)
         import desk_agent_providers as _prov
-        names = dict(_prov.AGENT_MODELS[{"claude": "claude_api", "grok": "grok_api"}[p]])
+        names = dict(_prov.AGENT_MODELS[{"claude": "claude_api", "grok": "grok_api", "muse": "muse_api"}[p]])
         return names.get(m, m).split(" — ")[0]
     except Exception:  # noqa: BLE001
         return m

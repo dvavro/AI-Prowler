@@ -150,6 +150,11 @@ def test_tab_is_added_with_its_sections(root, db_home, switch, wizard):  # S16-G
     tab = app._estimator_tab
     assert set(tab.sections) == {"setup", "company", "trades", "agents", "director", "modules", "data", "sync",
                                  "cad", "phone", "help"}           # no "labor": labor rates are in the web app (2026-11-17)
+    # 📦 Modules is reference only, so it starts folded up; the rest start open (2026-11-17).
+    assert [k for k, v in tab._section_collapsed.items() if v] == ["modules"]
+    assert tab.sections["modules"].winfo_manager() == "" and tab._section_header["modules"].cget("text").startswith("▶ ")
+    tab._toggle_section("modules")
+    assert tab.sections["modules"].winfo_manager() == "pack"
     texts = _texts(frame)
     assert any("🧭 Estimator setup" in t for t in texts)                  # Setup AI-Prowler scrolls to this
     assert any("The Estimator is ON" in t for t in texts) and any("Setup checklist: 0 of 10" in t for t in texts)
@@ -561,6 +566,9 @@ def test_agents_section_sets_each_step_and_one_runner(root, db_home, switch, wiz
     assert got["reviewer"]["provider"] == "chat_only" and got["reviewer"]["fallback_provider"] is None
     assert got["bid_writer"]["provider"] == "off"
     assert model.agents()["budget"]["daily_cents"] == 350
+    v["runner"].set("Muse (API key)")                                            # Muse runs it too (2026-11-17)
+    tab._agent_save()
+    assert _roles()["llm_takeoff"]["provider"] == "muse_api"
     v["mode_llm_takeoff"].set("Off")                                             # and back off again
     tab._agent_save()
     assert _roles()["llm_takeoff"]["provider"] == "off"

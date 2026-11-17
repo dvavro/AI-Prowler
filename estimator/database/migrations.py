@@ -941,6 +941,25 @@ CREATE INDEX ix_project_sync_estimate ON project_sync (company_id, estimate_id)
 ALTER TABLE estimates ADD COLUMN change_order_of INTEGER;
 CREATE INDEX ix_estimates_change_order_of ON estimates (change_order_of)
 """),
+    # 2026-11-17 (David): Muse is a provider for the AI agents now, so agent_roles must accept
+    # 'muse_api' as a provider and as a fallback. SQLite can't change a CHECK, so the table is rebuilt.
+    (27, "Muse provider for agent roles", """
+CREATE TABLE agent_roles_new (
+    company_id        TEXT NOT NULL,
+    role              TEXT NOT NULL,
+    provider          TEXT NOT NULL DEFAULT 'off'
+                      CHECK (provider IN ('off', 'chat_only', 'claude_api', 'grok_api', 'muse_api')),
+    model             TEXT,                   -- NULL = AI-Prowler's agent model for that provider
+    fallback_provider TEXT CHECK (fallback_provider IS NULL OR fallback_provider IN ('claude_api', 'grok_api', 'muse_api')),
+    updated_by        TEXT,
+    updated_at        TEXT,
+    PRIMARY KEY (company_id, role)
+);
+INSERT INTO agent_roles_new (company_id, role, provider, model, fallback_provider, updated_by, updated_at)
+  SELECT company_id, role, provider, model, fallback_provider, updated_by, updated_at FROM agent_roles;
+DROP TABLE agent_roles;
+ALTER TABLE agent_roles_new RENAME TO agent_roles
+"""),
 ]
 
 

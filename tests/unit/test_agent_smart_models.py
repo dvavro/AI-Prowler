@@ -65,6 +65,7 @@ def test_model_per_item():
     assert prov.model_for_item("claude_api", route, dict(LIGHT, agent_claude_model="claude-opus-5-5")) == \
         "claude-opus-5-5"
     assert prov.model_for_item("grok_api", intake, LIGHT) == prov.model_for("grok_api", LIGHT)
+    assert prov.model_for_item("muse_api", intake, LIGHT) == prov.model_for("muse_api", LIGHT)   # no light model for Muse either
     assert prov.model_for_item("claude_api", intake, {"agent_claude_model_light": "gpt-9"}) == "claude-sonnet-5-5"
 
 

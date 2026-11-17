@@ -1198,7 +1198,7 @@ MODULES: list[Module] = [
            tab="⏰ Schedule", requires=("index",), detect=detect_auto_index),
     Module("links", "Scheduled AI analyses (Links & Analysis)", 5,
            "Your AI can review things for you on a schedule — overdue invoices, a weekly summary — "
-           "and save or email the result. Needs an Agent API Key (Claude or Grok, pay-as-you-go) — "
+           "and save or email the result. Needs an Agent API Key (Claude, Grok or Muse, pay-as-you-go) — "
            "you can skip this step.", tab="🔗 Links & Analysis", requires=("index",),
            detect=detect_links),
     Module("learnings", "Teach AI-Prowler (Learnings)", 2,

@@ -65,6 +65,15 @@ def test_save_grok_key(keys):
     assert ok and prov.load_agent_key("grok") == "xai-test" and not prov.has_agent_key("anthropic")
 
 
+def test_save_muse_key(keys):
+    ok, msg = dga.save_agent_key("muse", "muse-test")
+    assert ok, msg
+    assert prov.load_agent_key("muse") == "muse-test" and not prov.has_agent_key("anthropic")
+    assert prov.agent_key_path("muse").name == "agent_muse_api_key.txt"
+    assert dga.key_status("muse").endswith("Saved") and dga.key_status("grok") == "Not saved"
+    assert dga.clear_agent_key("muse")[0] and not prov.has_agent_key("muse")
+
+
 def test_agents_and_task_queue_share_the_agent_key_and_ignore_the_environment(keys, monkeypatch):
     """2026-11-01: one key for everything — the Task Queue runs on the Agent API Key too. The old
     Task Queue key files and the environment variables are never used."""
@@ -76,6 +85,7 @@ def test_agents_and_task_queue_share_the_agent_key_and_ignore_the_environment(ke
     for edition in ("solo", "business"):
         assert prov.ready("claude_api", edition)[0] is False
         assert prov.ready("grok_api", edition)[0] is False
+        assert prov.ready("muse_api", edition)[0] is False
     assert not tqa.has_key({"provider": "claude"})
     dga.save_agent_key("anthropic", "sk-ant-api03-agents")
     assert prov._key("claude_api") == "sk-ant-api03-agents"
@@ -105,7 +115,7 @@ def test_remove_key(keys):
 
 def test_every_install_offers_only_the_api_keys():
     for ed in ("business", "solo"):
-        assert [p for p, _ in das.providers_for(ed)] == ["claude_api", "grok_api"]
+        assert [p for p, _ in das.providers_for(ed)] == ["claude_api", "grok_api", "muse_api"]
 
 
 def test_chat_runner_cant_be_saved_anywhere(db):

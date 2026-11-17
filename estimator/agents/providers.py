@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import sys
 
-API_PROVIDERS = ("claude_api", "grok_api")
+API_PROVIDERS = ("claude_api", "grok_api", "muse_api")
 PROVIDERS = ("off", "chat_only", *API_PROVIDERS)
 PROVIDER_LABELS = {"off": "Off", "chat_only": "From chat only (nothing runs on its own)",
-                   "claude_api": "Claude API key", "grok_api": "Grok API key"}
+                   "claude_api": "Claude API key", "grok_api": "Grok API key",
+                   "muse_api": "Muse API key"}
 _OVERRIDE: dict = {}
 
 
@@ -29,7 +30,9 @@ class ProviderError(RuntimeError):
 def set_provider(fake) -> None:
     """Tests: an object with ask(provider, system, user, model) -> (text, usage),
     ask_vision(provider, system, user, images, model) -> (text, usage), ready(provider) -> (ok, why),
-    model_for(provider) -> str, cost(model, usage) -> float. None goes back to AI-Prowler's."""
+    model_for(provider) -> str, cost(model, usage) -> float. None goes back to AI-Prowler's.
+    token_cost(model, new_input, cache_write, cache_read, output) -> float is optional;
+    cost_micros uses it when present (it is unrounded, cost() is not)."""
     _OVERRIDE.clear()
     if fake is not None:
         _OVERRIDE["p"] = fake
@@ -99,17 +102,19 @@ def step_group(role: str, step: str | None = None) -> str:
 
 
 def fits(provider: str, model: str | None) -> bool:
-    """A model name that belongs to this runner (a Claude model on the Claude key, a Grok one on Grok)."""
+    """A model name that belongs to this runner (a Claude model on the Claude key, a Grok one on Grok,
+    a Muse one on Muse)."""
     m = (model or "").lower()
     return bool(m) and ((provider == "claude_api" and m.startswith("claude")) or
-                        (provider == "grok_api" and m.startswith("grok")))
+                        (provider == "grok_api" and m.startswith("grok")) or
+                        (provider == "muse_api" and m.startswith("muse")))
 
 
 def model_for_step(provider: str, role: str, step: str | None = None, pinned: str | None = None) -> str:
     """The model for one Estimator AI step. The model the agent was set to itself in the Estimator tab (pinned) wins
     when it belongs to this runner (2026-11-13, David: "select the AI Model type for each agent"); otherwise the
     internal-steps model for an internal step (when one is chosen at the top of the Small Business tab), else the
-    complex & customer model. Grok has one model."""
+    complex & customer model. Grok and Muse each have one model (no simple-steps model)."""
     if fits(provider, pinned):
         return pinned  # type: ignore[return-value]
     main = model_for(provider)
@@ -157,7 +162,19 @@ def cost_micros(model: str, usage: dict) -> int:
     """Millionths of a dollar for one call, from AI-Prowler's price table."""
     h = _host()
     try:
-        usd = h.cost(model, usage) if h else 0.0
+        if h is None:
+            usd = 0.0
+        elif hasattr(h, "token_cost"):
+            # token_cost is unrounded; cost() rounds to 5 decimals, which loses
+            # a micro-dollar when the exact cost ties at the 5th decimal
+            # (2,000 in / 500 out on muse-spark-1.3 is exactly $0.004625 but
+            # rounds to $0.00462). Same usage split as desk cost().
+            cr = int(usage.get("cache_read", 0) or 0)
+            cw = int(usage.get("cache_write", 0) or 0)
+            new = max(int(usage.get("input", 0) or 0) - cr - cw, 0)
+            usd = h.token_cost(model, new, cw, cr, int(usage.get("output", 0) or 0))
+        else:
+            usd = h.cost(model, usage)
     except Exception:  # noqa: BLE001
         usd = 0.0
     return int(round(float(usd) * 1_000_000))

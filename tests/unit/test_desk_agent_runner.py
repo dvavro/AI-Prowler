@@ -98,8 +98,10 @@ def test_ready_says_whats_missing(monkeypatch):
     monkeypatch.setattr(prov, "_key", lambda p: "")
     assert "Claude API key" in prov.ready("claude_api")[1]
     assert "Grok API key" in prov.ready("grok_api")[1]
+    assert "Muse API key" in prov.ready("muse_api")[1]
     monkeypatch.setattr(prov, "_key", lambda p: "k")
     assert prov.ready("grok_api") == (True, "")
+    assert prov.ready("muse_api") == (True, "")
 
 
 # ── whether to start ─────────────────────────────────────────────────────────

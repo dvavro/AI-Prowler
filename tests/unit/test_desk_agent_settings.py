@@ -76,7 +76,7 @@ def test_no_reply_delay_or_overnight_wait():
 @pytest.mark.parametrize("key,value", [
     ("agent_label", "Office manager"),           # not an assistant label
     ("agent_label", ""),
-    ("agent_provider", "muse_api"),
+    ("agent_provider", "gpt_api"),                # not a runner AI-Prowler knows (muse_api IS one, since 2026-11-17)
     ("agent_stage_intake", "always"),
     ("agent_reply_delay_min", 2),                # removed 2026-10-30
     ("agent_name", "Sam <script>"),
@@ -95,8 +95,10 @@ def test_good_values_save_and_names_are_trimmed(db):
     desk_db.set_setting(db, "agent_name", "  Sam  ", edition="solo")
     desk_db.set_setting(db, "agent_label", "AI assistant", edition="solo")
     desk_db.set_setting(db, "agent_hours", [8, 18], edition="solo")
+    desk_db.set_setting(db, "agent_provider", "muse_api", edition="solo")   # Muse is a runner since 2026-11-17
     s = desk_db.get_settings(db)
     assert (s["agent_name"], s["agent_label"], s["agent_hours"]) == ("Sam", "AI assistant", [8, 18])
+    assert s["agent_provider"] == "muse_api"
 
 
 def test_only_the_owner_changes_agent_settings(db):
@@ -253,7 +255,9 @@ def test_an_old_saved_cli_value_uses_the_saved_key(db, monkeypatch):
     conn.execute("UPDATE desk_settings SET value = ? WHERE key = 'agent_provider'", (_json.dumps("claude_code"),))
     conn.commit()
     conn.close()
-    for saved, want in (({"claude_api"}, "claude_api"), ({"grok_api"}, "grok_api"), ({"claude_api", "grok_api"}, "claude_api"), (set(), "chat_only")):
+    for saved, want in (({"claude_api"}, "claude_api"), ({"grok_api"}, "grok_api"), ({"muse_api"}, "muse_api"),
+                         ({"claude_api", "grok_api"}, "claude_api"), ({"grok_api", "muse_api"}, "grok_api"),
+                         ({"claude_api", "muse_api"}, "claude_api"), (set(), "chat_only")):
         monkeypatch.setattr(prov, "_key", lambda p, s=saved: "k" if p in s else "")
         assert desk_db.get_settings(db)["agent_provider"] == want
         for ed in ("solo", "business"):

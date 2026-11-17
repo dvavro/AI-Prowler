@@ -95,13 +95,13 @@ def test_sd_01_agent_tab_follows_agent_on(card):
 
 # ── AG-SD-03: which AI runs it ───────────────────────────────────────────────
 def test_sd_03_runner(card):
-    for v in ("grok_api", "claude_api"):
+    for v in ("grok_api", "claude_api", "muse_api"):
         card.pick("agent_provider", v)
         assert card.stored("agent_provider") == v
     st, d = card.box.desk("POST", "/settings", {"key": "agent_provider", "value": "claude_code"})
-    assert st == 400 and card.stored("agent_provider") == "claude_api", d      # the removed Claude CLI runner
+    assert st == 400 and card.stored("agent_provider") == "muse_api", d       # the removed Claude CLI runner
     st, d = card.box.desk("POST", "/settings", {"key": "agent_provider", "value": "chat_only"})
-    assert st == 400 and card.stored("agent_provider") == "claude_api", d      # Chat isn't a runner
+    assert st == 400 and card.stored("agent_provider") == "muse_api", d       # Chat isn't a runner
 
 
 # ── AG-SD-04: the five stages × Off / Suggest / Auto, and the diagram follows ──

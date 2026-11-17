@@ -466,7 +466,7 @@ def estimates(calls_per_day: float, call_tokens: tuple, share: float, *, cfg: di
         ti, to = measured.get(m, {}).get("tokens", call_tokens)
         return prov.cost(m, {"input": ti, "output": to}, cfg if cfg is not None else {})
     rows = []
-    for runner in ("claude_api", "grok_api"):
+    for runner in ("claude_api", "grok_api", "muse_api"):
         for m, lab in prov.AGENT_MODELS[runner]:
             pc = per_call(m)
             rows.append({"label": lab, "model": m, "per_call": pc, "per_day": round(pc * calls_per_day, 4),
@@ -605,6 +605,16 @@ def sample_items(limit: int = 3, edition: str = "solo") -> tuple:
     return system, mix[:limit]
 
 
+def _runner_for_model(model: str) -> str:
+    """Which runner owns this model (AGENT_MODELS) — the live analysis asks each model through its own
+    provider, so a Muse model goes to the Meta API, not to Claude."""
+    import desk_agent_providers as prov
+    for runner, models in prov.AGENT_MODELS.items():
+        if model in {m for m, _ in models}:
+            return runner
+    return "claude_api"                        # unknown model: the old behaviour
+
+
 def measure(models: list, system: str, samples: list, ask_fn=None) -> dict:
     """Send each sample to each model ONCE and read the answers (never submitted). Real API calls — costs a few
     cents. Returns {"rows": [...], "per_model": {model: {"tokens": (in, out), "per_call": $}}, "cost": $}."""
@@ -614,7 +624,7 @@ def measure(models: list, system: str, samples: list, ask_fn=None) -> dict:
     for m in models:
         for label, user, cx in samples:
             try:
-                text, u = ask_fn("claude_api", system, user, model=m)
+                text, u = ask_fn(_runner_for_model(m), system, user, model=m)
                 try:
                     acts, _ = prov.parse_actions(text)
                     answer = ", ".join(str(a.get("action")) for a in acts) or "no actions"

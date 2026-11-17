@@ -84,6 +84,23 @@ def test_v21_sheet_trade_active_table(db):  # per-trade sheet activation for tak
                    " VALUES (?, 1, ?, 1, ?)", ("default", "concrete", NOW))
 
 
+def test_v27_agent_roles_muse_provider(tmp_path):  # agent roles accept Muse (v27)
+    from estimator.database import migrations as mig
+    conn = connect(tmp_path / "v26.db")
+    mig.migrate(conn, target=26)
+    conn.execute("INSERT INTO agent_roles (company_id, role, provider, fallback_provider, updated_at)"
+                 " VALUES (?, ?, ?, ?, ?)", ("default", "reviewer", "grok_api", "claude_api", NOW))
+    assert mig.migrate(conn) == [27]
+    row = conn.execute("SELECT provider, fallback_provider FROM agent_roles WHERE role=?", ("reviewer",)).fetchone()
+    assert tuple(row) == ("grok_api", "claude_api")       # the rebuild keeps the old rows
+    conn.execute("INSERT INTO agent_roles (company_id, role, provider, fallback_provider, updated_at)"
+                 " VALUES (?, ?, ?, ?, ?)", ("default", "bid_writer", "muse_api", "muse_api", NOW))
+    with pytest.raises(sqlite3.IntegrityError):          # unknown provider still refused
+        conn.execute("INSERT INTO agent_roles (company_id, role, provider, updated_at)"
+                     " VALUES (?, ?, ?, ?)", ("default", "follow_up", "bogus_api", NOW))
+    conn.close()
+
+
 def test_every_business_table_has_company_or_parent(db):
     for table in ("estimates", "price_book", "markups", "estimate_events", "company_profile", "setup_progress"):
         cols = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
@@ -152,7 +169,7 @@ def test_v1_database_upgrades_to_v2(tmp_path):  # S3-B02
     conn = connect(tmp_path / "old.db")
     mig.migrate(conn, target=1)
     conn.execute("INSERT INTO estimates (company_id, title, created_at, updated_at) VALUES ('default', 'old', 'now', 'now')")
-    assert mig.migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]   # 26: change orders (2026-11-16), 25: projects received from PCs (2026-11-13), 24: auto calibration result on viewports (2026-11-13), 23: project lane for Director jobs (2026-11-12), 14-15: symbols (Coder 2 Sprints 10-11), 16: revisions and the processing-PC queue, 17: design firm, assembly uses, line overrides, 18: help progress (guided tours, Coder 2 Sprint 18), 19: price book rows carry their trade, 20: concrete agent auto-runs, 21: per-trade sheet activation, 22: AI log (every LLM call, what was sent and what came back)
+    assert mig.migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]   # 27: Muse provider for agent roles (2026-11-17), 26: change orders (2026-11-16), 25: projects received from PCs (2026-11-13), 24: auto calibration result on viewports (2026-11-13), 23: project lane for Director jobs (2026-11-12), 14-15: symbols (Coder 2 Sprints 10-11), 16: revisions and the processing-PC queue, 17: design firm, assembly uses, line overrides, 18: help progress (guided tours, Coder 2 Sprint 18), 19: price book rows carry their trade, 20: concrete agent auto-runs, 21: per-trade sheet activation, 22: AI log (every LLM call, what was sent and what came back)
     assert conn.execute("SELECT title FROM estimates").fetchone()[0] == "old"
     conn.close()
 

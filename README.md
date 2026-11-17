@@ -244,7 +244,7 @@ Found a bug? Open an **[Issue](https://github.com/dvavro/AI-Prowler/issues)** an
 - 📋 **Copy AI Route for Any AI** — the Jobs app makes a ready-to-paste prompt that plans the day's route in any AI chat connected to AI-Prowler; a one-time code makes sure it uses the right AI-Prowler
 - 🗓️ **Plan Week with Any AI** — suggests moving soft jobs so nearby jobs share a day (new setting **Week Plan Distance (miles)**, default 5); nothing moves until you approve
 - 🧹 **Claude CLI AI Route removed** (personal and server) — no Claude Code or per-person Claude tokens needed for routing; admins no longer manage AI passwords; old leftovers are cleaned up automatically
-- 🤖 **AI analyses** (task queue, Claude or Grok) always use the AI-Prowler that's already running and never start a second copy (needs remote access / a Bearer Token)
+- 🤖 **AI analyses** (task queue, Claude, Grok or Muse) always use the AI-Prowler that's already running and never start a second copy (needs remote access / a Bearer Token)
 - 📱 **Jobs app** — version badge (tap to check for a newer app), PC map pull-down bar fixed, "Settings aren't filled out" warning, yearly Net Revenue (after sales tax) report, recurring jobs and projections land on Preferred Day(s)
 - 🔄 **Updates** — "downloaded, NOT installed yet" with **Restart Now**, and a reminder until it's installed
 - 🧭 **Setup Center** — blinking first-steps nudge on new installs; Connect your AI split into Claude Desktop (free) and phone/web

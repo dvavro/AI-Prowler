@@ -57,7 +57,7 @@ def test_stage_mode_and_time_off_switch():
 def test_runner_is_api_keys_only_never_a_chat(monkeypatch):
     import desk_agent_providers as _prov
     monkeypatch.setattr(_prov, "_key", lambda p: "")
-    for p in ("claude_api", "grok_api"):
+    for p in ("claude_api", "grok_api", "muse_api"):
         assert das.hr_runner({"agent_provider": p}, B) == (p, "")
     for ed in ("solo", B):                                                 # 2026-11-01: no Claude CLI anywhere
         p, why = das.hr_runner({"agent_provider": "claude_code"}, ed)
@@ -189,6 +189,8 @@ def test_an_old_chat_setting_runs_on_the_saved_key(monkeypatch):
     import desk_agent_providers as _prov
     monkeypatch.setattr(_prov, "_key", lambda p: "k" if p == "grok_api" else "")
     assert das.hr_runner({"agent_provider": "chat_only"}, B) == ("grok_api", "")
+    monkeypatch.setattr(_prov, "_key", lambda p: "k" if p == "muse_api" else "")
+    assert das.hr_runner({"agent_provider": "chat_only"}, B) == ("muse_api", "")
     monkeypatch.setattr(_prov, "_key", lambda p: "k")
     assert das.hr_runner({"agent_provider": "chat_only"}, "solo") == ("claude_api", "")
     assert das.effective_provider({"agent_provider": "chat_only"}, B) == "claude_api"
