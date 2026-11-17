@@ -1,14 +1,18 @@
 # Electrical from device and circuit counts (no plans needed).
 # Labor = devices x hours per device x work factor; wire lf = devices x average run, 15% waste; one box per device.
+# Voltage/phase picks the branch wire and breakers (110 V: 12/2 + single-pole; 220 V: 12/3 + 2-pole;
+# 220 V 3-phase: 3-phase wire + 3-pole, and labor x 1.25). Dedicated circuits split 15 Amp (12/2 wire,
+# single-pole breaker) and 30 Amp (heavy wire, 2-pole breaker). Box material picks the box price,
+# underground runs price direct-burial cable in conduit per ft, subpanel size picks the subpanel price.
 id: electrical
 name: Electrical
 version: 0.1.0
 category: construction
 path: both
-description: Outlets, switches, GFCIs, lights, ceiling fans, dedicated appliance and EV circuits, low-voltage drops, subpanels and panel upgrades, priced by labor hours per device with wire, boxes, breakers and permit.
+description: Outlets, switches, GFCIs, lights, ceiling fans, dedicated 15 and 30 Amp appliance and EV circuits, low-voltage drops, subpanels and panel upgrades, priced by labor hours per device with wire, boxes, breakers and permit. Voltage and phase, box material, underground runs and subpanel size change the price.
 minimum_charge: "200.00"
-keywords: [electrical, electrician, outlet, outlets, lights, install lights, wiring, light fixture, ceiling fan, recessed lights, can lights, panel upgrade, subpanel, ev charger, gfci, rewire, new circuit, dedicated circuit]
-required_any: [outlets, switches, gfci, lights, fans, appliance_circuits, low_voltage, panel]
+keywords: [electrical, electrician, outlet, outlets, lights, install lights, wiring, light fixture, ceiling fan, recessed lights, can lights, panel upgrade, subpanel, ev charger, gfci, rewire, new circuit, dedicated circuit, 220v, 3-phase, underground wire]
+required_any: [outlets, switches, gfci, lights, fans, appliance_circuits, circuits_15a, low_voltage, underground_ft, panel]
 notes:
   - "Panel upgrades and new circuits need a permit and inspection; a service upgrade may need the utility to schedule a disconnect."
 
@@ -22,16 +26,42 @@ questions:
       - {value: new, label: "New work (open walls)", factor: "1.0"}
       - {value: remodel, label: "Old work (finished walls)", factor: "1.6"}
       - {value: replace, label: "Swap devices only", factor: "0.5"}
+  - id: voltage
+    label: "Voltage and phase"
+    type: choice
+    default: "110"
+    # factor is a code used by the wire and breaker line gates: 1 = 110 V, 2 = 220 V, 3 = 220 V 3-phase.
+    # 3-phase labor is 1.25x (three-pole terminations, phasing and load-balancing checks take longer).
+    choices:
+      - {value: "110", label: "110 V (standard residential)", factor: "1"}
+      - {value: "220", label: "220 V (single-phase)", factor: "2"}
+      - {value: "220_3ph", label: "220 V 3-phase (commercial)", factor: "3"}
   - {id: outlets, label: "Outlets", type: integer, default: 0, min: 0, max: 1000}
   - {id: switches, label: "Switches", type: integer, default: 0, min: 0, max: 1000}
   - {id: gfci, label: "GFCI outlets", type: integer, default: 0, min: 0, max: 500}
   - {id: lights, label: "Light fixtures or recessed lights", type: integer, default: 0, min: 0, max: 1000,
      help: "Fixtures themselves are supplied by the customer."}
   - {id: fans, label: "Ceiling fans", type: integer, default: 0, min: 0, max: 200}
-  - {id: appliance_circuits, label: "Dedicated circuits (range, dryer, AC, EV charger)", type: integer, default: 0, min: 0,
+  - id: box_material
+    label: "Box material"
+    type: choice
+    default: plastic
+    # factor is a code used by the boxes line gates: 1 = plastic, 2 = metal.
+    choices:
+      - {value: plastic, label: "Plastic boxes", factor: "1"}
+      - {value: metal, label: "Metal boxes", factor: "2"}
+  # Backward compat: older estimates saved dedicated circuits under appliance_circuits with no amperage.
+  # They still price: appliance_circuits is the 30 Amp count (range, dryer, AC, EV charger are 30 Amp loads,
+  # and plan takeoff counts 240 V receptacles and EV chargers here), now with a 2-pole breaker instead of
+  # the single-pole breaker it used to get. 15 Amp circuits are the new circuits_15a count.
+  - {id: appliance_circuits, label: "Dedicated 30 Amp circuits (range, dryer, AC, EV charger)", type: integer, default: 0, min: 0,
+     max: 100}
+  - {id: circuits_15a, label: "Dedicated 15 Amp circuits (microwave, disposal, fridge)", type: integer, default: 0, min: 0,
      max: 100}
   - {id: low_voltage, label: "Data or TV drops", type: integer, default: 0, min: 0, max: 500}
   - {id: avg_run_ft, label: "Average wire run per device", type: number, unit: ft, default: 25, min: 5, max: 200}
+  - {id: underground_ft, label: "Underground run", type: number, unit: ft, default: 0, min: 0, max: 5000,
+     help: "Feet of run buried underground (direct-burial cable in conduit), e.g. to a detached garage or shed."}
   - id: panel
     label: "Panel work"
     type: choice
@@ -40,16 +70,26 @@ questions:
       - {value: none, label: "None", factor: "0"}
       - {value: subpanel, label: "Add a subpanel", factor: "1"}
       - {value: upgrade, label: "Upgrade to 200 A service", factor: "2"}
+  - id: subpanel_amps
+    label: "Subpanel size"
+    type: choice
+    default: "100"
+    help: "Only priced when Panel work is 'Add a subpanel'."
+    # factor is the amperage itself, used by the subpanel line gates (same pattern as concrete's footing_rebar_size).
+    choices:
+      - {value: "100", label: "100 Amp subpanel", factor: "100"}
+      - {value: "200", label: "200 Amp subpanel", factor: "200"}
   - {id: permit, label: "Pull a permit?", type: boolean, default: true}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 lines:
-  # hours per device: outlet 0.5, switch 0.5, GFCI 0.75, light 0.75, fan 1.5
+  # hours per device: outlet 0.5, switch 0.5, GFCI 0.75, light 0.75, fan 1.5; 3-phase labor is 1.25x
   - {id: device_labor, description: "Install devices and lights", kind: labor, unit: hr,
-     quantity: "(outlets * 0.5 + switches * 0.5 + gfci * 0.75 + lights * 0.75 + fans * 1.5) * work",
+     quantity: "(outlets * 0.5 + switches * 0.5 + gfci * 0.75 + lights * 0.75 + fans * 1.5) * work * (1.25 if voltage == 3 else 1)",
      price_key: el_labor_hr, when: "outlets + switches + gfci + lights + fans > 0"}
   - {id: circuit_labor, description: "Run dedicated circuits", kind: labor, unit: hr,
-     quantity: "appliance_circuits * 3 * work", price_key: el_labor_hr, when: "appliance_circuits > 0"}
+     quantity: "(appliance_circuits + circuits_15a) * 3 * work * (1.25 if voltage == 3 else 1)", price_key: el_labor_hr,
+     when: "appliance_circuits + circuits_15a > 0"}
   - {id: outlets, description: "Outlets and plates", kind: material, unit: ea, quantity: "outlets",
      price_key: el_outlet_ea, when: "outlets > 0"}
   - {id: switches, description: "Switches and plates", kind: material, unit: ea, quantity: "switches",
@@ -58,21 +98,43 @@ lines:
      when: "gfci > 0"}
   - {id: fan_boxes, description: "Fan-rated boxes and bracing", kind: material, unit: ea, quantity: "fans",
      price_key: el_fan_box_ea, when: "fans > 0"}
-  - {id: boxes, description: "Electrical boxes", kind: material, unit: ea, quantity: "outlets + switches + gfci + lights",
-     price_key: el_box_ea, when: "work >= 1 and outlets + switches + gfci + lights > 0"}
+  - {id: boxes_plastic, description: "Plastic electrical boxes", kind: material, unit: ea, quantity: "outlets + switches + gfci + lights",
+     price_key: el_box_plastic_ea, when: "box_material == 1 and work >= 1 and outlets + switches + gfci + lights > 0"}
+  - {id: boxes_metal, description: "Metal electrical boxes", kind: material, unit: ea, quantity: "outlets + switches + gfci + lights",
+     price_key: el_box_metal_ea, when: "box_material == 2 and work >= 1 and outlets + switches + gfci + lights > 0"}
   - {id: wire, description: "Branch circuit wire (12/2)", kind: material, unit: lf,
      quantity: "(outlets + switches + gfci + lights + fans) * avg_run_ft", waste: "0.15", price_key: el_wire_lf,
-     when: "work >= 1 and outlets + switches + gfci + lights + fans > 0"}
-  - {id: heavy_wire, description: "Heavy-gauge wire for dedicated circuits", kind: material, unit: lf,
+     when: "voltage == 1 and work >= 1 and outlets + switches + gfci + lights + fans > 0"}
+  - {id: wire_220, description: "Branch circuit wire, 220 V (12/3)", kind: material, unit: lf,
+     quantity: "(outlets + switches + gfci + lights + fans) * avg_run_ft", waste: "0.15", price_key: el_wire_220_lf,
+     when: "voltage == 2 and work >= 1 and outlets + switches + gfci + lights + fans > 0"}
+  - {id: wire_3ph, description: "Branch circuit wire, 220 V 3-phase", kind: material, unit: lf,
+     quantity: "(outlets + switches + gfci + lights + fans) * avg_run_ft", waste: "0.15", price_key: el_wire_3ph_lf,
+     when: "voltage == 3 and work >= 1 and outlets + switches + gfci + lights + fans > 0"}
+  - {id: wire_15a, description: "Wire for 15 Amp dedicated circuits (12/2)", kind: material, unit: lf,
+     quantity: "circuits_15a * avg_run_ft", waste: "0.15", price_key: el_wire_lf, when: "circuits_15a > 0"}
+  - {id: heavy_wire, description: "Heavy-gauge wire for 30 Amp circuits", kind: material, unit: lf,
      quantity: "appliance_circuits * avg_run_ft", waste: "0.15", price_key: el_heavy_wire_lf,
      when: "appliance_circuits > 0"}
-  - {id: breakers, description: "Breakers", kind: material, unit: ea,
-     quantity: "appliance_circuits + (ceil((outlets + switches + gfci + lights + fans) / 10) if work >= 1 else 0)",
-     price_key: el_breaker_ea, when: "appliance_circuits > 0 or (work >= 1 and outlets + switches + gfci + lights + fans > 0)"}
+  # Branch breakers follow the voltage (single-pole at 110 V, 2-pole at 220 V, 3-pole at 3-phase);
+  # dedicated circuits keep their amperage breaker (15 Amp single-pole, 30 Amp 2-pole).
+  - {id: breakers, description: "Breakers (single-pole)", kind: material, unit: ea,
+     quantity: "circuits_15a + (ceil((outlets + switches + gfci + lights + fans) / 10) if work >= 1 and voltage == 1 else 0)",
+     price_key: el_breaker_ea, when: "circuits_15a > 0 or (voltage == 1 and work >= 1 and outlets + switches + gfci + lights + fans > 0)"}
+  - {id: breakers_2pole, description: "Breakers, 2-pole (220 V / 30 Amp)", kind: material, unit: ea,
+     quantity: "appliance_circuits + (ceil((outlets + switches + gfci + lights + fans) / 10) if work >= 1 and voltage == 2 else 0)",
+     price_key: el_breaker_2pole_ea, when: "appliance_circuits > 0 or (voltage == 2 and work >= 1 and outlets + switches + gfci + lights + fans > 0)"}
+  - {id: breakers_3pole, description: "Breakers, 3-pole (220 V 3-phase)", kind: material, unit: ea,
+     quantity: "ceil((outlets + switches + gfci + lights + fans) / 10) if work >= 1 else 0",
+     price_key: el_breaker_3pole_ea, when: "voltage == 3 and work >= 1 and outlets + switches + gfci + lights + fans > 0"}
   - {id: low_voltage, description: "Data or TV drop, cable and jack", kind: other, unit: ea, quantity: "low_voltage",
      price_key: el_lv_drop_ea, when: "low_voltage > 0"}
-  - {id: subpanel, description: "Subpanel, installed", kind: other, unit: ea, quantity: "1", price_key: el_subpanel_ea,
-     when: "panel == 1"}
+  - {id: underground_wire, description: "Underground feeder, direct-burial cable in conduit", kind: material, unit: lf,
+     quantity: "underground_ft", waste: "0.05", price_key: el_underground_lf, when: "underground_ft > 0"}
+  - {id: subpanel_100a, description: "100 Amp subpanel, installed", kind: other, unit: ea, quantity: "1", price_key: el_subpanel_100a_ea,
+     when: "panel == 1 and subpanel_amps == 100"}
+  - {id: subpanel_200a, description: "200 Amp subpanel, installed", kind: other, unit: ea, quantity: "1", price_key: el_subpanel_200a_ea,
+     when: "panel == 1 and subpanel_amps == 200"}
   - {id: panel_upgrade, description: "200 A panel and service upgrade, installed", kind: other, unit: ea, quantity: "1",
      price_key: el_panel_upgrade_ea, when: "panel == 2"}
   - {id: permit, description: "Electrical permit", kind: other, unit: ea, quantity: "1", price_key: el_permit_ea,

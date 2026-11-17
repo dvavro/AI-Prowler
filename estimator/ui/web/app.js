@@ -361,10 +361,14 @@ async function renderProject(main, id) {
   const parts = [
     el("p", {}, el("a", { href: "#/projects" }, "← Projects")),
     el("div", { class: "page-head" }, el("h2", {}, est.title || "Estimate " + est.id),
-      el("span", { class: "status big" }, words(est.status)), helpLink("project")),
+      projectEditButton(est),
+      el("span", { class: "status big" }, words(est.status)), helpLink("project"),
+      topDeleteButton(est)),
   ];
   if (est.practice) parts.push(el("p", { class: "note" }, "🎓 Practice project — not a real job."));
   if (est.editing_warning) parts.push(el("p", { class: "note warn" }, est.editing_warning));
+  const editForm = projectEditForm(est);
+  if (editForm) parts.push(editForm);
   parts.push(el("div", { class: "tiles" },
     tile(money(st.estimate.total_cents), "total"),
     Object.assign(tile(st.trades.length, "trades"), { id: "tile-trades" }),
@@ -424,6 +428,81 @@ async function renderProject(main, id) {
 }
 
 // Archive / restore / delete the project (owner; 2026-11-12, David). Every action asks first; delete needs the name.
+// Top-of-page Delete button (2026-11-17, David): the admin box sits at the bottom of the
+// page and owners could not find it. This button reuses the existing delete flow exactly:
+// it scrolls to the admin box and clicks #proj-delete, so the endpoint and the
+// type-the-name confirm are unchanged.
+function topDeleteButton(est) {
+  if (!state.me || state.me.role !== "owner" || est.practice) return null;
+  const b = el("button", { class: "button danger", type: "button", id: "proj-delete-top" }, "🗑 Delete…");
+  b.addEventListener("click", () => {
+    const box = $("project-admin");
+    if (box) box.scrollIntoView({ behavior: "smooth", block: "start" });
+    const del = $("proj-delete");
+    if (del) del.click();
+  });
+  return b;
+}
+
+// Fix the project's name, address or due date in place (2026-11-17, David: a typo in the title
+// had no fix except re-running the quick estimate, which made a duplicate). Owner and estimator
+// only; the form sits at the top of the page, hidden until Edit is clicked. Saving re-renders
+// the page; nothing priced changes, so no confirm is needed.
+function projectEditButton(est) {
+  if (!can("edit_estimate")) return null;
+  const b = el("button", { class: "button", type: "button", id: "proj-edit-top" }, "✏️ Edit");
+  b.addEventListener("click", () => {
+    const form = $("proj-edit");
+    if (!form) return;
+    form.hidden = false;
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+    const title = $("proj-edit-title");
+    if (title) title.focus();
+  });
+  return b;
+}
+
+function projectEditForm(est) {
+  if (!can("edit_estimate")) return null;
+  const title = el("input", { id: "proj-edit-title", maxlength: 200, required: true, "aria-label": "Project name" });
+  title.value = est.title || "";
+  const addr = el("input", { id: "proj-edit-address", maxlength: 500, "aria-label": "Address" });
+  addr.value = est.address || "";
+  const dueOk = /^\d{4}-\d{2}-\d{2}$/.test(est.due_date || "");
+  const due = el("input", { id: "proj-edit-due", type: "date", "aria-label": "Due date" });
+  if (dueOk) due.value = est.due_date;
+  const msg = el("div", { id: "proj-edit-message", role: "status" });
+  const save = el("button", { class: "primary", type: "submit", id: "proj-edit-save" }, "Save changes");
+  const cancel = el("button", { class: "button", type: "button", id: "proj-edit-cancel" }, "Cancel");
+  const form = el("form", { class: "card section", id: "proj-edit", hidden: true },
+    el("strong", {}, "Edit this project"),
+    el("div", { class: "row" }, el("label", {}, "Name", title), el("label", {}, "Address", addr),
+      el("label", {}, "Due date", due)),
+    el("p", { class: "muted small" }, "Only the name, address and due date change. " +
+      "The priced lines, totals and status stay exactly as they are."),
+    msg, el("div", { class: "row" }, save, cancel));
+  cancel.addEventListener("click", () => { form.hidden = true; msg.replaceChildren(); });
+  form.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    if (!title.value.trim()) {
+      msg.replaceChildren(el("p", { class: "error" }, "Give the project a name."));
+      return;
+    }
+    const body = { title: title.value.trim(), address: addr.value.trim() || null };
+    if (due.value) body.due_date = due.value;
+    else if (dueOk && est.due_date) body.due_date = null;   // cleared; an odd stored date is left alone
+    msg.replaceChildren();
+    save.disabled = true;
+    try {
+      const out = await api("POST", "/estimates/" + est.id + "/edit", body);
+      toast("Saved " + out.title);
+      route();
+    } catch (e) { if (e.status !== 401) msg.replaceChildren(errorBox(e)); }
+    finally { save.disabled = false; }
+  });
+  return form;
+}
+
 function projectAdminBox(est) {
   const msg = el("div", { id: "proj-admin-message", role: "status" });
   const kids = [el("h3", {}, "Archive or delete this project")];

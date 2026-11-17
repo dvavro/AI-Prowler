@@ -96,6 +96,24 @@ def test_archive_restore_and_delete_a_project(call):
     assert "function projectAdminBox(" in js and 'id: "proj-delete"' in js and 'id: "proj-archive"' in js
 
 
+def test_project_page_head_has_a_delete_button_that_reuses_the_delete_flow():
+    # 2026-11-17, David: the only Delete button sat at the bottom of the project page (in the
+    # admin box) and could not be found. A second button in the page-head scrolls to the admin
+    # box and clicks the existing #proj-delete, so the endpoint and the type-the-name confirm
+    # are the same flow, not a copy of it.
+    js = (router.WEB_DIR / "app.js").read_text(encoding="utf-8")
+    render = js[js.index("function renderProject("):js.index("function topDeleteButton(")]
+    assert "topDeleteButton(est)" in render                    # called from the project page-head
+    assert render.index("topDeleteButton(est)") < render.index('class: "tiles"')
+    fn = js[js.index("function topDeleteButton("):js.index("function projectAdminBox(")]
+    assert 'id: "proj-delete-top"' in fn and "🗑 Delete…" in fn
+    assert '$("proj-delete")' in fn and "del.click()" in fn   # reuses the existing delete button
+    assert '$("project-admin")' in fn and "scrollIntoView" in fn
+    assert 'role !== "owner"' in fn and "est.practice" in fn  # same gate as the admin box
+    assert '"/delete"' not in fn                             # the top button posts nothing itself
+    assert js.count('"/delete"') == 2                        # ask + confirm, both in projectAdminBox
+
+
 def _price(call, key):
     return next(p for p in call("GET", f"{API}/price-book").json()["prices"] if p["price_key"] == key)
 
@@ -136,3 +154,74 @@ def test_pages_have_the_director_panel_and_start_page():
     assert "a.primary.button { color: var(--brand-ink); background: var(--brand);" in css
     est = (router.WEB_DIR / "estimates.js").read_text(encoding="utf-8")
     assert "directorPanel(est.id)" in est
+
+
+def test_edit_project_fixes_the_title_in_place(call):
+    # 2026-11-17, David: "NSB" was typed "NSM" in project 7's title and there was no way to fix
+    # it, so re-running the quick estimate made a duplicate project 8. The edit fixes the header
+    # in place; lines, totals, status, rev and the Director job are untouched.
+    e = call("POST", f"{API}/estimates",
+             {"title": "Electrical - 1500 shadow pines dr, NSM FL 32168",
+              "address": "1500 shadow pines dr, NSM FL 32168"}).json()
+    r = call("POST", f"{API}/quick", {"estimate_id": e["id"], "rev": e["rev"], "module_id": "concrete",
+                                      "answers": {"area_sqft": 400}})
+    assert r.status == 200, r.body
+    before = call("GET", f"{API}/estimates/{e['id']}").json()
+    assert before["sections"] and before["totals"] and before["totals"]["total_cents"] > 0
+    job = call("POST", f"{API}/estimates/{e['id']}/director", {}).json()["job"]
+    r = call("POST", f"{API}/estimates/{e['id']}/edit",
+             {"title": "Electrical - 1500 shadow pines dr, NSB FL 32168",
+              "address": "1500 Shadow Pines Dr, NSB FL 32168",
+              "due_date": "2026-12-01", "customer_id": "CUST-1"})
+    assert r.status == 200, r.body
+    out = r.json()
+    assert out["title"] == "Electrical - 1500 shadow pines dr, NSB FL 32168"
+    assert out["address"] == "1500 Shadow Pines Dr, NSB FL 32168"
+    assert out["due_date"] == "2026-12-01" and out["customer_id"] == "CUST-1"
+    after = call("GET", f"{API}/estimates/{e['id']}").json()
+    assert after["sections"] == before["sections"] and after["totals"] == before["totals"]
+    assert after["status"] == before["status"] and after["rev"] == before["rev"]
+    again = call("POST", f"{API}/estimates/{e['id']}/director", {}).json()["job"]
+    assert again["id"] == job["id"] and again["rev"] == job["rev"]
+    events = call("GET", f"{API}/estimates/{e['id']}/events").json()["events"]
+    assert "estimate_edited" in [ev["action"] for ev in events]
+    assert call("POST", f"{API}/estimates/99999/edit", {"title": "x"}).status == 404
+    assert call("POST", f"{API}/estimates/{e['id']}/edit", {}).status == 200   # nothing to change
+
+
+def test_edit_project_refuses_an_empty_title_and_a_bad_due_date(call):
+    e = call("POST", f"{API}/estimates", {"title": "Shed slab", "due_date": "2026-11-30"}).json()
+    r = call("POST", f"{API}/estimates/{e['id']}/edit", {"title": "   "})
+    assert r.status == 400 and r.json()["error"] == "invalid_input"
+    for bad in ("next Friday", "2026-02-30", "30/11/2026", "2026-13-01"):
+        r = call("POST", f"{API}/estimates/{e['id']}/edit", {"due_date": bad})
+        assert r.status == 400 and r.json()["error"] == "invalid_input", bad
+    # Nothing changed, and clearing the due date works.
+    again = call("GET", f"{API}/estimates/{e['id']}").json()
+    assert again["title"] == "Shed slab" and again["due_date"] == "2026-11-30"
+    r = call("POST", f"{API}/estimates/{e['id']}/edit", {"due_date": None})
+    assert r.status == 200 and r.json()["due_date"] is None
+
+
+def test_edit_project_refuses_roles_that_cannot_edit(call, session_for):
+    e = call("POST", f"{API}/estimates", {"title": "Shed slab"}).json()
+    for role in ("reviewer", "office", "field"):
+        r = call("POST", f"{API}/estimates/{e['id']}/edit", {"title": "Nope"},
+                 headers=session_for(role))
+        assert r.status == 403 and r.json()["error"] == "permission_denied", role
+    r = call("POST", f"{API}/estimates/{e['id']}/edit", {"title": "Estimator fixed it"},
+             headers=session_for("estimator"))
+    assert r.status == 200, r.body
+    assert call("GET", f"{API}/estimates/{e['id']}").json()["title"] == "Estimator fixed it"
+
+
+def test_project_page_has_an_edit_button_in_the_page_head():
+    js = (router.WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = js.index("async function renderProject(")
+    end = js.index("main.replaceChildren(...parts);", start)
+    assert "projectEditButton(est)" in js[start:end]      # the button sits by the title, no scrolling
+    assert 'id: "proj-edit-top"' in js and "function projectEditButton(" in js
+    assert 'id: "proj-edit"' in js and 'id: "proj-edit-title"' in js
+    assert 'id: "proj-edit-address"' in js and 'id: "proj-edit-due"' in js
+    assert '"/estimates/" + est.id + "/edit"' in js
+

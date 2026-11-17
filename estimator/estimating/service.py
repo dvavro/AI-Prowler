@@ -175,6 +175,56 @@ def create_estimate(conn, ctx: RequestContext, title: str = "", *, customer_id: 
     return get_estimate(conn, ctx, eid)
 
 
+_UNSET = object()   # edit_estimate: a field the caller didn't pass (None means "clear it")
+
+
+def edit_estimate(conn, ctx: RequestContext, estimate_id: int, *, title=_UNSET, address=_UNSET,
+                  customer_id=_UNSET, due_date=_UNSET) -> dict:
+    """Fix a project's name, address, customer or due date in place (2026-11-17, David: a typo in
+    project 7's title had no fix except re-running the quick estimate, which made a duplicate).
+
+    Header fields only: lines, totals, status and the Director job are untouched, so this is not a
+    priced change - no new revision, `rev` is not bumped (an in-flight line edit must not go stale
+    because someone fixed a typo), and it works on a finalized estimate too. Only the fields passed
+    in change; passing None (an empty box in the form) clears address, customer_id or due_date. An
+    empty title is refused, and a due date must be a real date, stored as YYYY-MM-DD.
+    Owner and estimator only.
+    """
+    _require_edit_role(ctx)
+    updates: dict[str, object] = {}
+    if title is not _UNSET:
+        if title is None or not str(title).strip():
+            raise InvalidInput("give the project a name", field="title")
+        title = str(title).strip()
+        if len(title) > 200:
+            raise InvalidInput("the project name is too long (200 characters at most)", field="title")
+        updates["title"] = title
+    if address is not _UNSET:
+        updates["address"] = str(address).strip() or None if address is not None else None
+    if customer_id is not _UNSET:
+        updates["customer_id"] = str(customer_id).strip() or None if customer_id is not None else None
+    if due_date is not _UNSET:
+        if due_date is None:
+            updates["due_date"] = None
+        else:
+            try:
+                parsed = datetime.strptime(str(due_date).strip(), "%Y-%m-%d").date()
+            except ValueError:
+                raise InvalidInput(f"due_date must be a real date (YYYY-MM-DD), not '{due_date}'",
+                                   field="due_date") from None
+            updates["due_date"] = parsed.isoformat()
+    if not updates:
+        return get_estimate(conn, ctx, estimate_id)
+    with transaction(conn):
+        row = _load_row(conn, ctx, estimate_id)
+        sets = ", ".join(f"{k} = ?" for k in updates)
+        conn.execute(f"UPDATE estimates SET {sets}, updated_by = ?, updated_at = ? WHERE id = ?",
+                     (*updates.values(), ctx.actor, _now(), estimate_id))
+        _log(conn, ctx, estimate_id, "estimate_edited",
+             {k: v for k, v in updates.items()}, {k: row[k] for k in updates})
+    return get_estimate(conn, ctx, estimate_id)
+
+
 def _section_id(conn, ctx: RequestContext, estimate_id: int, module_id: str, module_version: str | None = None,
                 create: bool = True) -> int | None:
     row = conn.execute("SELECT id FROM trade_sections WHERE estimate_id = ? AND module_id = ?",

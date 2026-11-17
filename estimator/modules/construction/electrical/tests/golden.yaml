@@ -3,15 +3,16 @@
   answers: {outlets: 10, switches: 4, lights: 6}
   # labor 10 x 0.5 + 4 x 0.5 + 6 x 0.75 = 11.5 hr x $90; wire 20 x 25 = 500 lf x 1.15 x $0.55 = $316.25
   # breakers ceil(20 / 10) = 2
-  expected_lines: {device_labor: 103500, outlets: 4000, switches: 1600, boxes: 6000, wire: 31625, breakers: 7000,
+  expected_lines: {device_labor: 103500, outlets: 4000, switches: 1600, boxes_plastic: 6000, wire: 31625, breakers: 7000,
                    permit: 20000}
   expected_total_cents: 173725
 - name: Old work, 2 fans, 2 GFCIs, 1 dedicated circuit, 40 ft runs
   answers: {work: remodel, fans: 2, gfci: 2, appliance_circuits: 1, avg_run_ft: 40}
   # devices (2 x 0.75 + 2 x 1.5) x 1.6 = 7.2 hr; circuit 3 x 1.6 = 4.8 hr
-  expected_lines: {device_labor: 64800, circuit_labor: 43200, gfci: 4400, fan_boxes: 3000, boxes: 600, wire: 10120,
-                   heavy_wire: 11500, breakers: 7000, permit: 20000}
-  expected_total_cents: 164620
+  # backward compat: an old-style appliance_circuits answer still prices, as a 30 Amp circuit (heavy wire + 2-pole breaker)
+  expected_lines: {device_labor: 64800, circuit_labor: 43200, gfci: 4400, fan_boxes: 3000, boxes_plastic: 600, wire: 10120,
+                   heavy_wire: 11500, breakers: 3500, breakers_2pole: 7000, permit: 20000}
+  expected_total_cents: 168120
 - name: 200 A panel upgrade
   answers: {panel: upgrade}
   expected_lines: {panel_upgrade: 350000, permit: 20000}
@@ -19,3 +20,45 @@
 - name: Swap 5 outlets comes to the $200 minimum
   answers: {work: replace, outlets: 5, permit: false}
   expected_total_cents: 20000
+- name: 220 V, 10 outlets, 4 switches, 6 lights
+  answers: {voltage: "220", outlets: 10, switches: 4, lights: 6}
+  # 220 V: 12/3 wire at $0.85 (500 lf x 1.15 = $488.75) and 2-pole branch breakers at $70
+  expected_lines: {device_labor: 103500, outlets: 4000, switches: 1600, boxes_plastic: 6000, wire_220: 48875,
+                   breakers_2pole: 14000, permit: 20000}
+  expected_total_cents: 197975
+- name: 220 V 3-phase, 10 outlets, 4 switches, 6 lights
+  answers: {voltage: "220_3ph", outlets: 10, switches: 4, lights: 6}
+  # 3-phase: labor 11.5 hr x 1.25 = 14.375 hr; 3-phase wire $1.20; 3-pole breakers $105
+  expected_lines: {device_labor: 129375, outlets: 4000, switches: 1600, boxes_plastic: 6000, wire_3ph: 69000,
+                   breakers_3pole: 21000, permit: 20000}
+  expected_total_cents: 250975
+- name: Two 15 Amp dedicated circuits, 40 ft runs
+  answers: {circuits_15a: 2, avg_run_ft: 40}
+  # 15 Amp circuits run on 12/2 wire ($0.55) with single-pole breakers: 2 x 40 ft x 1.15 = 92 lf
+  expected_lines: {circuit_labor: 54000, wire_15a: 5060, breakers: 7000, permit: 20000}
+  expected_total_cents: 86060
+- name: One 15 Amp and one 30 Amp circuit, 30 ft runs
+  answers: {circuits_15a: 1, appliance_circuits: 1, avg_run_ft: 30}
+  # 15 Amp: 34.5 lf x $0.55 = $18.98; 30 Amp: 34.5 lf x $2.50 = $86.25; one breaker of each kind
+  expected_lines: {circuit_labor: 54000, wire_15a: 1898, heavy_wire: 8625, breakers: 3500, breakers_2pole: 7000,
+                   permit: 20000}
+  expected_total_cents: 95023
+- name: Metal boxes, 10 outlets
+  answers: {outlets: 10, box_material: metal}
+  # metal boxes $6 each vs plastic $3: 10 x $6 = $60
+  expected_lines: {device_labor: 45000, outlets: 4000, boxes_metal: 6000, wire: 15813, breakers: 3500, permit: 20000}
+  expected_total_cents: 94313
+- name: 2 outlets plus a 100 ft underground run
+  answers: {outlets: 2, underground_ft: 100}
+  # underground: 100 ft x 1.05 x $4.50 = $472.50
+  expected_lines: {device_labor: 9000, outlets: 800, boxes_plastic: 600, wire: 3163, breakers: 3500,
+                   underground_wire: 47250, permit: 20000}
+  expected_total_cents: 84313
+- name: 100 Amp subpanel
+  answers: {panel: subpanel}
+  expected_lines: {subpanel_100a: 90000, permit: 20000}
+  expected_total_cents: 110000
+- name: 200 Amp subpanel
+  answers: {panel: subpanel, subpanel_amps: "200"}
+  expected_lines: {subpanel_200a: 150000, permit: 20000}
+  expected_total_cents: 170000

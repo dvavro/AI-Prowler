@@ -54,6 +54,8 @@ Sprint 4 (Coder 2):
                                     the Dashboard's "Start a new quote or estimate": starts the right job, returns route
   POST /estimates/<id>/archive|restore|delete {confirm?, title?}   owner: hide / bring back / delete a project and its
                                     revisions (asks first; delete needs the name typed and refuses a quoted project)
+    POST /estimates/<id>/edit {title?, address?, customer_id?, due_date?}   owner, estimator: fix the
+                                      project's name or address in place (lines, totals, status untouched; no ask-first)
   POST /estimates/<id>/director     the project's Director job (made the first time; project lane) and its next step
                                     (2026-11-12: every project gets one; POST /estimates makes it straight away)
   Bids (owner, estimator, office, field - the bid_send roles): GET /bids?status=&estimate_id=, GET /bids/<id> (bid_preview),
@@ -319,6 +321,7 @@ _EST = re.compile(r"^/estimates/(\d+)$")
 _EST_EVENTS = re.compile(r"^/estimates/(\d+)/events$")
 _EST_DIRECTOR = re.compile(r"^/estimates/(\d+)/director$")
 _EST_ADMIN = re.compile(r"^/estimates/(\d+)/(archive|restore|delete)$")
+_EST_EDIT = re.compile(r"^/estimates/(\d+)/edit$")
 _PROJECT = re.compile(r"^/estimates/(\d+)/project$")
 _PLANS = re.compile(r"^/estimates/(\d+)/plans$")
 _STAGE = re.compile(r"^/estimates/(\d+)/plans/stage$")
@@ -459,6 +462,16 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
         if action == "restore":
             return _ask_first(lambda: project_admin.restore(conn, ctx, eid, confirm=confirm))
         return _ask_first(lambda: project_admin.delete(conn, ctx, eid, confirm=confirm, title=_opt(b, "title")))
+
+    mm = _EST_EDIT.match(sub)
+    if mm and m == "POST":
+        # Fix a project's name, address, customer or due date in place (owner, estimator; no
+        # ask-first: nothing priced changes). 2026-11-17.
+        if ctx.role not in service.EDIT_ROLES:
+            raise _Refuse(403, "permission_denied", "only the owner or an estimator can edit a project")
+        b = _body(req)
+        kw = {f: _opt(b, f) for f in ("title", "address", "customer_id", "due_date") if f in b}
+        return _json(200, redact(service.edit_estimate(conn, ctx, int(mm.group(1)), **kw), see))
 
     mm = _EST_DIRECTOR.match(sub)
     if mm and m == "POST":
