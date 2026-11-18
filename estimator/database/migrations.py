@@ -985,6 +985,24 @@ CREATE TABLE zip_cache (
     looked_up_at TEXT NOT NULL
 )
 """),
+    # 2026-11-18 (David): the Bill of Materials' ordered checklist, and the Inspector's
+    # review per trade. bom_ordered keys on section+item (not line id) so the flags
+    # survive a re-price. inspection_reviews gains module_id (one row per trade per
+    # run); v28 rows were all electrical, so the default is 'electrical'.
+    (29, "BOM ordered flags and inspection review per trade", """
+CREATE TABLE bom_ordered (
+    company_id   TEXT NOT NULL,
+    estimate_id  INTEGER NOT NULL REFERENCES estimates (id) ON DELETE CASCADE,
+    section_id   INTEGER NOT NULL,
+    item_key     TEXT NOT NULL,
+    ordered_by   TEXT,
+    ordered_at   TEXT NOT NULL,
+    PRIMARY KEY (company_id, estimate_id, section_id, item_key)
+);
+CREATE INDEX ix_bom_ordered_estimate ON bom_ordered (company_id, estimate_id);
+ALTER TABLE inspection_reviews ADD COLUMN module_id TEXT NOT NULL DEFAULT 'electrical';
+CREATE INDEX ix_inspection_reviews_trade ON inspection_reviews (company_id, estimate_id, module_id, id)
+"""),
 ]
 
 

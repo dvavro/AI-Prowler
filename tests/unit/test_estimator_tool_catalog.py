@@ -1,6 +1,6 @@
 """Estimator tools in the MCP Tool Configuration catalog (2026-11-12, David).
 
-The Estimator tools were live (108 then, 110 now; registered via est_tools.register) but
+The Estimator tools were live (108 then, 111 now; registered via est_tools.register) but
 had no rows in mcp_tool_catalog.py, so the Settings tab's MCP Tool
 Configuration panel could not show or toggle them — and the Tier C
 suppression in ai_prowler_mcp.py silently dropped them from any hand-edited
@@ -32,8 +32,8 @@ def test_every_catalogued_estimator_tool_is_registered():
 
 
 def test_catalog_states_the_true_count():
-    assert len(TOOLS) == 110                      # +1 est_inspection_review (2026-11-18)
-    assert len(tc.tools_in_category("estimator")) == 110
+    assert len(TOOLS) == 111                      # +1 est_bom (2026-11-18), +1 est_inspection_review (2026-11-18)
+    assert len(tc.tools_in_category("estimator")) == 111
 
 
 def test_estimator_category_exists_last_and_unlocked():
@@ -80,11 +80,11 @@ def test_estimator_is_not_a_default_off_group():
     assert "estimator" not in tcs.DEFAULT_OFF_GROUPS
 
 
-def test_panel_group_list_includes_estimator_with_110_tools():
+def test_panel_group_list_includes_estimator_with_111_tools():
     # The panel (rag_gui.py MCP Tool Configuration) builds one row per
     # category in CATEGORY_ORDER, keeping only the tools whose modes include
     # the current mode. Replicate that data path (no GUI) and check the
-    # estimator row shows up with all 110 tools in both modes.
+    # estimator row shows up with all 111 tools in both modes.
     for mode in ("personal", "server"):
         cats = []
         for cat in tc.CATEGORY_ORDER:
@@ -94,13 +94,13 @@ def test_panel_group_list_includes_estimator_with_110_tools():
                 cats.append((cat.key, tools))
         est = dict(cats).get("estimator")
         assert est is not None, mode
-        assert len(est) == 110, mode
+        assert len(est) == 111, mode
         assert set(est) == _registered_names(), mode
 
 
 def test_panel_totals_include_estimator_tools():
-    # Personal: 198 catalogued + 110 estimator = 308. Server: 186 + 110 = 296.
+    # Personal: 198 catalogued + 111 estimator = 309. Server: 186 + 111 = 297.
     # (The panel header reads "N of M tools enabled in <mode> mode".)
-    assert len(tc.tools_available_in_mode("personal")) == 308
-    assert len(tc.tools_available_in_mode("server")) == 296
-    assert len(tc.TOOL_CATALOG) == 330
+    assert len(tc.tools_available_in_mode("personal")) == 309
+    assert len(tc.tools_available_in_mode("server")) == 297
+    assert len(tc.TOOL_CATALOG) == 331

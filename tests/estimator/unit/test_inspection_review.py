@@ -1,4 +1,4 @@
-"""The Inspector agent: NEC edition, prompt, parsing, running and applying.
+"""The Inspector agent: editions, prompts, parsing, running and applying.
 
 A fake provider stands in for Claude, Grok and Muse: no real API calls, no
 token cost. The zip lookup is served from the seeded zip_cache: no network.
@@ -13,15 +13,17 @@ import pytest
 from estimator.agents import providers, roles
 from estimator.context import RequestContext, personal_context
 from estimator.errors import InvalidInput, NotFound, PermissionDenied
+from estimator.estimating import inspection_refs
 from estimator.estimating import inspection_review as ir
 from estimator.estimating import quick, service
-from estimator.estimating.zip_lookup import nec_edition
+from estimator.estimating.zip_lookup import code_edition, nec_edition
 
 CTX = personal_context()
 OFFICE = RequestContext(user_id="olga", role="office")
 NOW = "2026-11-18T10:00:00+00:00"
-ON_DATE = date(2026, 11, 18)          # Florida is on the 2020 NEC that day
+ON_DATE = date(2026, 11, 18)          # Florida is on the 2020 NEC / FBC 8th Edition that day
 ELEC = {"outlets": 10, "switches": 4, "lights": 6, "gfci": 0}
+ROOF = {"roof_area_sqft": 2000, "pitch": "5/12", "material": "architectural"}
 ADDR = "1500 Shadow Pines Dr, New Smyrna Beach, FL 32168"
 
 
@@ -73,6 +75,16 @@ def elec(db):
     return quick.answer(db, CTX, e["id"], "electrical", ELEC, e["rev"])
 
 
+@pytest.fixture
+def multi(db):
+    """An electrical + roofing estimate in New Smyrna Beach, zip cached."""
+    db.execute("INSERT INTO zip_cache (zip_code, city, state, state_abbr, looked_up_at)"
+               " VALUES ('32168', 'New Smyrna Beach', 'Florida', 'FL', ?)", (NOW,))
+    e = service.create_estimate(db, CTX, "Two trades", address=ADDR)
+    e = quick.answer(db, CTX, e["id"], "electrical", ELEC, e["rev"])
+    return quick.answer(db, CTX, e["id"], "roofing", ROOF, e["rev"])
+
+
 def _on(db, provider="claude_api", **extra):
     return roles.update_role(db, CTX, "inspector", {"provider": provider, **extra}, confirm=True)
 
@@ -89,6 +101,12 @@ AFCI_ITEM = {"id": "afci", "description": "AFCI protection on bedroom and living
              "code_ref": "210.12", "status": "flag", "note": "bedroom circuits not broken out"}
 SURGE_ITEM = {"id": "surge_protection", "description": "Whole-house surge protection device",
               "code_ref": "230.67", "status": "pass", "note": "surge protector priced"}
+ROOF_ITEM = {"id": "underlayment", "description": "Underlayment per R905.1.1",
+             "code_ref": "R905.1.1", "status": "pass", "note": "self-adhering underlayment priced"}
+
+
+def _section(est, module_id):
+    return next(s for s in est["sections"] if s["module_id"] == module_id)
 
 
 # ------------------------------------------------------------------ the role and the edition
@@ -123,11 +141,12 @@ def test_nec_edition_unknown_state_is_a_fallback():
 # ------------------------------------------------------------------ the prompt and the parsing
 
 def test_prompt_carries_answers_lines_jurisdiction_edition_and_reference(db, elec):
+    est = service.get_estimate(db, CTX, elec["id"])
     system, user = ir.build_prompt(
-        service.get_estimate(db, CTX, elec["id"]),
+        est, _section(est, "electrical"),
         {"zip": "32168", "city": "New Smyrna Beach", "state": "Florida", "state_abbr": "FL",
          "verified": True},
-        nec_edition("FL", ON_DATE))
+        code_edition("FL", "electrical", ON_DATE), "electrical")
     assert "Outlets: 10" in user and "GFCI outlets: 0" in user       # the electrical answers
     assert "Outlets and plates" in user                               # the line items
     assert "New Smyrna Beach, Florida (FL)" in user                   # the jurisdiction
@@ -137,15 +156,34 @@ def test_prompt_carries_answers_lines_jurisdiction_edition_and_reference(db, ele
         assert ref in user, ref
     assert "verify with the AHJ" in user and "verify with the AHJ" in system
     assert "ONLY one JSON object" in system
+    assert "electrical inspection assistant" in system and "National Electrical Code" in system
+
+
+def test_prompt_is_per_trade(db, multi):
+    est = service.get_estimate(db, CTX, multi["id"])
+    system, user = ir.build_prompt(
+        est, _section(est, "roofing"),
+        {"zip": "32168", "city": "New Smyrna Beach", "state": "Florida", "state_abbr": "FL",
+         "verified": True},
+        code_edition("FL", "roofing", ON_DATE), "roofing")
+    assert "Roofing answers:" in user
+    assert "Roof area seen from above (include overhangs): 2000" in user
+    assert "Florida Building Code 8th Edition" in user               # the FBC edition, not an NEC year
+    assert "2020 NEC" not in user
+    for ref in ("R905.1.1", "R905.2.2", "R806.2", "R903.2"):          # the roofing references
+        assert ref in user, ref
+    assert "210.8" not in user                                        # no electrical references leak in
+    assert "roofing inspection assistant" in system and "Florida Building Code" in system
 
 
 def test_reference_requirements_cover_the_residential_list():
-    refs = {r["id"]: r for r in ir.REFERENCE_REQUIREMENTS}
+    refs = {r["id"]: r for r in inspection_refs.REFERENCE_REQUIREMENTS["electrical"]}
     assert len(refs) == 18 and refs["gfci"]["code_ref"] == "210.8"
     assert refs["surge_protection"]["code_ref"] == "230.67"
     assert refs["kitchen_circuits"]["code_ref"] == "210.11(C)(1)"
     assert refs["wire_gauge"]["code_ref"].startswith("240.4")
-    assert all(r["description"] and r["code_ref"] for r in ir.REFERENCE_REQUIREMENTS)
+    assert all(r["description"] and r["code_ref"]
+               for r in inspection_refs.REFERENCE_REQUIREMENTS["electrical"])
 
 
 def test_parse_valid_review():
@@ -176,14 +214,73 @@ def test_run_review_stores_a_review(db, elec, fake):
     _on(db)
     fake.replies["claude_api"] = [_reply(GFCI_ITEM, AFCI_ITEM)]
     out = ir.run_review(db, CTX, elec["id"], on_date=ON_DATE)
-    assert out["zip_code"] == "32168" and out["status"] == "complete"
-    assert out["jurisdiction"]["city"] == "New Smyrna Beach"
-    assert out["jurisdiction"]["verified"] is True
-    assert out["nec_edition"] == "2020"
-    assert [i["id"] for i in out["checklist"]] == ["gfci", "afci"]
-    assert ir.latest_review(db, "default", elec["id"])["id"] == out["id"]
+    assert len(out["reviews"]) == 1
+    review = out["reviews"][0]
+    assert review["module_id"] == "electrical"
+    assert review["zip_code"] == "32168" and review["status"] == "complete"
+    assert review["jurisdiction"]["city"] == "New Smyrna Beach"
+    assert review["jurisdiction"]["verified"] is True
+    assert review["jurisdiction"]["edition"]["code"] == "FBC 8th Edition"
+    assert review["code_edition"] == "2020"
+    assert [i["id"] for i in review["checklist"]] == ["gfci", "afci"]
+    assert ir.latest_review(db, "default", elec["id"])["id"] == review["id"]
     assert len(fake.calls) == 1 and fake.calls[0]["model"] == "claude-sonnet-5-5"
     assert fake.calls[0]["provider"] == "claude_api"
+
+
+def test_run_review_reviews_every_trade_on_a_multi_trade_estimate(db, multi, fake):
+    _on(db)
+    fake.replies["claude_api"] = [_reply(GFCI_ITEM), _reply(ROOF_ITEM)]
+    out = ir.run_review(db, CTX, multi["id"], on_date=ON_DATE)
+    assert [r["module_id"] for r in out["reviews"]] == ["electrical", "roofing"]
+    assert [r["checklist"][0]["id"] for r in out["reviews"]] == ["gfci", "underlayment"]
+    assert out["reviews"][1]["code_edition"] == "8th Edition"
+    assert out["reviews"][1]["jurisdiction"]["edition"]["code"] == "Florida Building Code 8th Edition"
+    rows = db.execute("SELECT module_id FROM inspection_reviews ORDER BY id").fetchall()
+    assert [r["module_id"] for r in rows] == ["electrical", "roofing"]   # one stored row per trade
+    assert len(fake.calls) == 2                                          # one LLM call per trade
+    assert "210.8" in fake.calls[0]["user"] and "R905.2.2" in fake.calls[1]["user"]
+    assert fake.calls[1]["system"] != fake.calls[0]["system"]            # a prompt per trade
+    log = db.execute("SELECT purpose FROM ai_log ORDER BY id").fetchall()
+    assert [r["purpose"] for r in log] == ["Inspection review (Electrical)",
+                                          "Inspection review (Roofing)"]
+
+
+def test_run_review_with_module_id_reviews_one_trade(db, multi, fake):
+    _on(db)
+    fake.replies["claude_api"] = [_reply(ROOF_ITEM)]
+    out = ir.run_review(db, CTX, multi["id"], module_id="roofing", on_date=ON_DATE)
+    assert [r["module_id"] for r in out["reviews"]] == ["roofing"]
+    assert len(fake.calls) == 1
+    assert db.execute("SELECT COUNT(*) FROM inspection_reviews").fetchone()[0] == 1
+
+
+def test_run_review_is_atomic_when_one_trade_fails_to_parse(db, multi, fake):
+    _on(db)
+    fake.replies["claude_api"] = [_reply(GFCI_ITEM), "not json"]
+    with pytest.raises(ir.InspectionReviewError, match="Roofing"):
+        ir.run_review(db, CTX, multi["id"], on_date=ON_DATE)
+    assert db.execute("SELECT COUNT(*) FROM inspection_reviews").fetchone()[0] == 0
+    assert ir.latest_review(db, "default", multi["id"]) is None          # nothing stored from the run
+    row = db.execute("SELECT ok, error FROM ai_log ORDER BY id DESC LIMIT 1").fetchone()
+    assert row["ok"] == 0 and "JSON" in row["error"]
+
+
+def test_latest_review_filters_by_trade_and_latest_reviews_groups(db, multi, fake):
+    _on(db)
+    fake.replies["claude_api"] = [_reply(GFCI_ITEM), _reply(ROOF_ITEM)]
+    ir.run_review(db, CTX, multi["id"], on_date=ON_DATE)
+    assert ir.latest_review(db, "default", multi["id"], "roofing")["checklist"][0]["id"] == "underlayment"
+    assert ir.latest_review(db, "default", multi["id"], "electrical")["checklist"][0]["id"] == "gfci"
+    assert ir.latest_review(db, "default", multi["id"], "plumbing") is None
+    by_trade = ir.latest_reviews(db, "default", multi["id"])
+    assert sorted(by_trade) == ["electrical", "roofing"]
+    assert by_trade["roofing"]["module_id"] == "roofing"
+
+
+def test_reviewable_on_lists_the_trades_with_checklists(db, multi):
+    est = service.get_estimate(db, CTX, multi["id"])
+    assert ir.reviewable_on(est) == ["electrical", "roofing"]
 
 
 def test_run_review_logs_usage_and_the_ai_log(db, elec, fake):
@@ -194,7 +291,7 @@ def test_run_review_logs_usage_and_the_ai_log(db, elec, fake):
     assert [(r["role"], r["task_id"], r["ok"]) for r in usage] == [("inspector", None, 1)]
     log = db.execute("SELECT role, purpose, estimate_id, ok FROM ai_log").fetchall()
     assert [(r["role"], r["purpose"], r["estimate_id"], r["ok"]) for r in log] == [
-        ("inspector", "Inspection review", elec["id"], 1)]
+        ("inspector", "Inspection review (Electrical)", elec["id"], 1)]
 
 
 def test_run_review_uses_the_backup_provider(db, elec, fake):
@@ -202,7 +299,7 @@ def test_run_review_uses_the_backup_provider(db, elec, fake):
     fake.replies["claude_api"] = [RuntimeError("boom")]
     fake.replies["grok_api"] = [_reply(AFCI_ITEM)]
     out = ir.run_review(db, CTX, elec["id"], on_date=ON_DATE)
-    assert out["checklist"][0]["id"] == "afci"
+    assert out["reviews"][0]["checklist"][0]["id"] == "afci"
     assert [c["provider"] for c in fake.calls] == ["claude_api", "grok_api"]
     assert sorted(r["ok"] for r in db.execute("SELECT ok FROM agent_usage")) == [0, 1]
 
@@ -218,8 +315,9 @@ def test_run_review_works_when_the_zip_lookup_is_unreachable(db, fake, monkeypat
 
     monkeypatch.setattr(urllib.request, "urlopen", down)
     out = ir.run_review(db, CTX, e["id"], on_date=ON_DATE)
-    assert out["jurisdiction"]["verified"] is False and out["jurisdiction"]["city"] is None
-    assert out["nec_edition"] is None and out["checklist"][0]["id"] == "afci"
+    review = out["reviews"][0]
+    assert review["jurisdiction"]["verified"] is False and review["jurisdiction"]["city"] is None
+    assert review["code_edition"] is None and review["checklist"][0]["id"] == "afci"
 
 
 def test_run_review_refuses_when_the_role_is_off(db, elec, fake):
@@ -234,13 +332,27 @@ def test_run_review_refuses_when_the_provider_isnt_ready(db, elec, fake):
         ir.run_review(db, CTX, elec["id"])
 
 
-def test_run_review_refuses_a_non_electrical_estimate(db, fake):
-    e = service.create_estimate(db, CTX, "Roof")
-    e = quick.answer(db, CTX, e["id"], "roofing",
-                     {"roof_area_sqft": 2000, "pitch": "5/12", "material": "architectural"}, e["rev"])
+def test_run_review_refuses_a_services_only_estimate(db, fake):
+    e = service.create_estimate(db, CTX, "Windows")
+    e = quick.answer(db, CTX, e["id"], "window_cleaning", {"windows": 10}, e["rev"])
     _on(db)
-    with pytest.raises(InvalidInput, match="no electrical section"):
+    with pytest.raises(InvalidInput, match="no trade with an inspection checklist"):
         ir.run_review(db, CTX, e["id"])
+    assert fake.calls == []                                     # refused before any LLM call
+
+
+def test_run_review_refuses_a_trade_without_a_checklist(db, elec, fake):
+    e = quick.answer(db, CTX, elec["id"], "painting", {"wall_sqft": 1000}, elec["rev"])
+    _on(db)
+    with pytest.raises(InvalidInput, match="no inspection checklist"):
+        ir.run_review(db, CTX, e["id"], module_id="painting")
+    assert fake.calls == []
+
+
+def test_run_review_refuses_a_module_id_not_on_the_estimate(db, elec, fake):
+    _on(db)
+    with pytest.raises(InvalidInput, match="has no Roofing section"):
+        ir.run_review(db, CTX, elec["id"], module_id="roofing")
 
 
 def test_run_review_refuses_without_a_zip(db, fake):
@@ -289,7 +401,7 @@ def test_inspector_setting(db, fake):
 def _reviewed(db, elec, fake):
     _on(db)
     fake.replies["claude_api"] = [_reply(GFCI_ITEM, AFCI_ITEM)]
-    return ir.run_review(db, CTX, elec["id"], on_date=ON_DATE)
+    return ir.run_review(db, CTX, elec["id"], on_date=ON_DATE)["reviews"][0]
 
 
 def test_apply_adds_the_suggested_item_as_a_hand_line(db, elec, fake):
@@ -311,7 +423,7 @@ def test_an_applied_line_survives_a_re_price(db, elec, fake):
 def test_apply_refuses_an_unknown_price_key(db, elec, fake):
     _on(db)
     fake.replies["claude_api"] = [_reply({**GFCI_ITEM, "suggested_action": {"price_key": "el_nope_ea"}})]
-    review = ir.run_review(db, CTX, elec["id"], on_date=ON_DATE)
+    review = ir.run_review(db, CTX, elec["id"], on_date=ON_DATE)["reviews"][0]
     with pytest.raises(NotFound, match="el_nope_ea"):
         ir.apply_item(db, CTX, elec["id"], review["id"], "gfci", elec["rev"])
 
@@ -330,4 +442,14 @@ def test_mcp_tool_runs_a_review(db, elec, fake):
     _on(db)
     fake.replies["claude_api"] = [_reply(AFCI_ITEM)]
     out = json.loads(t.est_inspection_review(elec["id"]))
-    assert out["checklist"][0]["id"] == "afci" and out["zip_code"] == "32168"
+    assert out["reviews"][0]["checklist"][0]["id"] == "afci" and out["reviews"][0]["zip_code"] == "32168"
+
+
+def test_mcp_tool_reviews_one_trade(db, multi, fake):
+    from estimator.mcp_tools import est_tools as t
+
+    _on(db)
+    fake.replies["claude_api"] = [_reply(ROOF_ITEM)]
+    out = json.loads(t.est_inspection_review(multi["id"], module_id="roofing"))
+    assert [r["module_id"] for r in out["reviews"]] == ["roofing"]
+    assert len(fake.calls) == 1

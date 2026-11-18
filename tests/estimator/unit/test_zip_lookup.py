@@ -6,6 +6,7 @@ the network; an unreachable API returns None and the review carries on.
 import json
 import urllib.error
 import urllib.request
+from datetime import date
 
 import pytest
 
@@ -101,3 +102,37 @@ def test_parse_zip_from_address():
     assert zl.parse_zip_from_address(None) is None
     # several 5-digit numbers: the last one wins (the zip is conventionally last)
     assert zl.parse_zip_from_address("Suite 12345, 67890 Main St, Anytown 32168") == "32168"
+
+
+def test_code_edition_florida_switches_on_dec_31_2026():
+    assert zl.code_edition("FL", "roofing", date(2026, 6, 1)) == {
+        "edition": "8th Edition", "code": "Florida Building Code 8th Edition",
+        "note": "Florida Building Code 8th Edition in effect until December 30, 2026."}
+    assert zl.code_edition("FL", "roofing", date(2026, 12, 30))["edition"] == "8th Edition"
+    assert zl.code_edition("FL", "roofing", date(2026, 12, 31)) == {
+        "edition": "9th Edition", "code": "Florida Building Code 9th Edition",
+        "note": "Florida Building Code 9th Edition in effect from December 31, 2026."}
+    assert zl.code_edition("fl", "framing", "2026-11-18")["edition"] == "8th Edition"
+
+
+def test_code_edition_plumbing_and_hvac_get_their_own_codes():
+    assert zl.code_edition("FL", "plumbing", date(2026, 11, 18)) == {
+        "edition": "8th Edition", "code": "Florida Plumbing Code 8th Edition",
+        "note": "Florida Plumbing Code 8th Edition in effect until December 30, 2026."}
+    assert zl.code_edition("FL", "plumbing", date(2027, 1, 1))["code"] == "Florida Plumbing Code 9th Edition"
+    assert zl.code_edition("FL", "hvac", date(2026, 11, 18))["code"] == "Florida Mechanical Code 8th Edition"
+    assert zl.code_edition("FL", "hvac", date(2027, 1, 1))["code"] == "Florida Mechanical Code 9th Edition"
+
+
+def test_code_edition_electrical_delegates_to_the_nec():
+    assert zl.code_edition("FL", "electrical", date(2026, 11, 18)) == zl.nec_edition("FL", date(2026, 11, 18))
+    assert zl.code_edition("FL", "electrical", date(2026, 11, 18))["edition"] == "2020"
+    assert zl.code_edition("FL", "electrical", date(2027, 1, 1))["edition"] == "2023"
+
+
+def test_code_edition_unknown_state_is_a_fallback():
+    for state in ("GA", "TX", "", None):
+        out = zl.code_edition(state, "roofing", date(2026, 11, 18))
+        assert out["edition"] is None and out["code"] is None
+        assert "not in the local table" in out["note"] and "AHJ" in out["note"]
+    assert zl.code_edition("GA", "electrical") == zl.nec_edition("GA")

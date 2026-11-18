@@ -89,10 +89,7 @@ async function renderEstimate(main, id) {
     parts.push(sectionBlock(d, sec, tr, lineLinks, meas, focusLine, msg, book));
   }
   for (const tr of tradesWithoutLines) parts.push(sectionBlock(d, { id: null, module_id: tr.module_id, lines: [], subtotal_cents: 0 }, tr, lineLinks, meas, focusLine, msg, book));
-  // The Inspector's code review, only on electrical estimates - and only when the Inspector agent is on or a
-  // review already exists, so pros who never turn it on see nothing new (2026-11-18, David).
-  const hasElectrical = est.sections.some(s => s.module_id === "electrical");
-  if (hasElectrical && ((d.inspector || {}).enabled || d.inspection_review)) parts.push(inspectionReviewCard(d, msg));
+  // The Inspector's code review lives inside each trade's section now (sectionBlock).
   if (!est.sections.length && !tradesWithoutLines.length) {
     const next = d.can_edit
       ? ["Measure the plans in ", el("a", { href: "#/takeoffs/" + est.id }, "Blueprint Review"), " and Recalculate, or add a line below."]
@@ -211,6 +208,8 @@ function sectionBlock(d, sec, tr, lineLinks, meas, focusLine, msg, book) {
     box.append(el("div", { class: "row" }, edit), form);
   }
   if (sec.id && d.can_options && sec.module_id !== "custom") box.append(optionsBlock(d, sec, msg));
+  const bom = bomBlock(d, sec, msg); if (bom) box.append(bom);
+  if (sec.id && (d.reviewable_trades || []).includes(sec.module_id) && ((d.inspector || {}).enabled || (d.inspection_reviews || []).some(r => r.module_id === sec.module_id))) box.append(inspectionReviewCard(d, sec, msg));
   if (!sec.lines.length) { box.append(el("p", { class: "muted" }, "No lines priced for this trade yet.")); return box; }
   const see = d.see_margins;
   const cols = 4 + (see ? 3 : 0) + (d.can_edit ? 1 : 0);
@@ -386,10 +385,75 @@ function optionsBlock(d, sec, msg) {
   return wrap;
 }
 
-// The Inspector's code review of the electrical trade: run it, read the checklist, add what's missing.
-function inspectionReviewCard(d, msg) {
-  const est = d.estimate, insp = d.inspector || {}, review = d.inspection_review || null;
-  const box = el("div", { class: "card section", id: "inspection-review" },
+// The Bill of Materials for one construction trade: the material lines, aggregated by price book item,
+// with the quantity to order (waste included) and a checklist of what's ordered already. Service trades
+// and "Other lines" have no list, so nothing renders for them.
+function bomBlock(d, sec, msg) {
+  const est = d.estimate, see = d.see_margins;
+  const entry = (d.bom || []).find(b => b.module_id === sec.module_id);
+  const items = (entry && entry.items) || [];
+  if (!items.length) return null;
+  const costOf = item => item.unit_cost_cents === undefined || item.unit_cost_cents === null ? null
+    : Math.round(item.unit_cost_cents * parseFloat(item.order_quantity));
+  const rows = items.map(item => {
+    const box = el("input", { type: "checkbox", checked: item.ordered, "aria-label": "Ordered: " + item.description,
+      "data-bom-ordered": item.item_key });
+    box.addEventListener("change", async () => {
+      const ordered = box.checked;
+      box.disabled = true;
+      try {
+        await api("POST", "/estimates/" + est.id + "/bom/ordered",
+          { section_id: entry.section_id, item_key: item.item_key, ordered });
+      } catch (e) {
+        box.checked = !ordered;
+        if (e.status !== 401) msg.replaceChildren(errorBox(e));
+      } finally { box.disabled = false; }
+    });
+    const cost = costOf(item);
+    return el("tr", { "data-bom-item": item.item_key },
+      el("td", {}, item.description),
+      el("td", {}, num2(item.order_quantity)),
+      el("td", {}, item.unit),
+      el("td", {}, item.supplier || "\u2014"),
+      see ? el("td", { class: "money" }, cost === null ? "\u2014" : money(cost)) : null,
+      el("td", {}, box));
+  });
+  const csvCell = v => { const s = String(v === null || v === undefined ? "" : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const csv = [["Item", "Qty to order", "Unit", "Supplier", "Unit cost", "Cost"]]
+    .concat(items.map(item => {
+      const cost = costOf(item);
+      return [item.description, item.order_quantity, item.unit, item.supplier || "",
+        item.unit_cost_cents === undefined || item.unit_cost_cents === null ? "" : (item.unit_cost_cents / 100).toFixed(2),
+        cost === null ? "" : (cost / 100).toFixed(2)];
+    }))
+    .map(r => r.map(csvCell).join(",")).join("\r\n");
+  const copy = el("button", { class: "button", type: "button", id: "bom-copy-" + sec.module_id }, "Copy list");
+  copy.addEventListener("click", async () => {
+    const text = items.map(item => item.order_quantity + " " + item.unit + " \u2014 " + item.description).join("\n");
+    try { await navigator.clipboard.writeText(text); toast("Bill of materials copied"); }
+    catch (e) { msg.replaceChildren(errorBox(e)); }
+  });
+  const download = el("button", { class: "button", type: "button", id: "bom-csv-" + sec.module_id }, "Download CSV");
+  download.addEventListener("click", () => {
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = el("a", { href: url, download: "bom-" + est.id + "-" + sec.module_id + ".csv" });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  return el("details", { class: "bom", id: "bom-" + sec.module_id },
+    el("summary", {}, "Bill of Materials (" + items.length + (items.length === 1 ? " item)" : " items)")),
+    el("div", { class: "row" }, copy, download),
+    el("table", { class: "list", id: "bom-table-" + sec.module_id },
+      el("thead", {}, el("tr", {}, el("th", {}, "Item"), el("th", {}, "Qty to order"), el("th", {}, "Unit"),
+        el("th", {}, "Supplier"), see ? el("th", {}, "Cost") : null, el("th", {}, "Ordered"))),
+      el("tbody", {}, rows)));
+}
+
+// The Inspector's code review of one trade: run it, read the checklist, add what's missing.
+function inspectionReviewCard(d, sec, msg) {
+  const est = d.estimate, insp = d.inspector || {},
+    review = (d.inspection_reviews || []).find(r => r.module_id === sec.module_id) || null;
+  const box = el("div", { class: "card section", id: "inspection-review-" + sec.module_id },
     el("h3", {}, "🔍 Inspection review"));
   const zips = (est.address || "").match(/\b\d{5}\b/g) || [];
   const zipFromAddress = zips.length ? zips[zips.length - 1] : "";
@@ -397,21 +461,21 @@ function inspectionReviewCard(d, msg) {
   if (review) {
     const j = review.jurisdiction || {};
     const place = j.city ? j.city + ", " + j.state_abbr : "Zip " + review.zip_code;
-    const nec = review.nec_edition ? review.nec_edition + " NEC" : "NEC edition not in the local table";
-    box.append(el("p", { class: "muted", id: "inspection-jurisdiction" },
-      place + " — " + nec + (j.verified === false ? " (unverified — the zip lookup was unreachable)" : ""),
+    const edition = (j.edition || {}).code || "Code edition not in the local table";
+    box.append(el("p", { class: "muted", id: "inspection-jurisdiction-" + sec.module_id },
+      place + " — " + edition + (j.verified === false ? " (unverified — the zip lookup was unreachable)" : ""),
       " · reviewed " + when(review.created_at)));
   }
   const runRow = el("div", { class: "row" });
   let zipInput = null;
   if (!zipFromAddress) {
-    zipInput = el("input", { id: "inspection-zip", maxlength: 5, inputmode: "numeric", value: zip || "",
+    zipInput = el("input", { id: "inspection-zip-" + sec.module_id, maxlength: 5, inputmode: "numeric", value: zip || "",
       placeholder: "Zip code", "aria-label": "Zip code" });
     runRow.append(el("label", {}, "Zip code", zipInput));
   } else if (!review) {
     runRow.append(el("span", { class: "muted" }, "Zip " + zipFromAddress + " (from the address)"));
   }
-  const run = el("button", { class: "button", type: "button", id: "inspection-run" },
+  const run = el("button", { class: "button", type: "button", id: "inspection-run-" + sec.module_id },
     review ? "Run the review again" : "Run inspection review");
   runRow.append(run);
   let whyDisabled = "";
@@ -425,7 +489,7 @@ function inspectionReviewCard(d, msg) {
     if (!z) { if (zipInput) zipInput.focus(); return; }
     run.disabled = true;
     try {
-      await api("POST", "/estimates/" + est.id + "/inspection-review", { zip_code: z });
+      await api("POST", "/estimates/" + est.id + "/inspection-review", { zip_code: z, module_id: sec.module_id });
       toast("Inspection review done");
       route();
     } catch (e) { if (e.status !== 401) msg.replaceChildren(errorBox(e)); run.disabled = false; }
@@ -457,7 +521,7 @@ function inspectionReviewCard(d, msg) {
         el("td", {}, item.note || ""),
         el("td", {}, add));
     });
-    box.append(el("table", { class: "list", id: "inspection-checklist" },
+    box.append(el("table", { class: "list", id: "inspection-checklist-" + sec.module_id },
       el("thead", {}, el("tr", {}, el("th", {}, ""), el("th", {}, "Check"), el("th", {}, "Code"), el("th", {}, "Note"), el("th", {}, ""))),
       el("tbody", {}, rows)));
   }

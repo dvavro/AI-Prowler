@@ -90,7 +90,7 @@ def test_v27_agent_roles_muse_provider(tmp_path):  # agent roles accept Muse (v2
     mig.migrate(conn, target=26)
     conn.execute("INSERT INTO agent_roles (company_id, role, provider, fallback_provider, updated_at)"
                  " VALUES (?, ?, ?, ?, ?)", ("default", "reviewer", "grok_api", "claude_api", NOW))
-    assert mig.migrate(conn) == [27, 28]  # v28 (inspection reviews) applies too
+    assert mig.migrate(conn) == [27, 28, 29]  # v28 (inspection reviews) and v29 (BOM + per-trade reviews) apply too
     row = conn.execute("SELECT provider, fallback_provider FROM agent_roles WHERE role=?", ("reviewer",)).fetchone()
     assert tuple(row) == ("grok_api", "claude_api")       # the rebuild keeps the old rows
     conn.execute("INSERT INTO agent_roles (company_id, role, provider, fallback_provider, updated_at)"
@@ -119,6 +119,26 @@ def test_v28_inspection_reviews_and_zip_cache(db):  # inspection reviews + zip c
     with pytest.raises(sqlite3.IntegrityError):          # one row per zip
         db.execute("INSERT INTO zip_cache (zip_code, city, state, state_abbr, looked_up_at)"
                    " VALUES ('32168', 'X', 'Florida', 'FL', ?)", (NOW,))
+
+
+def test_v29_bom_ordered_and_inspection_module_id(db):  # BOM ordered flags + per-trade reviews (v29)
+    cols = {r[1] for r in db.execute("PRAGMA table_info(bom_ordered)")}
+    assert {"company_id", "estimate_id", "section_id", "item_key", "ordered_by", "ordered_at"} <= cols
+    cols = {r[1] for r in db.execute("PRAGMA table_info(inspection_reviews)")}
+    assert "module_id" in cols
+    est = _estimate(db)
+    db.execute("INSERT INTO bom_ordered (company_id, estimate_id, section_id, item_key, ordered_at)"
+               " VALUES ('default', ?, 1, 'cc_concrete_cy', ?)", (est, NOW))
+    with pytest.raises(sqlite3.IntegrityError):          # one flag per section+item
+        db.execute("INSERT INTO bom_ordered (company_id, estimate_id, section_id, item_key, ordered_at)"
+                   " VALUES ('default', ?, 1, 'cc_concrete_cy', ?)", (est, NOW))
+    with pytest.raises(sqlite3.IntegrityError):          # a flag needs a real estimate
+        db.execute("INSERT INTO bom_ordered (company_id, estimate_id, section_id, item_key, ordered_at)"
+                   " VALUES ('default', 999, 1, 'x', ?)", (NOW,))
+    db.execute("INSERT INTO inspection_reviews (company_id, estimate_id, zip_code, checklist_json, created_at)"
+               " VALUES ('default', ?, '32168', '[]', ?)", (est, NOW))
+    row = db.execute("SELECT module_id FROM inspection_reviews WHERE estimate_id = ?", (est,)).fetchone()
+    assert row[0] == "electrical"                        # the default: v28 rows were electrical
 
 
 def test_every_business_table_has_company_or_parent(db):
@@ -189,7 +209,7 @@ def test_v1_database_upgrades_to_v2(tmp_path):  # S3-B02
     conn = connect(tmp_path / "old.db")
     mig.migrate(conn, target=1)
     conn.execute("INSERT INTO estimates (company_id, title, created_at, updated_at) VALUES ('default', 'old', 'now', 'now')")
-    assert mig.migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]   # 28: inspection reviews and zip cache (2026-11-18), 27: Muse provider for agent roles (2026-11-17), 26: change orders (2026-11-16), 25: projects received from PCs (2026-11-13), 24: auto calibration result on viewports (2026-11-13), 23: project lane for Director jobs (2026-11-12), 14-15: symbols (Coder 2 Sprints 10-11), 16: revisions and the processing-PC queue, 17: design firm, assembly uses, line overrides, 18: help progress (guided tours, Coder 2 Sprint 18), 19: price book rows carry their trade, 20: concrete agent auto-runs, 21: per-trade sheet activation, 22: AI log (every LLM call, what was sent and what came back)
+    assert mig.migrate(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]   # 29: BOM ordered flags and inspection review per trade (2026-11-18), 28: inspection reviews and zip cache (2026-11-18), 27: Muse provider for agent roles (2026-11-17), 26: change orders (2026-11-16), 25: projects received from PCs (2026-11-13), 24: auto calibration result on viewports (2026-11-13), 23: project lane for Director jobs (2026-11-12), 14-15: symbols (Coder 2 Sprints 10-11), 16: revisions and the processing-PC queue, 17: design firm, assembly uses, line overrides, 18: help progress (guided tours, Coder 2 Sprint 18), 19: price book rows carry their trade, 20: concrete agent auto-runs, 21: per-trade sheet activation, 22: AI log (every LLM call, what was sent and what came back)
     assert conn.execute("SELECT title FROM estimates").fetchone()[0] == "old"
     conn.close()
 

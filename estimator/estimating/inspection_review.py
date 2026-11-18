@@ -1,21 +1,24 @@
-"""The Inspector agent: an AI-powered inspection audit and checklist for electrical estimates.
+"""The Inspector agent: an AI-powered inspection audit and checklist for construction trades.
 
 (2026-11-18, David): before the final quote is approved, the estimate can be
-checked against the residential NEC requirements for the job's zip code. The
-Inspector is an agent role (agents/roles.py) - it starts Off, like every
-role, and does nothing until the owner picks a provider, so pros who don't
-need it see nothing new. Running a review is interactive (no queue, no
-detached runner): one LLM call through the providers layer, within the
-budget, logged to the AI Log.
+checked against the code requirements for the job's zip code, one trade at a
+time. The Inspector is an agent role (agents/roles.py) - it starts Off, like
+every role, and does nothing until the owner picks a provider, so pros who don't
+need it see nothing new. Running a review is interactive (no queue, no detached
+runner): one LLM call per trade through the providers layer, within the budget,
+logged to the AI Log.
 
-The AI matches, it does not invent: the prompt carries the estimate's
-electrical answers and line items, the jurisdiction (city/state) and the NEC
-edition, and a reference list of residential NEC requirements
-(REFERENCE_REQUIREMENTS, below) that the APP provides. The AI checks the
-estimate against that list and answers with STRICT JSON. A suggested_action
-may name a price-book item to add; the person adds it with one click
-(apply_item), as a hand-entered line in "Other lines", so a later re-price of
-the electrical trade never deletes it.
+The AI matches, it does not invent: the prompt carries the estimate's answers
+and line items for that trade, the jurisdiction (city/state) and the code
+edition, and a reference list of requirements (inspection_refs.py) that the APP
+provides. The AI checks the estimate against that list and answers with STRICT
+JSON. A suggested_action may name a price-book item to add; the person adds it
+with one click (apply_item), as a hand-entered line in "Other lines", so a later
+re-price of the trade never deletes it.
+
+A run reviews one trade (module_id given) or every construction trade on the
+estimate with a reference list. A run is atomic: a parse failure on any trade
+aborts the whole run and stores nothing from it.
 """
 from __future__ import annotations
 
@@ -28,71 +31,50 @@ from estimator.agents import ai_log, providers, roles
 from estimator.context import RequestContext
 from estimator.errors import EstimatorError, InvalidInput, NotFound
 from estimator.estimating import service
-from estimator.estimating.zip_lookup import lookup_zip, nec_edition, parse_zip_from_address
+from estimator.estimating.inspection_refs import (
+    NO_CHECKLIST, REFERENCE_REQUIREMENTS, TRADE_CODE, has_references)
+from estimator.estimating.zip_lookup import code_edition, lookup_zip, parse_zip_from_address
 from estimator.pricing.price_book import get_price
 
 ROLE = "inspector"              # the agent role that turns this on (roles.py)
-MODULE_ID = "electrical"        # the only trade this reviews, for now
 STATUSES = ("pass", "flag", "missing")
-
-# Residential NEC requirements (2020), verified facts the app provides - the AI
-# checks the estimate against this list, it does not make up code sections.
-# The wire-gauge limits are 240.4(D) (14/12/10 AWG) with 8 AWG from Table 310.16.
-REFERENCE_REQUIREMENTS = (
-    {"id": "afci", "description": "AFCI protection on bedroom and living-area circuits",
-     "code_ref": "210.12"},
-    {"id": "gfci", "description": "GFCI protection in bathrooms, kitchens, garage, laundry, outdoors,"
-                                 " basement/crawl — all 125–250V receptacles in those areas",
-     "code_ref": "210.8"},
-    {"id": "kitchen_circuits", "description": "Two 20A small-appliance circuits in the kitchen",
-     "code_ref": "210.11(C)(1)"},
-    {"id": "laundry_circuit", "description": "Dedicated 20A laundry circuit",
-     "code_ref": "210.11(C)(2)"},
-    {"id": "bathroom_circuit", "description": "Dedicated 20A bathroom circuit",
-     "code_ref": "210.11(C)(3)"},
-    {"id": "receptacle_spacing", "description": "A receptacle within 6 ft of any point along a wall",
-     "code_ref": "210.52(A)"},
-    {"id": "tamper_resistant", "description": "Tamper-resistant receptacles",
-     "code_ref": "406.12"},
-    {"id": "tub_clearance", "description": "No receptacle within 3 ft horizontal / 8 ft vertical of the tub rim",
-     "code_ref": "406.9(C)"},
-    {"id": "switched_light", "description": "Switch-controlled light in every habitable room, hallway and garage",
-     "code_ref": "210.70(A)"},
-    {"id": "outdoor_receptacles", "description": "Outdoor receptacle at the front and the back",
-     "code_ref": "210.52(E)"},
-    {"id": "service_receptacle", "description": "A receptacle within 25 ft of equipment needing service",
-     "code_ref": "210.63"},
-    {"id": "surge_protection", "description": "Whole-house surge protection device",
-     "code_ref": "230.67"},
-    {"id": "panel_clearance", "description": "Panel working clearance 30\"W x 36\"D x 6.5'H",
-     "code_ref": "110.26"},
-    {"id": "panel_directory", "description": "Panel directory labeled",
-     "code_ref": "408.4"},
-    {"id": "subpanel_grounds", "description": "Neutral and ground separated in subpanels",
-     "code_ref": "250.24(A)(5)"},
-    {"id": "grounding_electrode", "description": "Grounding electrode system",
-     "code_ref": "250.50"},
-    {"id": "wire_gauge", "description": "Wire gauge matches the breaker"
-                                        " (14 AWG/15A, 12 AWG/20A, 10 AWG/30A, 8 AWG/40A)",
-     "code_ref": "240.4(D), Table 310.16"},
-    {"id": "smoke_co", "description": "Hardwired interconnected smoke/CO detectors",
-     "code_ref": "NFPA 72"},
-)
 
 AHJ_NOTE = ("Local amendments vary by jurisdiction — flag anything that depends on a local amendment as "
             "'verify with the AHJ' rather than asserting it.")
 
-SYSTEM_PROMPT = (
-    "You are an electrical inspection assistant reviewing a residential electrical estimate against the "
-    "National Electrical Code (NEC). Check the estimate ONLY against the reference list of requirements in "
-    "the request — do not add other code sections and do not invent requirements. "
-    "For each requirement say whether the estimate passes it, flags a concern, or is missing it. "
-    "Reply with ONLY one JSON object, nothing else: "
-    '{"checklist": [{"id": "gfci", "description": "...", "code_ref": "210.8", "status": "pass|flag|missing", '
-    '"note": "...", "suggested_action": {"price_key": "...", "quantity": 1, "unit": "ea", '
-    '"description": "..."}}]}. '
-    "A suggested_action names a price-book item to add to the estimate; include one only when something is "
-    "missing or flagged and a standard item fixes it. " + AHJ_NOTE)
+
+def _trade_name(module_id: str) -> str:
+    """The trade's display name from the registry ('Windows and Doors'), or plain words."""
+    try:
+        from estimator.modules import get_registry
+        return get_registry().get(module_id).name
+    except Exception:  # noqa: BLE001 - without the registry the id still reads
+        return module_id.replace("_", " ")
+
+
+def _system_prompt(module_id: str) -> str:
+    """The system prompt for one trade: its name, its code, and the STRICT JSON shape."""
+    name = _trade_name(module_id)
+    lower = name if name.isupper() else name.lower()
+    article = "an" if lower[:1] in "aeiou" or name == "HVAC" else "a"
+    first = REFERENCE_REQUIREMENTS[module_id][0]
+    return (
+        f"You are {article} {lower} inspection assistant reviewing a residential {lower} estimate against "
+        f"{TRADE_CODE.get(module_id, 'the Florida Building Code')}. "
+        "Check the estimate ONLY against the reference list of requirements in "
+        "the request — do not add other code sections and do not invent requirements. "
+        "For each requirement say whether the estimate passes it, flags a concern, or is missing it. "
+        "Reply with ONLY one JSON object, nothing else: "
+        f'{{"checklist": [{{"id": "{first["id"]}", "description": "...", "code_ref": "{first["code_ref"]}", '
+        '"status": "pass|flag|missing", '
+        '"note": "...", "suggested_action": {"price_key": "...", "quantity": 1, "unit": "ea", '
+        '"description": "..."}}]}. '
+        "A suggested_action names a price-book item to add to the estimate; include one only when something is "
+        "missing or flagged and a standard item fixes it. " + AHJ_NOTE)
+
+
+# The electrical prompt, kept for callers that still import it.
+SYSTEM_PROMPT = _system_prompt("electrical")
 
 
 class InspectionReviewError(EstimatorError):
@@ -121,12 +103,12 @@ def inspector_setting(conn, company_id: str) -> dict:
 
 # ------------------------------------------------------------------ the prompt
 
-def _answer_lines(answers: dict) -> str:
-    """The electrical answers as 'Label: value' lines (choice values shown as their labels)."""
+def _answer_lines(answers: dict, module_id: str) -> str:
+    """The trade's answers as 'Label: value' lines (choice values shown as their labels)."""
     questions = {}
     try:
         from estimator.modules import get_registry
-        questions = {q.id: q for q in get_registry().get(MODULE_ID).questions}
+        questions = {q.id: q for q in get_registry().get(module_id).questions}
     except Exception:  # noqa: BLE001 - without the registry the raw ids still read
         pass
     out = []
@@ -144,39 +126,47 @@ def _answer_lines(answers: dict) -> str:
     return "\n".join(out) or "- (no answers recorded)"
 
 
-def build_prompt(est: dict, jurisdiction: dict, nec: dict) -> tuple[str, str]:
-    """(system, user) for one review: the estimate's answers and lines, the jurisdiction and NEC
-    edition, and the reference requirements the AI checks against."""
-    elec = next(s for s in est["sections"] if s["module_id"] == MODULE_ID)
-    lines = ["- %s %s — %s" % (ln["quantity"], ln["unit"], ln["description"]) for ln in elec["lines"]]
+def _edition_text(edition: dict, module_id: str) -> str:
+    """The edition line for the prompt: the NEC year for electrical, the code edition otherwise."""
+    if not edition["edition"]:
+        return "unknown — " + edition["note"]
+    if module_id == "electrical":
+        return f"{edition['edition']} NEC under {edition['code']}"
+    return edition["code"]
+
+
+def build_prompt(est: dict, section: dict, jurisdiction: dict, edition: dict,
+                 module_id: str) -> tuple[str, str]:
+    """(system, user) for one trade's review: that trade's answers and lines, the jurisdiction
+    and code edition, and the reference requirements the AI checks against."""
+    name = _trade_name(module_id)
+    lower = name if name.isupper() else name.lower()
+    lines = ["- %s %s — %s" % (ln["quantity"], ln["unit"], ln["description"]) for ln in section["lines"]]
     if jurisdiction.get("city"):
         place = f"{jurisdiction['city']}, {jurisdiction['state']} ({jurisdiction['state_abbr']})"
     else:
         place = (f"unknown — the zip lookup was unreachable, so the city and state are unverified "
                  f"(zip {jurisdiction['zip']})")
-    if nec["edition"]:
-        edition = f"{nec['edition']} NEC under {nec['code']}"
-    else:
-        edition = "unknown — " + nec["note"]
-    refs = "\n".join(f"- [{r['id']}] {r['description']} (NEC {r['code_ref']})"
-                     for r in REFERENCE_REQUIREMENTS)
+    refs = "\n".join(f"- [{r['id']}] {r['description']} ({r['code_ref']})"
+                     + (f" — {r['note']}" if r.get("note") else "")
+                     for r in REFERENCE_REQUIREMENTS[module_id])
     user = (
         f"Estimate: {est['title']} (#{est['id']}) — {est.get('address') or 'no address'}\n"
         f"Job zip code: {jurisdiction['zip']}\n"
         f"Jurisdiction: {place}\n"
-        f"NEC edition: {edition}\n"
+        f"Code edition: {_edition_text(edition, module_id)}\n"
         "(The edition that governs a job is set by the permit application date; this review uses the "
         "current date to pick the edition.)\n"
-        "\nElectrical answers:\n" + _answer_lines(elec.get("answers") or {}) +
+        f"\n{name} answers:\n" + _answer_lines(section.get("answers") or {}, module_id) +
         "\n\nLine items:\n" + ("\n".join(lines) or "- (no lines priced)") +
-        "\n\nReference — residential NEC requirements to check the estimate against "
+        f"\n\nReference — residential {lower} requirements to check the estimate against "
         "(do not add other code sections):\n" + refs +
         "\n\n" + AHJ_NOTE +
         "\n\nReply with ONLY one JSON object: {\"checklist\": [{\"id\", \"description\", \"code_ref\", "
         "\"status\": \"pass|flag|missing\", \"note\", \"suggested_action\"}]}. "
         "A suggested_action is {\"price_key\", \"quantity\", \"unit\", \"description\"}; include one only "
         "when a standard price-book item fixes a missing or flagged item.")
-    return SYSTEM_PROMPT, user
+    return _system_prompt(module_id), user
 
 
 # ------------------------------------------------------------------ the answer
@@ -229,7 +219,8 @@ def parse_review_response(text: str) -> list[dict]:
 
 # ------------------------------------------------------------------ the call
 
-def _call(conn, ctx: RequestContext, cfg: dict, est: dict, system: str, user: str) -> tuple[str, str, str, int]:
+def _call(conn, ctx: RequestContext, cfg: dict, est: dict, system: str, user: str,
+          purpose: str = "Inspection review") -> tuple[str, str, str, int]:
     """One text call on the main provider, then the backup. (text, provider, model, AI Log id).
 
     Follows llm_takeoff._call: the budget is checked first; every attempt's
@@ -254,14 +245,14 @@ def _call(conn, ctx: RequestContext, cfg: dict, est: dict, system: str, user: st
         except providers.ProviderError as exc:
             roles.record_usage(conn, ctx, task_id=None, role=ROLE, provider=which, model=model,
                                usage=None, ok=False, error=str(exc))
-            ai_log.record(conn, ctx, provider=which, model=model, role=ROLE, purpose="Inspection review",
+            ai_log.record(conn, ctx, provider=which, model=model, role=ROLE, purpose=purpose,
                           system_prompt=system, user_prompt=user, estimate_id=est["id"],
                           duration_ms=int((time.monotonic() - started) * 1000), ok=False, error=str(exc))
             errors.append(f"{which}: {exc}")
             continue
         roles.record_usage(conn, ctx, task_id=None, role=ROLE, provider=which, model=model,
                            usage=usage, ok=True)
-        log_id = ai_log.record(conn, ctx, provider=which, model=model, role=ROLE, purpose="Inspection review",
+        log_id = ai_log.record(conn, ctx, provider=which, model=model, role=ROLE, purpose=purpose,
                                system_prompt=system, user_prompt=user, estimate_id=est["id"],
                                response_text=text, usage=usage,
                                duration_ms=int((time.monotonic() - started) * 1000))
@@ -272,35 +263,90 @@ def _call(conn, ctx: RequestContext, cfg: dict, est: dict, system: str, user: st
 # ------------------------------------------------------------------ running and reading reviews
 
 def _shape(row) -> dict:
-    return {"id": row["id"], "estimate_id": row["estimate_id"], "zip_code": row["zip_code"],
+    return {"id": row["id"], "estimate_id": row["estimate_id"], "module_id": row["module_id"],
+            "zip_code": row["zip_code"],
             "jurisdiction": json.loads(row["jurisdiction_json"] or "{}"),
-            "nec_edition": row["nec_edition"],
+            "code_edition": row["nec_edition"],
             "checklist": json.loads(row["checklist_json"]),
             "status": row["status"], "created_by": row["created_by"], "created_at": row["created_at"]}
 
 
-def latest_review(conn, company_id: str, estimate_id: int) -> dict | None:
-    """The estimate's latest inspection review, or None."""
-    row = conn.execute("SELECT * FROM inspection_reviews WHERE company_id = ? AND estimate_id = ?"
-                       " ORDER BY id DESC LIMIT 1", (company_id, estimate_id)).fetchone()
+def latest_review(conn, company_id: str, estimate_id: int, module_id: str | None = None) -> dict | None:
+    """The estimate's latest inspection review, or the latest for one trade, or None."""
+    if module_id is None:
+        row = conn.execute("SELECT * FROM inspection_reviews WHERE company_id = ? AND estimate_id = ?"
+                           " ORDER BY id DESC LIMIT 1", (company_id, estimate_id)).fetchone()
+    else:
+        row = conn.execute("SELECT * FROM inspection_reviews WHERE company_id = ? AND estimate_id = ?"
+                           " AND module_id = ? ORDER BY id DESC LIMIT 1",
+                           (company_id, estimate_id, module_id)).fetchone()
     return _shape(row) if row else None
 
 
-def run_review(conn, ctx: RequestContext, estimate_id: int, zip_code: str | None = None, *,
-               on_date=None) -> dict:
-    """Run one inspection review on an electrical estimate and store it. Returns the review.
+def latest_reviews(conn, company_id: str, estimate_id: int) -> dict[str, dict]:
+    """The estimate's latest review per trade, {module_id: review}."""
+    rows = conn.execute("SELECT * FROM inspection_reviews WHERE company_id = ? AND estimate_id = ?"
+                        " ORDER BY id DESC", (company_id, estimate_id)).fetchall()
+    out = {}
+    for row in rows:
+        out.setdefault(row["module_id"], _shape(row))
+    return out
 
-    The zip comes from the caller or the estimate's address; the jurisdiction
-    comes from the zip lookup (unverified when the lookup is unreachable, and
-    the review still runs). Refuses when the Inspector role is off or has no
-    ready provider, when there's no zip, and when the estimate has no
-    electrical section.
+
+def reviewable_on(est: dict) -> list[str]:
+    """The module_ids on this estimate with a reference list, in estimate order."""
+    seen, out = set(), []
+    for s in est["sections"]:
+        if s["module_id"] not in seen and has_references(s["module_id"]):
+            seen.add(s["module_id"])
+            out.append(s["module_id"])
+    return out
+
+
+def _no_checklist_message(module_id: str) -> str:
+    """Why one trade can't be reviewed: its own reason, or that services aren't reviewed."""
+    name = _trade_name(module_id)
+    if module_id in NO_CHECKLIST:
+        return f"the {name} trade has no inspection checklist — {NO_CHECKLIST[module_id]}"
+    return (f"the {name} trade has no inspection checklist —"
+            " the Inspector reviews construction trades only")
+
+
+def run_review(conn, ctx: RequestContext, estimate_id: int, zip_code: str | None = None,
+               module_id: str | None = None, *, on_date=None) -> dict:
+    """Run the inspection review and store it. Returns {"reviews": [one shaped review per trade]}.
+
+    With module_id, only that trade is reviewed (it must be on the estimate and
+    have a reference list); without it, every construction trade on the estimate
+    with a reference list is reviewed, one LLM call per trade. The zip comes from
+    the caller or the estimate's address; the jurisdiction comes from the zip
+    lookup (unverified when the lookup is unreachable, and the review still
+    runs). Refuses when the Inspector role is off or has no ready provider, when
+    there's no zip, and when no trade on the estimate has a checklist. A parse
+    failure on any trade aborts the whole run and stores nothing from it.
     """
     service._require_edit_role(ctx)  # EDIT_ROLES: it costs money and stores a review
     est = service.get_estimate(conn, ctx, estimate_id)
-    if not any(s["module_id"] == MODULE_ID for s in est["sections"]):
-        raise InvalidInput(f"estimate {estimate_id} has no electrical section;"
-                           " the inspection review checks electrical estimates", estimate_id=estimate_id)
+    if module_id is not None:
+        module_id = str(module_id).strip()
+        section = next((s for s in est["sections"] if s["module_id"] == module_id), None)
+        if section is None:
+            raise InvalidInput(f"estimate {estimate_id} has no {_trade_name(module_id)} section",
+                               estimate_id=estimate_id)
+        if not has_references(module_id):
+            raise InvalidInput(_no_checklist_message(module_id), estimate_id=estimate_id)
+        targets = [(module_id, section)]
+    else:
+        targets, seen = [], set()
+        for s in est["sections"]:
+            if s["module_id"] in seen or not has_references(s["module_id"]):
+                continue
+            seen.add(s["module_id"])
+            targets.append((s["module_id"], s))
+    if not targets:
+        raise InvalidInput(f"estimate {estimate_id} has no trade with an inspection checklist —"
+                           " the Inspector reviews construction trades only",
+                           estimate_id=estimate_id)
     zip_code = (zip_code or "").strip() or parse_zip_from_address(est.get("address") or "")
     if not zip_code:
         raise InvalidInput("no zip code: the estimate's address has none — give a zip code to run the review",
@@ -317,25 +363,33 @@ def run_review(conn, ctx: RequestContext, estimate_id: int, zip_code: str | None
     jurisdiction = dict(place) if place else {"zip": zip_code, "city": None, "state": None,
                                               "state_abbr": None}
     jurisdiction["verified"] = place is not None
-    nec = nec_edition(jurisdiction["state_abbr"], on_date)
-    jurisdiction["nec"] = nec
-    system, user = build_prompt(est, jurisdiction, nec)
-    text, _provider, _model, log_id = _call(conn, ctx, cfg, est, system, user)
-    try:
-        checklist = parse_review_response(text)
-    except InspectionReviewError as exc:
-        ai_log.set_error(conn, ctx.company_id, log_id, str(exc))
-        raise
-    ai_log.set_parsed(conn, ctx.company_id, log_id, {"checklist": checklist})
+    done = []
+    for mid, section in targets:
+        edition = code_edition(jurisdiction["state_abbr"], mid, on_date)
+        system, user = build_prompt(est, section, jurisdiction, edition, mid)
+        text, _provider, _model, log_id = _call(conn, ctx, cfg, est, system, user,
+                                                purpose=f"Inspection review ({_trade_name(mid)})")
+        try:
+            checklist = parse_review_response(text)
+        except InspectionReviewError as exc:
+            ai_log.set_error(conn, ctx.company_id, log_id, str(exc))
+            raise InspectionReviewError(
+                f"the {_trade_name(mid)} review couldn't be used: {exc}") from None
+        ai_log.set_parsed(conn, ctx.company_id, log_id, {"checklist": checklist})
+        stored_jurisdiction = dict(jurisdiction)
+        stored_jurisdiction["edition"] = edition
+        done.append((mid, stored_jurisdiction, edition, checklist))
     with service.transaction(conn):
-        cur = conn.execute("INSERT INTO inspection_reviews (company_id, estimate_id, zip_code, jurisdiction_json,"
-                           " nec_edition, checklist_json, status, created_by, created_at)"
-                           " VALUES (?,?,?,?,?,?,?,?,?)",
-                           (ctx.company_id, estimate_id, zip_code, json.dumps(jurisdiction),
-                            nec["edition"], json.dumps(checklist), "complete", ctx.actor, _now()))
-        rid = int(cur.lastrowid)
-    row = conn.execute("SELECT * FROM inspection_reviews WHERE id = ?", (rid,)).fetchone()
-    return _shape(row)
+        ids = []
+        for mid, jur, edition, checklist in done:
+            cur = conn.execute("INSERT INTO inspection_reviews (company_id, estimate_id, module_id, zip_code,"
+                               " jurisdiction_json, nec_edition, checklist_json, status, created_by, created_at)"
+                               " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                               (ctx.company_id, estimate_id, mid, zip_code, json.dumps(jur),
+                                edition["edition"], json.dumps(checklist), "complete", ctx.actor, _now()))
+            ids.append(int(cur.lastrowid))
+    rows = [conn.execute("SELECT * FROM inspection_reviews WHERE id = ?", (rid,)).fetchone() for rid in ids]
+    return {"reviews": [_shape(row) for row in rows]}
 
 
 # ------------------------------------------------------------------ applying a suggested item
@@ -344,8 +398,8 @@ def apply_item(conn, ctx: RequestContext, estimate_id: int, review_id: int, item
     """Add one checklist item's suggested price-book item as a hand-entered line.
 
     The line goes in the default 'custom' section ("Other lines"), so a later
-    re-price of the electrical trade never deletes it. The estimate must still
-    be editable (add_line_item checks that, the role and the revision).
+    re-price of the trade never deletes it. The estimate must still be editable
+    (add_line_item checks that, the role and the revision).
     """
     row = conn.execute("SELECT * FROM inspection_reviews WHERE id = ? AND company_id = ? AND estimate_id = ?",
                        (review_id, ctx.company_id, estimate_id)).fetchone()

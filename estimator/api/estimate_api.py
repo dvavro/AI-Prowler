@@ -17,9 +17,11 @@ est_validate, est_scenarios / est_choose_scenario, est_compare_history, est_crea
   POST /estimates/<id>/revision {change_summary, confirm?}          est_create_revision (asks first)
   POST /estimates/<id>/use-measurements {module_id, rev, confirm?}  re-price a trade with its approved measurements
                                                                     (est_quick_answer with takeoff_list's totals; asks)
-   GET  /estimates/<id>/inspection-review                              the latest Inspector code review, if any
-   POST /estimates/<id>/inspection-review {zip_code?}                  run the Inspector's code review (electrical only)
+   GET  /estimates/<id>/inspection-review                              the latest Inspector code review per trade, if any
+   POST /estimates/<id>/inspection-review {zip_code?, module_id?}     run the Inspector's code review (one trade, or all construction trades on the estimate)
    POST /estimates/<id>/inspection-review/<review_id>/apply {item_id, rev}   add a suggested item as a line
+   GET  /estimates/<id>/bom                                   the bill of materials: material lines per construction trade
+   POST /estimates/<id>/bom/ordered {section_id, item_key, ordered}   tick a BOM item ordered (or untick it)
 The service layer checks every role and the estimate's state again; the page only hides what would be refused.
 """
 from __future__ import annotations
@@ -32,11 +34,13 @@ _DETAIL = re.compile(r"^/estimates/(\d+)/(detail|validate|history)$")
 _ACTION = re.compile(r"^/estimates/(\d+)/(options|options/choose|lines|calculate|revision|reopen|change-order"
                      r"|use-measurements)$")
 _LINE = re.compile(r"^/estimates/(\d+)/lines/(\d+)$")
+_BOM = re.compile(r"^/estimates/(\d+)/bom(?:/(ordered))?$")
 _INSPECTION = re.compile(r"^/estimates/(\d+)/inspection-review(?:/(\d+)/apply)?$")
 
 
 def handles(sub: str) -> bool:
-    return bool(_DETAIL.match(sub) or _ACTION.match(sub) or _LINE.match(sub) or _INSPECTION.match(sub))
+    return bool(_DETAIL.match(sub) or _ACTION.match(sub) or _LINE.match(sub) or _BOM.match(sub)
+                or _INSPECTION.match(sub))
 
 
 def _refuse(message: str, status: int = 400, error: str = "invalid_input"):
@@ -74,7 +78,7 @@ def _asked(question: str, **details):
 def route(m: str, sub: str, req, ctx, conn, see: bool):
     from estimator.api import links
     from estimator.api.router import _body, _fail, _json, _ok, redact
-    from estimator.estimating import quick, scenarios, service, validate
+    from estimator.estimating import bom, quick, scenarios, service, validate
     from estimator.learning import history
     from estimator.modules import get_registry
 
@@ -107,17 +111,35 @@ def route(m: str, sub: str, req, ctx, conn, see: bool):
         except ConfirmationRequired as e:
             return _asked(_question(e.message), **e.details)
         return _json(200, redact(out, see))
+    bm = _BOM.match(sub)
+    if bm:
+        eid, action = int(bm.group(1)), bm.group(2)
+        if action is None:
+            if m != "GET":
+                return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
+            return _ok(bom=redact(bom.bom_for_estimate(conn, ctx.company_id, eid), see))
+        if m != "POST":
+            return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
+        b = _body(req)
+        section_id = b.get("section_id")
+        if isinstance(section_id, bool) or not isinstance(section_id, int):
+            raise _refuse("say which section (section_id)")
+        item_key = _text(b, "item_key", 300)
+        if not item_key:
+            raise _refuse("say which item (item_key)")
+        return _ok(**bom.set_ordered(conn, ctx, eid, section_id, item_key, b.get("ordered") is True))
     im = _INSPECTION.match(sub)
     if im:
         from estimator.estimating import inspection_review
         eid, review_id = int(im.group(1)), im.group(2)
         if review_id is None:
             if m == "GET":
-                return _ok(review=redact(inspection_review.latest_review(conn, ctx.company_id, eid), see))
+                return _ok(reviews=redact(list(inspection_review.latest_reviews(conn, ctx.company_id, eid).values()), see))
             if m != "POST":
                 return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
             b = _body(req)
-            out = inspection_review.run_review(conn, ctx, eid, _text(b, "zip_code", 10) or None)
+            out = inspection_review.run_review(
+                conn, ctx, eid, _text(b, "zip_code", 10) or None, _text(b, "module_id", 64) or None)
             return _json(200, redact(out, see))
         if m != "POST":
             return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
@@ -149,8 +171,10 @@ def route(m: str, sub: str, req, ctx, conn, see: bool):
                    can_options=editable and ctx.role in service.QUICK_ROLES,
                    can_revise=est["status"] in service.REVISABLE_STATUSES and ctx.role in service.QUICK_ROLES,
                    can_review=nav.can_open(ctx.role, "takeoffs"), line_kinds=list(service.LINE_KINDS),
+                   bom=redact(bom.bom_for_estimate(conn, ctx.company_id, eid), see),
                    inspector=inspection_review.inspector_setting(conn, ctx.company_id),
-                   inspection_review=redact(inspection_review.latest_review(conn, ctx.company_id, eid), see))
+                   inspection_reviews=redact(list(inspection_review.latest_reviews(conn, ctx.company_id, eid).values()), see),
+                   reviewable_trades=inspection_review.reviewable_on(est))
 
     if what == "validate" and m == "GET":
         return _json(200, redact(validate.validate(conn, ctx, eid), see))

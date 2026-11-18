@@ -10,7 +10,10 @@ zip, flagged as unverified - the inspection review works offline.
 The NEC edition is set by the permit application date, so the review uses the
 current date to pick the edition and says so. Florida is the only state in the
 local table (David's jobs are in Florida); any other state gets a fallback
-telling the user to confirm the edition with the AHJ.
+telling the user to confirm the edition with the AHJ. code_edition() generalizes
+nec_edition() per trade: electrical gets the NEC year, the other construction
+trades get the Florida Building Code edition (Plumbing and Mechanical for those
+two trades), all on the same December 31, 2026 switch.
 """
 from __future__ import annotations
 
@@ -113,3 +116,32 @@ def nec_edition(state_abbr: str | None, on_date=None) -> dict:
                 "note": "Florida Building Code 9th Edition adopts the 2023 NEC from December 31, 2026."}
     return {"edition": None, "code": None,
             "note": "not in the local table — confirm the edition with the AHJ."}
+
+
+def code_edition(state_abbr: str | None, module_id: str, on_date=None) -> dict:
+    """{edition, code, note} for a trade in a state on a date (today by default).
+
+    Electrical delegates to nec_edition (the NEC year under the FBC edition).
+    The other Florida construction trades get the Florida Building Code
+    edition on the same switch: 8th Edition until December 30, 2026, 9th
+    Edition from December 31, 2026 — plumbing under the Florida Plumbing Code
+    and HVAC under the Florida Mechanical Code. Any other state is not in the
+    local table: edition None, and a note to confirm with the AHJ.
+    """
+    if (state_abbr or "").strip().upper() != "FL":
+        return {"edition": None, "code": None,
+                "note": "not in the local table — confirm the edition with the AHJ."}
+    if module_id == "electrical":
+        return nec_edition(state_abbr, on_date)
+    if _as_date(on_date) < _FLORIDA_SWITCH:
+        edition, num, when = "8th Edition", "8th", "until December 30, 2026"
+    else:
+        edition, num, when = "9th Edition", "9th", "from December 31, 2026"
+    if module_id == "plumbing":
+        code = f"Florida Plumbing Code {num} Edition"
+    elif module_id == "hvac":
+        code = f"Florida Mechanical Code {num} Edition"
+    else:
+        code = f"Florida Building Code {num} Edition"
+    return {"edition": edition, "code": code,
+            "note": f"{code} in effect {when}."}

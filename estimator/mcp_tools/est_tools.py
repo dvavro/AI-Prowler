@@ -26,7 +26,7 @@ from estimator.director import engine as director
 from estimator.director import overrides as director_overrides
 from estimator.director import settings as director_settings
 from estimator.director import watch as director_watch
-from estimator.estimating import assemblies, inspection_review, quick, scenarios, service, setup, validate
+from estimator.estimating import assemblies, bom, inspection_review, quick, scenarios, service, setup, validate
 from estimator import agent_manager
 from estimator.runner import runner
 from estimator.agents import queue as agent_queue
@@ -418,12 +418,24 @@ def est_choose_scenario(estimate_id: int, option_id: str, rev: int, module_id: s
     return _run(lambda c: scenarios.choose_option(c, _ctx(), int(estimate_id), option_id, rev, module_id or None))
 
 
-def est_inspection_review(estimate_id: int, zip_code: str = "") -> str:
-    """Run the Inspector agent's code review on an electrical estimate: checks the answers and lines against
-    residential NEC requirements for the job's zip code and returns the checklist (what passes, what's flagged,
-    what's missing, and items to add). The Inspector role must be on (an API provider); the zip defaults to the
-    one in the estimate's address."""
-    return _run(lambda c: inspection_review.run_review(c, _ctx(), int(estimate_id), zip_code or None))
+def est_inspection_review(estimate_id: int, zip_code: str = "", module_id: str = "") -> str:
+    """Run the Inspector agent's code review on an estimate: checks each construction trade's answers and lines
+    against that trade's code checklist for the job's zip code and returns the checklists (what passes, what's
+    flagged, what's missing, and items to add). module_id reviews one trade only; without it, every construction
+    trade on the estimate with a checklist is reviewed. The Inspector role must be on (an API provider); the zip
+    defaults to the one in the estimate's address."""
+    return _run(lambda c: inspection_review.run_review(c, _ctx(), int(estimate_id), zip_code or None, module_id or None))
+
+
+def est_bom(estimate_id: int) -> str:
+    """The bill of materials for an estimate: per construction trade, the material lines aggregated by price
+    book item, with the quantity to order (waste included), the supplier, and which items are already ordered.
+    Service trades have no materials list."""
+    def go(c):
+        ctx = _ctx()
+        return {"ok": True, "estimate_id": int(estimate_id),
+                "bom": bom.bom_for_estimate(c, ctx.company_id, int(estimate_id))}
+    return _run(go)
 
 
 def est_playbook_update(playbook_id: str, changes: dict | str, reset: bool = False) -> str:
@@ -1267,6 +1279,7 @@ TOOLS = (
     est_director_start, est_director_next, est_director_change_lane, est_job_status, est_jobs_board,
     est_director_add_trade, est_project_trades, est_director_book_site_visit, est_validate, est_scenarios, est_choose_scenario,
     est_inspection_review,
+    est_bom,
     est_followups_due, est_director_briefing, est_director_inbox, est_director_watch_now, est_director_watch_status,
     est_director_settings_get, est_director_settings_update, est_playbook_list, est_playbook_update,
     pricebook_get, pricebook_update, pricebook_import, est_create_revision,

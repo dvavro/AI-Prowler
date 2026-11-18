@@ -131,9 +131,9 @@ lines:
      price_key: el_lv_drop_ea, when: "low_voltage > 0"}
   - {id: underground_wire, description: "Underground feeder, direct-burial cable in conduit", kind: material, unit: lf,
      quantity: "underground_ft", waste: "0.05", price_key: el_underground_lf, when: "underground_ft > 0"}
-  - {id: subpanel_100a, description: "100 Amp subpanel, installed", kind: other, unit: ea, quantity: "1", price_key: el_subpanel_100a_ea,
+  - {id: subpanel_100a, description: "100 Amp subpanel, installed", kind: material, unit: ea, quantity: "1", price_key: el_subpanel_100a_ea,
      when: "panel == 1 and subpanel_amps == 100"}
-  - {id: subpanel_200a, description: "200 Amp subpanel, installed", kind: other, unit: ea, quantity: "1", price_key: el_subpanel_200a_ea,
+  - {id: subpanel_200a, description: "200 Amp subpanel, installed", kind: material, unit: ea, quantity: "1", price_key: el_subpanel_200a_ea,
      when: "panel == 1 and subpanel_amps == 200"}
   - {id: panel_upgrade, description: "200 A panel and service upgrade, installed", kind: other, unit: ea, quantity: "1",
      price_key: el_panel_upgrade_ea, when: "panel == 2"}
