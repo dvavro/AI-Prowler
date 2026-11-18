@@ -129,6 +129,19 @@ def list_options(conn, ctx: RequestContext, estimate_id: int) -> list[dict]:
                                   (int(estimate_id), ctx.company_id))]
 
 
+def list_definitions(registry=None, module_ids=None) -> dict:
+    """The built-in good/better/best options for the given trades, for the estimate page popup.
+
+    Returns {module_id: [{id, label}, ...]}. A trade with no built-in options gets an empty list.
+    """
+    reg = _registry(registry)
+    out = {}
+    for mid in (module_ids or []):
+        mod = reg.modules.get(mid)
+        out[mid] = [{"id": o["id"], "label": o["label"]} for o in (mod.scenarios if mod else [])]
+    return out
+
+
 def choose_option(conn, ctx: RequestContext, estimate_id: int, option_id: str, rev: int, module_id: str | None = None,
                   registry=None) -> dict:
     """Re-price the trade with a saved option's answers (the estimate must still be editable)."""

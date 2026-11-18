@@ -960,6 +960,31 @@ INSERT INTO agent_roles_new (company_id, role, provider, model, fallback_provide
 DROP TABLE agent_roles;
 ALTER TABLE agent_roles_new RENAME TO agent_roles
 """),
+    # 2026-11-18 (David): the Inspector agent's code reviews on electrical estimates, and the zip-code
+    # cache behind them. Each run is a new inspection_reviews row; the UI shows the latest. zip_cache is
+    # reference data (a zip's place is the same for every company), so it carries no company_id.
+    (28, "inspection reviews and zip cache", """
+CREATE TABLE inspection_reviews (
+    id               INTEGER PRIMARY KEY,
+    company_id       TEXT NOT NULL,
+    estimate_id      INTEGER NOT NULL REFERENCES estimates (id) ON DELETE CASCADE,
+    zip_code         TEXT NOT NULL,
+    jurisdiction_json TEXT NOT NULL DEFAULT '{}',
+    nec_edition      TEXT,
+    checklist_json   TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'complete',
+    created_by       TEXT,
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX ix_inspection_reviews_estimate ON inspection_reviews (company_id, estimate_id, id);
+CREATE TABLE zip_cache (
+    zip_code     TEXT PRIMARY KEY,
+    city         TEXT NOT NULL,
+    state        TEXT NOT NULL,
+    state_abbr   TEXT NOT NULL,
+    looked_up_at TEXT NOT NULL
+)
+"""),
 ]
 
 

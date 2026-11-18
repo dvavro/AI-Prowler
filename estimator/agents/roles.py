@@ -35,6 +35,11 @@ ROLES = {
                             "sheet with the AI instead (uses the API key, costs tokens, counts against the budget "
                             "below). It only reads dimensions - the app does the maths - and every measurement it "
                             "proposes still needs a person to approve it. Concrete only for now."},
+    "inspector": {"label": "Inspector", "works_now": True,
+                    "does": "Reviews an electrical estimate against residential code requirements (NEC) for the job's "
+                            "zip code before the quote goes out: a checklist of what passes, what's flagged and what's "
+                            "missing, with items you can add to the estimate. It never changes the estimate itself - "
+                            "you add what you want."},
 }
 CONFIG_ROLES = ("owner",)
 DEFAULT_BUDGET = {"daily_cents": 200, "monthly_cents": 2000}

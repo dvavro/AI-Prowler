@@ -325,6 +325,14 @@ tr.focus td { background: #fff8e6; }
 ul.line-measurements li { padding: 3px 0; }
 .finding.error { color: var(--bad); } .finding.warning { color: var(--warn); }
 details.options { margin: 8px 0 12px; }
+summary.options-tip-target { position: relative; }
+.options-tip { position: absolute; top: 100%; left: 0; z-index: 20; width: 340px; max-width: 90vw; margin-top: 4px;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18); padding: 10px 12px; font-weight: 400; cursor: default; }
+.options-tip p { margin: 0 0 6px; }
+.options-tip p:last-child { margin-bottom: 0; }
+.options-tip ul { margin: 0; padding-left: 18px; }
+.options-tip li { margin: 2px 0; }
 .bp-readout { display: flex; gap: 8px; align-items: center; margin: 4px 0; padding: 6px 10px; background: #eef4ff;
               border: 1px solid #c9dafc; border-radius: 6px; }
 .bp-readout span { font-weight: 600; margin-right: auto; }

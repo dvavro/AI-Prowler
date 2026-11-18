@@ -17,6 +17,9 @@ est_validate, est_scenarios / est_choose_scenario, est_compare_history, est_crea
   POST /estimates/<id>/revision {change_summary, confirm?}          est_create_revision (asks first)
   POST /estimates/<id>/use-measurements {module_id, rev, confirm?}  re-price a trade with its approved measurements
                                                                     (est_quick_answer with takeoff_list's totals; asks)
+   GET  /estimates/<id>/inspection-review                              the latest Inspector code review, if any
+   POST /estimates/<id>/inspection-review {zip_code?}                  run the Inspector's code review (electrical only)
+   POST /estimates/<id>/inspection-review/<review_id>/apply {item_id, rev}   add a suggested item as a line
 The service layer checks every role and the estimate's state again; the page only hides what would be refused.
 """
 from __future__ import annotations
@@ -29,10 +32,11 @@ _DETAIL = re.compile(r"^/estimates/(\d+)/(detail|validate|history)$")
 _ACTION = re.compile(r"^/estimates/(\d+)/(options|options/choose|lines|calculate|revision|reopen|change-order"
                      r"|use-measurements)$")
 _LINE = re.compile(r"^/estimates/(\d+)/lines/(\d+)$")
+_INSPECTION = re.compile(r"^/estimates/(\d+)/inspection-review(?:/(\d+)/apply)?$")
 
 
 def handles(sub: str) -> bool:
-    return bool(_DETAIL.match(sub) or _ACTION.match(sub) or _LINE.match(sub))
+    return bool(_DETAIL.match(sub) or _ACTION.match(sub) or _LINE.match(sub) or _INSPECTION.match(sub))
 
 
 def _refuse(message: str, status: int = 400, error: str = "invalid_input"):
@@ -103,11 +107,32 @@ def route(m: str, sub: str, req, ctx, conn, see: bool):
         except ConfirmationRequired as e:
             return _asked(_question(e.message), **e.details)
         return _json(200, redact(out, see))
+    im = _INSPECTION.match(sub)
+    if im:
+        from estimator.estimating import inspection_review
+        eid, review_id = int(im.group(1)), im.group(2)
+        if review_id is None:
+            if m == "GET":
+                return _ok(review=redact(inspection_review.latest_review(conn, ctx.company_id, eid), see))
+            if m != "POST":
+                return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
+            b = _body(req)
+            out = inspection_review.run_review(conn, ctx, eid, _text(b, "zip_code", 10) or None)
+            return _json(200, redact(out, see))
+        if m != "POST":
+            return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
+        b = _body(req)
+        item_id = _text(b, "item_id", 80)
+        if not item_id:
+            raise _refuse("say which checklist item (item_id)")
+        out = inspection_review.apply_item(conn, ctx, eid, int(review_id), item_id, _rev(b))
+        return _json(200, redact(out, see))
     mm = _DETAIL.match(sub) or _ACTION.match(sub)
     eid, what = int(mm.group(1)), mm.group(2)
 
     if what == "detail" and m == "GET":
         from estimator.estimating import reopen
+        from estimator.estimating import inspection_review
         est = service.get_estimate(conn, ctx, eid)
         editable = est["status"] in service.EDITABLE_STATUSES
         since = reopen.changes_since_approval(conn, ctx, eid) if editable else None
@@ -118,10 +143,14 @@ def route(m: str, sub: str, req, ctx, conn, see: bool):
                    change_order=change_orders.info(conn, ctx, eid), change_orders=change_orders.list_for(conn, ctx, eid),
                    can_change_order=change_orders.can_make(conn, ctx, est),
                    options=redact(scenarios.list_options(conn, ctx, eid), see), see_margins=see,
+                   scenario_defs=scenarios.list_definitions(get_registry(),
+                                                            [s["module_id"] for s in est["sections"]]),
                    can_edit=editable and ctx.role in service.EDIT_ROLES,
                    can_options=editable and ctx.role in service.QUICK_ROLES,
                    can_revise=est["status"] in service.REVISABLE_STATUSES and ctx.role in service.QUICK_ROLES,
-                   can_review=nav.can_open(ctx.role, "takeoffs"), line_kinds=list(service.LINE_KINDS))
+                   can_review=nav.can_open(ctx.role, "takeoffs"), line_kinds=list(service.LINE_KINDS),
+                   inspector=inspection_review.inspector_setting(conn, ctx.company_id),
+                   inspection_review=redact(inspection_review.latest_review(conn, ctx.company_id, eid), see))
 
     if what == "validate" and m == "GET":
         return _json(200, redact(validate.validate(conn, ctx, eid), see))

@@ -89,6 +89,10 @@ async function renderEstimate(main, id) {
     parts.push(sectionBlock(d, sec, tr, lineLinks, meas, focusLine, msg, book));
   }
   for (const tr of tradesWithoutLines) parts.push(sectionBlock(d, { id: null, module_id: tr.module_id, lines: [], subtotal_cents: 0 }, tr, lineLinks, meas, focusLine, msg, book));
+  // The Inspector's code review, only on electrical estimates - and only when the Inspector agent is on or a
+  // review already exists, so pros who never turn it on see nothing new (2026-11-18, David).
+  const hasElectrical = est.sections.some(s => s.module_id === "electrical");
+  if (hasElectrical && ((d.inspector || {}).enabled || d.inspection_review)) parts.push(inspectionReviewCard(d, msg));
   if (!est.sections.length && !tradesWithoutLines.length) {
     const next = d.can_edit
       ? ["Measure the plans in ", el("a", { href: "#/takeoffs/" + est.id }, "Blueprint Review"), " and Recalculate, or add a line below."]
@@ -347,8 +351,17 @@ function lineMeasurementList(est, ln, lk, meas, d) {
 
 function optionsBlock(d, sec, msg) {
   const est = d.estimate, saved = (d.options || []).filter(o => o.module_id === sec.module_id);
-  const wrap = el("details", { class: "options", id: "options-" + sec.module_id, open: saved.length > 0 },
-    el("summary", {}, "Good / better / best options"));
+  const defs = ((d.scenario_defs || {})[sec.module_id]) || [];
+  const tip = el("div", { class: "options-tip", id: "options-tip-" + sec.module_id, hidden: true },
+    el("p", {}, "Good / better / best prices different versions of this trade \u2014 for example, different materials or finishes \u2014 so you can offer the customer a choice. Nothing changes until you pick one with \u201CUse this one\u2026\u201D."),
+    defs.length
+      ? el("ul", {}, defs.map(o => el("li", {}, o.label)))
+      : el("p", { class: "muted" }, "This trade has no built-in options yet."));
+  const sum = el("summary", { class: "options-tip-target", id: "options-summary-" + sec.module_id },
+    "Good / better / best options", tip);
+  sum.addEventListener("mouseenter", () => { tip.hidden = false; });
+  sum.addEventListener("mouseleave", () => { tip.hidden = true; });
+  const wrap = el("details", { class: "options", id: "options-" + sec.module_id, open: saved.length > 0 }, sum);
   const out = el("div", {});
   const show = opts => out.replaceChildren(el("table", { class: "list" },
     el("thead", {}, el("tr", {}, el("th", {}, "Option"), el("th", {}, "Total"), el("th", {}, ""))),
@@ -371,6 +384,86 @@ function optionsBlock(d, sec, msg) {
   });
   wrap.append(el("div", { class: "row" }, price), out);
   return wrap;
+}
+
+// The Inspector's code review of the electrical trade: run it, read the checklist, add what's missing.
+function inspectionReviewCard(d, msg) {
+  const est = d.estimate, insp = d.inspector || {}, review = d.inspection_review || null;
+  const box = el("div", { class: "card section", id: "inspection-review" },
+    el("h3", {}, "🔍 Inspection review"));
+  const zips = (est.address || "").match(/\b\d{5}\b/g) || [];
+  const zipFromAddress = zips.length ? zips[zips.length - 1] : "";
+  const zip = (review && review.zip_code) || zipFromAddress;
+  if (review) {
+    const j = review.jurisdiction || {};
+    const place = j.city ? j.city + ", " + j.state_abbr : "Zip " + review.zip_code;
+    const nec = review.nec_edition ? review.nec_edition + " NEC" : "NEC edition not in the local table";
+    box.append(el("p", { class: "muted", id: "inspection-jurisdiction" },
+      place + " — " + nec + (j.verified === false ? " (unverified — the zip lookup was unreachable)" : ""),
+      " · reviewed " + when(review.created_at)));
+  }
+  const runRow = el("div", { class: "row" });
+  let zipInput = null;
+  if (!zipFromAddress) {
+    zipInput = el("input", { id: "inspection-zip", maxlength: 5, inputmode: "numeric", value: zip || "",
+      placeholder: "Zip code", "aria-label": "Zip code" });
+    runRow.append(el("label", {}, "Zip code", zipInput));
+  } else if (!review) {
+    runRow.append(el("span", { class: "muted" }, "Zip " + zipFromAddress + " (from the address)"));
+  }
+  const run = el("button", { class: "button", type: "button", id: "inspection-run" },
+    review ? "Run the review again" : "Run inspection review");
+  runRow.append(run);
+  let whyDisabled = "";
+  if (!d.can_edit) whyDisabled = "Only owners and estimators can run a review.";
+  else if (!insp.enabled) whyDisabled = "Turn on the Inspector agent in 🤖 AI agents to run a code review.";
+  else if (!insp.ready) whyDisabled = "The Inspector agent can't run yet: " + (insp.why_not || "its provider is not ready.");
+  run.disabled = !!whyDisabled;
+  if (whyDisabled) runRow.append(el("span", { class: "muted small" }, whyDisabled));
+  run.addEventListener("click", async () => {
+    const z = zipInput ? zipInput.value.trim() : zipFromAddress;
+    if (!z) { if (zipInput) zipInput.focus(); return; }
+    run.disabled = true;
+    try {
+      await api("POST", "/estimates/" + est.id + "/inspection-review", { zip_code: z });
+      toast("Inspection review done");
+      route();
+    } catch (e) { if (e.status !== 401) msg.replaceChildren(errorBox(e)); run.disabled = false; }
+  });
+  box.append(runRow);
+  if (review) {
+    const icon = { pass: "✓", flag: "⚠", missing: "✗" };
+    const rows = (review.checklist || []).map(item => {
+      const action = item.suggested_action;
+      let add = null;
+      if (action && d.can_edit) {
+        add = el("button", { class: "button", type: "button", "data-inspection-add": item.id }, "Add to estimate");
+        add.addEventListener("click", async () => {
+          add.disabled = true;
+          try {
+            await api("POST", "/estimates/" + est.id + "/inspection-review/" + review.id + "/apply",
+              { item_id: item.id, rev: est.rev });
+            toast("Added to the estimate");
+            route();
+          } catch (e) { if (e.status !== 401) msg.replaceChildren(errorBox(e)); add.disabled = false; }
+        });
+      }
+      return el("tr", { "data-inspection-item": item.id },
+        el("td", {}, icon[item.status] || "?"),
+        el("td", {}, item.description,
+          action ? el("div", { class: "muted small" },
+            "Add: " + (action.quantity || 1) + " " + (action.unit || "") + " " + (action.description || action.price_key)) : null),
+        el("td", {}, item.code_ref),
+        el("td", {}, item.note || ""),
+        el("td", {}, add));
+    });
+    box.append(el("table", { class: "list", id: "inspection-checklist" },
+      el("thead", {}, el("tr", {}, el("th", {}, ""), el("th", {}, "Check"), el("th", {}, "Code"), el("th", {}, "Note"), el("th", {}, ""))),
+      el("tbody", {}, rows)));
+  }
+  box.append(el("p", { class: "muted small" },
+    "Local amendments vary — confirm with the building department before submitting."));
+  return box;
 }
 
 function addLineForm(d, msg, book) {

@@ -418,3 +418,28 @@ def test_clearing_a_pick_goes_back_to_the_trade_item(call, roof):               
                     for ln in s["lines"] if ln["calc"]["rule"] == "architectural")
     assert shingles["price_key"] == "rf_arch_sq"
     assert not any("kept the price book item" in w for w in repriced["warnings"])
+
+
+def test_estimate_detail_includes_scenario_definitions(call, roof):          # C2S8-E18
+    detail = call("GET", f"{API}/estimates/{roof['id']}/detail").json()
+    defs = detail["scenario_defs"]["roofing"]
+    assert [o["id"] for o in defs] == ["good", "better", "best"]
+    assert defs[0]["label"] == "Good: 3-tab shingles"
+    assert defs[2]["label"] == "Best: standing seam metal"
+
+
+def test_estimate_detail_shows_no_scenarios_for_electrical(db, call):        # C2S8-E19
+    ctx = personal_context()
+    e = service.create_estimate(db, ctx, "Electrical test")
+    e = quick.answer(db, ctx, e["id"], "electrical", {"outlets": 10, "switches": 4, "lights": 6}, e["rev"])
+    detail = call("GET", f"{API}/estimates/{e['id']}/detail").json()
+    assert detail["scenario_defs"]["electrical"] == []
+
+
+def test_options_block_has_a_hover_popup():                                  # C2S8-E20
+    js = (router.WEB_DIR / "estimates.js").read_text(encoding="utf-8")
+    for needed in ("options-tip-target", "options-tip-", "mouseenter", "mouseleave",
+                   "no built-in options yet", "Use this one"):
+        assert needed in js, needed
+    css = (router.WEB_DIR / "app.css").read_text(encoding="utf-8")
+    assert ".options-tip { position: absolute; top: 100%" in css

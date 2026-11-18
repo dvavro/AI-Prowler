@@ -79,7 +79,7 @@ def test_register_on_fastmcp(monkeypatch):  # S2-T07
     server = FastMCP("estimator-test")
     names = t.register(server)
     listed = {tool.name for tool in asyncio.run(server.list_tools())}
-    assert set(names) <= listed and len(names) == len(t.TOOLS) == 109       # +1 est_project_trades (2026-11-14), +6 assemblies, line edits, add/remove trade, design firm (Coder 1 S25), +4 revisions/server queue (Coder 1 S24), +5 symbol_* tools (Coder 2 S10-11), +2 plan_get_rooms_walls / plan_trade_answers (S12)
+    assert set(names) <= listed and len(names) == len(t.TOOLS) == 110       # +1 est_inspection_review (2026-11-18), +1 est_project_trades (2026-11-14), +6 assemblies, line edits, add/remove trade, design firm (Coder 1 S25), +4 revisions/server queue (Coder 1 S24), +5 symbol_* tools (Coder 2 S10-11), +2 plan_get_rooms_walls / plan_trade_answers (S12)
     tool = next(x for x in asyncio.run(server.list_tools()) if x.name == "est_quick_answer")
     assert {"estimate_id", "module_id", "answers", "rev"} <= set(tool.inputSchema["properties"])
 

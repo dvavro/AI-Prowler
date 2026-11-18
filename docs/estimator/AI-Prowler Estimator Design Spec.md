@@ -657,7 +657,7 @@ The whole estimating process can be run three ways, and they can be mixed on the
 
 ## MCP tool catalog
 
-109 tools, prefixed by area so the AI can find them, registered in the same MCP server as AI-Prowler's existing tools. All return JSON with ids, units and a `warnings` list.
+110 tools, prefixed by area so the AI can find them, registered in the same MCP server as AI-Prowler's existing tools. All return JSON with ids, units and a `warnings` list.
 
 | Area | Tool | Purpose | Writes? |
 | --- | --- | --- | --- |
@@ -690,6 +690,7 @@ The whole estimating process can be run three ways, and they can be mixed on the
 | Estimate | `est_validate` | QA checks, returns warnings | No |
 | Estimate | `est_scenarios` | Good/better/best or alternate pricing | Yes |
 | Estimate | `est_choose_scenario` | Switch an estimate to one of its priced options (re-prices that trade; not once approved) | Yes |
+| Estimate | `est_inspection_review` | The Inspector agent's code review of an electrical estimate: an NEC checklist for the job's zip code, with items that can be added to the estimate | Yes |
 | Estimate | `est_compare_history` | Compare unit costs to past estimates and actuals | No |
 | Estimate | `est_record_actuals` | Record what a sold job really cost, line by line, for the learning loop | Yes |
 | Quick | `est_quick_questions` / `est_quick_answer` | Service intake interview | Yes |

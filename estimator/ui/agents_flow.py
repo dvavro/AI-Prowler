@@ -26,6 +26,7 @@ STEPS = (
     ("plan_reader", "Plan reader", "Plans"),
     ("llm_takeoff", "AI takeoff", "Takeoff"),
     ("takeoff", "Takeoff agents", "Takeoff"),
+    ("inspector", "Inspector", "Estimate"),
     ("reviewer", "Reviewer", "Review"),
     ("bid_writer", "Bid writer", "Bid"),
     ("follow_up", "Follow-up", "Follow-up"),
@@ -40,6 +41,9 @@ STEP_HELP = {
                    "stronger model.",
     "takeoff": "Measures each trade from the plans for the Estimate Runner. Starts when the Plan Engine is installed. "
                "A complex step.",
+    "inspector": "Reviews an electrical estimate against residential code requirements (NEC) for the job's zip code "
+               "before the quote goes out: a checklist of what passes, what's flagged and what's missing, with "
+               "items you can add to the estimate. It never changes the estimate itself. A complex step.",
     "reviewer": "Writes notes for the human reviewer on estimates waiting for review: missing items, odd quantities, "
                 "unit costs that look off. It never approves or changes prices. An internal step.",
     "bid_writer": "Drafts the scope, inclusions and exclusions for an approved estimate; a person sees it in the bid "
@@ -53,7 +57,8 @@ _SW, _SH, _AW, _AH = 80, 32, 86, 52
 _STATE_X = {s: 10 + i * 92 for i, s in enumerate(STATES)}
 _STATE_Y = 120
 _STEP_XY = {"plan_reader": (_STATE_X["Plans"] - 3, 20), "llm_takeoff": (_STATE_X["Takeoff"] - 3, 20),
-            "takeoff": (_STATE_X["Takeoff"] - 3, 192), "reviewer": (_STATE_X["Review"] - 3, 20),
+            "takeoff": (_STATE_X["Takeoff"] - 3, 192), "inspector": (_STATE_X["Estimate"] - 3, 20),
+            "reviewer": (_STATE_X["Review"] - 3, 20),
             "bid_writer": (_STATE_X["Bid"] - 3, 20), "follow_up": (_STATE_X["Follow-up"] - 3, 20)}
 COLORS = {"off": "#9ca3af", "chat_only": "#7c3aed", "on": "#d97706", "waiting": "#9ca3af"}
 TINTS = {"#9ca3af": "#f3f4f6", "#7c3aed": "#ede9fe", "#d97706": "#fef3c7"}

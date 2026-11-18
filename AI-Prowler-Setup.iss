@@ -503,6 +503,7 @@ Source: "estimator\errors.py"; DestDir: "{app}\estimator"; Flags: ignoreversion
 Source: "estimator\estimating\__init__.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\assemblies.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\change_orders.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
+Source: "estimator\estimating\inspection_review.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\project_admin.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\quick.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\reopen.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
@@ -510,6 +511,7 @@ Source: "estimator\estimating\scenarios.py"; DestDir: "{app}\estimator\estimatin
 Source: "estimator\estimating\service.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\setup.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\estimating\validate.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
+Source: "estimator\estimating\zip_lookup.py"; DestDir: "{app}\estimator\estimating"; Flags: ignoreversion
 Source: "estimator\exports.py"; DestDir: "{app}\estimator"; Flags: ignoreversion
 Source: "estimator\integrations\__init__.py"; DestDir: "{app}\estimator\integrations"; Flags: ignoreversion
 Source: "estimator\integrations\host.py"; DestDir: "{app}\estimator\integrations"; Flags: ignoreversion
