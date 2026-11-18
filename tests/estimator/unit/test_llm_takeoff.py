@@ -252,6 +252,8 @@ def test_run_llm_takeoff_direct(db, fake, plans):
     assert out["foundation_sheet_id"] == plans["s1"] and out["provider"] == "claude_api"
     assert out["candidate"]["id"] == "llm" and out["candidate"]["source"] == "llm"
     assert out["candidate"]["label"] == "45'-7\" x 46'-7\" (read by the AI)"
+    assert out["summary"] == (f"read 45'-7\" x 46'-7\" on sheet {plans['s1']};"  # the runner logs this line
+                              f" measurements {out['measurement_ids']}")
     rows = [dict(r) for r in db.execute("SELECT * FROM measurements WHERE estimate_id = ?"
                                         " ORDER BY id", (plans["est"],))]
     assert len(rows) == 4

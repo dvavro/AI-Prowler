@@ -1,10 +1,11 @@
-"""LLM takeoff auto-run: read the foundation sheet with the AI when geometry finds nothing.
+"""LLM takeoff auto-run: read the plan with the AI when geometry finds nothing.
 
 The sibling API (estimator/api/autorun_api.py) starts this runner, detached, when a
-run has no slab candidates and the owner turned LLM takeoff on. It needs no browser
+run has no drawing candidates and the owner turned LLM takeoff on. It needs no browser
 and no HTTP: it reads the plan set's sheets from the database, calls the AI through
-the provider/budget system (estimator/takeoff/llm_takeoff.py), and proposes the
-concrete measurements straight into the database, where a person still approves them.
+the provider/budget system, and proposes the measurements straight into the database,
+where a person still approves them. Which reader runs depends on the run's trade (concrete: estimator/takeoff/llm_takeoff.py;
+every other trade: estimator/takeoff/llm_<trade>.py, run_llm_<trade> by convention).
 
     python -m estimator.agents.llm_takeoff_runner --db <db path> --run-id <id>
 
@@ -16,6 +17,7 @@ with the step and the error, so a run is never left stuck in 'running'.
 from __future__ import annotations
 
 import argparse
+import importlib
 import sqlite3
 import sys
 
@@ -23,6 +25,31 @@ from estimator.agents.concrete_autorun import AgentError, RunStore
 from estimator.agents import providers
 from estimator.context import RequestContext
 from estimator.takeoff import llm_takeoff
+
+
+def _trade_label(module_id: str) -> str:
+    """The trade's display name from its manifest, else the module id as given
+    (the same naming the API's refusal uses)."""
+    try:
+        from estimator.modules import get_registry
+        return get_registry().get(module_id).name
+    except Exception:  # noqa: BLE001 - no manifest, no registry: the id is the name
+        return module_id
+
+
+def _run_trade_reader(conn, ctx, run_row, module_id, on_step=None):
+    """The trade's LLM reader, by convention: estimator/takeoff/llm_<trade>.py,
+    run_llm_<trade>. A trade with no reader module isn't built yet."""
+    try:
+        mod = importlib.import_module(f"estimator.takeoff.llm_{module_id}")
+    except ModuleNotFoundError as exc:
+        if exc.name == f"estimator.takeoff.llm_{module_id}":
+            raise AgentError(f"auto-run isn't built for {_trade_label(module_id)} yet") from None
+        raise
+    fn = getattr(mod, f"run_llm_{module_id}", None)
+    if fn is None:
+        raise AgentError(f"auto-run isn't built for {_trade_label(module_id)} yet")
+    return fn(conn, ctx, run_row, on_step=on_step)
 
 
 class LlmTakeoffRun:
@@ -74,13 +101,16 @@ class LlmTakeoffRun:
             ctx = RequestContext(company_id=self.run_row["company_id"],
                                  user_id=self.run_row["created_by"] or "owner",
                                  role="owner", agent="llm-takeoff")
-            result = llm_takeoff.run_llm_takeoff(self.conn, ctx, self.run_row, on_step=self.set_step)
+            module_id = self.run_row["module_id"]
+            if module_id == "concrete":
+                result = llm_takeoff.run_llm_takeoff(self.conn, ctx, self.run_row, on_step=self.set_step)
+            else:
+                result = _run_trade_reader(self.conn, ctx, self.run_row, module_id,
+                                         on_step=self.set_step)
             self.store.update(self.run_id, status="done", step="done",
                               candidate_id=llm_takeoff.CANDIDATE_ID, candidates=[result["candidate"]],
                               measurement_ids=result["measurement_ids"])
-            self.log(f"done: read {result['reading']['slab_width_ft']} x "
-                     f"{result['reading']['slab_length_ft']} on sheet "
-                     f"{result['foundation_sheet_id']}; measurements {result['measurement_ids']}")
+            self.log(f"done: {result['summary']}")
             return 0
         except (AgentError, llm_takeoff.LlmTakeoffError, providers.ProviderError) as e:
             self._mark_failed(str(e))
@@ -99,7 +129,7 @@ class LlmTakeoffRun:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Read the foundation sheet with the AI for one concrete auto-run.")
+        description="Read the plan with the AI for one auto-run (any trade with a reader).")
     parser.add_argument("--db", required=True, help="path to estimator.db (the run row lives here)")
     parser.add_argument("--run-id", required=True, type=int, help="auto_runs id to drive")
     return parser

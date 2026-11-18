@@ -120,14 +120,16 @@ def _sheets_with_images(conn, company_id: str, plan_set_id: int) -> list[dict]:
 
 
 def pick_foundation_sheets(conn, company_id: str, plan_set_id: int,
-                           hint_sheet_id: int | None = None) -> list[dict]:
-    """The plan set's sheets, best foundation-plan match first, each with a score.
+                           hint_sheet_id: int | None = None, module_id: str = "concrete") -> list[dict]:
+    """The plan set's sheets, best match first for the trade's sheet rules, each with a score.
 
     A title word (foundation, slab, ...) is worth 2, a sheet-number prefix (S, A)
     is worth 1, and the sheet the run started on breaks ties. Only sheets with a
     rendered image are listed - the AI can't read a sheet with no picture.
+    module_id picks whose rules score the sheets (the electrical reader passes
+    "electrical"); the concrete rules are the default, so existing callers keep working.
     """
-    rules = _sheet_rules(conn, company_id, MODULE_ID)
+    rules = _sheet_rules(conn, company_id, module_id)
     titles = [str(w).strip().lower() for w in rules.get("titles") or [] if str(w).strip()]
     prefixes = [str(p).strip().upper() for p in rules.get("prefixes") or [] if str(p).strip()]
     scored = []
@@ -577,7 +579,9 @@ def run_llm_takeoff(conn, ctx: RequestContext, run: dict, on_step=None) -> dict:
         cand["detail_calibration"] = detail_calibration
     return {"reading": reading, "quantities": quantities, "measurement_ids": measurement_ids,
             "provider": provider, "model": model, "foundation_sheet_id": foundation["id"],
-            "candidate": cand, "calibration": calibration, "detail_calibration": detail_calibration}
+            "candidate": cand, "calibration": calibration, "detail_calibration": detail_calibration,
+            "summary": f"read {reading['slab_width_ft']} x {reading['slab_length_ft']} on sheet "
+                       f"{foundation['id']}; measurements {measurement_ids}"}
 
 
 def _calibrate_detail(conn, ctx: RequestContext, run: dict, sheet_id: int, step) -> dict | None:

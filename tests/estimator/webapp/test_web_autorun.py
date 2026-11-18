@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from estimator import config
+from estimator.agents import providers, roles
 from estimator.api import autorun_api
 from estimator.context import personal_context
 from estimator.estimating import service
@@ -44,6 +45,68 @@ def no_playwright(monkeypatch):
     monkeypatch.setattr(autorun_api, "_playwright_available", lambda: False)
     monkeypatch.setattr(subprocess, "Popen", _FakePopen)
     return _FakePopen
+
+
+class _FakeProvider:
+    """Ready (or not) on demand. The API never calls the LLM itself - the runner does."""
+
+    def __init__(self):
+        self.keys = {"claude_api": True, "grok_api": True}
+
+    def ready(self, provider):
+        return (True, "") if self.keys.get(provider) else (False, "no API key saved")
+
+    def model_for(self, provider):
+        return {"claude_api": "claude-sonnet-5-5", "grok_api": "grok-4.3"}[provider]
+
+    def ask(self, *a, **kw):
+        raise AssertionError("the API must not call the LLM")
+
+    def ask_vision(self, *a, **kw):
+        raise AssertionError("the API must not call the LLM")
+
+    def cost(self, model, usage):
+        return 0.0
+
+
+@pytest.fixture
+def fake():
+    f = _FakeProvider()
+    providers.set_provider(f)
+    yield f
+    providers.set_provider(None)
+
+
+def _on(db, **extra):
+    return roles.update_role(db, personal_context(), "llm_takeoff",
+                             {"provider": "claude_api", **extra}, confirm=True)
+
+
+@pytest.fixture
+def two_sheets(db, tmp_path):
+    """An estimate with three imaged sheets: S-1 FOUNDATION PLAN, E-1 ELECTRICAL PLAN and P-1 PLUMBING PLAN,
+    each with a viewport."""
+    ctx = personal_context()
+    est = service.create_estimate(db, ctx, "House")["id"]
+    ps = db.execute("INSERT INTO plan_sets (company_id, estimate_id, file_path, original_name, file_type,"
+                    " file_size, sha256, status, uploaded_by, created_at)"
+                    " VALUES ('default', ?, 'x.dwg', 'x.dwg', 'dwg', 1, 'aa', 'processed', 'owner', ?)",
+                    (est, NOW)).lastrowid
+    img = tmp_path / "s.png"
+    img.write_bytes(b"png")
+    s1 = db.execute("INSERT INTO sheets (company_id, plan_set_id, page_no, sheet_no, title, image_path)"
+                    " VALUES ('default', ?, 1, 'S-1', 'FOUNDATION PLAN', ?)", (ps, str(img))).lastrowid
+    e1 = db.execute("INSERT INTO sheets (company_id, plan_set_id, page_no, sheet_no, title, image_path)"
+                    " VALUES ('default', ?, 2, 'E-1', 'ELECTRICAL PLAN', ?)", (ps, str(img))).lastrowid
+    p1 = db.execute("INSERT INTO sheets (company_id, plan_set_id, page_no, sheet_no, title, image_path)"
+                    " VALUES ('default', ?, 3, 'P-1', 'PLUMBING PLAN', ?)", (ps, str(img))).lastrowid
+    vp_s = db.execute("INSERT INTO viewports (company_id, sheet_id, label, scale_ratio, is_nts)"
+                      " VALUES ('default', ?, 'Foundation plan', '84.3225', 0)", (s1,)).lastrowid
+    vp_e = db.execute("INSERT INTO viewports (company_id, sheet_id, label, scale_ratio, is_nts)"
+                      " VALUES ('default', ?, 'Electrical plan', '48', 0)", (e1,)).lastrowid
+    vp_p = db.execute("INSERT INTO viewports (company_id, sheet_id, label, scale_ratio, is_nts)"
+                      " VALUES ('default', ?, 'Plumbing plan', '48', 0)", (p1,)).lastrowid
+    return {"est": est, "s1": s1, "e1": e1, "p1": p1, "vp_s": vp_s, "vp_e": vp_e, "vp_p": vp_p}
 
 
 def _walls(db, vp, sheet, rects):
@@ -163,7 +226,7 @@ def test_start_run_without_playwright_marks_the_run_failed(call, db, slab, no_pl
 
 def test_start_run_rejects_other_modules_and_bad_ids(call, slab):                             # AR-A06
     base = {"estimate_id": slab["est"], "sheet_id": slab["sheet"], "viewport_id": slab["vp"]}
-    assert call("POST", f"{API}/auto-run", {**base, "module_id": "roofing"}).status == 400
+    assert call("POST", f"{API}/auto-run", {**base, "module_id": "house_cleaning"}).status == 400
     assert call("POST", f"{API}/auto-run", {**base, "module_id": "concrete",
                                             "estimate_id": 9999}).status == 404
     assert call("POST", f"{API}/auto-run", {"module_id": "concrete"}).status == 400
@@ -397,3 +460,110 @@ def test_update_run_reports_progress_and_finish(db, slab):                      
     assert got["status"] == "done" and got["measurement_ids"] == [7]
     with pytest.raises(Exception, match="not found"):
         autorun_api.update_run(db, 9999, step="x")
+
+
+# ---------------------------------------------------------------- electrical auto-run (multi-trade, Phase 1)
+
+def test_start_electrical_run_spawns_the_llm_runner(call, db, two_sheets, agent_spawns, fake):  # AR-A24
+    """Electrical is LLM-only: with LLM takeoff on, the run goes to the LLM runner (faked here - nothing runs,
+    no AI call), on the electrical sheet, with no geometric candidates."""
+    _on(db)
+    r = call("POST", f"{API}/auto-run", {"estimate_id": two_sheets["est"], "sheet_id": two_sheets["e1"],
+                                         "viewport_id": two_sheets["vp_e"], "module_id": "electrical"})
+    assert r.status == 200, r.json()
+    assert r.json()["status"] == "running"
+    assert len(agent_spawns.calls) == 1
+    cmd = agent_spawns.calls[0][0]
+    assert cmd[1:3] == ["-m", "estimator.agents.llm_takeoff_runner"]
+    assert cmd[cmd.index("--run-id") + 1] == str(r.json()["run_id"])
+    row = db.execute("SELECT module_id, candidates_json FROM auto_runs WHERE id = ?",
+                     (r.json()["run_id"],)).fetchone()
+    assert row["module_id"] == "electrical" and json.loads(row["candidates_json"]) == []
+
+
+def test_start_electrical_run_llm_off_fails_fast(call, db, two_sheets, agent_spawns, fake):    # AR-A25
+    """LLM takeoff off: the electrical run fails at once saying the AI reads the plan and where to turn it on -
+    there is no drawing fallback to try. Nothing spawns: no browser, no LLM, no cost."""
+    r = call("POST", f"{API}/auto-run", {"estimate_id": two_sheets["est"], "sheet_id": two_sheets["e1"],
+                                         "viewport_id": two_sheets["vp_e"], "module_id": "electrical"})
+    assert r.status == 200, r.json()
+    assert r.json()["status"] == "failed"
+    assert "turn LLM takeoff on" in r.json()["error"] and "count the devices" in r.json()["error"]
+    assert agent_spawns.calls == []
+    row = db.execute("SELECT status, error FROM auto_runs WHERE id = ?",
+                     (r.json()["run_id"],)).fetchone()
+    assert row["status"] == "failed" and "count the devices" in row["error"]
+
+
+def test_start_run_picks_each_trades_sheet(call, db, two_sheets, agent_spawns, fake):          # AR-A26
+    """With no sheet named, the electrical run measures the E-sheet (and the concrete run the foundation sheet)."""
+    _on(db)
+    r = call("POST", f"{API}/auto-run", {"estimate_id": two_sheets["est"], "module_id": "electrical"})
+    assert r.status == 200, r.json()
+    row = db.execute("SELECT sheet_id, viewport_id FROM auto_runs WHERE id = ?",
+                     (r.json()["run_id"],)).fetchone()
+    assert (row["sheet_id"], row["viewport_id"]) == (two_sheets["e1"], two_sheets["vp_e"])
+    db.execute("UPDATE auto_runs SET status = 'done'")
+    r = call("POST", f"{API}/auto-run", {"estimate_id": two_sheets["est"], "module_id": "concrete"})
+    assert r.status == 200, r.json()
+    row = db.execute("SELECT sheet_id, viewport_id FROM auto_runs WHERE id = ?",
+                     (r.json()["run_id"],)).fetchone()
+    assert (row["sheet_id"], row["viewport_id"]) == (two_sheets["s1"], two_sheets["vp_s"])
+
+
+def test_start_run_refuses_trades_without_an_agent(call, two_sheets):                          # AR-A27
+    base = {"estimate_id": two_sheets["est"], "sheet_id": two_sheets["e1"],
+            "viewport_id": two_sheets["vp_e"]}
+    r = call("POST", f"{API}/auto-run", {**base, "module_id": "house_cleaning"})
+    assert r.status == 400 and r.json()["message"] == "auto-run isn't built for House Cleaning yet"
+    r = call("POST", f"{API}/auto-run", {**base, "module_id": "warp-drive"})
+    assert r.status == 400 and r.json()["message"] == "auto-run isn't built for warp-drive yet"
+
+
+def test_start_run_requires_module_id(call, two_sheets):                                       # AR-A28
+    r = call("POST", f"{API}/auto-run", {"estimate_id": two_sheets["est"], "sheet_id": two_sheets["e1"],
+                                         "viewport_id": two_sheets["vp_e"]})
+    assert r.status == 400 and r.json()["message"] == "say which trade to run (module_id)"
+
+
+# ---------------------------------------------------------------- quantity trades (multi-trade, Phase 2)
+
+def test_start_plumbing_run_spawns_the_llm_runner(call, db, two_sheets, agent_spawns, fake):  # AR-A29
+    """Plumbing is LLM-only like electrical: with LLM takeoff on, the run goes to the LLM runner
+    (faked here - nothing runs, no AI call), on the plumbing sheet, with no geometric candidates."""
+    _on(db)
+    r = call("POST", f"{API}/auto-run", {"estimate_id": two_sheets["est"], "sheet_id": two_sheets["p1"],
+                                         "viewport_id": two_sheets["vp_p"], "module_id": "plumbing"})
+    assert r.status == 200, r.json()
+    assert r.json()["status"] == "running"
+    assert len(agent_spawns.calls) == 1
+    cmd = agent_spawns.calls[0][0]
+    assert cmd[1:3] == ["-m", "estimator.agents.llm_takeoff_runner"]
+    assert cmd[cmd.index("--run-id") + 1] == str(r.json()["run_id"])
+    row = db.execute("SELECT module_id, candidates_json FROM auto_runs WHERE id = ?",
+                     (r.json()["run_id"],)).fetchone()
+    assert row["module_id"] == "plumbing" and json.loads(row["candidates_json"]) == []
+
+
+def test_start_plumbing_run_llm_off_fails_fast(call, db, two_sheets, agent_spawns, fake):    # AR-A30
+    """LLM takeoff off: the plumbing run fails at once naming the trade's work and where to turn it on -
+    there is no drawing fallback to try. Nothing spawns: no browser, no LLM, no cost."""
+    r = call("POST", f"{API}/auto-run", {"estimate_id": two_sheets["est"], "sheet_id": two_sheets["p1"],
+                                         "viewport_id": two_sheets["vp_p"], "module_id": "plumbing"})
+    assert r.status == 200, r.json()
+    assert r.json()["status"] == "failed"
+    assert "turn LLM takeoff on" in r.json()["error"] and "count the fixtures" in r.json()["error"]
+    assert agent_spawns.calls == []
+    row = db.execute("SELECT status, error FROM auto_runs WHERE id = ?",
+                     (r.json()["run_id"],)).fetchone()
+    assert row["status"] == "failed" and "count the fixtures" in row["error"]
+
+
+def test_start_run_picks_the_plumbing_sheet(call, db, two_sheets, agent_spawns, fake):       # AR-A31
+    """With no sheet named, the plumbing run measures the P-sheet."""
+    _on(db)
+    r = call("POST", f"{API}/auto-run", {"estimate_id": two_sheets["est"], "module_id": "plumbing"})
+    assert r.status == 200, r.json()
+    row = db.execute("SELECT sheet_id, viewport_id FROM auto_runs WHERE id = ?",
+                     (r.json()["run_id"],)).fetchone()
+    assert (row["sheet_id"], row["viewport_id"]) == (two_sheets["p1"], two_sheets["vp_p"])

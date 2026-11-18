@@ -1,4 +1,4 @@
-"""Concrete agent auto-run (Phase 1): slab candidates, run rows, and the agent's stamp.
+"""Takeoff agent auto-run (Phase 1): slab candidates, run rows, and the agent's stamp.
 
 The auto-run finds the slab on a foundation plan (pure geometry - see
 estimator/takeoff/slab_find.py, no LLM and no cost), then a Playwright agent
@@ -16,10 +16,10 @@ and the measurements are proposed as "llm-takeoff" for a person to approve.
 
   GET  /viewports/<id>/slab-candidates   rectangles on the viewport, biggest first
                                           (empty when the sheet is switched off for Concrete)
-  POST /auto-run {estimate_id, sheet_id?, viewport_id?, module_id}   start a run (concrete only, Phase 1).
-                                          Only sheets switched ON for Concrete are measured: with no sheet (or a
-                                          switched-off one) it picks the best foundation sheet that is on, and its
-                                          slab plan view; refused when every sheet is switched off
+  POST /auto-run {estimate_id, sheet_id?, viewport_id?, module_id}   start a run (concrete and electrical, Phase 1).
+                                          Only sheets switched ON for the trade are measured: with no sheet (or a
+                                          switched-off one) it picks the best sheet for the trade that is on, and the
+                                          trade's view on it; refused when every sheet is switched off
   GET  /auto-run/<id>                    the run: status, step, candidates, measurements, and when done its
                                           results (each measurement, and the concrete volume they add up to,
                                           with every step's formula written out to check by hand)
@@ -61,7 +61,7 @@ _PLACE = re.compile(r"^/auto-run/(\d+)/section-place$")    # 2026-11-16: where t
 
 AGENT = "concrete-agent"         # proposed_by on every measurement the agent makes
 LLM_AGENT = "llm-takeoff"          # proposed_by on every measurement the LLM fallback makes
-MODULE_ID = "concrete"           # Phase 1: only the concrete agent runs itself
+MODULE_ID = "concrete"           # the slab-candidates endpoint is concrete-only; STRATEGIES lists the trades that run
 STATUSES = ("running", "done", "failed")
 PLAYWRIGHT_ERROR = "Playwright/Chromium is not installed — run: playwright install chromium"
 
@@ -266,27 +266,30 @@ def _start_llm_agent(conn, ctx, run_id: int):
     return _ok(run_id=run_id, status="running")
 
 
-def _start_run(conn, ctx, run_id: int, candidates: list):
+def _start_run(conn, ctx, run_id: int, candidates: list, module_id: str):
     """Start the right agent for a run row: the AI (LLM takeoff) when the owner turned it on and
-    its key is ready (2026-11-15), else the geometric agent when the drawing gave outlines. With LLM takeoff off
-    (the default) there is nothing left to try - the drawing gave no outline and the
-    AI is not to run - so the run fails at once, saying the AI did not run and where
-    to turn it on. (It used to start the geometric agent, which then failed with
-    'no slab outline' and looked like the AI had run and failed.)"""
+    its key is ready (2026-11-15), else the drawing agent when the trade has one and the drawing
+    gave outlines. With LLM takeoff off (the default) and nothing to fall back on, the run fails
+    at once, saying the AI did not run and where to turn it on. (It used to start the geometric
+    agent, which then failed with 'no slab outline' and looked like the AI had run and failed.)
+
+    Concrete keeps its Phase 1 behaviour exactly: the AI first, the drawing agent when the AI is
+    off, not ready, or out of budget. Electrical has no drawing agent - the symbols are
+    unclassified, so there is nothing to count geometrically - and is LLM-only."""
     from estimator.api.router import _ok
     from estimator.agents import roles
     from estimator.takeoff import llm_takeoff
+    strategy = STRATEGIES[module_id]
     setting = llm_takeoff.llm_setting(conn, ctx.company_id)
     # 2026-11-15 (David): with LLM takeoff on and its API key ready, AI Auto Run sends the sheet to the AI (after
     # calibrating it) even when the drawing has outlines - the AI reads the written dimensions and the footer detail,
     # the app does the maths. The drawing-only agent runs when the AI is off, not ready, or out of budget.
     if setting["enabled"] and setting["ready"] and roles.budget_left(conn, ctx.company_id)[0]:
         return _start_llm_agent(conn, ctx, run_id)
-    if candidates:
+    if candidates and strategy["geometric"]:
         return _start_agent(conn, ctx, run_id)
     if not setting["enabled"]:
-        msg = ("No slab outline found on this sheet — the AI did not run because LLM takeoff is off. "
-               "Turn it on in 🤖 AI agents (Setup) to let the AI read the plan, or measure the slab manually.")
+        msg = strategy["llm_off"]
         update_run(conn, run_id, status="failed", step="failed", error=msg)
         return _ok(run_id=run_id, status="failed", error=msg)
     if not setting["ready"]:
@@ -304,30 +307,32 @@ def _start_run(conn, ctx, run_id: int, candidates: list):
 
 # ------------------------------------------------------------------ which sheet AI Auto Run measures (2026-11-15)
 
-def _sheet_on(conn, ctx, sheet_id: int) -> bool:
+def _sheet_on(conn, ctx, sheet_id: int, module_id: str) -> bool:
     from estimator.takeoff import sheet_trades
-    return sheet_trades.is_active(conn, ctx.company_id, int(sheet_id), MODULE_ID)
+    return sheet_trades.is_active(conn, ctx.company_id, int(sheet_id), module_id)
 
 
-def pick_run_sheet(conn, ctx, estimate_id: int) -> int:
+def pick_run_sheet(conn, ctx, estimate_id: int, module_id: str) -> int:
     """The sheet AI Auto Run measures when none (or a switched-off one) is named: of the project's read plans, the
-    sheets switched ON for Concrete, best foundation-plan match first (the same ranking the AI uses). Refuses when
-    every sheet is switched off, or no plans have been read."""
+    sheets switched ON for the trade, best match first for the trade's sheet rules (the same ranking the AI uses).
+    Refuses when every sheet is switched off, or no plans have been read."""
     from estimator.takeoff import llm_takeoff
+    strategy = STRATEGIES[module_id]
     sets = [r["id"] for r in conn.execute("SELECT id FROM plan_sets WHERE company_id = ? AND estimate_id = ?"
                                           " AND status = 'processed' ORDER BY id DESC", (ctx.company_id, int(estimate_id)))]
     if not sets:
         raise _refuse("this project's plans haven't been read yet — upload them on the project page first")
     ranked = []
     for ps in sets:
-        ranked += [s for s in llm_takeoff.pick_foundation_sheets(conn, ctx.company_id, ps)
-                   if _sheet_on(conn, ctx, s["id"])]
+        ranked += [s for s in llm_takeoff.pick_foundation_sheets(conn, ctx.company_id, ps, module_id=module_id)
+                   if _sheet_on(conn, ctx, s["id"], module_id)]
     if not ranked:
         any_on = conn.execute("SELECT s.id FROM sheets s WHERE s.company_id = ? AND s.plan_set_id IN ("
                               + ",".join("?" * len(sets)) + ")", (ctx.company_id, *sets)).fetchall()
-        if any(_sheet_on(conn, ctx, r["id"]) for r in any_on):
-            raise _refuse("the sheets switched on for Concrete have no picture to read — read the plans again")
-        raise _refuse("every sheet is switched off for Concrete — switch the foundation sheet on from the Plans screen")
+        if any(_sheet_on(conn, ctx, r["id"], module_id) for r in any_on):
+            raise _refuse(f"the sheets switched on for {strategy['label']} have no picture to read — read the plans again")
+        raise _refuse(f"every sheet is switched off for {strategy['label']} — switch "
+                      f"{strategy['sheet_phrase']} on from the Plans screen")
     ranked.sort(key=lambda s: (-s["score"], s["page_no"]))
     return int(ranked[0]["id"])
 
@@ -358,8 +363,18 @@ def _n(v, places: int = 2) -> str:
 
 
 def run_results(conn, ctx, row: dict) -> dict | None:
-    """What a finished run measured, as a list to show, plus the concrete it adds up to, each step written out so a
-    person can check it by hand (2026-11-15, David):
+    """What a finished run measured, shaped for its trade (concrete: the list plus the concrete volume, each step
+    written out so a person can check it by hand; electrical: the devices the AI counted). A run for a trade the
+    auto-run doesn't know returns None - it is shown without results, never crashed on."""
+    strategy = STRATEGIES.get(row.get("module_id"))
+    if strategy is None:
+        return None
+    return strategy["results"](conn, ctx, row)
+
+
+def concrete_results(conn, ctx, row: dict) -> dict | None:
+    """What a finished concrete run measured, as a list to show, plus the concrete it adds up to,
+    each step written out so a person can check it by hand (2026-11-15, David):
       slab area      = width x length               (the dimensions the AI read off the plan)
       perimeter      = 2 x (width + length)          (footer and form length)
       slab volume    = area x thickness / 12 / 27    (thickness read off the plan, else the trade's default)
@@ -440,6 +455,235 @@ def run_results(conn, ctx, row: dict) -> dict | None:
                     "total_cuyd": q2(total), "with_waste_cuyd": q2(waste), "steps": steps}
         _add_shapes(conn, ctx, concrete, calc0, sec, slab_row, slab_adj)
     return {"lines": lines, "concrete": concrete}
+
+
+# ------------------------------------------------------------------ per-trade strategies (multi-trade auto-run, Phase 1)
+#
+# Each trade the auto-run knows how to run: its display name, which sheet and view to measure, how to find
+# candidates on the drawing, how to shape its finished results, and what to say when the AI can't run.
+# Concrete keeps its Phase 1 behaviour exactly; electrical has no geometric detection (the symbols on an
+# electrical sheet are unclassified, so there is nothing to count from the drawing) and is LLM-only.
+# The thirteen quantity trades below are LLM-only too: each reads its own sheet with the AI and proposes
+# the quantities its manifest asks for (counts, areas, lengths), through the shared flow in
+# takeoff/llm_quantities.py. Their results are shaped by their own reader module, imported lazily.
+
+
+def _trade_label(module_id: str) -> str:
+    """The trade's display name from its manifest, else the module id as given."""
+    try:
+        from estimator.modules import get_registry
+        return get_registry().get(module_id).name
+    except Exception:  # noqa: BLE001 - no manifest, no registry: the id is the name
+        return module_id
+
+
+def _concrete_viewport(conn, sheet_id: int) -> int | None:
+    """The slab plan's view on the sheet (llm_takeoff's pick: the foundation/slab view, else the biggest)."""
+    from estimator.takeoff import llm_takeoff
+    return llm_takeoff._slab_viewport(conn, sheet_id)
+
+
+def _first_viewport(conn, sheet_id: int) -> int | None:
+    """The first viewport on the sheet, by id: an electrical sheet's plan view."""
+    row = conn.execute("SELECT id FROM viewports WHERE sheet_id = ? ORDER BY id LIMIT 1",
+                       (int(sheet_id),)).fetchone()
+    return row["id"] if row is not None else None
+
+
+def _slab_candidates(conn, company_id: str, viewport_id: int) -> dict:
+    """The slab rectangles on the viewport, biggest first (concrete's geometric detection)."""
+    from estimator.takeoff import slab_find
+    return slab_find.find_slab_candidates(conn, company_id, viewport_id)
+
+
+def _no_candidates(conn, company_id: str, viewport_id: int) -> dict:
+    """No geometric candidates: the LLM-only trades have no drawing detection to run."""
+    return {"candidates": []}
+
+
+def electrical_results(conn, ctx, row: dict) -> dict | None:
+    """An electrical run's results, shaped by the electrical reader (imported lazily, as llm_takeoff is,
+    so this module loads before that file lands)."""
+    from estimator.takeoff import llm_electrical
+    return llm_electrical.electrical_results(conn, ctx, row)
+
+
+def _trade_results(conn, ctx, row: dict, module_id: str) -> dict | None:
+    """A quantity trade's results, shaped by its reader (imported lazily, as llm_takeoff is,
+    so this module loads before that file lands)."""
+    import importlib
+    mod = importlib.import_module(f"estimator.takeoff.llm_{module_id}")
+    return getattr(mod, f"{module_id}_results")(conn, ctx, row)
+
+
+STRATEGIES = {
+    "concrete": {
+        "label": "Concrete",
+        "sheet_phrase": "the foundation sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "concrete"),
+        "pick_viewport": _concrete_viewport,
+        "find_candidates": _slab_candidates,
+        "results": concrete_results,
+        "geometric": True,            # the drawing-only agent is the fallback when the AI can't run
+        "llm_off": ("No slab outline found on this sheet — the AI did not run because LLM takeoff is off. "
+                    "Turn it on in 🤖 AI agents (Setup) to let the AI read the plan, or measure the slab manually."),
+    },
+    "electrical": {
+        "label": "Electrical",
+        "sheet_phrase": "the electrical sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "electrical"),
+        "pick_viewport": _first_viewport,
+        "find_candidates": _no_candidates,
+        "results": electrical_results,
+        "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
+        "llm_off": ("electrical auto-run reads the plan with the AI — turn LLM takeoff on in 🤖 AI agents (Setup)"
+                    " to let it count the devices, or count them manually."),
+    },
+
+    "plumbing": {
+        "label": "Plumbing",
+        "sheet_phrase": "the plumbing sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "plumbing"),
+        "pick_viewport": _first_viewport,
+        "find_candidates": _no_candidates,
+        "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "plumbing"),
+        "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
+        "llm_off": ("plumbing auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+                    " to let it count the fixtures, or count them manually."),
+    },
+    "hvac": {
+        "label": "HVAC",
+        "sheet_phrase": "the mechanical sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "hvac"),
+        "pick_viewport": _first_viewport,
+        "find_candidates": _no_candidates,
+        "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "hvac"),
+        "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
+        "llm_off": ("HVAC auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+                    " to let it read the mechanical plan, or measure it manually."),
+    },
+    "flooring": {
+        "label": "Flooring",
+        "sheet_phrase": "the floor plan sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "flooring"),
+        "pick_viewport": _first_viewport,
+        "find_candidates": _no_candidates,
+        "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "flooring"),
+        "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
+        "llm_off": ("flooring auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+                    " to let it read the floor areas, or measure them manually."),
+    },
+    "roofing": {
+        "label": "Roofing",
+        "sheet_phrase": "the roof plan sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "roofing"),
+        "pick_viewport": _first_viewport,
+        "find_candidates": _no_candidates,
+        "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "roofing"),
+        "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
+        "llm_off": ("roofing auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+                    " to let it read the roof plan, or measure it manually."),
+    },
+    "framing": {
+        "label": "Framing",
+        "sheet_phrase": "the framing sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "framing"),
+        "pick_viewport": _first_viewport,
+        "find_candidates": _no_candidates,
+        "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "framing"),
+        "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
+        "llm_off": ("framing auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+                    " to let it read the framing plan, or measure it manually."),
+    },
+    "windows_doors": {
+        "label": "Windows and Doors",
+        "sheet_phrase": "the window and door sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "windows_doors"),
+        "pick_viewport": _first_viewport,
+        "find_candidates": _no_candidates,
+        "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "windows_doors"),
+        "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
+        "llm_off": ("windows and doors auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+                    " to let it count the windows and doors, or count them manually."),
+    },
+    "insulation": {
+        "label": "Insulation",
+        "sheet_phrase": "the insulation sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "insulation"),
+        "pick_viewport": _first_viewport,
+        "find_candidates": _no_candidates,
+        "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "insulation"),
+        "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
+        "llm_off": ("insulation auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+                    " to let it read the insulated areas, or measure them manually."),
+    },
+    "demolition": {
+        "label": "Demolition",
+        "sheet_phrase": "the demolition sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "demolition"),
+        "pick_viewport": _first_viewport,
+        "find_candidates": _no_candidates,
+        "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "demolition"),
+        "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
+        "llm_off": ("demolition auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+                    " to let it read the demolition plan, or measure it manually."),
+    },
+    "drywall": {
+        "label": "Drywall",
+        "sheet_phrase": "the drywall sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "drywall"),
+        "pick_viewport": _first_viewport,
+        "find_candidates": _no_candidates,
+        "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "drywall"),
+        "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
+        "llm_off": ("drywall auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+                    " to let it read the wall and ceiling areas, or measure them manually."),
+    },
+    "siding": {
+        "label": "Siding",
+        "sheet_phrase": "the elevations sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "siding"),
+        "pick_viewport": _first_viewport,
+        "find_candidates": _no_candidates,
+        "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "siding"),
+        "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
+        "llm_off": ("siding auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+                    " to let it read the outside walls, or measure them manually."),
+    },
+    "fencing": {
+        "label": "Fencing",
+        "sheet_phrase": "the site plan sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "fencing"),
+        "pick_viewport": _first_viewport,
+        "find_candidates": _no_candidates,
+        "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "fencing"),
+        "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
+        "llm_off": ("fencing auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+                    " to let it read the fence line, or measure it manually."),
+    },
+    "landscaping": {
+        "label": "Landscaping",
+        "sheet_phrase": "the landscape sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "landscaping"),
+        "pick_viewport": _first_viewport,
+        "find_candidates": _no_candidates,
+        "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "landscaping"),
+        "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
+        "llm_off": ("landscaping auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+                    " to let it read the landscape plan, or measure it manually."),
+    },
+    "painting": {
+        "label": "Painting",
+        "sheet_phrase": "the finish sheet",
+        "pick_sheet": lambda conn, ctx, estimate_id: pick_run_sheet(conn, ctx, estimate_id, "painting"),
+        "pick_viewport": _first_viewport,
+        "find_candidates": _no_candidates,
+        "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "painting"),
+        "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
+        "llm_off": ("painting auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+                    " to let it read the areas to paint, or measure them manually."),
+    },
+}
 
 
 # Which shapes each formula row highlights on the drawing (2026-11-16, David).
@@ -949,18 +1193,21 @@ def route(m: str, sub: str, req, ctx, conn):
         viewport_id = _int_opt(b.get("viewport_id"))
         if estimate_id is None:
             raise _refuse("say which estimate to measure (estimate_id)")
-        if str(b.get("module_id") or "").strip() != MODULE_ID:
-            raise _refuse("only the concrete agent runs itself for now (module_id must be 'concrete')")
+        module_id = str(b.get("module_id") or "").strip()
+        if not module_id:
+            raise _refuse("say which trade to run (module_id)")
+        if module_id not in STRATEGIES:
+            raise _refuse(f"auto-run isn't built for {_trade_label(module_id)} yet")
+        strategy = STRATEGIES[module_id]
         from estimator.estimating import service
         service.get_estimate(conn, ctx, estimate_id)          # not found / another company's estimate
-        # 2026-11-15 (David): AI Auto Run runs on the sheets switched ON for Concrete. With no sheet named (or the
-        # open sheet switched off), it picks the best foundation sheet that is on, and the slab plan's view on it.
-        if sheet_id is None or not _sheet_on(conn, ctx, sheet_id):
-            sheet_id = pick_run_sheet(conn, ctx, estimate_id)
+        # 2026-11-15 (David): AI Auto Run runs on the sheets switched ON for the trade. With no sheet named (or the
+        # open sheet switched off), it picks the best sheet for the trade that is on, and the trade's view on it.
+        if sheet_id is None or not _sheet_on(conn, ctx, sheet_id, module_id):
+            sheet_id = strategy["pick_sheet"](conn, ctx, estimate_id)
             viewport_id = None
         if viewport_id is None:
-            from estimator.takeoff import llm_takeoff
-            viewport_id = llm_takeoff._slab_viewport(conn, sheet_id)
+            viewport_id = strategy["pick_viewport"](conn, sheet_id)
             if viewport_id is None:
                 raise _refuse("that sheet has no view to measure — read the plans again on the Plans screen")
         sheet = conn.execute("SELECT id FROM sheets WHERE id = ? AND company_id = ?",
@@ -973,17 +1220,17 @@ def route(m: str, sub: str, req, ctx, conn):
             raise _refuse(f"viewport {viewport_id} not found", 404, "not_found")
         if vp["sheet_id"] != sheet_id:
             raise _refuse("that viewport is on a different sheet")
-        from estimator.takeoff import sheet_trades
-        if not sheet_trades.is_active(conn, ctx.company_id, sheet_id, MODULE_ID):
-            raise _refuse("this sheet is switched off for Concrete — switch it back on from the Plans screen to run the agent")
+        if not _sheet_on(conn, ctx, sheet_id, module_id):
+            raise _refuse(f"this sheet is switched off for {strategy['label']} — switch it back on from the Plans screen"
+                          " to run the agent")
         busy = conn.execute("SELECT id FROM auto_runs WHERE company_id = ? AND estimate_id = ?"
                             " AND viewport_id = ? AND module_id = ? AND status = 'running'",
-                            (ctx.company_id, estimate_id, viewport_id, MODULE_ID)).fetchone()
+                            (ctx.company_id, estimate_id, viewport_id, module_id)).fetchone()
         if busy is not None:
             raise _refuse("an auto-run is already going for this viewport; wait for it to finish")
-        found = slab_find.find_slab_candidates(conn, ctx.company_id, viewport_id)
-        run_id = create_run(conn, ctx, estimate_id, sheet_id, viewport_id, MODULE_ID, found["candidates"])
-        return _start_run(conn, ctx, run_id, found["candidates"])
+        found = strategy["find_candidates"](conn, ctx.company_id, viewport_id)
+        run_id = create_run(conn, ctx, estimate_id, sheet_id, viewport_id, module_id, found["candidates"])
+        return _start_run(conn, ctx, run_id, found["candidates"], module_id)
 
     if _RUNS.match(sub) and m == "GET":
         # 2026-11-15 (David): the latest run on a sheet, so Blueprint Review shows a run that is still going (and
@@ -1054,6 +1301,8 @@ def route(m: str, sub: str, req, ctx, conn):
         old = _load_run(conn, ctx, int(mm.group(1)))
         if old["status"] == "running":
             raise _refuse("that run is still going; wait for it to finish before re-running it")
+        if old["module_id"] not in STRATEGIES:
+            raise _refuse(f"auto-run isn't built for {_trade_label(old['module_id'])} yet")
         from estimator.takeoff import sheet_trades
         if not sheet_trades.is_active(conn, ctx.company_id, old["sheet_id"], old["module_id"]):
             raise _refuse("this sheet is switched off for that trade — switch it back on from the Plans screen to re-run the agent")
@@ -1069,7 +1318,7 @@ def route(m: str, sub: str, req, ctx, conn):
                 continue
             if calc.get("auto_run_id") == old["id"]:
                 doomed.append(r["id"])
-        found = slab_find.find_slab_candidates(conn, ctx.company_id, old["viewport_id"])
+        found = STRATEGIES[old["module_id"]]["find_candidates"](conn, ctx.company_id, old["viewport_id"])
         with service.transaction(conn):
             for mid in doomed:
                 conn.execute("DELETE FROM measurements WHERE id = ?", (mid,))
@@ -1077,7 +1326,7 @@ def route(m: str, sub: str, req, ctx, conn):
                          {"run_id": old["id"], "deleted_measurement_ids": doomed})
             new_id = create_run(conn, ctx, old["estimate_id"], old["sheet_id"], old["viewport_id"],
                                 old["module_id"], found["candidates"])
-        return _start_run(conn, ctx, new_id, found["candidates"])
+        return _start_run(conn, ctx, new_id, found["candidates"], old["module_id"])
 
     mm = _MEAS_ACT.match(sub)
     if mm and m == "POST":

@@ -174,5 +174,5 @@ def test_plan_set_detail_has_the_trade_selector_and_toggle():                   
 def test_blueprint_review_marks_a_deactivated_sheet():                                      # ST-A13
     review = (WEB / "review.js").read_text(encoding="utf-8")
     for needle in ("inactiveTrades", "inactive_trades", "bp-auto-off", "bp-guide-off-",
-                   "switched off for Concrete"):
+                   "switched off for \" + tradeName(trade)"):   # the note names any trade (2026-11-18)
         assert needle in review, needle

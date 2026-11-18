@@ -356,9 +356,52 @@ def test_agent_auto_run_markers():                                              
         assert needed in js, needed
     # The retarget goes through the ask-first flow, like every other change.
     assert any("reviewAsk" in ln and "/retarget" in ln for ln in js.splitlines())
-    # The button stays, disabled with the reason, when concrete isn't on the estimate.
-    assert "Add the Concrete trade" in js
+    # The button stays, disabled with the reason, when no runnable trade is on the estimate.
+    assert "Add a construction trade to this project first" in js
     # The run is watched by polling, and the poll stops when the page goes away.
     assert "setTimeout" in js and "pollAutoRun" in js
     # The agent's outline is shown from its own drawing objects, falling back to its shape.
     assert "showAgentOutline" in js and "zoomToSelection" in js
+
+
+def test_auto_run_picks_concrete_or_electrical_by_sheet():                   # C2S7-W07 (2026-11-18)
+    js = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
+    # The run's trade comes from the project and the open sheet's discipline — an electrical
+    # sheet means the electrical count, otherwise concrete wins.
+    for needed in ("autoRunTrade", "RV.sheet.discipline", '"electrical"', "AUTO.moduleId",
+                   "module_id: trade", "run.module_id"):
+        assert needed in js, needed
+    # The button's hover text names the trade it will actually run — never concrete's
+    # description on an electrical takeoff. Since 2026-11-18 the titles are composed
+    # from a per-trade blurb (AUTO_RUN_BLURBS) and the trade's name, so the markers
+    # are the parts; the E2E tests pin the composed text at runtime.
+    assert "count the outlets, switches, lights and circuits" in js
+    assert 'concrete: "measure the concrete"' in js
+    assert 'plumbing: "count the fixtures"' in js
+    assert '"AI Auto Run: " + (AUTO_RUN_BLURBS[trade]' in js
+    assert "Add a construction trade to this project first" in js
+    assert '"Every sheet is switched off for " + name' in js
+    # While a run works, the button names the running trade, not the open sheet's.
+    assert 'AUTO.status === "running" && AUTO.moduleId' in js
+    # The steps the banner shows differ by trade; counts need no calibration step.
+    assert "AUTO_STEPS_BY_TRADE" in js
+    assert "finding the electrical sheet" in js and "counting the devices" in js
+    assert "Sending the sheet to the AI to count the devices" in js
+    # Electrical results land in the Takeoff steps tab as a device-counts table.
+    assert "electricalStepsBox" in js and "AUTO.results.electrical" in js
+    assert "Device counts" in js and "bp-auto-counts" in js
+    # The finished-run note and the LLM scale note are per trade.
+    assert "price Electrical from them" in js
+    assert "counts don't need the sheet's scale" in js
+    # The toast counts devices for an electrical run.
+    assert "devices counted" in js
+    # Slab candidates stay concrete-only (the gate follows the picker's trade now).
+    assert 'selectedAutoRunTrade() !== "concrete"' in js
+
+
+def test_guide_count_badges_show_the_total():                                 # C2S7-W08 (2026-11-18)
+    js = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
+    # A count question has no unit in the manifest, but its measurements are counted "ea":
+    # the badge shows the total ("to review — 42 ea"), not "1 measurement(s)".
+    assert '(!q.unit && m.unit === "ea")' in js
+    assert "same[0].unit" in js

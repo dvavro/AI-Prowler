@@ -9,6 +9,10 @@ project but not priced), and the auto-run button couldn't run. Now:
   * 🤖 AI Auto Run lists what it measured and the concrete volume it adds up to.
 The run itself is not started here (no real AI): POST /auto-run is answered with a finished run made in the test,
 and the page reads that run from the real server.
+(2026-11-18) With both trades on the project, the open sheet's discipline picks the trade: the
+electrical sheet counts devices, and the counts land in the Takeoff steps tab.
+(2026-11-18) The other 13 construction trades run the same way through one generic quantities table,
+and a picker next to the button chooses the trade when more than one can run.
 """
 import json
 
@@ -322,3 +326,244 @@ def test_E2E_calibrate_the_detail_then_see_the_sections_parts_on_it(page, db, sh
     page.click("#bp-section-flip")
     page.wait_for_function("(bx) => { const p = document.querySelector(\"#bp-hl polygon[data-part='below']\");"
                            " return p && parseFloat(p.getAttribute('points').split(' ')[1]) < bx; }", arg=bx)
+
+
+@pytest.fixture
+def ehouse(db, tmp_path):
+    """A two-page plan set, both trades picked: page 1 is the structural sheet, page 2 the electrical sheet."""
+    lt, ll = legend([("recept", None, "DUPLEX RECEPTACLE")])
+    pages = [plan(lt, ll + shape("recept", 5, 5)), plan(lt, ll + shape("recept", 9, 9))]
+    est = service.create_estimate(db, CTX, "NSB House rewire")
+    ps = store.upload(db, CTX, est["id"], str(make_pdf(tmp_path / "ehouse.pdf", pages)), confirm=True)["plan_set_id"]
+    engine.start(db, CTX, ps, confirm=True)
+    director.set_project_trades(db, CTX, est["id"], ["concrete", "electrical"])
+    sheets = store.sheets(db, CTX, ps)["sheets"]
+    struct, elec = sheets[0]["id"], sheets[1]["id"]
+    db.execute("UPDATE sheets SET discipline = 'structural' WHERE id = ?", (struct,))
+    db.execute("UPDATE sheets SET discipline = 'electrical' WHERE id = ?", (elec,))
+    db.commit()
+    return {"est": est["id"], "struct": struct, "elec": elec}
+
+
+def _finished_electrical_run(db, seed):
+    """A finished AI run on the electrical sheet: 12 outlets, 4 switches, 2 GFCI, 6 lights counted."""
+    vp = db.execute("SELECT id FROM viewports WHERE sheet_id = ? ORDER BY id LIMIT 1", (seed["elec"],)).fetchone()[0]
+    run = autorun_api.create_run(db, CTX, seed["est"], seed["elec"], vp, "electrical")
+    counts = {"outlets": 12, "switches": 4, "gfci": 2, "lights": 6, "fans": 0,
+              "appliance_circuits": 0, "circuits_15a": 0, "low_voltage": 0}
+    ids = []
+    for feeds, label, qty, how in (("outlets", "Outlets (AI)", 12, "12 duplex receptacles on the plan"),
+                                   ("switches", "Switches (AI)", 4, "4 single-pole switches by the doors"),
+                                   ("gfci", "GFCI outlets (AI)", 2, "2 GFCI outlets in the kitchen and bath"),
+                                   ("lights", "Lights (AI)", 6, "6 ceiling lights and recessed cans")):
+        calc = json.dumps({"source": "llm", "auto_run_id": run, "candidate_id": "llm",
+                           "how": how, "qty": str(qty), "electrical_sheet_id": seed["elec"],
+                           "counts": counts, "notes": ""})
+        ids.append(db.execute(
+            "INSERT INTO measurements (company_id, estimate_id, module_id, feeds, sheet_id, viewport_id, kind, label,"
+            " qty, unit, source_object_ids, calc_json, method, status, locked, proposed_by, created_at, updated_at)"
+            " VALUES ('default', ?, 'electrical', ?, ?, ?, 'count', ?, ?, 'ea', '[]', ?, 'ai', 'proposed', 0, 'llm-takeoff', ?, ?)",
+            (seed["est"], feeds, seed["elec"], vp, label, str(qty), calc, NOW, NOW)).lastrowid)
+    autorun_api.update_run(db, run, step="counting the devices", measurement_ids=ids)
+    db.commit()
+    return run
+
+
+def test_E2E_ai_auto_run_counts_devices_on_the_electrical_sheet(page, db, ehouse):
+    """David's complaint (2026-11-18): on an electrical takeoff the Auto Run hover said it computes cement areas.
+    With both trades on the project, the open sheet's discipline picks the trade: the structural sheet runs
+    concrete, the electrical sheet counts devices - and the counts land in the Takeoff steps tab."""
+    sent, made = [], []
+
+    def fake_start(route):
+        if route.request.method != "POST":
+            route.continue_()
+            return
+        sent.append(json.loads(route.request.post_data or "{}"))
+        made.append(_finished_electrical_run(db, ehouse))           # the run "starts" when the button is clicked
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "run_id": made[0],
+                                                                                     "status": "running"}))
+    page.route("**/estimator-api/auto-run", fake_start)
+    page.goto(page.base + f"#/takeoffs/{ehouse['est']}")
+    page.wait_for_selector("#bp-tools")
+    dismiss_tour(page)
+    btn = page.locator("#bp-auto-run")
+    # On the structural sheet the button still runs concrete.
+    page.select_option("#review-sheet", str(ehouse["struct"]))
+    page.wait_for_function("() => document.querySelector('#bp-auto-run').title.includes('measure the concrete')")
+    assert "measure the concrete" in btn.get_attribute("title")
+    # On the electrical sheet it counts devices instead.
+    page.select_option("#review-sheet", str(ehouse["elec"]))
+    page.wait_for_function("() => document.querySelector('#bp-auto-run').title.includes('count the outlets')")
+    assert "count the outlets, switches, lights and circuits" in btn.get_attribute("title")
+    assert btn.is_enabled()
+    page.click("#bp-auto-run")
+    # While it works: the banner shows the electrical steps, and the button can't be clicked again.
+    page.wait_for_selector(".bp-running #bp-auto-steps")
+    assert "please wait" in page.inner_text("#bp-auto-status")
+    assert btn.is_disabled() and "working" in btn.inner_text()
+    page.wait_for_function("() => document.querySelector('#bp-auto-steps li.now') && "
+                           "document.querySelector('#bp-auto-steps li.now').innerText.includes('Working out the device counts')")
+    assert sent and sent[0].get("sheet_id") in (ehouse["elec"], str(ehouse["elec"])) and sent[0]["module_id"] == "electrical"
+    autorun_api.update_run(db, made[0], status="done", step="done")
+    db.commit()
+    page.wait_for_selector("#bp-auto-results", timeout=20000)
+    assert page.locator(".bp-running").count() == 0 and btn.is_enabled() and "working" not in btn.inner_text()
+    box = page.inner_text("#bp-auto-results")
+    assert "AI Auto Run measurements" in box
+    assert "Outlets (AI)" in box and "12 ea" in box and "Lights (AI)" in box
+    assert "price Electrical from them" in box
+    assert "AI Auto Run finished: 4 proposed measurement(s)" in page.inner_text("#bp-auto-status")
+    # The counts live in the Takeoff steps tab, zeros included, with the evidence for each.
+    page.click("#bp-tab-steps")
+    page.wait_for_selector("#bp-auto-count-table", timeout=20000)
+    counts = page.inner_text("#bp-auto-counts")
+    assert "Device counts" in counts
+    outlets = page.inner_text("#bp-auto-count-table tr[data-feeds='outlets']")
+    assert "12" in outlets and "12 duplex receptacles on the plan" in outlets
+    fans = page.inner_text("#bp-auto-count-table tr[data-feeds='fans']")
+    assert "0" in fans
+    # The guide's Outlets badge shows the total, not "1 measurement(s)".
+    page.wait_for_function("() => document.querySelector('#bp-guide').innerText.includes('to review — 12 ea')")
+    assert "to review — 12 ea" in page.inner_text("#bp-guide")
+    # Reloading the page keeps the counts (the latest run on the sheet is loaded again, with its trade).
+    page.reload()
+    page.wait_for_selector("#bp-tools")
+    page.select_option("#review-sheet", str(ehouse["elec"]))
+    page.wait_for_selector("#bp-tab-steps", timeout=20000)
+    assert "count the outlets" in btn.get_attribute("title")
+    page.click("#bp-tab-steps")
+    page.wait_for_selector("#bp-auto-count-table", timeout=20000)
+    assert "Device counts" in page.inner_text("#bp-auto-counts")
+    assert "price Electrical from them" in page.inner_text("#bp-auto-results")
+
+
+@pytest.fixture
+def phouse(db, tmp_path):
+    """A two-page plan set, Concrete and Plumbing picked: page 1 is the structural sheet,
+    page 2 the plumbing sheet - so the picker has two trades to choose between."""
+    lt, ll = legend([("recept", None, "DUPLEX RECEPTACLE")])
+    pages = [plan(lt, ll + shape("recept", 5, 5)), plan(lt, ll + shape("recept", 9, 9))]
+    est = service.create_estimate(db, CTX, "NSB House repipe")
+    ps = store.upload(db, CTX, est["id"], str(make_pdf(tmp_path / "phouse.pdf", pages)), confirm=True)["plan_set_id"]
+    engine.start(db, CTX, ps, confirm=True)
+    director.set_project_trades(db, CTX, est["id"], ["concrete", "plumbing"])
+    sheets = store.sheets(db, CTX, ps)["sheets"]
+    struct, plumb = sheets[0]["id"], sheets[1]["id"]
+    db.execute("UPDATE sheets SET discipline = 'structural' WHERE id = ?", (struct,))
+    db.execute("UPDATE sheets SET discipline = 'plumbing' WHERE id = ?", (plumb,))
+    db.commit()
+    return {"est": est["id"], "struct": struct, "plumb": plumb}
+
+
+def _finished_plumbing_run(db, seed):
+    """A finished AI run on the plumbing sheet: 2 toilets, 3 sinks, 1 kitchen sink, 2 showers,
+    1 dishwasher, 1 washer - and no hose bibs, so that quantity has no measurement row."""
+    vp = db.execute("SELECT id FROM viewports WHERE sheet_id = ? ORDER BY id LIMIT 1", (seed["plumb"],)).fetchone()[0]
+    values = {"toilets": 2, "sinks": 3, "kitchen_sinks": 1, "showers": 2,
+              "dishwashers": 1, "washers": 1, "hose_bibs": 0}
+    evidence = {"toilets": "2 water closets on the plan", "sinks": "3 lavatories in the baths",
+                "kitchen_sinks": "1 kitchen sink", "showers": "2 showers",
+                "dishwashers": "1 dishwasher by the kitchen sink", "washers": "1 laundry box",
+                "hose_bibs": "none seen"}
+    cand = {"id": "llm", "source": "llm", "values": values, "evidence": evidence,
+            "confidence": 0.9, "notes": "clear plan", "sheet_id": seed["plumb"],
+            "provider": "claude_api", "model": "claude-sonnet-5-5"}
+    run = autorun_api.create_run(db, CTX, seed["est"], seed["plumb"], vp, "plumbing", [cand])
+    ids = []
+    for feeds, label, qty in (("toilets", "Toilets (AI)", 2), ("sinks", "Bathroom sinks (AI)", 3),
+                              ("kitchen_sinks", "Kitchen or bar sinks (AI)", 1),
+                              ("showers", "Showers and tubs (AI)", 2),
+                              ("dishwashers", "Dishwashers to hook up (AI)", 1),
+                              ("washers", "Washer boxes (laundry) (AI)", 1)):
+        calc = json.dumps({"source": "llm", "auto_run_id": run, "candidate_id": "llm",
+                           "how": evidence[feeds], "qty": str(qty)})
+        ids.append(db.execute(
+            "INSERT INTO measurements (company_id, estimate_id, module_id, feeds, sheet_id, viewport_id, kind, label,"
+            " qty, unit, source_object_ids, calc_json, method, status, locked, proposed_by, created_at, updated_at)"
+            " VALUES ('default', ?, 'plumbing', ?, ?, ?, 'count', ?, ?, 'ea', '[]', ?, 'ai', 'proposed', 0, 'llm-takeoff', ?, ?)",
+            (seed["est"], feeds, seed["plumb"], vp, label, str(qty), calc, NOW, NOW)).lastrowid)
+    autorun_api.update_run(db, run, step="working out the quantities", measurement_ids=ids)
+    db.commit()
+    return run
+
+
+def test_E2E_ai_auto_run_picks_a_quantity_trade_and_shows_its_quantities(page, db, phouse):
+    """The quantity trades share one generic results table, and the picker next to the button
+    chooses the trade: on the structural sheet it runs concrete, on the plumbing sheet it
+    counts the fixtures - and switching the picker switches the trade the button will run."""
+    sent, made = [], []
+
+    def fake_start(route):
+        if route.request.method != "POST":
+            route.continue_()
+            return
+        sent.append(json.loads(route.request.post_data or "{}"))
+        made.append(_finished_plumbing_run(db, phouse))           # the run "starts" when the button is clicked
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "run_id": made[0],
+                                                                                     "status": "running"}))
+    page.route("**/estimator-api/auto-run", fake_start)
+    page.goto(page.base + f"#/takeoffs/{phouse['est']}")
+    page.wait_for_selector("#bp-tools")
+    dismiss_tour(page)
+    btn = page.locator("#bp-auto-run")
+    picker = page.locator("#bp-auto-trade")
+    assert picker.count() == 1                              # two runnable trades: the picker is there
+    assert picker.locator("option").all_inner_texts() == ["Concrete", "Plumbing"]
+    # On the structural sheet the picker defaults to concrete.
+    page.select_option("#review-sheet", str(phouse["struct"]))
+    page.wait_for_function("() => document.querySelector('#bp-auto-run').title.includes('measure the concrete')")
+    assert picker.input_value() == "concrete"
+    assert "measure the concrete" in btn.get_attribute("title")
+    # On the plumbing sheet it follows the discipline - no pick made yet, so it moves on its own.
+    page.select_option("#review-sheet", str(phouse["plumb"]))
+    page.wait_for_function("() => document.querySelector('#bp-auto-run').title.includes('count the fixtures')")
+    assert picker.input_value() == "plumbing"
+    assert "count the fixtures" in btn.get_attribute("title")
+    # Switching the picker switches the trade the button will run, and back again.
+    page.select_option("#bp-auto-trade", "concrete")
+    page.wait_for_function("() => document.querySelector('#bp-auto-run').title.includes('measure the concrete')")
+    assert "measure the concrete" in btn.get_attribute("title")
+    page.select_option("#bp-auto-trade", "plumbing")
+    page.wait_for_function("() => document.querySelector('#bp-auto-run').title.includes('count the fixtures')")
+    assert btn.is_enabled()
+    page.click("#bp-auto-run")
+    # While it works: the banner shows the quantity trades' default steps, and the button can't be clicked again.
+    page.wait_for_selector(".bp-running #bp-auto-steps")
+    assert "please wait" in page.inner_text("#bp-auto-status")
+    assert btn.is_disabled() and "working" in btn.inner_text()
+    assert picker.is_disabled()                              # the trade can't change mid-run
+    page.wait_for_function("() => document.querySelector('#bp-auto-steps li.now') && "
+                           "document.querySelector('#bp-auto-steps li.now').innerText.includes('Working out the quantities')")
+    assert sent and sent[0].get("sheet_id") in (phouse["plumb"], str(phouse["plumb"])) and sent[0]["module_id"] == "plumbing"
+    autorun_api.update_run(db, made[0], status="done", step="done")
+    db.commit()
+    page.wait_for_selector("#bp-auto-results", timeout=20000)
+    assert page.locator(".bp-running").count() == 0 and btn.is_enabled() and "working" not in btn.inner_text()
+    box = page.inner_text("#bp-auto-results")
+    assert "AI Auto Run measurements" in box
+    assert "Toilets (AI)" in box and "2 ea" in box and "Bathroom sinks (AI)" in box
+    assert "price Plumbing from them" in box
+    assert "AI Auto Run finished: 6 proposed measurement(s)" in page.inner_text("#bp-auto-status")
+    # The quantities live in the Takeoff steps tab, zeros included, with the evidence for each.
+    page.click("#bp-tab-steps")
+    page.wait_for_selector("#bp-auto-quantities-table", timeout=20000)
+    quantities = page.inner_text("#bp-auto-quantities")
+    assert "Plumbing quantities" in quantities
+    toilets = page.inner_text("#bp-auto-quantities-table tr[data-feeds='toilets']")
+    assert "2" in toilets and "2 water closets on the plan" in toilets
+    bibs = page.inner_text("#bp-auto-quantities-table tr[data-feeds='hose_bibs']")
+    assert "0" in bibs and "none seen" in bibs
+    # The guide's Toilets badge shows the total, not "1 measurement(s)".
+    page.wait_for_function("() => document.querySelector('#bp-guide').innerText.includes('to review — 2 ea')")
+    assert "to review — 2 ea" in page.inner_text("#bp-guide")
+    # Reloading the page keeps the quantities (the latest run on the sheet is loaded again, with its trade).
+    page.reload()
+    page.wait_for_selector("#bp-tools")
+    page.select_option("#review-sheet", str(phouse["plumb"]))
+    page.wait_for_selector("#bp-tab-steps", timeout=20000)
+    assert "count the fixtures" in btn.get_attribute("title")
+    page.click("#bp-tab-steps")
+    page.wait_for_selector("#bp-auto-quantities-table", timeout=20000)
+    assert "Plumbing quantities" in page.inner_text("#bp-auto-quantities")
+    assert "price Plumbing from them" in page.inner_text("#bp-auto-results")

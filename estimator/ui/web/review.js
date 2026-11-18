@@ -120,7 +120,7 @@ async function renderReview(main, estimateId) {
   next.addEventListener("click", () => step(1));
   const viewerBox = el("div", { class: "bp-viewer", id: "bp-viewer", tabindex: "0", "aria-label": "Blueprint" });
   const stepsTab = tabButton("steps", "Takeoff steps");
-  stepsTab.hidden = true;      // only shows when a run has a concrete calc to show (drawStepsPanel)
+  stepsTab.hidden = true;      // only shows when a run has a calc or quantities to show (drawStepsPanel)
   const side = el("div", { class: "bp-side" },
     el("div", { class: "bp-tabs", role: "tablist" },
       tabButton("list", "Measurements"), tabButton("symbols", "Symbols"), tabButton("lines", "Lines"), tabButton("layers", "Layers"),
@@ -332,18 +332,29 @@ function toolPalette(msg) {
     b.addEventListener("click", () => setTool(id, msg));
     box.append(b);
   }
-  // Phase 1: the Concrete agent measures the slab on its own (a measuring action, so it sits with the measure
-  // tools and is hidden from reviewers). Without the Concrete trade on the estimate it stays, disabled, with
-  // the reason — the agent only measures concrete slabs.
+  // Phase 1: the agent measures on its own (a measuring action, so it sits with the measure tools and is
+  // hidden from reviewers). Without a runnable trade on the estimate it stays, disabled, with the reason —
+  // the agent measures the quantities on the plans for the project's construction trades. drawAutoRunStatus
+  // keeps the title naming the trade it will actually run.
   if (RV.data.can_measure) {
-    const hasConcrete = hasConcreteTrade();
+    const trade = selectedAutoRunTrade();
     const run = el("button", { class: "button", type: "button", id: "bp-auto-run",
-      disabled: !hasConcrete,
-      title: hasConcrete ? "AI Auto Run: measure the concrete on the sheets switched on for Concrete, then review what it proposes."
-        : "Add the Concrete trade to this project first — AI Auto Run measures concrete slabs." },
+      disabled: !trade,
+      title: autoRunTitle(trade, true) },
       "🤖 AI Auto Run");
     run.addEventListener("click", () => startAutoRun());
     box.append(run);
+    // More than one runnable trade: a picker next to the button, so the run goes to the trade the user
+    // wants — the default follows the open sheet's discipline until the user picks (drawAutoRunStatus
+    // keeps the picker in step), and the choice is kept in AUTO.pickedTrade so a redraw never loses it.
+    const runnable = autoRunTrades();
+    if (runnable.length > 1) {
+      const pick = el("select", { id: "bp-auto-trade", "aria-label": "Trade for AI Auto Run",
+        title: "Which trade AI Auto Run measures" },
+        runnable.map(t => el("option", { value: t.module_id, selected: t.module_id === trade }, t.name)));
+      pick.addEventListener("change", () => { AUTO.pickedTrade = pick.value; drawAutoRunStatus(); });
+      box.append(pick);
+    }
   }
   return box;
 }
@@ -1185,11 +1196,59 @@ const AUTO_TIMEOUT_MS = 10 * 60 * 1000;     // give up after 10 minutes
 const AGENT = "concrete-agent";             // proposed_by of the agent's measurements
 const LLM_AGENT = "llm-takeoff";            // proposed_by of the LLM fallback's measurements
 const AUTO = { runId: null, estimateId: null, sheetId: null, viewportId: null, timer: null, startedAt: 0,
-               status: null, step: "", error: null, measurementIds: [],
+               status: null, step: "", error: null, measurementIds: [], moduleId: null, pickedTrade: null,
                candidates: new Map(), candidatesLoading: new Set(), llmTakeoff: new Map(),
                source: "geometry" };
 
 function hasConcreteTrade() { return !!(RV.data && RV.data.trades.some(t => t.module_id === "concrete")); }
+
+// Every trade AI Auto Run can measure (2026-11-18): the 15 construction trades with an auto-run reader.
+// Services trades never deal with plans, so they never appear here.
+const AUTO_RUN_TRADES = ["concrete", "electrical", "plumbing", "hvac", "flooring", "roofing", "framing",
+  "windows_doors", "insulation", "demolition", "drywall", "siding", "fencing", "landscaping", "painting"];
+function autoRunTrades() {
+  return ((RV.data && RV.data.trades) || []).filter(t => AUTO_RUN_TRADES.includes(t.module_id));
+}
+
+// Which trade AI Auto Run measures on this project (2026-11-18): all 15 construction trades run now.
+// The open sheet's discipline picks when it matches a runnable trade — an electrical sheet means the
+// electrical count — otherwise concrete wins (it was first), and a project with only one runnable trade
+// runs that one.
+function autoRunTrade() {
+  const runnable = autoRunTrades().map(t => t.module_id);
+  if (!runnable.length) return null;
+  const d = RV.sheet && RV.sheet.discipline;
+  if (d && runnable.includes(d)) return d;
+  if (runnable.includes("concrete")) return "concrete";
+  return runnable[0];
+}
+
+// The trade the run button will run: the user's picker choice when it is still on the project, otherwise
+// the default above. The choice lives here so a status redraw never loses it.
+function selectedAutoRunTrade() {
+  const runnable = autoRunTrades().map(t => t.module_id);
+  if (AUTO.pickedTrade && runnable.includes(AUTO.pickedTrade)) return AUTO.pickedTrade;
+  return autoRunTrade();
+}
+
+// The button's hover text names the trade it will actually run — never one trade's description while
+// running another. Concrete and electrical keep their exact wording from 2026-11-15 / 2026-11-18.
+const AUTO_RUN_BLURBS = {
+  concrete: "measure the concrete", electrical: "count the outlets, switches, lights and circuits",
+  plumbing: "count the fixtures", hvac: "read the conditioned area and count the registers, returns and thermostats",
+  flooring: "read the floor areas and count the stairs and transitions", roofing: "read the roof area, edges and ridge",
+  framing: "count the openings, trusses and corners and read the floor area", windows_doors: "count the windows and doors",
+  insulation: "read the attic and wall insulation areas", demolition: "read the areas to demolish and count the fixtures",
+  drywall: "read the ceiling area and the openings", siding: "read the wall areas and count the corners and openings",
+  fencing: "read the fence length and count the gates", landscaping: "read the landscaped areas and count the shrubs, trees and zones",
+  painting: "read the ceiling and exterior areas and count the doors" };
+function autoRunTitle(trade, anyOn) {
+  if (!trade) return "Add a construction trade to this project first — AI Auto Run measures the quantities on the plans for that trade.";
+  const name = tradeName(trade);
+  if (!anyOn) return "Every sheet is switched off for " + name + " — switch the sheets on from the Plans screen.";
+  return "AI Auto Run: " + (AUTO_RUN_BLURBS[trade] || "read the quantities") +
+    " on the sheets switched on for " + name + ", then review what it proposes.";
+}
 
 // A sheet is "on" when it isn't switched off (Plans screen) for every trade this project measures (2026-11-15).
 // With no trade to measure yet, every sheet counts as on.
@@ -1276,8 +1335,9 @@ async function getCandidates(vpId) {
 
 // What the agent found on this sheet, before anyone runs it — loaded once per sheet, in the background, so
 // opening a sheet never waits on it. A missing backend (or a sheet with no candidates) just leaves the line out.
+// Slab outlines are concrete-only: an electrical run counts devices, it has no geometric candidates.
 async function loadAutoCandidates() {
-  if (!hasConcreteTrade() || !RV.data.can_measure) return;
+  if (selectedAutoRunTrade() !== "concrete" || !RV.data.can_measure) return;
   const vp = autoRunViewport();
   if (!vp || AUTO.candidates.has(vp.id) || AUTO.candidatesLoading.has(vp.id)) return;
   AUTO.candidatesLoading.add(vp.id);
@@ -1300,22 +1360,26 @@ function drawAutoRunStatus() {
   const slot = $("bp-auto-slot");
   if (!slot || !RV.data) return;
   const runBtn = $("bp-auto-run");
-  // 2026-11-15 (David): AI Auto Run measures the sheets switched ON for Concrete, whichever sheet is open — so an
-  // open sheet that's switched off doesn't disable it; the run goes to the foundation sheet that is on.
-  const offForConcrete = (RV.inactiveTrades || []).includes("concrete");
-  const anyOn = ((RV.data && RV.data.sheets) || []).some(s => !(s.inactive_trades || []).includes("concrete"));
+  // 2026-11-15 (David): AI Auto Run measures the sheets switched ON for the trade being run, whichever sheet is
+  // open — so an open sheet that's switched off doesn't disable it; the run goes to the sheet that is on.
+  // While a run works, the button names the trade that is running — the open sheet may have changed since it started.
+  const trade = AUTO.status === "running" && AUTO.moduleId ? AUTO.moduleId : selectedAutoRunTrade();
+  const offForTrade = trade && (RV.inactiveTrades || []).includes(trade);
+  const anyOn = trade && ((RV.data && RV.data.sheets) || []).some(s => !(s.inactive_trades || []).includes(trade));
   if (runBtn) {
-    runBtn.disabled = !hasConcreteTrade() || AUTO.status === "running" || !anyOn;
-    runBtn.title = !anyOn
-      ? "Every sheet is switched off for Concrete — switch the foundation sheet on from the Plans screen."
-      : (hasConcreteTrade() ? "AI Auto Run: measure the concrete on the sheets switched on for Concrete, then review what it proposes."
-        : "Add the Concrete trade to this project first — AI Auto Run measures concrete slabs.");
+    runBtn.disabled = !trade || AUTO.status === "running" || !anyOn;
+    runBtn.title = autoRunTitle(trade, anyOn);
+  }
+  const picker = $("bp-auto-trade");
+  if (picker) {
+    if (!AUTO.pickedTrade) picker.value = trade || "";   // no pick yet: follow the sheet's discipline
+    picker.disabled = AUTO.status === "running";
   }
   const runHere = !!(AUTO.status && AUTO.sheetId === RV.sheetId);
   const parts = [];
-  if (offForConcrete && hasConcreteTrade()) {
+  if (offForTrade && trade) {
     const psId = RV.sheet && RV.sheet.plan_set_id;
-    parts.push(el("p", { class: "note warn", id: "bp-auto-off" }, "This sheet is switched off for Concrete — AI Auto Run skips it" +
+    parts.push(el("p", { class: "note warn", id: "bp-auto-off" }, "This sheet is switched off for " + tradeName(trade) + " — AI Auto Run skips it" +
       (anyOn ? " and measures the sheets that are on. " : ". "),
       psId ? el("a", { href: "#/plan-sets/" + psId }, "Change which sheets are on (Plans screen)") : "Change which sheets are on on the Plans screen", "."));
   }
@@ -1339,7 +1403,9 @@ function drawAutoRunStatus() {
     // The AI (API key) reads the dimensions written on the plan and the app does the maths: no scale, no
     // calibration - say so instead of naming a scale it never used (2026-11-13, David).
     if (AUTO.source === "llm") parts.push(el("p", { class: "muted small", id: "bp-auto-scale" },
-      "📐 The AI read the slab's written dimensions off the plan; the app worked out the quantities from them, so they don't depend on the sheet's scale."));
+      AUTO.moduleId === "electrical" ? "📐 The AI counted the devices on the plan; counts don't need the sheet's scale."
+        : AUTO.moduleId === "concrete" ? "📐 The AI read the slab's written dimensions off the plan; the app worked out the quantities from them, so they don't depend on the sheet's scale."
+        : "📐 The AI read the quantities off the plan; the app worked out the numbers from them, so they don't depend on the sheet's scale."));
     else if (AUTO.scale) parts.push(el("p", { class: "muted small", id: "bp-auto-scale" }, autoScaleText(AUTO.scale)));
     // The run calibrated the view itself, or found it couldn't (2026-11-13): say which, and what to do.
     const cal = AUTO.calibration && autoCalText(AUTO.calibration);
@@ -1353,7 +1419,7 @@ function drawAutoRunStatus() {
       "AI Auto Run timed out after 10 minutes — try re-running it."));
   }
   const vp = autoRunViewport();
-  if (vp && hasConcreteTrade() && AUTO.candidates.has(vp.id)) {
+  if (vp && trade === "concrete" && AUTO.candidates.has(vp.id)) {
     const list = AUTO.candidates.get(vp.id);
     let text = "Agent found no slab outline on this sheet — measure it manually or re-run after the plan is processed.";
     const llm = AUTO.llmTakeoff.get(vp.id);
@@ -1390,19 +1456,28 @@ function drawAutoRunStatus() {
 // "Please wait" while AI Auto Run works (2026-11-15, David): a spinner, the steps it goes through with the current one
 // marked, and how long it has been going — so nobody clicks it twice. The run's own step names come from the server
 // (llm_takeoff.run_llm_takeoff's on_step); an unknown step just shows as the current line.
-const AUTO_STEPS = [["starting", "Starting the run"], ["finding the foundation sheet", "Finding the foundation sheet (sheets switched on)"],
+// The steps differ by trade (2026-11-18): concrete calibrates and measures a slab, electrical counts devices,
+// and the other trades share the default list — find the sheet, read it, work out the quantities.
+const AUTO_STEPS_BY_TRADE = { concrete: [["starting", "Starting the run"], ["finding the foundation sheet", "Finding the foundation sheet (sheets switched on)"],
   ["calibrating the sheet", "Calibrating the slab view"], ["reading the plan with the AI", "Sending the sheet to the AI to read the dimensions"],
   ["reading the footer detail", "Reading the footer section detail (close-up)"],
   ["checking the reading against the plan", "The AI checks its footer reading against the plan"],
   ["calibrating the footer detail", "Calibrating the footer detail (it has its own scale)"],
-  ["measuring", "Working out the measurements and the concrete volume"]];
+  ["measuring", "Working out the measurements and the concrete volume"]],
+  electrical: [["starting", "Starting the run"], ["finding the electrical sheet", "Finding the electrical sheet (sheets switched on)"],
+  ["reading the plan with the AI", "Sending the sheet to the AI to count the devices"],
+  ["counting the devices", "Working out the device counts"]],
+  default: [["starting", "Starting the run"], ["finding the", "Finding the right sheet (sheets switched on)"],
+  ["reading the plan with the AI", "Sending the sheet to the AI to read the quantities"],
+  ["working out the quantities", "Working out the quantities"]] };
 let autoTick = null;
 function autoRunningBanner() {
+  const steps = AUTO_STEPS_BY_TRADE[AUTO.moduleId] || AUTO_STEPS_BY_TRADE.default;
   const step = String(AUTO.step || "").toLowerCase().replace(/[.…]+$/, "");
-  let at = AUTO_STEPS.findIndex(([k]) => step.startsWith(k.toLowerCase()));
+  let at = steps.findIndex(([k]) => step.startsWith(k.toLowerCase()));
   if (at < 0) at = step && step !== "starting" ? -1 : 0;
   const secs = Math.max(0, Math.round((Date.now() - (AUTO.startedAt || Date.now())) / 1000));
-  const items = AUTO_STEPS.map(([, label], i) => el("li", { class: at < 0 ? "todo" : i < at ? "done" : i === at ? "now" : "todo" },
+  const items = steps.map(([, label], i) => el("li", { class: at < 0 ? "todo" : i < at ? "done" : i === at ? "now" : "todo" },
     (at >= 0 && i < at ? "✓ " : at === i ? "▶ " : "") + label));
   if (at < 0 && AUTO.step) items.push(el("li", { class: "now" }, "▶ " + AUTO.step));
   if (!autoTick) {
@@ -1433,7 +1508,11 @@ function autoResultsBox(r) {
   const parts = [el("strong", {}, "🤖 AI Auto Run measurements"),
     el("table", { class: "list" }, el("thead", {}, el("tr", {}, el("th", {}, "What"), el("th", {}, "Quantity"), el("th", {}, "Status"))),
       el("tbody", {}, rows))];
-  parts.push(el("p", { class: "muted small" }, "Approve the measurements below, then price Concrete from them (the thickness can be changed there)."));
+  parts.push(el("p", { class: "muted small" }, AUTO.moduleId === "electrical"
+    ? "Approve the counts below, then price Electrical from them (voltage, box material and panel stay as answered)."
+    : AUTO.moduleId === "concrete"
+    ? "Approve the measurements below, then price Concrete from them (the thickness can be changed there)."
+    : "Approve the measurements below, then price " + tradeName(AUTO.moduleId) + " from them (your answers stay as answered)."));
   return el("div", { class: "card section", id: "bp-auto-results" }, ...parts);
 }
 
@@ -1459,20 +1538,64 @@ function concreteStepsBox(c) {
   return parts;
 }
 
-// The "Takeoff steps" tab shows only when this sheet has a finished run with a concrete calc — the same
-// condition the results box above the drawing uses. If the calc goes away while the tab is showing (a
-// re-run started), fall back to Measurements so the user isn't left on a tab with no button.
+// The electrical counts, in the "Takeoff steps" tab (2026-11-18): one row per device the AI counted, with the
+// evidence it counted from. Counts have no geometry, so there is no click-to-highlight here.
+function electricalStepsBox(c) {
+  const rows = (c.counts || []).map(x => el("tr", { "data-feeds": x.feeds },
+    el("td", {}, x.label || words(x.feeds)),
+    el("td", { class: "num" }, num(x.qty, 0)),
+    el("td", { class: "muted small" }, x.evidence || "")));
+  const parts = [el("div", { id: "bp-auto-counts" },
+    el("p", {}, el("strong", {}, "Device counts")),
+    el("table", { class: "list", id: "bp-auto-count-table" },
+      el("thead", {}, el("tr", {}, el("th", {}, "Device"), el("th", {}, "Count"), el("th", {}, "Evidence"))),
+      el("tbody", {}, rows)))];
+  const conf = c.confidence;
+  const confText = conf === undefined || conf === null || conf === "" ? ""
+    : "Confidence: " + (typeof conf === "number" ? pct(conf) : conf) + ". ";
+  if (confText || c.notes) parts.push(el("p", { class: "muted small" }, confText + (c.notes || "")));
+  return parts;
+}
+
+// The quantity trades' results, in the "Takeoff steps" tab (2026-11-18): one generic table for all 13 —
+// one row per quantity the AI read, with the amount, the unit, and the evidence it read it from. Counts,
+// areas and lengths all come through the same shape (the run's results.quantities); quantities have no
+// geometry, so there is no click-to-highlight here.
+function quantitiesStepsBox(q) {
+  const rows = (q.items || []).map(x => el("tr", { "data-feeds": x.feeds },
+    el("td", {}, x.label || words(x.feeds)),
+    el("td", { class: "num" }, num(x.qty, x.unit === "ea" ? 0 : 2) + (x.unit ? " " + x.unit : "")),
+    el("td", { class: "muted small" }, x.evidence || "")));
+  const parts = [el("div", { id: "bp-auto-quantities" },
+    el("p", {}, el("strong", {}, (q.label ? q.label + " quantities" : "Quantities"))),
+    el("table", { class: "list", id: "bp-auto-quantities-table" },
+      el("thead", {}, el("tr", {}, el("th", {}, "Quantity"), el("th", {}, "Amount"), el("th", {}, "Evidence"))),
+      el("tbody", {}, rows)))];
+  const conf = q.confidence;
+  const confText = conf === undefined || conf === null || conf === "" ? ""
+    : "Confidence: " + (typeof conf === "number" ? pct(conf) : conf) + ". ";
+  if (confText || q.notes) parts.push(el("p", { class: "muted small" }, confText + (q.notes || "")));
+  return parts;
+}
+
+// The "Takeoff steps" tab shows only when this sheet has a finished run with a concrete calc, electrical
+// counts, or a quantity trade's quantities — the same condition the results box above the drawing uses.
+// If the calc goes away while the tab is showing (a re-run started), fall back to Measurements so the user
+// isn't left on a tab with no button.
 function drawStepsPanel() {
   const pane = $("bp-pane-steps"), tab = $("bp-tab-steps");
   if (!pane || !tab) return;
-  const show = !!(AUTO.status === "done" && AUTO.sheetId === RV.sheetId && AUTO.results && AUTO.results.concrete);
+  const show = !!(AUTO.status === "done" && AUTO.sheetId === RV.sheetId && AUTO.results
+    && (AUTO.results.concrete || AUTO.results.electrical || AUTO.results.quantities));
   tab.hidden = !show;
   if (!show) {
     pane.replaceChildren();
     if (!pane.hidden) showTab("list");
     return;
   }
-  pane.replaceChildren(...concreteStepsBox(AUTO.results.concrete));
+  pane.replaceChildren(...(AUTO.results.electrical ? electricalStepsBox(AUTO.results.electrical)
+    : AUTO.results.quantities ? quantitiesStepsBox(AUTO.results.quantities)
+    : concreteStepsBox(AUTO.results.concrete)));
 }
 
 // The AI's own check of its footer reading against the plan (2026-11-15, David: "is it possible that some AI checking
@@ -1811,13 +1934,13 @@ function adjustForm(msg, shape, vp) {
 // What ran on this sheet before: a run still going is watched again (with its "please wait"), a finished one shows its
 // results — so a reload, or coming back to the sheet later, doesn't lose them (2026-11-15).
 async function loadLatestRun() {
-  if (!RV.data || !hasConcreteTrade() || (AUTO.status === "running")) return;
+  if (!RV.data || !autoRunTrade() || (AUTO.status === "running")) return;
   if (AUTO.runId && AUTO.sheetId === RV.sheetId && AUTO.status) {
     // Same run: fetch its results again quietly — a new scale (the footer detail just calibrated) changes its shapes.
     if (AUTO.status === "done") {
       try {
         const x = await api("GET", "/auto-run/" + AUTO.runId);
-        if (x.run && x.run.results && AUTO.status === "done") { AUTO.results = x.run.results; drawAutoRunStatus(); }
+        if (x.run && x.run.results && AUTO.status === "done") { AUTO.results = x.run.results; if (x.run.module_id) AUTO.moduleId = x.run.module_id; drawAutoRunStatus(); }
       } catch (e) { /* keep what is shown */ }
     }
     return;
@@ -1828,6 +1951,7 @@ async function loadLatestRun() {
   const run = r && r.run;
   if (!run || AUTO.status === "running") return;
   if (run.status === "running") {
+    AUTO.moduleId = run.module_id || null;
     trackAutoRun(run.id, null);
     AUTO.sheetId = run.sheet_id;
     const t = Date.parse(run.created_at);
@@ -1837,6 +1961,7 @@ async function loadLatestRun() {
   }
   AUTO.runId = run.id; AUTO.sheetId = run.sheet_id; AUTO.estimateId = RV.estimateId;
   AUTO.status = run.status === "done" ? "done" : "failed";
+  AUTO.moduleId = run.module_id || null;
   AUTO.error = run.error || null; AUTO.source = run.source || "geometry"; AUTO.scale = run.scale || null;
   AUTO.calibration = run.calibration || null; AUTO.measurementIds = run.measurement_ids || [];
   AUTO.results = run.results || null;
@@ -1892,7 +2017,8 @@ function pollAutoRun() {
     const run = r.run || {};
     AUTO.step = run.step || "";
     AUTO.source = run.source || "geometry";
-    // The server picks the sheet switched on for Concrete (2026-11-15): show that sheet while the run works on it.
+    if (run.module_id) AUTO.moduleId = run.module_id;
+    // The server picks the sheet switched on for the trade being run (2026-11-15): show that sheet while the run works on it.
     if (run.sheet_id && run.sheet_id !== AUTO.sheetId) {
       AUTO.sheetId = run.sheet_id;
       AUTO.viewportId = run.viewport_id || null;
@@ -1909,8 +2035,10 @@ function pollAutoRun() {
       AUTO.results = run.results || null;
       const n = AUTO.measurementIds.length;
       const src = AUTO.source === "llm" ? " (read from the plan by the AI)" : "";
-      const vol = AUTO.results && AUTO.results.concrete ? " — about " + num(AUTO.results.concrete.total_cuyd) + " cu yd of concrete" : "";
-      toast(n ? "AI Auto Run finished: " + n + " proposed measurement(s)" + src + vol + " to review." : "AI Auto Run finished: nothing proposed.");
+      const elec = AUTO.results && AUTO.results.electrical;
+      const extra = AUTO.results && AUTO.results.concrete ? " — about " + num(AUTO.results.concrete.total_cuyd) + " cu yd of concrete"
+        : elec ? " — " + (elec.counts || []).reduce((a, c) => a + (parseFloat(c.qty) || 0), 0) + " devices counted" : "";
+      toast(n ? "AI Auto Run finished: " + n + " proposed measurement(s)" + src + extra + " to review." : "AI Auto Run finished: nothing proposed.");
       drawAutoRunStatus();
       await refreshData();
     } else if (run.status === "failed") {
@@ -1926,11 +2054,14 @@ function pollAutoRun() {
 
 async function startAutoRun() {
   if (AUTO.status === "running") return;
+  const trade = selectedAutoRunTrade();
+  if (!trade) return;   // the button is disabled without a runnable trade; a stray click does nothing
   // 2026-11-15 (David): one click measures the project. The open sheet is sent only when it is switched on for
-  // Concrete; otherwise the server picks the foundation sheet that is on, and the slab plan's view on it.
-  const here = !(RV.inactiveTrades || []).includes("concrete");
+  // the trade being run; otherwise the server picks the sheet that is on, and the plan's view on it.
+  const here = !(RV.inactiveTrades || []).includes(trade);
   // Running from the click, not from the answer: a second click while the start is in flight is ignored.
   AUTO.status = "running";
+  AUTO.moduleId = trade;
   AUTO.sheetId = RV.sheetId;
   AUTO.estimateId = RV.estimateId;
   AUTO.viewportId = null;
@@ -1944,7 +2075,7 @@ async function startAutoRun() {
   if (slot && slot.scrollIntoView) slot.scrollIntoView({ block: "nearest", behavior: "smooth" });
   try {
     const r = await api("POST", "/auto-run", { estimate_id: RV.estimateId, sheet_id: here ? RV.sheetId : null,
-                                               module_id: "concrete" });
+                                               module_id: trade });
     if (!r.run_id) throw new Error("AI Auto Run didn't start (no run id)");
     trackAutoRun(r.run_id, null);
   } catch (e) {
@@ -2139,9 +2270,12 @@ function guideStatusFor(mod, q) {
   }
   const waiting = t.measurements.filter(m => m.module_id === mod && m.feeds === q.id && m.status === "proposed");
   if (waiting.length) {
-    const same = waiting.filter(m => m.unit === q.unit);
+    // A count question has no unit in the manifest, but its measurements are counted "ea" — treat those as
+    // the question's unit, or the badge shows "1 measurement(s)" instead of the total (2026-11-18).
+    const same = waiting.filter(m => m.unit === q.unit || (!q.unit && m.unit === "ea"));
     const total = same.reduce((a, m) => a + parseFloat(m.qty || 0), 0);
-    const text = same.length ? num(total) + (q.unit ? " " + q.unit : "") : waiting.length + " measurement(s)";
+    const unit = q.unit || (same.length ? same[0].unit : null);
+    const text = same.length ? num(total) + (unit ? " " + unit : "") : waiting.length + " measurement(s)";
     const remeasure = waiting.some(m => m.needs_remeasure) ? " · ⚠ re-measure" : "";
     return ["proposed", "to review — " + text + remeasure];
   }
