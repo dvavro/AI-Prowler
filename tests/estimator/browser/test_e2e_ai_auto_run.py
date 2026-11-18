@@ -88,6 +88,13 @@ def test_E2E_review_opens_on_a_sheet_that_is_on_and_marks_the_off_ones(page, she
     # The button is AI Auto Run, and it can run.
     btn = page.locator("#bp-auto-run")
     assert "AI Auto Run" in btn.inner_text() and btn.is_enabled()
+    # No run yet, so the Takeoff steps tab stays hidden; the Detail tab says to select a measurement.
+    assert page.locator("#bp-tab-steps").is_hidden()
+    page.click("#bp-tab-detail")
+    assert "Select a measurement" in page.inner_text("#bp-detail-empty")
+    # Layers: the Measurements row counts the measurements on this sheet (none yet).
+    page.click("#bp-tab-layers")
+    assert "0" in page.inner_text("#bp-layers tr[data-group=measurements]")
     # Open the switched-off sheet: it says AI Auto Run skips it, and the button still runs (the sheets that are on).
     page.select_option("#review-sheet", str(shed["off"]))
     page.wait_for_selector("#bp-auto-off")
@@ -127,6 +134,7 @@ def test_E2E_ai_auto_run_lists_its_measurements_and_the_concrete_volume(page, db
     db.commit()
     page.wait_for_selector("#bp-auto-results", timeout=20000)
     assert page.locator(".bp-running").count() == 0 and btn.is_enabled() and "working" not in btn.inner_text()
+    page.click("#bp-tab-steps")          # the volume and formulas live in the Takeoff steps tab now
     box = page.inner_text("#bp-auto-results")
     assert "AI Auto Run measurements" in box
     assert "Slab (AI)" in box and "Footer (AI)" in box
@@ -161,8 +169,13 @@ def test_E2E_ai_auto_run_lists_its_measurements_and_the_concrete_volume(page, db
     assert calc["footer_section"]["ledge_w_in"] == 4 and calc["footer_section"]["from"]["ledge_w_in"] == "entered by a person"
     # Reloading the page keeps the results (the latest run on the sheet is loaded again).
     page.reload()
+    page.wait_for_selector("#bp-tab-steps", timeout=20000)
+    page.click("#bp-tab-steps")
     page.wait_for_selector("#bp-auto-formulas tr[data-step='Footer concrete']", timeout=20000)
     assert "35.87 cu yd" in page.inner_text("#bp-auto-volume")       # the corrected footer stays
+    # Layers: the Measurements row counts the measurements on this sheet (3 proposed).
+    page.click("#bp-tab-layers")
+    assert "3" in page.inner_text("#bp-layers tr[data-group=measurements]")
 
 
 # ------------------------------------------------------------------ 2026-11-16: formulas on the drawing, drawn areas
@@ -203,6 +216,8 @@ def test_E2E_click_a_formula_to_see_it_and_draw_an_area_to_add(page, db, shed):
     page.goto(page.base + f"#/takeoffs/{shed['est']}")
     page.wait_for_selector("#bp-tools")
     dismiss_tour(page)
+    page.wait_for_selector("#bp-tab-steps", timeout=20000)
+    page.click("#bp-tab-steps")          # the formulas live in the Takeoff steps tab now
     page.wait_for_selector("#bp-auto-formulas tr.bp-step-link[data-step='Slab area']", timeout=20000)
     assert "placed on the plan's own lines" in page.inner_text("#bp-slab-fit")
     # Click "Slab area": the drawing outlines the slab in red, its corner on the plan's drawn edges.
@@ -262,6 +277,8 @@ def test_E2E_calibrate_the_detail_then_see_the_sections_parts_on_it(page, db, sh
     page.goto(page.base + f"#/takeoffs/{shed['est']}")
     page.wait_for_selector("#bp-tools")
     dismiss_tour(page)
+    page.wait_for_selector("#bp-tab-steps", timeout=20000)
+    page.click("#bp-tab-steps")          # the section place box lives in the Takeoff steps tab now
     page.wait_for_selector("#bp-detail-noscale", timeout=20000)
     assert "don't agree on one scale" in page.inner_text("#bp-detail-noscale")
     # 📏 Calibrate the footer detail: click both ends of a 12" dimension (1 paper inch here), type 12".

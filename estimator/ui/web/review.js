@@ -119,13 +119,16 @@ async function renderReview(main, estimateId) {
   prev.addEventListener("click", () => step(-1));
   next.addEventListener("click", () => step(1));
   const viewerBox = el("div", { class: "bp-viewer", id: "bp-viewer", tabindex: "0", "aria-label": "Blueprint" });
+  const stepsTab = tabButton("steps", "Takeoff steps");
+  stepsTab.hidden = true;      // only shows when a run has a concrete calc to show (drawStepsPanel)
   const side = el("div", { class: "bp-side" },
     el("div", { class: "bp-tabs", role: "tablist" },
       tabButton("list", "Measurements"), tabButton("symbols", "Symbols"), tabButton("lines", "Lines"), tabButton("layers", "Layers"),
-      tabButton("detail", "Detail")),
+      tabButton("detail", "Detail"), stepsTab),
     el("div", { class: "bp-pane", id: "bp-pane-list" }), el("div", { class: "bp-pane", id: "bp-pane-symbols", hidden: true }),
     el("div", { class: "bp-pane", id: "bp-pane-lines", hidden: true }),
-    el("div", { class: "bp-pane", id: "bp-pane-layers", hidden: true }), el("div", { class: "bp-pane", id: "bp-pane-detail", hidden: true }));
+    el("div", { class: "bp-pane", id: "bp-pane-layers", hidden: true }), el("div", { class: "bp-pane", id: "bp-pane-detail", hidden: true }),
+    el("div", { class: "bp-pane", id: "bp-pane-steps", hidden: true }));
   main.replaceChildren(...head,
     el("div", { class: "row bp-bar" }, prev, sheetPick, next, toolPalette(msg), viewButtons()),
     el("p", { class: "muted small", id: "bp-tool-help" }, TOOLS.find(t => t[0] === RV.tool)[3]),
@@ -133,6 +136,7 @@ async function renderReview(main, estimateId) {
     msg, el("div", { id: "bp-auto-slot" }), el("div", { class: "bp-split" }, viewerBox, side));
   RV.viewer = new Viewer(viewerBox, msg);
   $("bp-pane-list").replaceChildren(measurementPanel(msg));
+  $("bp-pane-detail").replaceChildren(detailEmpty());      // the Detail tab is never blank without explanation
   await openSheet(firstSheet.id, msg);
   if (RV.symbolId) {
     const o = RV.objects.find(x => x.symbol && x.symbol.detection_id === RV.symbolId);
@@ -194,6 +198,7 @@ function highlightSymbols(objs, key) {
   RV.symbolList = objs;
   RV.symbolPos = objs.length === 1 ? 0 : -1;           // -1: all of them at once
   RV.measurementId = null; RV.lineId = null;
+  const dp = $("bp-pane-detail"); if (dp) dp.replaceChildren(detailEmpty());   // no selection any more
   RV.selected = new Set(objs.map(o => o.id));
   // A symbol in a hidden layer is shown while it's highlighted (the layer setting itself isn't changed).
   for (const o of objs) {
@@ -291,6 +296,7 @@ function drawLinesPanel() {
       const pick = () => {
         RV.lineId = RV.lineId === l.line_id ? null : l.line_id;
         RV.measurementId = null;
+        const dp = $("bp-pane-detail"); if (dp) dp.replaceChildren(detailEmpty());   // no selection any more
         drawMeasurements(); drawLinesPanel();
         if (RV.lineId) {
           const other = ms.find(m => m.sheet_id && m.sheet_id !== RV.sheetId);
@@ -313,7 +319,7 @@ function tabButton(id, label) {
 }
 function showTab(id) {
   for (const t of document.querySelectorAll(".bp-tab")) t.classList.toggle("active", t.dataset.tab === id);
-  for (const p of ["list", "symbols", "lines", "layers", "detail"]) { const n = $("bp-pane-" + p); if (n) n.hidden = p !== id; }
+  for (const p of ["list", "symbols", "lines", "layers", "detail", "steps"]) { const n = $("bp-pane-" + p); if (n) n.hidden = p !== id; }
 }
 
 function toolPalette(msg) {
@@ -792,6 +798,10 @@ function drawOverlay(root) {
 function objectShape(o) {
   const g = o.geometry, pts = g.points.map(p => p.join(",")).join(" ");
   let n;
+  // A dimension with no dimension line is measurement-shaped text (often in the spec
+  // notes) with no scale information; the text itself is visible in the sheet image,
+  // so don't draw it as a dot. Line dimensions still render below.
+  if (o.kind === "dimension" && g.type === "point") return null;
   if (g.type === "point" || o.kind === "symbol" && g.points.length === 1) {
     n = svg("polyline", { points: g.points[0] + " " + g.points[0], class: "bp-dot" });
   } else if (g.type === "polygon") {
@@ -1374,6 +1384,7 @@ function drawAutoRunStatus() {
     el("a", { href: "#/agents/ai-log?auto_run_id=" + AUTO.runId }, "📋 AI Log — what the AI was given and what it returned for this run")));
   if (AUTO.status !== "running" && (runKnownHere || agentHere) && RV.data.can_measure) parts.push(rerunButton());
   slot.replaceChildren(...parts);
+  drawStepsPanel();      // the calc lives in the Takeoff steps tab, beside the drawing
 }
 
 // "Please wait" while AI Auto Run works (2026-11-15, David): a spinner, the steps it goes through with the current one
@@ -1422,25 +1433,46 @@ function autoResultsBox(r) {
   const parts = [el("strong", {}, "🤖 AI Auto Run measurements"),
     el("table", { class: "list" }, el("thead", {}, el("tr", {}, el("th", {}, "What"), el("th", {}, "Quantity"), el("th", {}, "Status"))),
       el("tbody", {}, rows))];
-  const c = r.concrete;
-  if (c) {
-    parts.push(el("div", { id: "bp-auto-volume" },
-      el("p", {}, el("strong", {}, "Concrete volume: " + num(c.total_cuyd) + " cu yd"),
-        " (" + num(c.with_waste_cuyd) + " cu yd with 5% waste) — slab " + num(c.slab_cuyd) + " + footer " + num(c.footer_cuyd) + " cu yd"),
-      el("p", { class: "muted small" }, "How it was worked out — check any line by hand:"),
-      slabFitNote(c),
-      el("table", { class: "list", id: "bp-auto-formulas" },
-        el("thead", {}, el("tr", {}, el("th", {}, "Step"), el("th", {}, "Formula"), el("th", {}, "Result"))),
-        el("tbody", {}, (c.steps || []).map(s => stepRow(s, c)))),
-      el("p", { class: "muted small" }, "1 cu yd = 27 cu ft. Thickness: " + num(c.thickness_in, 0) + " in (" + c.thickness_from + ").")));
-    const chk = footerCheckBox(c);
-    if (chk) parts.push(chk);
-    if (RV.data && RV.data.can_measure && c.footer_section) parts.push(footerEditForm(c));
-    const drawn = drawnAreasBox(c);
-    if (drawn) parts.push(drawn);
-  }
   parts.push(el("p", { class: "muted small" }, "Approve the measurements below, then price Concrete from them (the thickness can be changed there)."));
   return el("div", { class: "card section", id: "bp-auto-results" }, ...parts);
+}
+
+// The concrete calc, in the "Takeoff steps" tab (2026-11-18, David): the volume and every step of it, the
+// footer's check and correction, and the areas added or taken away — beside the drawing, so clicking a step
+// shows it on the plan without scrolling up and down. The measurements table stays above the drawing.
+function concreteStepsBox(c) {
+  const parts = [];
+  parts.push(el("div", { id: "bp-auto-volume" },
+    el("p", {}, el("strong", {}, "Concrete volume: " + num(c.total_cuyd) + " cu yd"),
+      " (" + num(c.with_waste_cuyd) + " cu yd with 5% waste) — slab " + num(c.slab_cuyd) + " + footer " + num(c.footer_cuyd) + " cu yd"),
+    el("p", { class: "muted small" }, "How it was worked out — check any line by hand:"),
+    slabFitNote(c),
+    el("table", { class: "list", id: "bp-auto-formulas" },
+      el("thead", {}, el("tr", {}, el("th", {}, "Step"), el("th", {}, "Formula"), el("th", {}, "Result"))),
+      el("tbody", {}, (c.steps || []).map(s => stepRow(s, c)))),
+    el("p", { class: "muted small" }, "1 cu yd = 27 cu ft. Thickness: " + num(c.thickness_in, 0) + " in (" + c.thickness_from + ").")));
+  const chk = footerCheckBox(c);
+  if (chk) parts.push(chk);
+  if (RV.data && RV.data.can_measure && c.footer_section) parts.push(footerEditForm(c));
+  const drawn = drawnAreasBox(c);
+  if (drawn) parts.push(drawn);
+  return parts;
+}
+
+// The "Takeoff steps" tab shows only when this sheet has a finished run with a concrete calc — the same
+// condition the results box above the drawing uses. If the calc goes away while the tab is showing (a
+// re-run started), fall back to Measurements so the user isn't left on a tab with no button.
+function drawStepsPanel() {
+  const pane = $("bp-pane-steps"), tab = $("bp-tab-steps");
+  if (!pane || !tab) return;
+  const show = !!(AUTO.status === "done" && AUTO.sheetId === RV.sheetId && AUTO.results && AUTO.results.concrete);
+  tab.hidden = !show;
+  if (!show) {
+    pane.replaceChildren();
+    if (!pane.hidden) showTab("list");
+    return;
+  }
+  pane.replaceChildren(...concreteStepsBox(AUTO.results.concrete));
 }
 
 // The AI's own check of its footer reading against the plan (2026-11-15, David: "is it possible that some AI checking
@@ -2062,6 +2094,7 @@ function refreshList(msg) {
   box.replaceChildren(...parts);
   drawTakeoffGuide();
   drawAutoRunStatus();
+  drawLayersPanel();      // the Measurements row counts this sheet's measurements — keep it fresh
 }
 
 // ------------------------------------------------------------------ guided takeoff: what to measure, with which tool
@@ -2281,6 +2314,11 @@ function bulkApprove(msg) {
 }
 
 // ------------------------------------------------------------------ the detail panel
+// Nothing selected yet: say so, instead of a blank tab (2026-11-18, David: the Detail tab had no info).
+function detailEmpty() {
+  return el("p", { class: "muted", id: "bp-detail-empty" },
+    "Select a measurement to see its detail — click one in the Measurements list or on the drawing.");
+}
 async function showDetail(id, msg, zoom) {
   RV.measurementId = id;
   const m = RV.data.takeoff.measurements.find(x => x.id === id);
@@ -2436,7 +2474,9 @@ function drawLayersPanel() {
     };
     show.addEventListener("change", change);
     lock.addEventListener("change", change);
-    return el("tr", { "data-group": g.id }, el("td", {}, swatch, " " + g.label), el("td", {}, g.id === "measurements" ? "" : g.count), el("td", {}, show), el("td", {}, lock));
+    // Measurements isn't a CAD group (the server sends 0 for it): count the measurements on this sheet instead.
+    const n = g.id === "measurements" ? sheetMeasurements().length : g.count;
+    return el("tr", { "data-group": g.id }, el("td", {}, swatch, " " + g.label), el("td", {}, n), el("td", {}, show), el("td", {}, lock));
   });
   pane.replaceChildren(el("table", { class: "list", id: "bp-layers" },
     el("thead", {}, el("tr", {}, el("th", {}, "Layer"), el("th", {}, "Items"), el("th", {}, "Show"), el("th", {}, "Lock"))), el("tbody", {}, rows)),

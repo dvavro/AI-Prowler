@@ -338,11 +338,15 @@ summary.options-tip-target { position: relative; }
 .bp-readout span { font-weight: 600; margin-right: auto; }
 .bp-side { background: var(--card); border: 1px solid var(--line); border-radius: 8px; max-height: 72vh; overflow-y: auto; }
 .bp-tabs { display: flex; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--card); z-index: 1; }
-.bp-tab { flex: 1; background: none; border: 0; padding: 10px 6px; color: var(--muted); border-bottom: 2px solid transparent; }
+.bp-tab { flex: 1; background: none; border: 0; padding: 8px 4px; color: var(--muted); border-bottom: 2px solid transparent; font-size: 13px; white-space: nowrap; }
 .bp-tab.active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
 .bp-pane { padding: 10px 12px; }
 .bp-pane h3 { margin-top: 4px; }
 .bp-pane h4 { margin: 10px 0 4px; font-size: 13px; color: var(--muted); }
+/* Takeoff steps tab (2026-11-18): the formulas table is narrow here, so the formula cells wrap (they are
+   nowrap above the drawing) and the table padding tightens; the panel itself scrolls (.bp-side). */
+#bp-pane-steps #bp-auto-formulas td.formula { white-space: normal; word-break: break-word; }
+#bp-pane-steps table.list th, #bp-pane-steps table.list td { padding: 7px 6px; }
 .bp-trade { margin: 8px 0; }
 ul.bp-rows { list-style: none; margin: 0; padding: 0; }
 .bp-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 7px 6px; border-bottom: 1px solid var(--line);

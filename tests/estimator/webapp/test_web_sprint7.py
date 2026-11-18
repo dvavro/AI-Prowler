@@ -311,6 +311,34 @@ def test_guide_starts_with_calibration_and_explains_edge_length():     # C2S7-W0
     assert "square slab's perimeter" in js
 
 
+def test_takeoff_steps_tab_and_detail_empty_state():                          # C2S7-W05 (2026-11-18)
+    js = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
+    # The calc lives in a Takeoff steps tab beside the drawing, not above it.
+    for needed in ("bp-tab-steps", "Takeoff steps", "bp-pane-steps", "drawStepsPanel", "concreteStepsBox"):
+        assert needed in js, needed
+    # The tab only shows when a finished run has a concrete calc.
+    assert "AUTO.results.concrete" in js
+    # The Detail tab is never blank: an empty state says to select a measurement.
+    assert "bp-detail-empty" in js and "Select a measurement" in js
+    # Layers: the Measurements row counts the measurements on this sheet.
+    assert "sheetMeasurements().length" in js
+    # The tab row fits six tabs in the same panel, and the formulas wrap in the narrow pane.
+    css = (router.WEB_DIR / "app.css").read_text(encoding="utf-8")
+    assert "#bp-pane-steps #bp-auto-formulas td.formula" in css
+
+
+def test_point_dimensions_not_drawn_as_dots():                          # C2S7-W06 (2026-11-18)
+    js = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
+    # A dimension with no dimension line is measurement-shaped text (often in the spec
+    # notes): it is not drawn as a dot on the overlay.
+    assert 'o.kind === "dimension" && g.type === "point"' in js
+    assert "return null" in js
+    # Line dimensions still render through the normal shape path.
+    assert '"bp-shape line "' in js
+    # Other point markers (symbols, counts) still render as dots.
+    assert 'class: "bp-dot"' in js
+
+
 def test_agent_auto_run_markers():                                              # C2S7-W04
     js = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
     for needed in (
