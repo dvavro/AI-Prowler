@@ -285,6 +285,30 @@ def modules() -> list[dict]:
             for m in sorted(reg.list(), key=lambda m: (m.category, m.name))]
 
 
+_TAB_STATE = "desktop_tab_state.json"
+
+
+def collapsed_sections() -> set[str]:
+    """The 🏗 Estimator tab sections the user last folded up (2026-11-18, David: show/hide is sticky between restarts).
+    Kept beside estimator.db; a missing or unreadable file just means every section starts open."""
+    import json
+    try:
+        data = json.loads((config.data_dir() / _TAB_STATE).read_text(encoding="utf-8"))
+        return {str(k) for k in data.get("collapsed", []) if isinstance(k, str)}
+    except Exception:  # noqa: BLE001 - never stop the tab over its own display state
+        return set()
+
+
+def save_collapsed_sections(keys) -> None:
+    import json
+    try:
+        path = config.data_dir() / _TAB_STATE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"collapsed": sorted(keys)}), encoding="utf-8")
+    except Exception:  # noqa: BLE001 - a read-only folder only means the choice isn't remembered
+        pass
+
+
 def services() -> list[dict]:
     """Every service module (pressure washing, cleaning, pest, ...), for the Trades section, with whether the company
     offers it. 2026-11-17 (David): services can be switched off like trades - not offered in the web app's quick

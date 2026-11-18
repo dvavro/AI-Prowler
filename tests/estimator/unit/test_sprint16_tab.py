@@ -150,15 +150,35 @@ def test_tab_is_added_with_its_sections(root, db_home, switch, wizard):  # S16-G
     tab = app._estimator_tab
     assert set(tab.sections) == {"setup", "company", "trades", "agents", "director", "modules", "data", "sync",
                                  "cad", "phone", "help"}           # no "labor": labor rates are in the web app (2026-11-17)
-    # 📦 Modules is reference only, so it starts folded up; the rest start open (2026-11-17).
-    assert [k for k, v in tab._section_collapsed.items() if v] == ["modules"]
-    assert tab.sections["modules"].winfo_manager() == "" and tab._section_header["modules"].cget("text").startswith("▶ ")
-    tab._toggle_section("modules")
+    # On a fresh install every section starts open; after that the user's own show/hide choices stick (2026-11-18).
+    assert not any(tab._section_collapsed.values())
     assert tab.sections["modules"].winfo_manager() == "pack"
     texts = _texts(frame)
     assert any("🧭 Estimator setup" in t for t in texts)                  # Setup AI-Prowler scrolls to this
     assert any("The Estimator is ON" in t for t in texts) and any("Setup checklist: 0 of 10" in t for t in texts)
     assert len(tab.trade_vars) == 15 and all(v.get() for v in tab.trade_vars.values())
+
+
+def test_show_hide_is_sticky_between_restarts(root, db_home, switch, wizard):  # S16-G01b (2026-11-18)
+    from estimator.ui.gui_tab import build_estimator_tab
+
+    def fresh_tab():
+        app = FakeApp(root)
+        build_estimator_tab(app)
+        return app._estimator_tab
+
+    tab = fresh_tab()
+    tab._toggle_section("modules")
+    tab._toggle_section("company")
+    assert model.collapsed_sections() == {"modules", "company"}
+    tab = fresh_tab()                                   # "restart": the folded sections stay folded
+    assert {k for k, v in tab._section_collapsed.items() if v} == {"modules", "company"}
+    assert tab.sections["modules"].winfo_manager() == "" and tab._section_header["modules"].cget("text").startswith("▶ ")
+    tab._toggle_section("modules")                      # opened again: remembered too
+    tab._scroll_to(tab._section_title["company"])       # scrolling to a section opens it, and that sticks
+    assert model.collapsed_sections() == set()
+    tab = fresh_tab()
+    assert not any(tab._section_collapsed.values())
 
 
 def test_company_form_saves(root, db_home, switch, wizard):  # S16-G02

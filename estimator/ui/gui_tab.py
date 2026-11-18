@@ -56,6 +56,7 @@ class EstimatorTab:
         self._section_title = {}
         self._section_header = {}
         self._section_collapsed = {}
+        self._sticky_collapsed = model.collapsed_sections()      # what the user folded up last time
         self._setup_section()
         for build in (self._company_section, self._trades_section, self._agents_section,
                       self._director_section, self._modules_section, self._data_section, self._sync_section,
@@ -87,10 +88,12 @@ class EstimatorTab:
         self._section_header[key] = header
         self._section_collapsed[key] = False
         header.bind("<Button-1>", lambda e, k=key: self._toggle_section(k))
+        if key in self._sticky_collapsed:      # folded up last time: stays folded (2026-11-18, David)
+            self._toggle_section(key, remember=False)
         return body
 
-    def _toggle_section(self, key: str):
-        """Collapse or expand a section (from its title)."""
+    def _toggle_section(self, key: str, remember: bool = True):
+        """Collapse or expand a section (from its title). The choice is remembered between restarts."""
         collapsed = not self._section_collapsed.get(key, False)
         self._section_collapsed[key] = collapsed
         title = self._section_title[key]
@@ -100,6 +103,8 @@ class EstimatorTab:
         else:
             self.sections[key].pack(fill="x")
             self._section_header[key].config(text="▼ " + title)
+        if remember:
+            model.save_collapsed_sections(k for k, v in self._section_collapsed.items() if v)
 
     def _note(self, parent, text, color="#333", size=9):
         lbl = self.ttk.Label(parent, text=text, wraplength=WRAP, justify="left", foreground=color,
@@ -690,7 +695,7 @@ class EstimatorTab:
 
     def _modules_section(self):
         """📦 Modules: reference only - every installed trade and service, how it's priced and its version (what support
-        asks for). Nothing to set here, so it starts folded up; click its title to open it (2026-11-17, David)."""
+        asks for). Nothing to set here; like every section it can be folded up, and stays as the user left it."""
         ttk = self.ttk
         box = self._box("📦 Modules", "modules")
         self._note(box, "Each trade and service is a module with its own questions, formulas and sample prices. "
@@ -702,7 +707,6 @@ class EstimatorTab:
         for i, m in enumerate(model.modules(), start=1):
             for c, v in enumerate((m["name"], m["category"], m["how"], m["version"])):
                 ttk.Label(grid, text=v, font=("Arial", 8)).grid(row=i, column=c, sticky="w", padx=(0, 18))
-        self._toggle_section("modules")                     # starts hidden
 
     # ------------------------------------------------------------ 💾 data
 
