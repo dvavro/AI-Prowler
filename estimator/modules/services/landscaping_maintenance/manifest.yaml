@@ -30,7 +30,7 @@ questions:
     default: 0
     min: 0
     max: 2000000
-    help: "For big or commercial properties. Leave at 0 to use the yard size above. If you type a size, the price is figured per 1,000 sq ft and gets cheaper per acre as the property gets bigger."
+    help: "For big or commercial properties. Leave at 0 to use the yard size above. If you type a size here, Yard size is ignored (except No mowing), and the price is figured per 1,000 sq ft, getting cheaper per acre as the property gets bigger."
   - id: exact_unit
     label: "Exact size unit"
     type: choice
@@ -49,15 +49,19 @@ questions:
       - {value: biweekly, label: "Every 2 weeks (2 visits a month)", factor: "2"}
       - {value: monthly, label: "Monthly (1 visit)", factor: "1"}
   - {id: edging, label: "Edging each visit?", type: boolean, default: false, help: "Clean edges along sidewalks, driveway and beds with a string trimmer or edger."}
+  - {id: edge_ft, label: "Edging length (optional)", type: number, unit: ft, default: 0, min: 0, max: 50000, help: "For big properties. Leave at 0 for a normal yard (flat price per visit). If you type the feet of edging, it's priced per 100 ft each visit."}
   - id: hedges
     label: "Hedge and shrub trimming (monthly)"
     type: choice
     default: none
-    help: "A few bushes is up to about 10 shrubs. Full yard is a hedge row or lots of shrubs."
+    help: "A few bushes is up to about 10 shrubs. Full yard is lots of shrubs. For long hedge rows pick a By the foot choice and type the length in Hedge length. Small jobs have a $75 minimum."
     choices:
       - {value: none, label: "None", factor: "0"}
       - {value: few, label: "A few bushes", factor: "1"}
-      - {value: full, label: "Full yard / hedge rows", factor: "2"}
+      - {value: full, label: "Full yard", factor: "2"}
+      - {value: ft_low, label: "By the foot, under 6 ft tall", factor: "3"}
+      - {value: ft_tall, label: "By the foot, over 6 ft tall", factor: "4"}
+  - {id: hedge_ft, label: "Hedge length", type: number, unit: ft, default: 0, min: 0, max: 20000, help: "Only for the By the foot hedge choices. Measure the length of the hedge row in feet."}
   - id: beds
     label: "Flower bed weeding (monthly)"
     type: choice
@@ -76,13 +80,19 @@ lines:
   - {id: mow_xlarge, description: "Mowing, extra large yard (per visit)", kind: other, unit: ea, quantity: "visits", price_key: lm_mow_xlarge_ea, when: "yard_size == 4 and exact_size == 0"}
   # Exact size: per 1,000 sq ft per visit, half rate past 11,000 sq ft, 12-unit minimum per visit.
   - {id: mow_exact, description: "Mowing by area (per 1,000 sq ft, per month)", kind: other, unit: ea, quantity: "ceil(max(min(exact_size * exact_unit / 1000, 11) + max(exact_size * exact_unit / 1000 - 11, 0) * 0.5, 12)) * visits", price_key: lm_mow_ksqft, when: "exact_size > 0 and yard_size > 0"}
-  - {id: edging, description: "Edging (per month)", kind: other, unit: ea, quantity: "visits", price_key: lm_edge_ea, when: "edging"}
+  - {id: edging, description: "Edging (per month)", kind: other, unit: ea, quantity: "visits", price_key: lm_edge_ea, when: "edging and edge_ft == 0"}
+  # Edging by length: per 100 ft each visit.
+  - {id: edging_ft, description: "Edging by length (per 100 ft, per month)", kind: other, unit: ea, quantity: "ceil(edge_ft / 100) * visits", price_key: lm_edge_100ft, when: "edging and edge_ft > 0"}
   - {id: hedges_few, description: "Hedge trimming, a few bushes (monthly)", kind: other, unit: ea, quantity: "1", price_key: lm_hedge_few_ea, when: "hedges == 1"}
   - {id: hedges_full, description: "Hedge trimming, full yard (monthly)", kind: other, unit: ea, quantity: "1", price_key: lm_hedge_full_ea, when: "hedges == 2"}
+  # Hedges by the foot, with a ~$75 customer minimum (42 ft low, 17 ft tall at sample costs).
+  - {id: hedges_ft_low, description: "Hedge trimming by the foot, under 6 ft (monthly, 42 ft min)", kind: other, unit: lf, quantity: "max(hedge_ft, 42)", price_key: lm_hedge_lf_low, when: "hedges == 3"}
+  - {id: hedges_ft_tall, description: "Hedge trimming by the foot, over 6 ft (monthly, 17 ft min)", kind: other, unit: lf, quantity: "max(hedge_ft, 17)", price_key: lm_hedge_lf_tall, when: "hedges == 4"}
   - {id: beds_small, description: "Bed weeding, small beds (monthly)", kind: other, unit: ea, quantity: "1", price_key: lm_bed_small_ea, when: "beds == 1"}
   - {id: beds_large, description: "Bed weeding, large beds (monthly)", kind: other, unit: ea, quantity: "1", price_key: lm_bed_large_ea, when: "beds == 2"}
   - {id: leaves_small, description: "Leaf cleanup, small yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_leaf_small_ea, when: "leaf_cleanup and exact_size == 0 and yard_size <= 1"}
   - {id: leaves_standard, description: "Leaf cleanup, standard yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_leaf_standard_ea, when: "leaf_cleanup and exact_size == 0 and yard_size == 2"}
   - {id: leaves_large, description: "Leaf cleanup, large yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_leaf_large_ea, when: "leaf_cleanup and exact_size == 0 and yard_size == 3"}
   - {id: leaves_xlarge, description: "Leaf cleanup, extra large yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_leaf_xlarge_ea, when: "leaf_cleanup and exact_size == 0 and yard_size == 4"}
-  - {id: leaves_exact, description: "Leaf cleanup by area (per 1,000 sq ft, one time)", kind: other, unit: ea, quantity: "max(ceil(exact_size * exact_unit / 1000), 20)", price_key: lm_leaf_ksqft, when: "leaf_cleanup and exact_size > 0"}
+  # Leaf cleanup by area: full rate for the first acre (44k sq ft), half rate after, 20-unit minimum.
+  - {id: leaves_exact, description: "Leaf cleanup by area (per 1,000 sq ft, one time)", kind: other, unit: ea, quantity: "max(ceil(min(exact_size * exact_unit / 1000, 44) + max(exact_size * exact_unit / 1000 - 44, 0) * 0.5), 20)", price_key: lm_leaf_ksqft, when: "leaf_cleanup and exact_size > 0"}
