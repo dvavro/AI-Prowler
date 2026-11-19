@@ -1,6 +1,20 @@
 price_key,description,kind,unit,cost
 jr_truck_load_ea,Full truck load (sample),other,ea,600.00
 jr_mattress_ea,Mattress disposal (sample),other,ea,25.00
-jr_appliance_ea,Appliance disposal (sample),other,ea,40.00
+jr_appliance_ea,Appliance disposal (sample),other,ea,25.00
 jr_stairs_ea,Per flight of stairs (sample),other,ea,25.00
 jr_rush_ea,Same-day service (sample),other,ea,50.00
+jr_construction_ea,Construction waste surcharge per quarter truck (sample),other,ea,40.00
+jr_heavy_lb,Heavy debris per pound - concrete dirt brick tile (sample),other,lb,0.07
+jr_heavy_quarter_ea,Heavy debris per quarter truck - concrete dirt brick tile (sample),other,ea,200.00
+jr_ac_ea,AC unit disposal (sample),other,ea,20.00
+jr_tv_ea,TV or monitor recycling (sample),other,ea,15.00
+jr_electronics_ea,Small electronics - included in truck load price (sample),other,ea,0.00
+jr_tire_ea,Tire recycling (sample),other,ea,10.00
+jr_hot_tub_ea,Hot tub removal (sample),other,ea,180.00
+jr_piano_ea,Piano removal (sample),other,ea,115.00
+jr_safe_ea,Large safe removal (sample),other,ea,65.00
+jr_hazmat_ea,Paint stain solvent or chemical per container - market $15-50+ (sample),other,ea,20.00
+jr_propane_ea,Propane tank (sample),other,ea,15.00
+jr_battery_ea,Lithium-ion battery (sample),other,ea,8.00
+jr_bulb_ea,Fluorescent bulb (sample),other,ea,3.00

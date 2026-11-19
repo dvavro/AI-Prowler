@@ -825,7 +825,7 @@ function questionInput(q) {
   const id = "q-" + q.id;
   if (q.type === "boolean") {
     return el("label", { class: "check" }, el("input", { type: "checkbox", id, "data-q": q.id, checked: q.default === true }),
-      " " + q.label);
+      " ", hoverLabel(q, q.label));
   }
   let input;
   if (q.type === "choice") {
@@ -837,8 +837,36 @@ function questionInput(q) {
       step: q.type === "integer" ? "1" : "any", min: q.min, max: q.max,
       value: q.default === null || q.default === undefined ? null : q.default });
   }
-  return el("label", {}, q.label + (q.unit ? " (" + q.unit + ")" : "") + (q.required ? " *" : ""), input,
-    q.help ? el("span", { class: "muted small" }, q.help) : null);
+  return el("label", {}, hoverLabel(q, q.label + (q.unit ? " (" + q.unit + ")" : "") + (q.required ? " *" : "")), input);
+}
+
+// The question's own text shows its explanation when you hover over it (2026-11-18, Jamie): no note under the box.
+// Questions with an explanation get a light dotted underline so you know you can hover them.
+function hoverLabel(q, text) {
+  if (!q.help) return text;
+  const s = el("span", { class: "help-hover", tabindex: "0", "aria-label": text + ". " + q.help }, text);
+  let tip = null;
+  const hide = () => {
+    if (!tip) return;
+    tip.remove(); tip = null;
+    window.removeEventListener("scroll", hide, true);
+  };
+  const show = () => {
+    if (tip) return;
+    tip = el("div", { role: "tooltip", class: "help-hover-tip" }, q.help);   // look: app.css (inline styles are blocked)
+    document.body.append(tip);
+    const r = s.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+    const left = Math.min(Math.max(8, r.left), window.innerWidth - w - 8);
+    const top = r.top - h - 8 >= 8 ? r.top - h - 8 : r.bottom + 8;
+    tip.style.left = left + "px"; tip.style.top = top + "px";
+    window.addEventListener("scroll", hide, true);
+  };
+  s.addEventListener("mouseenter", show);
+  s.addEventListener("mouseleave", hide);
+  s.addEventListener("focus", show);
+  s.addEventListener("blur", hide);
+  s.addEventListener("click", ev => { ev.preventDefault(); s.focus(); show(); });
+  return s;
 }
 
 function buildQuickForm(form, result, q, est, next) {

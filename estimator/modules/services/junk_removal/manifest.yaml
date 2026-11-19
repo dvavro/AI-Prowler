@@ -1,36 +1,179 @@
 # Junk removal: priced by how much of the truck the load fills, plus item fees.
+# Layout (2026-11-18, Jamie): short labels, one-line notes, questions grouped in order -
+#   truck + everyday items, two surcharge-item pairs, heavy debris, chemicals, stairs + same day.
+# Surcharge and chemical choices carry a code (factor) that picks their own price line, so each keeps its own Price Book price.
 id: junk_removal
 name: Junk Removal
 version: 0.1.0
 category: service
 path: quick_estimate
-description: Junk hauling priced by truck-load size, with fees for mattresses, appliances, stairs and same-day service.
+description: Priced by how much of the truck the junk fills, plus fees for items that need special handling.
 minimum_charge: "95.00"
 keywords: [junk removal, junk, haul away, hauling, haul off, trash removal, debris removal, clean out, cleanout, dump run, furniture removal, appliance removal, mattress]
 
 questions:
+  # --- Truck and everyday items ---
   - id: load
-    label: "How much of a truck will it fill?"
+    label: "How much of a truck?"
     type: choice
     required: true
     choices:
+      - {value: none, label: "None (special items only)", factor: "0"}
       - {value: minimum, label: "Minimum (a few items)", factor: "0.125"}
-      - {value: quarter, label: "Quarter truck", factor: "0.25"}
-      - {value: half, label: "Half truck", factor: "0.5"}
-      - {value: three_quarter, label: "Three-quarter truck", factor: "0.75"}
+      - {value: quarter, label: "1/4 truck", factor: "0.25"}
+      - {value: half, label: "1/2 truck", factor: "0.5"}
+      - {value: three_quarter, label: "3/4 truck", factor: "0.75"}
       - {value: full, label: "Full truck", factor: "1.0"}
-  - {id: mattresses, label: "Mattresses / box springs", type: integer, default: 0, min: 0, max: 20}
-  - {id: appliances, label: "Appliances (fridges, washers…)", type: integer, default: 0, min: 0, max: 20}
-  - {id: stairs, label: "Flights of stairs to carry down", type: integer, default: 0, min: 0, max: 10}
-  - {id: same_day, label: "Same-day pickup?", type: boolean, default: false}
+      - {value: one_and_half, label: "1 1/2 trucks", factor: "1.5"}
+      - {value: two, label: "2 trucks", factor: "2.0"}
+      - {value: three, label: "3 trucks", factor: "3.0"}
+  - {id: mattresses, label: "Mattresses / box springs", type: integer, default: 0, min: 0, max: 100, help: "Mattresses and box springs: usually $20–$40 extra per piece due to specialized landfill/recycling handling."}
+  - {id: appliances, label: "Washers, dryers, stoves", type: integer, default: 0, min: 0, max: 100}
+  - {id: stairs, label: "Flights of stairs", type: integer, default: 0, min: 0, max: 10}
+
+  # --- Surcharge items (two pairs, so a quote can have e.g. tires and a TV) ---
+  - id: special
+    label: "Surcharge item"
+    type: choice
+    required: false
+    default: none
+    help: "Fridges, freezers and AC units: $15–$30 extra if the Freon has not been certified as removed. TVs and CRT monitors (older tube TVs and large flat-screens): $15–$35 each for certified e-waste recycling. Small electronics (computers, printers, cables, small stereos) are included in the truck price at no extra charge. Tires: $10–$25 each, more if still on rims. Construction waste is charged per 1/4 truck."
+    choices: &surcharge_choices
+      - {value: none, label: "None", factor: "0"}
+      - {value: ac_units, label: "Fridge, freezer or AC (Freon)", factor: "3"}
+      - {value: tvs, label: "TV or CRT monitor", factor: "4"}
+      - {value: electronics, label: "Small electronics (no charge)", factor: "5"}
+      - {value: tires, label: "Tires", factor: "6"}
+      - {value: hot_tubs, label: "Hot tub", factor: "7"}
+      - {value: pianos, label: "Piano", factor: "8"}
+      - {value: safes, label: "Large safe", factor: "9"}
+      - {value: construction, label: "Construction waste (per 1/4 truck)", factor: "1"}
+  - {id: special_qty, label: "How many?", type: integer, default: 0, min: 0, max: 500}
+  - id: special2
+    label: "Another surcharge item"
+    type: choice
+    required: false
+    default: none
+    choices: *surcharge_choices
+  - {id: special2_qty, label: "How many?", type: integer, default: 0, min: 0, max: 500}
+
+  # --- Heavy debris ---
+  - id: heavy_quarters
+    label: "Concrete, dirt, brick, tile (1/4 trucks)"
+    type: number
+    default: 0
+    min: 0
+    max: 12
+    help: "Concrete, dirt, brick and tile are billed by weight or in strict 1/4-truck increments rather than full-truck volume, so the truck does not exceed legal axle weight limits. It goes to a concrete/dirt recycling yard, not the landfill. Example: half a truck of broken concrete = 2."
+  - id: heavy_lbs
+    label: "…or by weight (lbs)"
+    type: number
+    default: 0
+    min: 0
+    max: 20000
+    help: "If you know the weight, it is billed by the pound with a 1,000 lb minimum. Leave at 0 to bill per 1/4 truck instead. Example: 3,000 lbs of brick."
+
+  # --- Chemicals ---
+  - id: is_chemical
+    label: "Chemicals or hazardous items?"
+    type: boolean
+    default: false
+    help: "Paint, solvents, pool chemicals, fuel, propane, batteries and bulbs are kept separate from the load and taken to a hazardous waste facility, never the landfill. Many haulers cannot legally carry them. Chandler residents can drop them off free at the City of Chandler Recycling-Solid Waste Collection Center with a utility bill and ID."
+  - id: chem_type
+    label: "Type of chemical"
+    type: choice
+    required: false
+    default: none
+    choices:
+      - {value: none, label: "None", factor: "0"}
+      - {value: paint, label: "Paint and stains", factor: "1"}
+      - {value: solvents, label: "Solvents and paint thinner", factor: "2"}
+      - {value: pool, label: "Pool chemicals", factor: "3"}
+      - {value: yard, label: "Pesticides, weed killer, fertilizer", factor: "4"}
+      - {value: cleaners, label: "Cleaning chemicals", factor: "5"}
+      - {value: auto, label: "Motor oil or antifreeze", factor: "6"}
+      - {value: fuel, label: "Gasoline or other fuel", factor: "7"}
+      - {value: propane, label: "Propane tanks", factor: "8"}
+      - {value: batteries, label: "Lithium-ion batteries", factor: "9"}
+      - {value: bulbs, label: "Fluorescent bulbs", factor: "10"}
+      - {value: asbestos, label: "Asbestos (we can't haul it)", factor: "11"}
+  - {id: chem_qty, label: "How many containers?", type: integer, default: 0, min: 0, max: 200}
+
+  # --- Timing ---
+  - {id: same_day, label: "Same-day pickup", type: boolean, default: false}
 
 lines:
   - {id: load, description: "Truck load (hauling and disposal)", kind: other, unit: ea, quantity: "load",
-     price_key: jr_truck_load_ea}
+     price_key: jr_truck_load_ea, when: "load > 0"}
   - {id: mattresses, description: "Mattress disposal fee", kind: other, unit: ea, quantity: "mattresses",
      price_key: jr_mattress_ea, when: "mattresses > 0"}
   - {id: appliances, description: "Appliance disposal fee", kind: other, unit: ea, quantity: "appliances",
      price_key: jr_appliance_ea, when: "appliances > 0"}
+
+  # Surcharge item 1
+  - {id: construction, description: "Construction waste surcharge (per 1/4 truck)", kind: other, unit: ea, quantity: "special_qty",
+     price_key: jr_construction_ea, when: "special == 1 and special_qty > 0"}
+  - {id: ac_units, description: "Fridge / freezer / AC fee (Freon)", kind: other, unit: ea, quantity: "special_qty",
+     price_key: jr_ac_ea, when: "special == 3 and special_qty > 0"}
+  - {id: tvs, description: "TV / CRT monitor e-waste recycling", kind: other, unit: ea, quantity: "special_qty",
+     price_key: jr_tv_ea, when: "special == 4 and special_qty > 0"}
+  - {id: electronics, description: "Small electronics (included)", kind: other, unit: ea, quantity: "special_qty",
+     price_key: jr_electronics_ea, when: "special == 5 and special_qty > 0"}
+  - {id: tires, description: "Tire recycling fee", kind: other, unit: ea, quantity: "special_qty",
+     price_key: jr_tire_ea, when: "special == 6 and special_qty > 0"}
+  - {id: hot_tubs, description: "Hot tub removal", kind: other, unit: ea, quantity: "special_qty",
+     price_key: jr_hot_tub_ea, when: "special == 7 and special_qty > 0"}
+  - {id: pianos, description: "Piano removal", kind: other, unit: ea, quantity: "special_qty",
+     price_key: jr_piano_ea, when: "special == 8 and special_qty > 0"}
+  - {id: safes, description: "Large safe removal", kind: other, unit: ea, quantity: "special_qty",
+     price_key: jr_safe_ea, when: "special == 9 and special_qty > 0"}
+
+  # Surcharge item 2
+  - {id: construction2, description: "Construction waste surcharge (per 1/4 truck)", kind: other, unit: ea, quantity: "special2_qty",
+     price_key: jr_construction_ea, when: "special2 == 1 and special2_qty > 0"}
+  - {id: ac_units2, description: "Fridge / freezer / AC fee (Freon)", kind: other, unit: ea, quantity: "special2_qty",
+     price_key: jr_ac_ea, when: "special2 == 3 and special2_qty > 0"}
+  - {id: tvs2, description: "TV / CRT monitor e-waste recycling", kind: other, unit: ea, quantity: "special2_qty",
+     price_key: jr_tv_ea, when: "special2 == 4 and special2_qty > 0"}
+  - {id: electronics2, description: "Small electronics (included)", kind: other, unit: ea, quantity: "special2_qty",
+     price_key: jr_electronics_ea, when: "special2 == 5 and special2_qty > 0"}
+  - {id: tires2, description: "Tire recycling fee", kind: other, unit: ea, quantity: "special2_qty",
+     price_key: jr_tire_ea, when: "special2 == 6 and special2_qty > 0"}
+  - {id: hot_tubs2, description: "Hot tub removal", kind: other, unit: ea, quantity: "special2_qty",
+     price_key: jr_hot_tub_ea, when: "special2 == 7 and special2_qty > 0"}
+  - {id: pianos2, description: "Piano removal", kind: other, unit: ea, quantity: "special2_qty",
+     price_key: jr_piano_ea, when: "special2 == 8 and special2_qty > 0"}
+  - {id: safes2, description: "Large safe removal", kind: other, unit: ea, quantity: "special2_qty",
+     price_key: jr_safe_ea, when: "special2 == 9 and special2_qty > 0"}
+
+  # Heavy debris: by weight when known (1,000 lb minimum), otherwise per 1/4 truck rounded up
+  - {id: heavy, description: "Heavy debris by weight (concrete, dirt, brick, tile; 1,000 lb minimum)", kind: other, unit: lb,
+     quantity: "max(heavy_lbs, 1000)", price_key: jr_heavy_lb, when: "heavy_lbs > 0"}
+  - {id: heavy_quarter, description: "Heavy debris per 1/4 truck (concrete, dirt, brick, tile)", kind: other, unit: ea,
+     quantity: "max(ceil(heavy_quarters), 1)", price_key: jr_heavy_quarter_ea, when: "heavy_lbs == 0 and heavy_quarters > 0"}
+
+  # Chemicals (only when the chemicals box is checked; asbestos is a warning, no price)
+  - {id: chem_paint, description: "Hazardous: paint and stains", kind: other, unit: ea, quantity: "chem_qty",
+     price_key: jr_hazmat_ea, when: "is_chemical and chem_type == 1 and chem_qty > 0"}
+  - {id: chem_solvents, description: "Hazardous: solvents and paint thinner", kind: other, unit: ea, quantity: "chem_qty",
+     price_key: jr_hazmat_ea, when: "is_chemical and chem_type == 2 and chem_qty > 0"}
+  - {id: chem_pool, description: "Hazardous: pool chemicals", kind: other, unit: ea, quantity: "chem_qty",
+     price_key: jr_hazmat_ea, when: "is_chemical and chem_type == 3 and chem_qty > 0"}
+  - {id: chem_yard, description: "Hazardous: pesticides, weed killer or fertilizer", kind: other, unit: ea, quantity: "chem_qty",
+     price_key: jr_hazmat_ea, when: "is_chemical and chem_type == 4 and chem_qty > 0"}
+  - {id: chem_cleaners, description: "Hazardous: cleaning chemicals", kind: other, unit: ea, quantity: "chem_qty",
+     price_key: jr_hazmat_ea, when: "is_chemical and chem_type == 5 and chem_qty > 0"}
+  - {id: chem_auto, description: "Hazardous: motor oil or antifreeze", kind: other, unit: ea, quantity: "chem_qty",
+     price_key: jr_hazmat_ea, when: "is_chemical and chem_type == 6 and chem_qty > 0"}
+  - {id: chem_fuel, description: "Hazardous: gasoline or other fuel", kind: other, unit: ea, quantity: "chem_qty",
+     price_key: jr_hazmat_ea, when: "is_chemical and chem_type == 7 and chem_qty > 0"}
+  - {id: chem_propane, description: "Hazardous: propane tanks", kind: other, unit: ea, quantity: "chem_qty",
+     price_key: jr_propane_ea, when: "is_chemical and chem_type == 8 and chem_qty > 0"}
+  - {id: chem_batteries, description: "Hazardous: lithium-ion batteries", kind: other, unit: ea, quantity: "chem_qty",
+     price_key: jr_battery_ea, when: "is_chemical and chem_type == 9 and chem_qty > 0"}
+  - {id: chem_bulbs, description: "Hazardous: fluorescent bulbs", kind: other, unit: ea, quantity: "chem_qty",
+     price_key: jr_bulb_ea, when: "is_chemical and chem_type == 10 and chem_qty > 0"}
+
   - {id: stairs, description: "Stairs", kind: other, unit: ea, quantity: "stairs", price_key: jr_stairs_ea,
      when: "stairs > 0"}
   - {id: same_day, description: "Same-day service", kind: other, unit: ea, quantity: "1", price_key: jr_rush_ea,
