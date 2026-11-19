@@ -1,22 +1,41 @@
-# Landscaping maintenance: monthly mowing and upkeep priced by area and visits.
+# Landscaping maintenance: monthly lawn and yard upkeep, bid the way local crews bid it.
+# Main question is the yard-size tier (flat price per visit). For big or commercial
+# properties an exact size can be typed instead; that prices per 1,000 sq ft and gets
+# cheaper per acre as the property grows (first 11,000 sq ft full rate, the rest half rate).
 id: landscaping_maintenance
 name: Landscaping Maintenance
 version: 0.2.0
 category: service
 path: quick_estimate
-description: Monthly lawn and yard upkeep priced by lawn area and visits, with edging, hedge trimming, weeding beds and leaf cleanup.
+description: Monthly lawn and yard upkeep priced by yard size and visits, with edging, hedge trimming, bed weeding and leaf cleanup.
 minimum_charge: "80.00"
 keywords: [landscaping maintenance, lawn care, lawn service, lawn mowing, mow, mowing, mow my lawn, yard maintenance, yard work, hedge trimming, hedges, weeding, leaf cleanup, edging, gardener]
-required_any: [lawn_sqft, hedge_lf, beds_sqft]
 # A won quote with one of these answers becomes a repeating job in AI-Prowler.
 recurrence: {question: visits, map: {weekly: Weekly, biweekly: Biweekly, monthly: Monthly}}
-
 questions:
-  - {id: lawn_sqft, label: "Lawn area to mow", type: number, default: 0, min: 0, max: 200000}
-  - id: lawn_unit
-    label: "Lawn area unit"
+  - id: yard_size
+    label: "Yard size"
+    type: choice
+    default: standard
+    help: "Pick the closest size. Most city lots are Standard. A quarter acre is about 11,000 sq ft. Choose No mowing if you only need hedges or beds."
+    choices:
+      - {value: none, label: "No mowing (hedges or beds only)", factor: "0"}
+      - {value: small, label: "Small (under 1/4 acre)", factor: "1"}
+      - {value: standard, label: "Standard (1/4 to 1/2 acre)", factor: "2"}
+      - {value: large, label: "Large (1/2 to 1 acre)", factor: "3"}
+      - {value: xlarge, label: "Extra large (over 1 acre)", factor: "4"}
+  - id: exact_size
+    label: "Exact size (optional)"
+    type: number
+    default: 0
+    min: 0
+    max: 2000000
+    help: "For big or commercial properties. Leave at 0 to use the yard size above. If you type a size, the price is figured per 1,000 sq ft and gets cheaper per acre as the property gets bigger."
+  - id: exact_unit
+    label: "Exact size unit"
     type: choice
     default: sqft
+    help: "Is the exact size in square feet or acres? 1 acre = 43,560 sq ft."
     choices:
       - {value: sqft, label: "Square feet", factor: "1"}
       - {value: acre, label: "Acres", factor: "43560"}
@@ -24,23 +43,46 @@ questions:
     label: "How often?"
     type: choice
     default: biweekly
+    help: "Weekly keeps it neat in growing season. Every 2 weeks is the most common plan."
     choices:
       - {value: weekly, label: "Weekly (4 visits a month)", factor: "4"}
       - {value: biweekly, label: "Every 2 weeks (2 visits a month)", factor: "2"}
       - {value: monthly, label: "Monthly (1 visit)", factor: "1"}
-  - {id: edging, label: "Edging each visit?", type: boolean, default: false}
-  - {id: hedge_lf, label: "Hedges to trim (once a month)", type: number, unit: lf, default: 0, min: 0, max: 5000}
-  - {id: beds_sqft, label: "Flower beds to weed", type: number, unit: sqft, default: 0, min: 0, max: 50000}
-  - {id: leaf_cleanup, label: "One-time leaf cleanup?", type: boolean, default: false}
-
+  - {id: edging, label: "Edging each visit?", type: boolean, default: false, help: "Clean edges along sidewalks, driveway and beds with a string trimmer or edger."}
+  - id: hedges
+    label: "Hedge and shrub trimming (monthly)"
+    type: choice
+    default: none
+    help: "A few bushes is up to about 10 shrubs. Full yard is a hedge row or lots of shrubs."
+    choices:
+      - {value: none, label: "None", factor: "0"}
+      - {value: few, label: "A few bushes", factor: "1"}
+      - {value: full, label: "Full yard / hedge rows", factor: "2"}
+  - id: beds
+    label: "Flower bed weeding (monthly)"
+    type: choice
+    default: none
+    help: "Small is one or two beds by the house. Large is beds around most of the yard."
+    choices:
+      - {value: none, label: "None", factor: "0"}
+      - {value: small, label: "Small beds", factor: "1"}
+      - {value: large, label: "Large beds", factor: "2"}
+  - {id: leaf_cleanup, label: "One-time leaf cleanup?", type: boolean, default: false, help: "Rake, blow and haul away leaves once. Priced by yard size."}
 lines:
-  - {id: mowing, description: "Mowing (per month)", kind: other, unit: sqft, quantity: "lawn_sqft * lawn_unit * visits",
-     price_key: lm_mow_sqft, when: "lawn_sqft > 0"}
-  - {id: edging, description: "Edging (per month)", kind: other, unit: ea, quantity: "visits",
-     price_key: lm_edge_ea, when: "edging"}
-  - {id: hedges, description: "Hedge trimming", kind: other, unit: lf, quantity: "hedge_lf",
-     price_key: lm_hedge_lf, when: "hedge_lf > 0"}
-  - {id: beds, description: "Bed weeding (per month)", kind: other, unit: sqft, quantity: "beds_sqft * visits",
-     price_key: lm_bed_sqft, when: "beds_sqft > 0"}
-  - {id: leaves, description: "Leaf cleanup (one time)", kind: other, unit: ea, quantity: "1",
-     price_key: lm_leaf_ea, when: "leaf_cleanup"}
+  # Yard-size tiers: flat price per visit.
+  - {id: mow_small, description: "Mowing, small yard (per visit)", kind: other, unit: ea, quantity: "visits", price_key: lm_mow_small_ea, when: "yard_size == 1 and exact_size == 0"}
+  - {id: mow_standard, description: "Mowing, standard yard (per visit)", kind: other, unit: ea, quantity: "visits", price_key: lm_mow_standard_ea, when: "yard_size == 2 and exact_size == 0"}
+  - {id: mow_large, description: "Mowing, large yard (per visit)", kind: other, unit: ea, quantity: "visits", price_key: lm_mow_large_ea, when: "yard_size == 3 and exact_size == 0"}
+  - {id: mow_xlarge, description: "Mowing, extra large yard (per visit)", kind: other, unit: ea, quantity: "visits", price_key: lm_mow_xlarge_ea, when: "yard_size == 4 and exact_size == 0"}
+  # Exact size: per 1,000 sq ft per visit, half rate past 11,000 sq ft, 12-unit minimum per visit.
+  - {id: mow_exact, description: "Mowing by area (per 1,000 sq ft, per month)", kind: other, unit: ea, quantity: "ceil(max(min(exact_size * exact_unit / 1000, 11) + max(exact_size * exact_unit / 1000 - 11, 0) * 0.5, 12)) * visits", price_key: lm_mow_ksqft, when: "exact_size > 0 and yard_size > 0"}
+  - {id: edging, description: "Edging (per month)", kind: other, unit: ea, quantity: "visits", price_key: lm_edge_ea, when: "edging"}
+  - {id: hedges_few, description: "Hedge trimming, a few bushes (monthly)", kind: other, unit: ea, quantity: "1", price_key: lm_hedge_few_ea, when: "hedges == 1"}
+  - {id: hedges_full, description: "Hedge trimming, full yard (monthly)", kind: other, unit: ea, quantity: "1", price_key: lm_hedge_full_ea, when: "hedges == 2"}
+  - {id: beds_small, description: "Bed weeding, small beds (monthly)", kind: other, unit: ea, quantity: "1", price_key: lm_bed_small_ea, when: "beds == 1"}
+  - {id: beds_large, description: "Bed weeding, large beds (monthly)", kind: other, unit: ea, quantity: "1", price_key: lm_bed_large_ea, when: "beds == 2"}
+  - {id: leaves_small, description: "Leaf cleanup, small yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_leaf_small_ea, when: "leaf_cleanup and exact_size == 0 and yard_size <= 1"}
+  - {id: leaves_standard, description: "Leaf cleanup, standard yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_leaf_standard_ea, when: "leaf_cleanup and exact_size == 0 and yard_size == 2"}
+  - {id: leaves_large, description: "Leaf cleanup, large yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_leaf_large_ea, when: "leaf_cleanup and exact_size == 0 and yard_size == 3"}
+  - {id: leaves_xlarge, description: "Leaf cleanup, extra large yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_leaf_xlarge_ea, when: "leaf_cleanup and exact_size == 0 and yard_size == 4"}
+  - {id: leaves_exact, description: "Leaf cleanup by area (per 1,000 sq ft, one time)", kind: other, unit: ea, quantity: "max(ceil(exact_size * exact_unit / 1000), 20)", price_key: lm_leaf_ksqft, when: "leaf_cleanup and exact_size > 0"}
