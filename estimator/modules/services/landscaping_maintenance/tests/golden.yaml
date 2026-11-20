@@ -58,6 +58,14 @@
   # overseed 43.56 -> 44 x $8 = $352
   expected_lines: {mow_exact: 13160, overseed_exact: 35200}
   expected_total_cents: 48360
+- name: Palms by height - 2 at 40 to 60 ft, then 1 over 60 ft
+  answers: {yard_size: none, palm_height: from40to60, palm_qty: 2}
+  expected_lines: {palms_40_60: 87000}
+  expected_total_cents: 87000
+- name: One palm over 60 ft
+  answers: {yard_size: none, palm_height: over60}
+  expected_lines: {palms_over60: 60200}
+  expected_total_cents: 60200
 - name: Hard access ignored when there are no visits (hedges only)
   answers: {yard_size: none, hedges: full, hard_access: true}
   expected_lines: {hedges_full: 10000}

@@ -103,7 +103,8 @@ questions:
       - {value: none, label: "None", factor: "0"}
       - {value: under20, label: "Under 20 ft", factor: "1"}
       - {value: mid, label: "20 to 40 ft", factor: "2"}
-      - {value: over40, label: "Over 40 ft", factor: "3"}
+      - {value: from40to60, label: "40 to 60 ft", factor: "3"}
+      - {value: over60, label: "Over 60 ft (lift or climber)", factor: "4"}
   - {id: palm_qty, label: "Palm trees", type: integer, default: 1, min: 1, max: 200, help: "How many palms to trim. Only used when a palm height is picked."}
   - {id: trees_qty, label: "Other trees to prune (one time)", type: integer, default: 0, min: 0, max: 200, help: "Citrus, mesquite, palo verde and other yard trees under about 25 ft. Bigger trees need a tree service quote."}
   - {id: overseed, label: "Winter rye overseeding (one time)?", type: boolean, default: false, help: "Fall seeding of winter rye grass so the lawn stays green in winter. Grass lawns only, done in the fall when nights cool down. Priced by yard size."}
@@ -143,7 +144,8 @@ lines:
   - {id: irrigation, description: "Irrigation / drip check (monthly)", kind: other, unit: ea, quantity: "1", price_key: lm_irrigation_ea, when: "irrigation_check"}
   - {id: palms_under20, description: "Palm trimming, under 20 ft (one time)", kind: other, unit: ea, quantity: "palm_qty", price_key: lm_palm_under20_ea, when: "palm_height == 1"}
   - {id: palms_mid, description: "Palm trimming, 20 to 40 ft (one time)", kind: other, unit: ea, quantity: "palm_qty", price_key: lm_palm_mid_ea, when: "palm_height == 2"}
-  - {id: palms_over40, description: "Palm trimming, over 40 ft (one time)", kind: other, unit: ea, quantity: "palm_qty", price_key: lm_palm_over40_ea, when: "palm_height == 3"}
+  - {id: palms_40_60, description: "Palm trimming, 40 to 60 ft (one time)", kind: other, unit: ea, quantity: "palm_qty", price_key: lm_palm_40_60_ea, when: "palm_height == 3"}
+  - {id: palms_over60, description: "Palm trimming, over 60 ft (one time)", kind: other, unit: ea, quantity: "palm_qty", price_key: lm_palm_over60_ea, when: "palm_height == 4"}
   - {id: trees, description: "Tree pruning, under 25 ft (one time)", kind: other, unit: ea, quantity: "trees_qty", price_key: lm_tree_prune_ea, when: "trees_qty > 0"}
   - {id: overseed_small, description: "Winter rye overseeding, small yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_overseed_small_ea, when: "overseed and exact_size == 0 and yard_size == 1"}
   - {id: overseed_standard, description: "Winter rye overseeding, standard yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_overseed_standard_ea, when: "overseed and exact_size == 0 and yard_size == 2"}

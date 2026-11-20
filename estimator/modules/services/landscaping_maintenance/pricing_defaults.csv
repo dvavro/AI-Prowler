@@ -26,7 +26,8 @@ lm_weed_large_ea,"Weed spraying monthly, large area (sample)",other,ea,63.50
 lm_irrigation_ea,Irrigation / drip check monthly (sample),other,ea,23.50
 lm_palm_under20_ea,"Palm trimming per tree, under 20 ft (sample)",other,ea,84.00
 lm_palm_mid_ea,"Palm trimming per tree, 20 to 40 ft (sample)",other,ea,167.00
-lm_palm_over40_ea,"Palm trimming per tree, over 40 ft (sample)",other,ea,301.00
+lm_palm_40_60_ea,"Palm trimming per tree, 40 to 60 ft (sample)",other,ea,435.00
+lm_palm_over60_ea,"Palm trimming per tree, over 60 ft, lift or climber (sample)",other,ea,602.00
 lm_tree_prune_ea,"Tree pruning per tree, under 25 ft (sample)",other,ea,167.00
 lm_overseed_small_ea,"Winter rye overseeding, small yard (sample)",other,ea,80.00
 lm_overseed_standard_ea,"Winter rye overseeding, standard yard (sample)",other,ea,147.00
