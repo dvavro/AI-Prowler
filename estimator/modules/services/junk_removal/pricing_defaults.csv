@@ -1,5 +1,5 @@
 price_key,description,kind,unit,cost
-jr_truck_load_ea,Full truck load (sample),other,ea,600.00
+jr_truck_load_ea,Full truck load (sample),other,ea,540.00
 jr_mattress_ea,Mattress disposal (sample),other,ea,25.00
 jr_appliance_ea,Appliance disposal (sample),other,ea,25.00
 jr_stairs_ea,Per flight of stairs (sample),other,ea,25.00

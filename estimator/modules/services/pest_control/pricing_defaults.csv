@@ -1,7 +1,7 @@
 price_key,description,kind,unit,cost
-pc_one_time_ea,"One-time pest treatment, up to 2,500 sq ft (sample)",other,ea,147.00
-pc_startup_ea,"Plan startup service, up to 2,500 sq ft (sample)",other,ea,100.00
-pc_visit_monthly_ea,"Monthly plan visit, up to 2,500 sq ft (sample)",other,ea,30.00
+pc_one_time_ea,"One-time pest treatment, up to 2,500 sq ft (sample)",other,ea,167.00
+pc_startup_ea,"Plan startup service, up to 2,500 sq ft (sample)",other,ea,117.00
+pc_visit_monthly_ea,"Monthly plan visit, up to 2,500 sq ft (sample)",other,ea,33.45
 pc_visit_bimonthly_ea,"Every 2 months plan visit, up to 2,500 sq ft (sample)",other,ea,57.00
 pc_visit_quarterly_ea,"Quarterly plan visit, up to 2,500 sq ft (sample)",other,ea,87.00
 pc_size_first_ea,"Larger home, first treatment, per extra 1,000 sq ft (sample)",other,ea,16.75

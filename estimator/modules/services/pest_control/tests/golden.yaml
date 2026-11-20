@@ -1,27 +1,27 @@
 # Golden cases: sample prices, no markups. Totals in cents.
 - name: One-time treatment, home up to 2,500 sq ft (defaults)
   answers: {}
-  expected_lines: {one_time: 14700}
-  expected_total_cents: 14700
+  expected_lines: {one_time: 16700}
+  expected_total_cents: 16700
 - name: Quarterly plan, 2,500-3,500 sq ft, moderate, scorpions
   answers: {plan: quarterly, home_size: large, level: moderate, scorpions: true}
-  # startup $100 + visit $87 + size first $16.75 + size visit $6.70 + moderate $33.50 + scorpion first $83.60 + scorpion visit $23.40
-  expected_lines: {startup: 10000, visit_quarterly: 8700, size_first: 1675, size_visit: 670, level_moderate: 3350, scorpion_first: 8360, scorpion_visit: 2340}
-  expected_total_cents: 35095
+  # startup $117 + visit $87 + size first $16.75 + size visit $6.70 + moderate $33.50 + scorpion first $83.60 + scorpion visit $23.40
+  expected_lines: {startup: 11700, visit_quarterly: 8700, size_first: 1675, size_visit: 670, level_moderate: 3350, scorpion_first: 8360, scorpion_visit: 2340}
+  expected_total_cents: 36795
 - name: Monthly plan, exact 5,200 sq ft
   answers: {plan: monthly, exact_sqft: 5200}
   # 2,700 sq ft over 2,500 -> 3 extra units: first 3 x $16.75, visit 3 x $6.70
-  expected_lines: {startup: 10000, visit_monthly: 3000, size_first_exact: 5025, size_visit_exact: 2010}
-  expected_total_cents: 20035
+  expected_lines: {startup: 11700, visit_monthly: 3345, size_first_exact: 5025, size_visit_exact: 2010}
+  expected_total_cents: 22080
 - name: One time heavy with rodents, termite inspection, 2 bed bug rooms, mosquitoes, standard yard
   answers: {level: heavy, rodents: true, termite_inspection: true, bedbug_rooms: 2, mosquitoes: true, yard: standard}
-  expected_lines: {one_time: 14700, level_heavy: 6700, rodent_setup: 15050, rodent_monthly: 4680, termite: 6700, bedbugs: 60200, mosquito: 6350, yard_standard: 2675}
-  expected_total_cents: 117055
+  expected_lines: {one_time: 16700, level_heavy: 6700, rodent_setup: 15050, rodent_monthly: 4680, termite: 6700, bedbugs: 60200, mosquito: 6350, yard_standard: 2675}
+  expected_total_cents: 119055
 - name: Exact 2,000 sq ft one time - no larger-home charge
   answers: {exact_sqft: 2000}
-  expected_lines: {one_time: 14700}
-  expected_total_cents: 14700
+  expected_lines: {one_time: 16700}
+  expected_total_cents: 16700
 - name: Every 2 months plan with scorpion sealing
   answers: {plan: bimonthly, scorpion_seal: true}
-  expected_lines: {startup: 10000, visit_bimonthly: 5700, scorpion_seal: 20070}
-  expected_total_cents: 35770
+  expected_lines: {startup: 11700, visit_bimonthly: 5700, scorpion_seal: 20070}
+  expected_total_cents: 37470
