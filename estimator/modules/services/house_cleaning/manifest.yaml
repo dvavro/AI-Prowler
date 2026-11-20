@@ -1,10 +1,11 @@
 # House cleaning: quick estimate priced on estimated labor hours plus add-ons.
+# Standard / deep / move-out cleans; recurring plans start with a deep first visit, the way cleaning companies bid.
 id: house_cleaning
 name: House Cleaning
 version: 0.1.0
 category: service
 path: quick_estimate
-description: Standard, deep and move-in/out cleans priced from rooms, size, condition and visit frequency.
+description: Standard, deep and move-in/out cleans priced from rooms, size, condition and visit frequency, with a deep first visit on plans and add-ons like cabinets, baseboards, blinds, laundry, dishes, garage and patio.
 minimum_charge: "120.00"
 keywords: [clean a house, clean house, house clean, clean a home, clean the home, clean my home, cleaning service, cleaning lady, cleaners, house cleaner, home cleaner, apartment, condo, bedroom, bathroom, housekeeping, maid service, house cleaning, home cleaning, clean my house, clean the house, maid, deep clean, move out clean, move-out clean, move in clean, move-in clean, recurring clean, bedrooms, bathrooms]
 # A won quote with one of these answers becomes a repeating job in AI-Prowler.
@@ -26,9 +27,18 @@ questions:
       - {value: "3", label: "3 - average", factor: "1.0"}
       - {value: "4", label: "4 - dirty", factor: "1.2"}
       - {value: "5", label: "5 - very dirty", factor: "1.5"}
+  - id: clean_type
+    label: "Type of clean"
+    type: choice
+    default: standard
+    help: "Standard keeps a home clean: kitchen, bathrooms, dusting, floors. Deep adds baseboards, vents, door frames and heavy buildup, about 50% more time. Move-in / move-out is for an empty home, including inside cabinets, closets and appliances."
+    choices:
+      - {value: standard, label: "Standard clean", factor: "1.0"}
+      - {value: deep, label: "Deep clean", factor: "1.5"}
+      - {value: move_out, label: "Move-in / move-out clean", factor: "1.75"}
   - {id: pets, label: "Pets in the home?", type: boolean, default: false, help: "Pet hair and dander take extra time to clean."}
   - id: frequency
-    help: "Regular cleanings cost less per visit because the home stays cleaner."
+    help: "Regular cleanings cost less per visit because the home stays cleaner. Plans start with a deep first visit to bring the home up to standard."
     label: "How often?"
     type: choice
     default: one_time
@@ -37,19 +47,40 @@ questions:
       - {value: weekly, label: "Weekly (20% off)", factor: "0.80"}
       - {value: biweekly, label: "Every 2 weeks (15% off)", factor: "0.85"}
       - {value: monthly, label: "Monthly (10% off)", factor: "0.90"}
-  - {id: move_in_out, label: "Move-in / move-out clean?", type: boolean, default: false, help: "A deeper clean for an empty home, including inside cabinets and closets."}
   - {id: oven, label: "Clean inside the oven?", type: boolean, default: false, help: "Clean the inside of the oven."}
   - {id: fridge, label: "Clean inside the fridge?", type: boolean, default: false, help: "Empty and clean the inside of the fridge."}
   - {id: interior_windows, label: "Interior windows", type: integer, default: 0, min: 0, max: 200, help: "Number of windows to clean on the inside."}
+  - {id: cabinets, label: "Inside kitchen cabinets?", type: boolean, default: false, help: "Empty, wipe out and reload the kitchen cabinets. Already included in a move-in / move-out clean."}
+  - {id: baseboards, label: "Hand-wipe baseboards?", type: boolean, default: false, help: "Wipe every baseboard by hand. Already part of a deep or move-out clean."}
+  - {id: blinds, label: "Blinds to dust", type: integer, default: 0, min: 0, max: 100, help: "Number of window blinds to dust slat by slat."}
+  - {id: laundry_loads, label: "Laundry loads", type: integer, default: 0, min: 0, max: 20, help: "Loads to wash, dry and fold while the cleaners are there."}
+  - {id: dishes, label: "Wash dishes?", type: boolean, default: false, help: "Wash and put away a sink of dishes."}
+  - {id: garage, label: "Sweep the garage?", type: boolean, default: false, help: "Sweep the garage floor and knock down cobwebs."}
+  - {id: patio, label: "Sweep the patio?", type: boolean, default: false, help: "Sweep the patio or balcony and wipe outdoor furniture."}
 
 lines:
   - id: labor
     description: "Cleaning labor"
     kind: other
     unit: hr
-    quantity: "round((1 + 0.5 * bedrooms + 0.75 * bathrooms + sqft / 1000 * 0.75) * condition * (1.25 if move_in_out else 1) + (0.25 if pets else 0), 2) * frequency"
+    quantity: "round((1 + 0.5 * bedrooms + 0.75 * bathrooms + sqft / 1000 * 0.75) * condition * clean_type + (0.25 if pets else 0), 2) * frequency"
     price_key: hc_labor_hr
+  # Plans: the first visit is a deep clean, about 50% more time, charged once.
+  - id: first_deep
+    description: "First visit deep clean (one time, extra time)"
+    kind: other
+    unit: hr
+    quantity: "round((1 + 0.5 * bedrooms + 0.75 * bathrooms + sqft / 1000 * 0.75) * condition * 0.5, 2)"
+    price_key: hc_labor_hr
+    when: "frequency < 1 and clean_type < 1.5"
   - {id: oven, description: "Inside oven", kind: other, unit: ea, quantity: "1", price_key: hc_oven_ea, when: "oven"}
   - {id: fridge, description: "Inside fridge", kind: other, unit: ea, quantity: "1", price_key: hc_fridge_ea, when: "fridge"}
   - {id: windows, description: "Interior windows", kind: other, unit: ea, quantity: "interior_windows",
      price_key: hc_window_ea, when: "interior_windows > 0"}
+  - {id: cabinets, description: "Inside kitchen cabinets", kind: other, unit: ea, quantity: "1", price_key: hc_cabinets_ea, when: "cabinets and clean_type < 1.75"}
+  - {id: baseboards, description: "Hand-wiped baseboards", kind: other, unit: ea, quantity: "1", price_key: hc_baseboards_ea, when: "baseboards and clean_type < 1.5"}
+  - {id: blinds, description: "Blinds dusted", kind: other, unit: ea, quantity: "blinds", price_key: hc_blind_ea, when: "blinds > 0"}
+  - {id: laundry, description: "Laundry (wash, dry, fold)", kind: other, unit: ea, quantity: "laundry_loads", price_key: hc_laundry_load_ea, when: "laundry_loads > 0"}
+  - {id: dishes, description: "Dishes", kind: other, unit: ea, quantity: "1", price_key: hc_dishes_ea, when: "dishes"}
+  - {id: garage, description: "Garage sweep", kind: other, unit: ea, quantity: "1", price_key: hc_garage_ea, when: "garage"}
+  - {id: patio, description: "Patio sweep", kind: other, unit: ea, quantity: "1", price_key: hc_patio_ea, when: "patio"}
