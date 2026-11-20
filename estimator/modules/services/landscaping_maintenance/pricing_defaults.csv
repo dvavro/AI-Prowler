@@ -17,3 +17,21 @@ lm_leaf_standard_ea,"Leaf cleanup, standard yard (sample)",other,ea,200.00
 lm_leaf_large_ea,"Leaf cleanup, large yard (sample)",other,ea,300.00
 lm_leaf_xlarge_ea,"Leaf cleanup, extra large yard (sample)",other,ea,450.00
 lm_leaf_ksqft,"Leaf cleanup per 1,000 sq ft, exact size (sample)",other,ea,7.00
+lm_rock_small_ea,"Rock yard upkeep per visit, small (sample)",other,ea,23.50
+lm_rock_standard_ea,"Rock yard upkeep per visit, standard (sample)",other,ea,33.50
+lm_rock_large_ea,"Rock yard upkeep per visit, large (sample)",other,ea,50.00
+lm_weed_small_ea,"Weed spraying monthly, small area (sample)",other,ea,30.00
+lm_weed_standard_ea,"Weed spraying monthly, standard area (sample)",other,ea,43.50
+lm_weed_large_ea,"Weed spraying monthly, large area (sample)",other,ea,63.50
+lm_irrigation_ea,Irrigation / drip check monthly (sample),other,ea,23.50
+lm_palm_under20_ea,"Palm trimming per tree, under 20 ft (sample)",other,ea,84.00
+lm_palm_mid_ea,"Palm trimming per tree, 20 to 40 ft (sample)",other,ea,167.00
+lm_palm_over40_ea,"Palm trimming per tree, over 40 ft (sample)",other,ea,301.00
+lm_tree_prune_ea,"Tree pruning per tree, under 25 ft (sample)",other,ea,167.00
+lm_overseed_small_ea,"Winter rye overseeding, small yard (sample)",other,ea,80.00
+lm_overseed_standard_ea,"Winter rye overseeding, standard yard (sample)",other,ea,147.00
+lm_overseed_large_ea,"Winter rye overseeding, large yard (sample)",other,ea,268.00
+lm_overseed_xlarge_ea,"Winter rye overseeding, extra large yard (sample)",other,ea,435.00
+lm_overseed_ksqft,"Winter rye overseeding per 1,000 sq ft, exact size (sample)",other,ea,8.00
+lm_green_waste_ea,Green waste haul-away monthly (sample),other,ea,26.75
+lm_hard_access_ea,Steep slope / hard access per visit (sample),other,ea,10.00

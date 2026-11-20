@@ -43,6 +43,25 @@
   # 17 ft x $3 = $51, raised to the $80 job minimum
   expected_lines: {hedges_ft_tall: 5100}
   expected_total_cents: 8000
+- name: Desert yard every 2 weeks - rock, weed spray, drip check, hard access
+  answers: {yard_size: none, rock_area: standard, weed_spray: standard, irrigation_check: true, hard_access: true}
+  # rock 2 x $33.50 = $67; weeds $43.50; drip $23.50; access 2 x $10 = $20
+  expected_lines: {rock_standard: 6700, weed_standard: 4350, irrigation: 2350, hard_access: 2000}
+  expected_total_cents: 15400
+- name: Standard yard weekly with 3 mid palms, 2 trees, overseed, green waste
+  answers: {visits: weekly, palm_height: mid, palm_qty: 3, trees_qty: 2, overseed: true, green_waste: true}
+  # mow $148; palms 3 x $167 = $501; trees 2 x $167 = $334; overseed $147; green waste $26.75
+  expected_lines: {mow_standard: 14800, palms_mid: 50100, trees: 33400, overseed_standard: 14700, green_waste: 2675}
+  expected_total_cents: 115675
+- name: Exact 1 acre every 2 weeks with overseeding
+  answers: {exact_size: 1, exact_unit: acre, overseed: true}
+  # overseed 43.56 -> 44 x $8 = $352
+  expected_lines: {mow_exact: 13160, overseed_exact: 35200}
+  expected_total_cents: 48360
+- name: Hard access ignored when there are no visits (hedges only)
+  answers: {yard_size: none, hedges: full, hard_access: true}
+  expected_lines: {hedges_full: 10000}
+  expected_total_cents: 10000
 - name: No mowing, full-yard hedges only
   answers: {yard_size: none, hedges: full}
   expected_lines: {hedges_full: 10000}

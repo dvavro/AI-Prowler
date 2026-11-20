@@ -72,6 +72,43 @@ questions:
       - {value: small, label: "Small beds", factor: "1"}
       - {value: large, label: "Large beds", factor: "2"}
   - {id: leaf_cleanup, label: "One-time leaf cleanup?", type: boolean, default: false, help: "Rake, blow and haul away leaves once. Priced by yard size."}
+  # --- Arizona / desert add-ons ---
+  - id: rock_area
+    label: "Rock / desert yard upkeep"
+    type: choice
+    default: none
+    help: "Most Arizona yards are rock or gravel. Each visit: rake rock, blow off paths and pull loose weeds. Small is a front yard, Standard is front and back, Large is a big lot."
+    choices:
+      - {value: none, label: "None", factor: "0"}
+      - {value: small, label: "Small rock area", factor: "1"}
+      - {value: standard, label: "Standard rock area", factor: "2"}
+      - {value: large, label: "Large rock area", factor: "3"}
+  - id: weed_spray
+    label: "Weed spraying (monthly)"
+    type: choice
+    default: none
+    help: "Pre-emergent and post-emergent spray for rock and gravel areas, once a month. Pick the size of the area sprayed."
+    choices:
+      - {value: none, label: "None", factor: "0"}
+      - {value: small, label: "Small area", factor: "1"}
+      - {value: standard, label: "Standard area", factor: "2"}
+      - {value: large, label: "Large area", factor: "3"}
+  - {id: irrigation_check, label: "Irrigation / drip check (monthly)?", type: boolean, default: false, help: "Check drip lines and sprinklers for leaks, fix clogged emitters and set the timer for the season. Bigger repairs are quoted separately."}
+  - id: palm_height
+    label: "Palm tree trimming (one time)"
+    type: choice
+    default: none
+    help: "Trim dead fronds and seed pods and haul them away. Pick the height of most of the palms, then type how many in Palm trees."
+    choices:
+      - {value: none, label: "None", factor: "0"}
+      - {value: under20, label: "Under 20 ft", factor: "1"}
+      - {value: mid, label: "20 to 40 ft", factor: "2"}
+      - {value: over40, label: "Over 40 ft", factor: "3"}
+  - {id: palm_qty, label: "Palm trees", type: integer, default: 1, min: 1, max: 200, help: "How many palms to trim. Only used when a palm height is picked."}
+  - {id: trees_qty, label: "Other trees to prune (one time)", type: integer, default: 0, min: 0, max: 200, help: "Citrus, mesquite, palo verde and other yard trees under about 25 ft. Bigger trees need a tree service quote."}
+  - {id: overseed, label: "Winter rye overseeding (one time)?", type: boolean, default: false, help: "Fall seeding of winter rye grass so the lawn stays green in winter. Grass lawns only, best mid-October to mid-November. Priced by yard size."}
+  - {id: green_waste, label: "Green waste haul-away (monthly)?", type: boolean, default: false, help: "Haul away trimmings and clippings when it's more than the customer's green bin can hold."}
+  - {id: hard_access, label: "Steep slope or hard access?", type: boolean, default: false, help: "Hillside yard, narrow side gates, lots of steps or obstacles. Adds a little to each visit for the extra time."}
 lines:
   # Yard-size tiers: flat price per visit.
   - {id: mow_small, description: "Mowing, small yard (per visit)", kind: other, unit: ea, quantity: "visits", price_key: lm_mow_small_ea, when: "yard_size == 1 and exact_size == 0"}
@@ -96,3 +133,22 @@ lines:
   - {id: leaves_xlarge, description: "Leaf cleanup, extra large yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_leaf_xlarge_ea, when: "leaf_cleanup and exact_size == 0 and yard_size == 4"}
   # Leaf cleanup by area: full rate for the first acre (44k sq ft), half rate after, 20-unit minimum.
   - {id: leaves_exact, description: "Leaf cleanup by area (per 1,000 sq ft, one time)", kind: other, unit: ea, quantity: "max(ceil(min(exact_size * exact_unit / 1000, 44) + max(exact_size * exact_unit / 1000 - 44, 0) * 0.5), 20)", price_key: lm_leaf_ksqft, when: "leaf_cleanup and exact_size > 0"}
+  # --- Arizona / desert add-ons ---
+  - {id: rock_small, description: "Rock yard upkeep, small (per visit)", kind: other, unit: ea, quantity: "visits", price_key: lm_rock_small_ea, when: "rock_area == 1"}
+  - {id: rock_standard, description: "Rock yard upkeep, standard (per visit)", kind: other, unit: ea, quantity: "visits", price_key: lm_rock_standard_ea, when: "rock_area == 2"}
+  - {id: rock_large, description: "Rock yard upkeep, large (per visit)", kind: other, unit: ea, quantity: "visits", price_key: lm_rock_large_ea, when: "rock_area == 3"}
+  - {id: weed_small, description: "Weed spraying, small area (monthly)", kind: other, unit: ea, quantity: "1", price_key: lm_weed_small_ea, when: "weed_spray == 1"}
+  - {id: weed_standard, description: "Weed spraying, standard area (monthly)", kind: other, unit: ea, quantity: "1", price_key: lm_weed_standard_ea, when: "weed_spray == 2"}
+  - {id: weed_large, description: "Weed spraying, large area (monthly)", kind: other, unit: ea, quantity: "1", price_key: lm_weed_large_ea, when: "weed_spray == 3"}
+  - {id: irrigation, description: "Irrigation / drip check (monthly)", kind: other, unit: ea, quantity: "1", price_key: lm_irrigation_ea, when: "irrigation_check"}
+  - {id: palms_under20, description: "Palm trimming, under 20 ft (one time)", kind: other, unit: ea, quantity: "palm_qty", price_key: lm_palm_under20_ea, when: "palm_height == 1"}
+  - {id: palms_mid, description: "Palm trimming, 20 to 40 ft (one time)", kind: other, unit: ea, quantity: "palm_qty", price_key: lm_palm_mid_ea, when: "palm_height == 2"}
+  - {id: palms_over40, description: "Palm trimming, over 40 ft (one time)", kind: other, unit: ea, quantity: "palm_qty", price_key: lm_palm_over40_ea, when: "palm_height == 3"}
+  - {id: trees, description: "Tree pruning, under 25 ft (one time)", kind: other, unit: ea, quantity: "trees_qty", price_key: lm_tree_prune_ea, when: "trees_qty > 0"}
+  - {id: overseed_small, description: "Winter rye overseeding, small yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_overseed_small_ea, when: "overseed and exact_size == 0 and yard_size == 1"}
+  - {id: overseed_standard, description: "Winter rye overseeding, standard yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_overseed_standard_ea, when: "overseed and exact_size == 0 and yard_size == 2"}
+  - {id: overseed_large, description: "Winter rye overseeding, large yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_overseed_large_ea, when: "overseed and exact_size == 0 and yard_size == 3"}
+  - {id: overseed_xlarge, description: "Winter rye overseeding, extra large yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_overseed_xlarge_ea, when: "overseed and exact_size == 0 and yard_size == 4"}
+  - {id: overseed_exact, description: "Winter rye overseeding by area (per 1,000 sq ft, one time)", kind: other, unit: ea, quantity: "max(ceil(exact_size * exact_unit / 1000), 10)", price_key: lm_overseed_ksqft, when: "overseed and exact_size > 0 and yard_size > 0"}
+  - {id: green_waste, description: "Green waste haul-away (monthly)", kind: other, unit: ea, quantity: "1", price_key: lm_green_waste_ea, when: "green_waste"}
+  - {id: hard_access, description: "Steep slope / hard access (per visit)", kind: other, unit: ea, quantity: "visits", price_key: lm_hard_access_ea, when: "hard_access and yard_size + rock_area > 0"}
