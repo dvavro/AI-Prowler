@@ -78,7 +78,7 @@ questions:
     label: "Chemicals or hazardous items?"
     type: boolean
     default: false
-    help: "Paint, solvents, pool chemicals, fuel, propane, batteries and bulbs are kept separate from the load and taken to a hazardous waste facility, never the landfill. Many haulers cannot legally carry them. Chandler residents can drop them off free at the City of Chandler Recycling-Solid Waste Collection Center with a utility bill and ID."
+    help: "Paint, solvents, pool chemicals, fuel, propane, batteries and bulbs are kept separate from the load and taken to a hazardous waste facility, never the landfill. Many haulers cannot legally carry them. Many cities and counties let residents drop them off free at a household hazardous waste site; check the local city or county website for the nearest one."
   - id: chem_type
     label: "Type of chemical"
     type: choice

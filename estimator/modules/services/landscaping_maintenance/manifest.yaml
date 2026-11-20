@@ -72,12 +72,12 @@ questions:
       - {value: small, label: "Small beds", factor: "1"}
       - {value: large, label: "Large beds", factor: "2"}
   - {id: leaf_cleanup, label: "One-time leaf cleanup?", type: boolean, default: false, help: "Rake, blow and haul away leaves once. Priced by yard size."}
-  # --- Arizona / desert add-ons ---
+  # --- Desert / regional add-ons ---
   - id: rock_area
     label: "Rock / desert yard upkeep"
     type: choice
     default: none
-    help: "Most Arizona yards are rock or gravel. Each visit: rake rock, blow off paths and pull loose weeds. Small is a front yard, Standard is front and back, Large is a big lot."
+    help: "For rock, gravel or desert-style yards. Each visit: rake rock, blow off paths and pull loose weeds. Small is a front yard, Standard is front and back, Large is a big lot."
     choices:
       - {value: none, label: "None", factor: "0"}
       - {value: small, label: "Small rock area", factor: "1"}
@@ -106,7 +106,7 @@ questions:
       - {value: over40, label: "Over 40 ft", factor: "3"}
   - {id: palm_qty, label: "Palm trees", type: integer, default: 1, min: 1, max: 200, help: "How many palms to trim. Only used when a palm height is picked."}
   - {id: trees_qty, label: "Other trees to prune (one time)", type: integer, default: 0, min: 0, max: 200, help: "Citrus, mesquite, palo verde and other yard trees under about 25 ft. Bigger trees need a tree service quote."}
-  - {id: overseed, label: "Winter rye overseeding (one time)?", type: boolean, default: false, help: "Fall seeding of winter rye grass so the lawn stays green in winter. Grass lawns only, best mid-October to mid-November. Priced by yard size."}
+  - {id: overseed, label: "Winter rye overseeding (one time)?", type: boolean, default: false, help: "Fall seeding of winter rye grass so the lawn stays green in winter. Grass lawns only, done in the fall when nights cool down. Priced by yard size."}
   - {id: green_waste, label: "Green waste haul-away (monthly)?", type: boolean, default: false, help: "Haul away trimmings and clippings when it's more than the customer's green bin can hold."}
   - {id: hard_access, label: "Steep slope or hard access?", type: boolean, default: false, help: "Hillside yard, narrow side gates, lots of steps or obstacles. Adds a little to each visit for the extra time."}
 lines:
@@ -133,7 +133,7 @@ lines:
   - {id: leaves_xlarge, description: "Leaf cleanup, extra large yard (one time)", kind: other, unit: ea, quantity: "1", price_key: lm_leaf_xlarge_ea, when: "leaf_cleanup and exact_size == 0 and yard_size == 4"}
   # Leaf cleanup by area: full rate for the first acre (44k sq ft), half rate after, 20-unit minimum.
   - {id: leaves_exact, description: "Leaf cleanup by area (per 1,000 sq ft, one time)", kind: other, unit: ea, quantity: "max(ceil(min(exact_size * exact_unit / 1000, 44) + max(exact_size * exact_unit / 1000 - 44, 0) * 0.5), 20)", price_key: lm_leaf_ksqft, when: "leaf_cleanup and exact_size > 0"}
-  # --- Arizona / desert add-ons ---
+  # --- Desert / regional add-ons ---
   - {id: rock_small, description: "Rock yard upkeep, small (per visit)", kind: other, unit: ea, quantity: "visits", price_key: lm_rock_small_ea, when: "rock_area == 1"}
   - {id: rock_standard, description: "Rock yard upkeep, standard (per visit)", kind: other, unit: ea, quantity: "visits", price_key: lm_rock_standard_ea, when: "rock_area == 2"}
   - {id: rock_large, description: "Rock yard upkeep, large (per visit)", kind: other, unit: ea, quantity: "visits", price_key: lm_rock_large_ea, when: "rock_area == 3"}
