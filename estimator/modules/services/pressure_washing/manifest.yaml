@@ -16,14 +16,15 @@ scenarios:
   - {id: wash_and_seal, label: "Wash and seal the driveway", answers: {seal_driveway: true}}
 
 questions:
-  - {id: driveway_sqft, label: "Driveway / flatwork area", type: number, unit: sqft, default: 0, min: 0, max: 100000}
-  - {id: house_siding_sqft, label: "House siding area", type: number, unit: sqft, default: 0, min: 0, max: 100000}
-  - {id: deck_sqft, label: "Deck area", type: number, unit: sqft, default: 0, min: 0, max: 20000}
-  - {id: roof_sqft, label: "Roof area (soft wash)", type: number, unit: sqft, default: 0, min: 0, max: 50000}
-  - {id: fence_lf, label: "Fence length", type: number, unit: lf, default: 0, min: 0, max: 10000}
+  - {id: driveway_sqft, label: "Driveway / flatwork area", type: number, unit: sqft, default: 0, min: 0, max: 100000, help: "Square feet of driveway, walkways or patio to wash."}
+  - {id: house_siding_sqft, label: "House siding area", type: number, unit: sqft, default: 0, min: 0, max: 100000, help: "Square feet of house walls to wash."}
+  - {id: deck_sqft, label: "Deck area", type: number, unit: sqft, default: 0, min: 0, max: 20000, help: "Square feet of deck to wash."}
+  - {id: roof_sqft, label: "Roof area (soft wash)", type: number, unit: sqft, default: 0, min: 0, max: 50000, help: "Roof area to clean with a low-pressure soft wash that won't damage it."}
+  - {id: fence_lf, label: "Fence length", type: number, unit: lf, default: 0, min: 0, max: 10000, help: "Feet of fence to wash."}
   - {id: stories, label: "Number of stories", type: integer, default: 1, min: 1, max: 3,
      help: "Each story above the first adds 15% to siding work (ladders, reach)."}
   - id: condition
+    help: "Mildew, moss and black streaks need more cleaner and time."
     label: "How dirty is it?"
     type: choice
     default: normal
@@ -31,8 +32,8 @@ questions:
       - {value: light, label: "Light dirt", factor: "1.0"}
       - {value: normal, label: "Normal (some mildew)", factor: "1.15"}
       - {value: heavy, label: "Heavy (moss, black streaks)", factor: "1.35"}
-  - {id: oil_stains, label: "Oil stains to treat", type: integer, default: 0, min: 0, max: 50}
-  - {id: seal_driveway, label: "Seal the driveway after washing?", type: boolean, default: false}
+  - {id: oil_stains, label: "Oil stains to treat", type: integer, default: 0, min: 0, max: 50, help: "Number of oil stains to pre-treat on the driveway."}
+  - {id: seal_driveway, label: "Seal the driveway after washing?", type: boolean, default: false, help: "Apply a sealer after washing to protect the surface and slow new stains."}
 
 lines:
   - {id: driveway, description: "Driveway / flatwork wash", kind: other, unit: sqft,

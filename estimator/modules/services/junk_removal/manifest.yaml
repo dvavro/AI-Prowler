@@ -14,6 +14,7 @@ keywords: [junk removal, junk, haul away, hauling, haul off, trash removal, debr
 questions:
   # --- Truck and everyday items ---
   - id: load
+    help: "How much of a standard junk truck the items would fill. A queen bed set is about 1/4 truck; a one-car garage cleanout is often a full truck."
     label: "How much of a truck?"
     type: choice
     required: true
@@ -28,8 +29,8 @@ questions:
       - {value: two, label: "2 trucks", factor: "2.0"}
       - {value: three, label: "3 trucks", factor: "3.0"}
   - {id: mattresses, label: "Mattresses / box springs", type: integer, default: 0, min: 0, max: 100, help: "Mattresses and box springs: usually $20–$40 extra per piece due to specialized landfill/recycling handling."}
-  - {id: appliances, label: "Washers, dryers, stoves", type: integer, default: 0, min: 0, max: 100}
-  - {id: stairs, label: "Flights of stairs", type: integer, default: 0, min: 0, max: 10}
+  - {id: appliances, label: "Washers, dryers, stoves", type: integer, default: 0, min: 0, max: 100, help: "Washers, dryers and stoves are heavy and are recycled for metal."}
+  - {id: stairs, label: "Flights of stairs", type: integer, default: 0, min: 0, max: 10, help: "Flights of stairs the crew has to carry items up or down."}
 
   # --- Surcharge items (two pairs, so a quote can have e.g. tires and a TV) ---
   - id: special
@@ -48,14 +49,15 @@ questions:
       - {value: pianos, label: "Piano", factor: "8"}
       - {value: safes, label: "Large safe", factor: "9"}
       - {value: construction, label: "Construction waste (per 1/4 truck)", factor: "1"}
-  - {id: special_qty, label: "How many?", type: integer, default: 0, min: 0, max: 500}
+  - {id: special_qty, label: "How many?", type: integer, default: 0, min: 0, max: 500, help: "How many of the item you picked."}
   - id: special2
+    help: "Pick a second item type that has a special handling fee."
     label: "Another surcharge item"
     type: choice
     required: false
     default: none
     choices: *surcharge_choices
-  - {id: special2_qty, label: "How many?", type: integer, default: 0, min: 0, max: 500}
+  - {id: special2_qty, label: "How many?", type: integer, default: 0, min: 0, max: 500, help: "How many of the second item you picked."}
 
   # --- Heavy debris ---
   - id: heavy_quarters
@@ -80,6 +82,7 @@ questions:
     default: false
     help: "Paint, solvents, pool chemicals, fuel, propane, batteries and bulbs are kept separate from the load and taken to a hazardous waste facility, never the landfill. Many haulers cannot legally carry them. Many cities and counties let residents drop them off free at a household hazardous waste site; check the local city or county website for the nearest one."
   - id: chem_type
+    help: "Pick the kind of chemical. Each type is handled and disposed of differently."
     label: "Type of chemical"
     type: choice
     required: false
@@ -97,10 +100,10 @@ questions:
       - {value: batteries, label: "Lithium-ion batteries", factor: "9"}
       - {value: bulbs, label: "Fluorescent bulbs", factor: "10"}
       - {value: asbestos, label: "Asbestos (we can't haul it)", factor: "11"}
-  - {id: chem_qty, label: "How many containers?", type: integer, default: 0, min: 0, max: 200}
+  - {id: chem_qty, label: "How many containers?", type: integer, default: 0, min: 0, max: 200, help: "Number of cans, bottles or tanks."}
 
   # --- Timing ---
-  - {id: same_day, label: "Same-day pickup", type: boolean, default: false}
+  - {id: same_day, label: "Same-day pickup", type: boolean, default: false, help: "Pickup on the same day you call. Adds a rush fee."}
 
 lines:
   - {id: load, description: "Truck load (hauling and disposal)", kind: other, unit: ea, quantity: "load",

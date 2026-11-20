@@ -11,11 +11,12 @@ keywords: [clean a house, clean house, house clean, clean a home, clean the home
 recurrence: {question: frequency, map: {weekly: Weekly, biweekly: Biweekly, monthly: Monthly}}
 
 questions:
-  - {id: bedrooms, label: Bedrooms, type: integer, required: true, min: 0, max: 20}
+  - {id: bedrooms, label: Bedrooms, type: integer, required: true, min: 0, max: 20, help: "Number of bedrooms in the home."}
   - {id: bathrooms, label: Bathrooms, type: number, required: true, min: 0, max: 20,
      help: "Half baths count as 0.5."}
-  - {id: sqft, label: "Home size", type: number, unit: sqft, required: true, min: 100, max: 20000}
+  - {id: sqft, label: "Home size", type: number, unit: sqft, required: true, min: 100, max: 20000, help: "Size of the home in square feet."}
   - id: condition
+    help: "How dirty the home is now. Dirtier homes take longer, especially the first clean."
     label: "Condition (1 = very clean, 5 = very dirty)"
     type: choice
     default: "3"
@@ -25,8 +26,9 @@ questions:
       - {value: "3", label: "3 - average", factor: "1.0"}
       - {value: "4", label: "4 - dirty", factor: "1.2"}
       - {value: "5", label: "5 - very dirty", factor: "1.5"}
-  - {id: pets, label: "Pets in the home?", type: boolean, default: false}
+  - {id: pets, label: "Pets in the home?", type: boolean, default: false, help: "Pet hair and dander take extra time to clean."}
   - id: frequency
+    help: "Regular cleanings cost less per visit because the home stays cleaner."
     label: "How often?"
     type: choice
     default: one_time
@@ -35,10 +37,10 @@ questions:
       - {value: weekly, label: "Weekly (20% off)", factor: "0.80"}
       - {value: biweekly, label: "Every 2 weeks (15% off)", factor: "0.85"}
       - {value: monthly, label: "Monthly (10% off)", factor: "0.90"}
-  - {id: move_in_out, label: "Move-in / move-out clean?", type: boolean, default: false}
-  - {id: oven, label: "Clean inside the oven?", type: boolean, default: false}
-  - {id: fridge, label: "Clean inside the fridge?", type: boolean, default: false}
-  - {id: interior_windows, label: "Interior windows", type: integer, default: 0, min: 0, max: 200}
+  - {id: move_in_out, label: "Move-in / move-out clean?", type: boolean, default: false, help: "A deeper clean for an empty home, including inside cabinets and closets."}
+  - {id: oven, label: "Clean inside the oven?", type: boolean, default: false, help: "Clean the inside of the oven."}
+  - {id: fridge, label: "Clean inside the fridge?", type: boolean, default: false, help: "Empty and clean the inside of the fridge."}
+  - {id: interior_windows, label: "Interior windows", type: integer, default: 0, min: 0, max: 200, help: "Number of windows to clean on the inside."}
 
 lines:
   - id: labor

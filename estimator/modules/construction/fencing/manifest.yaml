@@ -13,8 +13,9 @@ notes:
   - "Block walls over 6 ft, or retaining soil, usually need an engineered footing and a permit."
 
 questions:
-  - {id: length_lf, label: "Fence length", type: number, unit: lf, required: true, min: 4, max: 10000}
+  - {id: length_lf, label: "Fence length", type: number, unit: lf, required: true, min: 4, max: 10000, help: "Total length of fence to build, in feet. Measure along every side."}
   - id: material
+    help: "Wood is the most affordable privacy fence, vinyl is low maintenance, chain link is cheapest, block walls and wrought iron cost the most."
     label: "Material"
     type: choice
     required: true
@@ -26,6 +27,7 @@ questions:
       - {value: block, label: "Block wall (CMU)", factor: "4"}
       - {value: iron, label: "Wrought iron", factor: "5"}
   - id: height
+    help: "Fence height. Check local rules and HOA limits; 6 ft is common for back yards."
     label: "Height"
     type: choice
     default: "6"
@@ -35,10 +37,10 @@ questions:
       - {value: "5", label: "5 ft", factor: "5"}
       - {value: "6", label: "6 ft", factor: "6"}
       - {value: "8", label: "8 ft", factor: "8"}
-  - {id: walk_gates, label: "Walk gates", type: integer, default: 0, min: 0, max: 20}
-  - {id: drive_gates, label: "Drive (double) gates", type: integer, default: 0, min: 0, max: 10}
-  - {id: remove_old, label: "Remove the old fence?", type: boolean, default: false}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: walk_gates, label: "Walk gates", type: integer, default: 0, min: 0, max: 20, help: "Single gates people walk through."}
+  - {id: drive_gates, label: "Drive (double) gates", type: integer, default: 0, min: 0, max: 10, help: "Wide double gates for cars, trailers or RVs."}
+  - {id: remove_old, label: "Remove the old fence?", type: boolean, default: false, help: "Tear out and haul away the old fence first."}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false, help: "Many cities require a permit for fences or walls, especially taller ones. Adds the permit fee."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
   - {id: survey, label: "Survey needed?", type: boolean, default: false, help: "A licensed surveyor locates the lines and stakes the work."}
 

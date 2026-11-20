@@ -12,10 +12,11 @@ notes:
   - "Hot sun: fiber cement and stucco hold up better than vinyl, which can warp next to reflective windows."
 
 questions:
-  - {id: wall_sqft, label: "Outside wall area (all sides)", type: number, unit: sqft, required: true, min: 50, max: 100000}
+  - {id: wall_sqft, label: "Outside wall area (all sides)", type: number, unit: sqft, required: true, min: 50, max: 100000, help: "Outside wall area to cover, all sides added up, in square feet."}
   - {id: openings, label: "Windows and doors in those walls", type: integer, default: 0, min: 0, max: 500,
      help: "Each takes about 15 sq ft off the wall and needs about 16 ft of trim around it."}
   - id: material
+    help: "Vinyl is most affordable, fiber cement is durable, stucco and stone veneer cost the most."
     label: "Material"
     type: choice
     required: true
@@ -27,6 +28,7 @@ questions:
       - {value: stucco, label: "Stucco (3-coat)", factor: "4"}
       - {value: stone, label: "Stone veneer", factor: "5"}
   - id: walls
+    help: "Lots of corners, gables and angles take more cuts and labor."
     label: "Walls"
     type: choice
     default: simple
@@ -35,6 +37,7 @@ questions:
       - {value: simple, label: "Simple (few corners)", factor: "0.10"}
       - {value: complex, label: "Complex (many corners, gables)", factor: "0.15"}
   - id: stories
+    help: "Two-story homes need ladders or scaffolding and more labor."
     label: "Stories"
     type: choice
     default: one
@@ -42,10 +45,11 @@ questions:
     choices:
       - {value: one, label: "One story", factor: "10"}
       - {value: two, label: "Two stories", factor: "20"}
-  - {id: outside_corners, label: "Outside corners", type: integer, default: 4, min: 0, max: 100}
-  - {id: inside_corners, label: "Inside corners", type: integer, default: 0, min: 0, max: 100}
-  - {id: eave_lf, label: "Eaves (soffit and fascia)", type: number, unit: lf, default: 0, min: 0, max: 5000}
+  - {id: outside_corners, label: "Outside corners", type: integer, default: 4, min: 0, max: 100, help: "Number of corners that stick out."}
+  - {id: inside_corners, label: "Inside corners", type: integer, default: 0, min: 0, max: 100, help: "Number of corners that go in."}
+  - {id: eave_lf, label: "Eaves (soffit and fascia)", type: number, unit: lf, default: 0, min: 0, max: 5000, help: "Feet of roof edge getting new soffit and fascia."}
   - id: soffit_depth
+    help: "How far the roof hangs over the wall. Deeper soffits use more material."
     label: "Soffit depth"
     type: choice
     default: "12"
@@ -54,9 +58,9 @@ questions:
       - {value: "12", label: "12 in", factor: "1"}
       - {value: "18", label: "18 in", factor: "1.5"}
       - {value: "24", label: "24 in", factor: "2"}
-  - {id: house_wrap, label: "New house wrap or paper?", type: boolean, default: true}
-  - {id: remove_old, label: "Remove the old siding?", type: boolean, default: true}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: house_wrap, label: "New house wrap or paper?", type: boolean, default: true, help: "Weather barrier behind the siding to keep water and air out."}
+  - {id: remove_old, label: "Remove the old siding?", type: boolean, default: true, help: "Tear off and haul away the old siding first."}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false, help: "Siding replacement often needs a permit. Adds the permit fee."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 scenarios:

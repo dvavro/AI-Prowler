@@ -14,19 +14,20 @@ scenarios:
   - {id: best, label: "Best: inside and out with hard-water removal", answers: {sides: inside_and_out, hard_water: true}}
 
 questions:
-  - {id: windows, label: "Number of windows (panes)", type: integer, required: true, min: 1, max: 500}
+  - {id: windows, label: "Number of windows (panes)", type: integer, required: true, min: 1, max: 500, help: "Count each glass pane. A window with two sashes counts as two."}
   - {id: stories, label: "Number of stories", type: integer, default: 1, min: 1, max: 3,
      help: "Each story above the first adds 20% (ladders and reach)."}
   - id: sides
+    help: "Outside only, or both inside and outside."
     label: "Outside only, or inside and out?"
     type: choice
     default: outside
     choices:
       - {value: outside, label: "Outside only", factor: "1.0"}
       - {value: inside_and_out, label: "Inside and out", factor: "1.8"}
-  - {id: screens, label: "Screens to clean", type: integer, default: 0, min: 0, max: 500}
-  - {id: skylights, label: "Skylights", type: integer, default: 0, min: 0, max: 50}
-  - {id: hard_water, label: "Hard-water spots to remove?", type: boolean, default: false}
+  - {id: screens, label: "Screens to clean", type: integer, default: 0, min: 0, max: 500, help: "Number of screens to remove and wash."}
+  - {id: skylights, label: "Skylights", type: integer, default: 0, min: 0, max: 50, help: "Skylights take more time and safety gear."}
+  - {id: hard_water, label: "Hard-water spots to remove?", type: boolean, default: false, help: "White mineral spots from sprinklers or hard water need special treatment to remove."}
 
 lines:
   - {id: windows, description: "Window cleaning", kind: other, unit: ea,

@@ -15,8 +15,9 @@ scenarios:
   - {id: best, label: "Best: hardwood", answers: {material: hardwood}}
 
 questions:
-  - {id: area_sqft, label: "Floor area", type: number, unit: sqft, required: true, min: 10, max: 50000}
+  - {id: area_sqft, label: "Floor area", type: number, unit: sqft, required: true, min: 10, max: 50000, help: "Floor area to cover, in square feet. Extra for waste is added automatically."}
   - id: material
+    help: "LVP and laminate are budget-friendly, tile is durable and waterproof, hardwood costs the most, carpet is softest."
     label: "Flooring type"
     type: choice
     required: true
@@ -28,6 +29,7 @@ questions:
       - {value: hardwood, label: "Hardwood", factor: "4"}
       - {value: carpet, label: "Carpet", factor: "5"}
   - id: pattern
+    help: "Straight is standard. Diagonal or herringbone takes more cuts and about 5% more material."
     label: "Layout"
     type: choice
     default: straight
@@ -36,6 +38,7 @@ questions:
       - {value: straight, label: "Straight", factor: "0"}
       - {value: diagonal, label: "Diagonal or herringbone (+5% waste)", factor: "0.05"}
   - id: remove_old
+    help: "Tear out the old floor first. Tile and hardwood take more labor to remove than carpet or vinyl."
     label: "Remove the old floor?"
     type: choice
     default: none
@@ -43,11 +46,11 @@ questions:
       - {value: none, label: "No", factor: "0"}
       - {value: carpet, label: "Carpet or vinyl", factor: "1"}
       - {value: hard, label: "Tile or hardwood", factor: "2"}
-  - {id: subfloor_prep, label: "Level / patch the subfloor?", type: boolean, default: false}
-  - {id: baseboard_lf, label: "New baseboard", type: number, unit: lf, default: 0, min: 0, max: 10000}
-  - {id: stairs, label: "Stairs (steps)", type: integer, default: 0, min: 0, max: 100}
-  - {id: transitions, label: "Transition strips", type: integer, default: 0, min: 0, max: 100}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: subfloor_prep, label: "Level / patch the subfloor?", type: boolean, default: false, help: "Patch and level the floor underneath so the new flooring lies flat and doesn't crack or squeak."}
+  - {id: baseboard_lf, label: "New baseboard", type: number, unit: lf, default: 0, min: 0, max: 10000, help: "Feet of new baseboard trim around the room edges."}
+  - {id: stairs, label: "Stairs (steps)", type: integer, default: 0, min: 0, max: 100, help: "Number of steps to cover. Each step is extra labor."}
+  - {id: transitions, label: "Transition strips", type: integer, default: 0, min: 0, max: 100, help: "Strips where the new floor meets another floor type or a doorway."}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false, help: "Flooring rarely needs a permit, but some buildings or HOAs require one."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 lines:

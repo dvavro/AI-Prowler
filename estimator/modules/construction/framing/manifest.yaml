@@ -13,8 +13,9 @@ notes:
   - "Check local code and any engineered plans for header sizes, stud spacing and shear walls; these are rules of thumb."
 
 questions:
-  - {id: wall_lf, label: "Wall length (all walls added up)", type: number, unit: lf, default: 0, min: 0, max: 20000}
+  - {id: wall_lf, label: "Wall length (all walls added up)", type: number, unit: lf, default: 0, min: 0, max: 20000, help: "Add up the length of every wall being framed, in feet."}
   - id: wall_height
+    help: "Floor to ceiling height of the walls."
     label: "Wall height"
     type: choice
     default: "8"
@@ -24,6 +25,7 @@ questions:
       - {value: "9", label: "9 ft", factor: "9"}
       - {value: "10", label: "10 ft", factor: "10"}
   - id: stud_size
+    help: "2x4 is standard for inside walls. 2x6 is used for outside walls and walls with plumbing."
     label: "Studs"
     type: choice
     default: 2x4
@@ -32,19 +34,20 @@ questions:
       - {value: 2x4, label: "2x4", factor: "1"}
       - {value: 2x6, label: "2x6 (exterior, plumbing walls)", factor: "2"}
   - id: spacing
+    help: "Distance between studs. 16 in is standard and stronger; 24 in uses less lumber."
     label: "Stud spacing"
     type: choice
     default: "16"
     choices:
       - {value: "16", label: "16 in on center", factor: "16"}
       - {value: "24", label: "24 in on center", factor: "24"}
-  - {id: corners, label: "Corners and wall ends", type: integer, default: 4, min: 0, max: 500}
-  - {id: openings, label: "Door and window openings", type: integer, default: 0, min: 0, max: 500}
-  - {id: exterior, label: "Exterior walls (add sheathing)?", type: boolean, default: false}
+  - {id: corners, label: "Corners and wall ends", type: integer, default: 4, min: 0, max: 500, help: "Each corner or wall end needs extra studs."}
+  - {id: openings, label: "Door and window openings", type: integer, default: 0, min: 0, max: 500, help: "Each door or window needs a header and extra framing."}
+  - {id: exterior, label: "Exterior walls (add sheathing)?", type: boolean, default: false, help: "Outside walls get plywood or OSB sheathing on the outside."}
   - {id: floor_sqft, label: "Floor to frame (joists and subfloor)", type: number, unit: sqft, default: 0, min: 0,
-     max: 100000}
-  - {id: trusses, label: "Roof trusses to set", type: integer, default: 0, min: 0, max: 500}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+     max: 100000, help: "Floor area to frame with joists and cover with subfloor."}
+  - {id: trusses, label: "Roof trusses to set", type: integer, default: 0, min: 0, max: 500, help: "Number of pre-built roof trusses to set in place."}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false, help: "Framing usually needs a building permit and inspection. Adds the permit fee."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
   - {id: survey, label: "Survey needed?", type: boolean, default: false, help: "A licensed surveyor locates the lines and stakes the work."}
 

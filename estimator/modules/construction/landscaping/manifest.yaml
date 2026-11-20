@@ -15,12 +15,13 @@ notes:
 
 questions:
   - {id: clear_sqft, label: "Area to clear and haul (old grass, rock, weeds)", type: number, unit: sqft, default: 0,
-     min: 0, max: 200000}
-  - {id: grading, label: "Rough grade the new areas?", type: boolean, default: true}
-  - {id: sod_sqft, label: "Sod", type: number, unit: sqft, default: 0, min: 0, max: 200000}
-  - {id: turf_sqft, label: "Artificial turf", type: number, unit: sqft, default: 0, min: 0, max: 100000}
-  - {id: rock_sqft, label: "Decorative rock or decomposed granite", type: number, unit: sqft, default: 0, min: 0, max: 200000}
+     min: 0, max: 200000, help: "Area to strip and haul away old grass, rock or weeds before the new landscape goes in."}
+  - {id: grading, label: "Rough grade the new areas?", type: boolean, default: true, help: "Shape and level the soil so water drains away from the house."}
+  - {id: sod_sqft, label: "Sod", type: number, unit: sqft, default: 0, min: 0, max: 200000, help: "Square feet of new grass sod to lay."}
+  - {id: turf_sqft, label: "Artificial turf", type: number, unit: sqft, default: 0, min: 0, max: 100000, help: "Square feet of artificial grass, including base prep."}
+  - {id: rock_sqft, label: "Decorative rock or decomposed granite", type: number, unit: sqft, default: 0, min: 0, max: 200000, help: "Square feet to cover with decorative rock or decomposed granite."}
   - id: rock_depth
+    help: "Deeper rock covers better and blocks more weeds but uses more material."
     label: "Rock depth"
     type: choice
     default: "2"
@@ -28,14 +29,14 @@ questions:
     choices:
       - {value: "2", label: "2 in", factor: "2"}
       - {value: "3", label: "3 in", factor: "3"}
-  - {id: weed_barrier, label: "Weed barrier under the rock?", type: boolean, default: true}
-  - {id: pavers_sqft, label: "Pavers", type: number, unit: sqft, default: 0, min: 0, max: 50000}
-  - {id: shrubs, label: "Shrubs (5 gal)", type: integer, default: 0, min: 0, max: 1000}
-  - {id: trees, label: "Trees (24 in box)", type: integer, default: 0, min: 0, max: 200}
-  - {id: drip_zones, label: "Drip zones", type: integer, default: 0, min: 0, max: 40}
-  - {id: sprinkler_zones, label: "Sprinkler zones", type: integer, default: 0, min: 0, max: 40}
-  - {id: edging_lf, label: "Landscape edging or curbing", type: number, unit: lf, default: 0, min: 0, max: 10000}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: weed_barrier, label: "Weed barrier under the rock?", type: boolean, default: true, help: "Fabric under the rock that helps stop weeds from growing through."}
+  - {id: pavers_sqft, label: "Pavers", type: number, unit: sqft, default: 0, min: 0, max: 50000, help: "Square feet of paver patio or walkway, including base."}
+  - {id: shrubs, label: "Shrubs (5 gal)", type: integer, default: 0, min: 0, max: 1000, help: "Number of 5 gallon shrubs to plant."}
+  - {id: trees, label: "Trees (24 in box)", type: integer, default: 0, min: 0, max: 200, help: "Number of 24 in box trees to plant."}
+  - {id: drip_zones, label: "Drip zones", type: integer, default: 0, min: 0, max: 40, help: "Drip irrigation zones that water plants and trees at the roots."}
+  - {id: sprinkler_zones, label: "Sprinkler zones", type: integer, default: 0, min: 0, max: 40, help: "Sprinkler zones for lawn areas."}
+  - {id: edging_lf, label: "Landscape edging or curbing", type: number, unit: lf, default: 0, min: 0, max: 10000, help: "Feet of edging or concrete curbing between grass, rock and beds."}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false, help: "Most landscaping doesn't need a permit, but some cities or HOAs require one for grading or walls."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
   - {id: survey, label: "Survey needed?", type: boolean, default: false, help: "A licensed surveyor locates the lines and stakes the work."}
 

@@ -18,8 +18,9 @@ scenarios:
   - {id: best, label: "Best: stamped and coloured with rebar", answers: {finish: stamped, reinforcement: rebar}}
 
 questions:
-  - {id: area_sqft, label: "Slab / flatwork area", type: number, unit: sqft, required: true, min: 10, max: 100000}
+  - {id: area_sqft, label: "Slab / flatwork area", type: number, unit: sqft, required: true, min: 10, max: 100000, help: "Length x width of the slab, driveway, patio or sidewalk in square feet. Add up separate pours."}
   - id: thickness_in
+    help: "Thicker concrete holds more weight. 4 in for walks and patios, 5 in for cars, 6 in for trucks, RVs and heavy loads."
     label: "Thickness"
     type: choice
     default: "4"
@@ -30,6 +31,7 @@ questions:
   - {id: perimeter_lf, label: "Edge length to form", type: number, unit: lf, default: 0, min: 0, max: 20000,
      help: "Leave 0 to estimate it as a square pour."}
   - id: reinforcement
+    help: "Steel or fiber that helps stop cracks from spreading. Rebar is strongest; wire mesh is common for patios."
     label: "Reinforcement"
     type: choice
     default: mesh
@@ -39,6 +41,7 @@ questions:
       - {value: mesh, label: "Wire mesh", factor: "1"}
       - {value: rebar, label: "#4 rebar at 18 in each way", factor: "2"}
   - id: finish
+    help: "Broom finish is the standard non-slip surface. Stamped and exposed aggregate look nicer but take more labor."
     label: "Finish"
     type: choice
     default: broom
@@ -56,10 +59,10 @@ questions:
      help: "Inches of soil to dig out and haul away over the slab area; priced per cubic yard. Leave 0 if none."}
   - {id: excavation_lump, label: "Excavation, lump sum ($)", type: number, default: 0, min: 0, max: 500000,
      help: "Or a set price for the dig (a sub's quote, a bobcat day). Added as one line; leave 0 if none."}
-  - {id: base, label: "Gravel base (4 in ABC)?", type: boolean, default: true}
+  - {id: base, label: "Gravel base (4 in ABC)?", type: boolean, default: true, help: "A compacted gravel layer under the slab for drainage and support. Recommended on soft or clay soil."}
   - {id: vapor_barrier, label: "Vapor barrier (10 mil poly) under the slab?", type: boolean, default: false,
      help: "For slabs under a building (house, garage, shed with a floor)."}
-  - {id: remove_existing, label: "Remove existing concrete?", type: boolean, default: false}
+  - {id: remove_existing, label: "Remove existing concrete?", type: boolean, default: false, help: "Break up and haul away old concrete in the same area before pouring the new slab."}
   - {id: footing_lf, label: "Thickened edge / footing length", type: number, unit: lf, default: 0, min: 0, max: 5000,
      help: "Along the footer's middle (the slab perimeter less 4 x the footer width)."}
   # 2026-11-15 (David): the footer's own cross-section below the slab, instead of a fixed 12 x 12 in. 1.0 = 12 x 12 in.
@@ -76,7 +79,7 @@ questions:
       - {value: "5", label: "#5 bar", factor: "5"}
   - {id: pump, label: "Pump truck needed?", type: boolean, default: false,
      help: "When the truck can't reach the pour."}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false, help: "Many cities require a permit for driveways, structural slabs or work near the street. Adds the permit fee."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
   - {id: survey, label: "Survey needed?", type: boolean, default: false, help: "A licensed surveyor locates the lines and stakes the work."}
 

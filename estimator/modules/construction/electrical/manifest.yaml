@@ -18,6 +18,7 @@ notes:
 
 questions:
   - id: work
+    help: "New work is when walls are open. Old work means fishing wire through finished walls, which takes longer. Swap only replaces existing devices."
     label: "Type of work"
     type: choice
     default: new
@@ -27,6 +28,7 @@ questions:
       - {value: remodel, label: "Old work (finished walls)", factor: "1.6"}
       - {value: replace, label: "Swap devices only", factor: "0.5"}
   - id: voltage
+    help: "Most homes are 110 V. 220 V is for big appliances. 3-phase is mostly for commercial buildings."
     label: "Voltage and phase"
     type: choice
     default: "110"
@@ -36,13 +38,14 @@ questions:
       - {value: "110", label: "110 V (standard residential)", factor: "1"}
       - {value: "220", label: "220 V (single-phase)", factor: "2"}
       - {value: "220_3ph", label: "220 V 3-phase (commercial)", factor: "3"}
-  - {id: outlets, label: "Outlets", type: integer, default: 0, min: 0, max: 1000}
-  - {id: switches, label: "Switches", type: integer, default: 0, min: 0, max: 1000}
-  - {id: gfci, label: "GFCI outlets", type: integer, default: 0, min: 0, max: 500}
+  - {id: outlets, label: "Outlets", type: integer, default: 0, min: 0, max: 1000, help: "Number of standard wall outlets to install."}
+  - {id: switches, label: "Switches", type: integer, default: 0, min: 0, max: 1000, help: "Number of light switches to install."}
+  - {id: gfci, label: "GFCI outlets", type: integer, default: 0, min: 0, max: 500, help: "Outlets with built-in shock protection, needed in kitchens, bathrooms, garages and outdoors."}
   - {id: lights, label: "Light fixtures or recessed lights", type: integer, default: 0, min: 0, max: 1000,
      help: "Fixtures themselves are supplied by the customer."}
-  - {id: fans, label: "Ceiling fans", type: integer, default: 0, min: 0, max: 200}
+  - {id: fans, label: "Ceiling fans", type: integer, default: 0, min: 0, max: 200, help: "Number of ceiling fans to install, including a fan-rated box."}
   - id: box_material
+    help: "Plastic boxes are standard in homes. Metal boxes are needed for some commercial jobs and certain codes."
     label: "Box material"
     type: choice
     default: plastic
@@ -55,14 +58,15 @@ questions:
   # and plan takeoff counts 240 V receptacles and EV chargers here), now with a 2-pole breaker instead of
   # the single-pole breaker it used to get. 15 Amp circuits are the new circuits_15a count.
   - {id: appliance_circuits, label: "Dedicated 30 Amp circuits (range, dryer, AC, EV charger)", type: integer, default: 0, min: 0,
-     max: 100}
+     max: 100, help: "Separate 30 Amp circuits for big appliances like a range, dryer, AC unit or EV charger."}
   - {id: circuits_15a, label: "Dedicated 15 Amp circuits (microwave, disposal, fridge)", type: integer, default: 0, min: 0,
-     max: 100}
-  - {id: low_voltage, label: "Data or TV drops", type: integer, default: 0, min: 0, max: 500}
-  - {id: avg_run_ft, label: "Average wire run per device", type: number, unit: ft, default: 25, min: 5, max: 200}
+     max: 100, help: "Separate 15 Amp circuits for things like a microwave, garbage disposal or fridge."}
+  - {id: low_voltage, label: "Data or TV drops", type: integer, default: 0, min: 0, max: 500, help: "Network (data) or TV cable outlets to run."}
+  - {id: avg_run_ft, label: "Average wire run per device", type: number, unit: ft, default: 25, min: 5, max: 200, help: "About how far the wire runs from the panel to each device. Longer runs use more wire."}
   - {id: underground_ft, label: "Underground run", type: number, unit: ft, default: 0, min: 0, max: 5000,
      help: "Feet of run buried underground (direct-burial cable in conduit), e.g. to a detached garage or shed."}
   - id: panel
+    help: "A subpanel adds more circuit space. A 200 A upgrade replaces the main panel for more power."
     label: "Panel work"
     type: choice
     default: none
@@ -79,7 +83,7 @@ questions:
     choices:
       - {value: "100", label: "100 Amp subpanel", factor: "100"}
       - {value: "200", label: "200 Amp subpanel", factor: "200"}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: true, help: "Most electrical work needs a permit and inspection. Adds the permit fee."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 lines:

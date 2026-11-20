@@ -22,6 +22,7 @@ questions:
      required: true, min: 50, max: 100000,
      help: "Measure the footprint of the roof from above; the pitch adds the slope."}
   - id: pitch
+    help: "How steep the roof is: inches of rise per 12 in. Steeper roofs have more area and need more safety gear."
     label: "Roof pitch"
     type: choice
     required: true
@@ -37,6 +38,7 @@ questions:
       - {value: "10/12", label: "10 in 12", factor: "1.302"}
       - {value: "12/12", label: "12 in 12", factor: "1.414"}
   - id: shape
+    help: "Gable roofs have two sides. Hip and complex roofs have more angles and waste."
     label: "Roof shape"
     type: choice
     default: gable
@@ -45,6 +47,7 @@ questions:
       - {value: gable, label: "Gable (simple)", factor: "0.10"}
       - {value: hip, label: "Hip or complex", factor: "0.15"}
   - id: material
+    help: "Shingles are most common, tile lasts longer, metal costs more but lasts the longest, TPO is for flat roofs."
     label: "New roofing"
     type: choice
     required: true
@@ -55,20 +58,21 @@ questions:
       - {value: tile, label: "Concrete tile", factor: "3"}
       - {value: metal, label: "Standing seam metal", factor: "4"}
       - {value: flat, label: "Flat roof (TPO)", factor: "5"}
-  - {id: layers, label: "Layers to tear off", type: integer, default: 1, min: 0, max: 3}
+  - {id: layers, label: "Layers to tear off", type: integer, default: 1, min: 0, max: 3, help: "Number of old roof layers to tear off. More layers means more labor and dump fees."}
   - {id: edges_lf, label: "Eaves and rakes (drip edge)", type: number, unit: lf, default: 0, min: 0, max: 10000,
      help: "Leave 0 to estimate from the roof area."}
   - {id: ridge_lf, label: "Ridges and hips", type: number, unit: lf, default: 0, min: 0, max: 5000,
      help: "Leave 0 to estimate from the roof area."}
-  - {id: decking_sheets, label: "Decking sheets to replace", type: integer, default: 0, min: 0, max: 500}
+  - {id: decking_sheets, label: "Decking sheets to replace", type: integer, default: 0, min: 0, max: 500, help: "Sheets of rotted or damaged plywood under the roof to replace."}
   - id: stories
+    help: "Two-story roofs take more time and safety equipment."
     label: "Stories"
     type: choice
     default: one
     choices:
       - {value: one, label: "One story", factor: "1"}
       - {value: two, label: "Two or more stories", factor: "2"}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: true, help: "Roof replacement usually needs a permit. Adds the permit fee."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 lines:
