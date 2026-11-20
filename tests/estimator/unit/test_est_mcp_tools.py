@@ -128,7 +128,7 @@ def test_bid_tools(fake_host):  # S4-T01
 
 
 def test_sprint6_tools(fake_host):  # S6-T01
-    assert j(t.pricebook_get(module_id="pool_service"))["samples_left"] == 4
+    assert j(t.pricebook_get(module_id="pool_service"))["samples_left"] == 11   # 4 -> 11: pool add-ons (2026-11-20, Jamie)
     assert j(t.pricebook_update({"ps_visit_ea": "35"}))["error"] == "needs_confirmation"
     assert j(t.pricebook_update('{"ps_visit_ea": "35"}', confirm=True))["changed"][0]["new_cents"] == 3500
     assert "All quiet" in j(t.est_director_briefing())["text"]

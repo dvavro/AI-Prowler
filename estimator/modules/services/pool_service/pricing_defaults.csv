@@ -1,5 +1,12 @@
 price_key,description,kind,unit,cost
-ps_visit_ea,Pool service visit (sample),other,ea,30.00
-ps_chemicals_ea,Chemicals per visit (sample),material,ea,10.00
+ps_visit_ea,Pool service visit (sample),other,ea,26.00
+ps_chemicals_ea,Chemicals per visit (sample),material,ea,6.00
 ps_filter_ea,Filter cleaning (sample),other,ea,75.00
 ps_cleanup_ea,Cleanup unit (sample),other,ea,100.00
+ps_salt_ea,Salt cell care per month (sample),other,ea,10.00
+ps_debris_ea,Heavy debris per visit (sample),other,ea,5.00
+ps_one_time_ea,"One-time pool cleaning, medium pool (sample)",other,ea,117.00
+ps_acid_wash_ea,Acid wash (sample),other,ea,301.00
+ps_tile_clean_ea,Waterline tile cleaning (sample),other,ea,267.50
+ps_drain_refill_ea,Drain and refill (sample),other,ea,200.70
+ps_repair_hr,Repair labor per hour (sample),labor,hr,50.00
