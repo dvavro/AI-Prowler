@@ -23,7 +23,7 @@ OFFICE = RequestContext(role="office", user_id="sue", mode="server")
 def test_list_prices_shows_module_samples_before_use(db):  # S6-P01
     out = price_book.list_prices(db, "default", "pressure_washing", registry=REG)
     keys = {p["price_key"]: p for p in out["prices"]}
-    assert keys["pw_driveway_sqft"]["source"] == "sample (not used yet)" and out["samples_left"] == 7
+    assert keys["pw_driveway_sqft"]["source"] == "sample (not used yet)" and out["samples_left"] == 14   # 7 -> 14: pressure washing add-ons (2026-11-20, Jamie)
     assert price_book.list_prices(db, "default", registry=REG)["count"] == sum(len(m.sample_prices) for m in REG.list())
 
 

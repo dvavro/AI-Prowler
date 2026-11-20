@@ -1,28 +1,59 @@
 # Pressure washing: quick estimate (no plans). Sample prices are placeholders;
 # the setup wizard asks the company to replace them with its own.
+# Bid the way pressure washing companies do: flatwork by the square foot, a house wash as a flat price by
+# home size and stories (always a low-pressure soft wash), roofs soft washed by the square foot, plus add-ons.
 id: pressure_washing
 name: Pressure Washing
 version: 0.1.0
 category: service
 path: quick_estimate
-description: Driveways, house siding, decks, roofs and fences, priced by area or length with condition and height adjustments.
+description: Driveways and flatwork by the square foot, house soft wash by home size and stories, decks, roofs, fences, gutters, windows and solar panels, with condition and height adjustments.
 minimum_charge: "150.00"
-keywords: [wash, washing, pressure wash, pressure washing, power wash, power washing, soft wash, driveway, siding wash, deck wash, roof wash, fence wash, oil stain, sealing]
+keywords: [wash, washing, pressure wash, pressure washing, power wash, power washing, soft wash, driveway, siding wash, deck wash, roof wash, fence wash, oil stain, sealing, house wash, gutter brightening, solar panel cleaning]
 # The Director asks until at least one surface is given.
-required_any: [driveway_sqft, house_siding_sqft, deck_sqft, roof_sqft, fence_lf]
+required_any: [driveway_sqft, house_size, house_siding_sqft, deck_sqft, roof_sqft, fence_lf, gutters_lf, windows, solar_panels]
 # Options for the quote.
 scenarios:
   - {id: wash, label: "Wash only", answers: {seal_driveway: false}}
   - {id: wash_and_seal, label: "Wash and seal the driveway", answers: {seal_driveway: true}}
 
 questions:
-  - {id: driveway_sqft, label: "Driveway / flatwork area", type: number, unit: sqft, default: 0, min: 0, max: 100000, help: "Square feet of driveway, walkways or patio to wash."}
-  - {id: house_siding_sqft, label: "House siding area", type: number, unit: sqft, default: 0, min: 0, max: 100000, help: "Square feet of house walls to wash."}
+  - {id: driveway_sqft, label: "Driveway / flatwork area", type: number, unit: sqft, default: 0, min: 0, max: 100000, help: "Square feet of driveway, walkways, patio or pool deck to wash. A 2-car driveway is about 600 sq ft."}
+  - id: house_size
+    label: "House wash (home size)"
+    type: choice
+    default: none
+    help: "Soft wash the outside walls of the house (low pressure plus cleaner, which is safe for siding and stucco). Pick the home's living area; most companies price a house wash this way, then add for extra stories."
+    choices:
+      - {value: none, label: "No house wash", factor: "0"}
+      - {value: small, label: "Under 1,500 sq ft home", factor: "1"}
+      - {value: medium, label: "1,500 to 2,500 sq ft home", factor: "2"}
+      - {value: large, label: "2,500 to 3,500 sq ft home", factor: "3"}
+      - {value: xlarge, label: "Over 3,500 sq ft home", factor: "4"}
+  - {id: house_siding_sqft, label: "Exact siding area (optional)", type: number, unit: sqft, default: 0, min: 0, max: 100000, help: "For big or commercial buildings. Square feet of wall to wash. If you fill this in, it's priced by area instead of by home size."}
   - {id: deck_sqft, label: "Deck area", type: number, unit: sqft, default: 0, min: 0, max: 20000, help: "Square feet of deck to wash."}
-  - {id: roof_sqft, label: "Roof area (soft wash)", type: number, unit: sqft, default: 0, min: 0, max: 50000, help: "Roof area to clean with a low-pressure soft wash that won't damage it."}
+  - {id: roof_sqft, label: "Roof area (soft wash)", type: number, unit: sqft, default: 0, min: 0, max: 50000, help: "Roof area to clean with a low-pressure soft wash that won't damage it. About the home's square footage plus overhangs."}
+  - id: roof_type
+    label: "Roof type"
+    type: choice
+    default: shingle
+    help: "Tile roofs are slower and more careful work. Metal roofs rinse off faster."
+    choices:
+      - {value: shingle, label: "Shingle", factor: "1.0"}
+      - {value: tile, label: "Tile", factor: "1.25"}
+      - {value: metal, label: "Metal", factor: "0.9"}
   - {id: fence_lf, label: "Fence length", type: number, unit: lf, default: 0, min: 0, max: 10000, help: "Feet of fence to wash."}
+  - id: fence_type
+    label: "Fence type"
+    type: choice
+    default: wood
+    help: "Wood needs gentle washing and takes the longest. Vinyl and chain link clean faster."
+    choices:
+      - {value: wood, label: "Wood", factor: "1.0"}
+      - {value: vinyl, label: "Vinyl", factor: "0.75"}
+      - {value: chain_link, label: "Chain link or metal", factor: "0.6"}
   - {id: stories, label: "Number of stories", type: integer, default: 1, min: 1, max: 3,
-     help: "Each story above the first adds 15% to siding work (ladders, reach)."}
+     help: "Taller homes need ladders and more reach: each story above the first adds 30% to a house wash and gutters, and 15% to siding priced by area."}
   - id: condition
     help: "Mildew, moss and black streaks need more cleaner and time."
     label: "How dirty is it?"
@@ -34,20 +65,38 @@ questions:
       - {value: heavy, label: "Heavy (moss, black streaks)", factor: "1.35"}
   - {id: oil_stains, label: "Oil stains to treat", type: integer, default: 0, min: 0, max: 50, help: "Number of oil stains to pre-treat on the driveway."}
   - {id: seal_driveway, label: "Seal the driveway after washing?", type: boolean, default: false, help: "Apply a sealer after washing to protect the surface and slow new stains."}
+  - {id: gutters_lf, label: "Gutters to clean and brighten", type: number, unit: lf, default: 0, min: 0, max: 5000, help: "Feet of gutter to clean out and wash the outside face to remove black streaks. A typical home has 120 to 200 feet."}
+  - {id: windows, label: "Exterior windows", type: integer, default: 0, min: 0, max: 200, help: "Windows to wash on the outside while the house is being washed."}
+  - {id: solar_panels, label: "Solar panels", type: integer, default: 0, min: 0, max: 200, help: "Number of solar panels to clean. Clean panels make more power."}
 
 lines:
   - {id: driveway, description: "Driveway / flatwork wash", kind: other, unit: sqft,
      quantity: "driveway_sqft * condition", price_key: pw_driveway_sqft, when: "driveway_sqft > 0"}
+  # House wash by home size: flat price, +30% per extra story, adjusted for how dirty it is.
+  - {id: house_small, description: "House soft wash, under 1,500 sq ft home", kind: other, unit: ea,
+     quantity: "condition * (1 + 0.3 * (stories - 1))", price_key: pw_house_small_ea, when: "house_size == 1 and house_siding_sqft == 0"}
+  - {id: house_medium, description: "House soft wash, 1,500 to 2,500 sq ft home", kind: other, unit: ea,
+     quantity: "condition * (1 + 0.3 * (stories - 1))", price_key: pw_house_medium_ea, when: "house_size == 2 and house_siding_sqft == 0"}
+  - {id: house_large, description: "House soft wash, 2,500 to 3,500 sq ft home", kind: other, unit: ea,
+     quantity: "condition * (1 + 0.3 * (stories - 1))", price_key: pw_house_large_ea, when: "house_size == 3 and house_siding_sqft == 0"}
+  - {id: house_xlarge, description: "House soft wash, over 3,500 sq ft home", kind: other, unit: ea,
+     quantity: "condition * (1 + 0.3 * (stories - 1))", price_key: pw_house_xlarge_ea, when: "house_size == 4 and house_siding_sqft == 0"}
   - {id: siding, description: "House siding wash", kind: other, unit: sqft,
      quantity: "house_siding_sqft * condition * (1 + 0.15 * (stories - 1))", price_key: pw_siding_sqft,
      when: "house_siding_sqft > 0"}
   - {id: deck, description: "Deck wash", kind: other, unit: sqft,
      quantity: "deck_sqft * condition", price_key: pw_deck_sqft, when: "deck_sqft > 0"}
   - {id: roof, description: "Roof soft wash", kind: other, unit: sqft,
-     quantity: "roof_sqft * condition", price_key: pw_roof_sqft, when: "roof_sqft > 0"}
+     quantity: "roof_sqft * condition * roof_type", price_key: pw_roof_sqft, when: "roof_sqft > 0"}
   - {id: fence, description: "Fence wash", kind: other, unit: lf,
-     quantity: "fence_lf * condition", price_key: pw_fence_lf, when: "fence_lf > 0"}
+     quantity: "fence_lf * condition * fence_type", price_key: pw_fence_lf, when: "fence_lf > 0"}
   - {id: oil_stains, description: "Oil stain treatment", kind: other, unit: ea,
      quantity: "oil_stains", price_key: pw_oil_stain_ea, when: "oil_stains > 0"}
   - {id: sealer, description: "Driveway sealing", kind: other, unit: sqft,
      quantity: "driveway_sqft", price_key: pw_sealer_sqft, when: "seal_driveway and driveway_sqft > 0"}
+  - {id: gutters, description: "Gutter cleaning and brightening", kind: other, unit: lf,
+     quantity: "gutters_lf * (1 + 0.3 * (stories - 1))", price_key: pw_gutter_lf, when: "gutters_lf > 0"}
+  - {id: windows, description: "Exterior window washing", kind: other, unit: ea,
+     quantity: "windows", price_key: pw_window_ea, when: "windows > 0"}
+  - {id: solar, description: "Solar panel cleaning", kind: other, unit: ea,
+     quantity: "solar_panels", price_key: pw_solar_ea, when: "solar_panels > 0"}

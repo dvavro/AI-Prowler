@@ -6,7 +6,27 @@
 - name: driveway, two-story heavy siding, oil stains, sealing
   answers: {driveway_sqft: 1000, house_siding_sqft: 2000, stories: 2, condition: heavy,
             oil_stains: 2, seal_driveway: true}
-  # driveway 1000 x 1.35 x 0.15 = 202.50; siding 2000 x 1.35 x 1.15 x 0.25 = 776.25;
+  # driveway 1000 x 1.35 x 0.15 = 202.50; siding 2000 x 1.35 x 1.15 x 0.12 = 372.60;
   # oil 2 x 25 = 50; sealer 1000 x 0.30 = 300
-  expected_lines: {driveway: 20250, siding: 77625, oil_stains: 5000, sealer: 30000}
-  expected_total_cents: 132875
+  expected_lines: {driveway: 20250, siding: 37260, oil_stains: 5000, sealer: 30000}
+  expected_total_cents: 92510
+- name: house wash by home size - 1,500 to 2,500 sq ft, 2 stories, normal, gutters and windows
+  answers: {house_size: medium, stories: 2, gutters_lf: 150, windows: 10}
+  # house 1.15 x 1.3 = 1.495 x $203.60 = $304.38; gutters 150 x 1.3 = 195 x $0.75 = $146.25; windows 10 x $4
+  expected_lines: {house_medium: 30438, gutters: 14625, windows: 4000}
+  expected_total_cents: 49063
+- name: tile roof and vinyl fence, light dirt
+  answers: {roof_sqft: 2000, roof_type: tile, fence_lf: 200, fence_type: vinyl, condition: light}
+  # roof 2000 x 1.25 x $0.20 = $500; fence 200 x 0.75 x $0.90 = $135
+  expected_lines: {roof: 50000, fence: 13500}
+  expected_total_cents: 63500
+- name: small house, light, one story, plus 20 solar panels
+  answers: {house_size: small, condition: light, solar_panels: 20}
+  expected_lines: {house_small: 14540, solar: 16000}
+  expected_total_cents: 30540
+- name: exact siding area wins over home size
+  answers: {house_size: large, house_siding_sqft: 1000, condition: light}
+  # 1000 x $0.12 = $120, raised to the $150 minimum; no flat house wash line
+  expected_lines: {siding: 12000}
+  expected_subtotal_cents: 12000
+  expected_total_cents: 15000
