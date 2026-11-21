@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import re
 
-VERSION = 5                         # Sprint 12: fuller electrical and plumbing libraries, and what each one feeds
+VERSION = 6                         # Sprint 12: fuller electrical and plumbing libraries, and what each one feeds
+                                    # 2026-11-20: range and dryer receptacles; disconnects are counted
                                     # Sprint 14: the HVAC library; Sprint 15: the landscape library
                                     # 2026-11-13: low voltage, architectural and fire alarm symbols
 
@@ -21,12 +22,19 @@ _ROWS = (
     ("duplex_receptacle_wp", "electrical", "Duplex receptacle, weatherproof", ("WP",), ("WP", "WEATHER")),
     ("quad_receptacle", "electrical", "Quad receptacle", ("QUAD",), ("QUAD", "FOURPLEX")),
     ("receptacle_240v", "electrical", "240 V receptacle", ("240V",), ("240", "RANGE", "DRYER")),
+    # 2026-11-20 (David: "add the new symbols in the CAD drawing"): the range and dryer receptacles are parts of their own
+    ("range_receptacle", "electrical", "Range receptacle (240 V, NEMA 14-50R)", ("14-50R",),
+     ("RANGERECEPT", "RANGEOUTLET", "RANGERCPT", "RECEPTRANGE")),
+    ("dryer_receptacle", "electrical", "Dryer receptacle (240 V, NEMA 14-30R)", ("14-30R",),
+     ("DRYERRECEPT", "DRYEROUTLET", "DRYERRCPT", "RECEPTDRYER")),
     ("floor_box", "electrical", "Floor box", ("FB",), ("FLOORBOX", "FLR_BOX", "FB")),
     ("switch", "electrical", "Single-pole switch", ("$", "S"), ("SWITCH", "SW")),
     ("switch_3way", "electrical", "Three-way switch", ("$3", "S3"), ("SW3", "3WAY", "3-WAY")),
     ("switch_4way", "electrical", "Four-way switch", ("$4", "S4"), ("SW4", "4WAY", "4-WAY")),
-    ("switch_dimmer", "electrical", "Dimmer switch", ("$D", "DIM"), ("DIMMER",)),
-    ("light_recessed", "electrical", "Recessed light", ("R",), ("RECESSED", "CANLIGHT", "DOWNLIGHT")),
+    ("switch_dimmer", "electrical", "Dimmer switch", ("$D", "DIM"), ("DIMMER", "SWITCHDIM", "SWDIM")),
+    # (2026-11-19: LIGHT_REC is a recessed can - it used to fall to "LIGHT", a plain fixture)
+    ("light_recessed", "electrical", "Recessed light", ("R",), ("RECESSED", "CANLIGHT", "DOWNLIGHT", "LIGHTREC",
+                                                                "RECLIGHT", "LIGHTCAN")),
     ("light_fixture", "electrical", "Light fixture", (), ("LIGHT", "LUMINAIRE", "FIXTURE", "LTG")),
     ("exit_sign", "electrical", "Exit sign", ("EXIT",), ("EXIT",)),
     ("emergency_light", "electrical", "Emergency light", ("EM",), ("EMERG",)),
@@ -36,7 +44,8 @@ _ROWS = (
     ("data_outlet", "low_voltage", "Data outlet", ("DATA",), ("DATA", "CAT6", "CAT5")),
     ("phone_outlet", "low_voltage", "Telephone outlet", ("TEL",), ("PHONE", "TEL")),
     ("tv_outlet", "low_voltage", "TV outlet", ("TV", "CATV"), ("CATV", "TV")),
-    ("ceiling_fan", "electrical", "Ceiling fan", ("CF",), ("CEILFAN", "CEILING_FAN")),
+    # (2026-11-19: a plain FAN block is a ceiling fan on a house plan; FAN_EXH is the exhaust fan below.)
+    ("ceiling_fan", "electrical", "Ceiling fan", ("CF",), ("CEILFAN", "CEILING_FAN", "FAN")),
     ("panel", "electrical", "Electrical panel", (), ("PANEL", "PNL")),
     ("junction_box", "electrical", "Junction box", ("J", "JB"), ("JBOX", "JUNCTION")),
     # Sprint 12: the rest of a house's electrical devices
@@ -45,10 +54,10 @@ _ROWS = (
     ("ev_charger", "electrical", "EV charger", ("EV", "EVSE"), ("EVSE", "EVCHARGER")),
     ("disconnect", "electrical", "Disconnect switch", ("DISC",), ("DISCONNECT",)),
     ("switch_occupancy", "electrical", "Occupancy sensor switch", ("$OS", "OS"), ("OCCUPANCY", "OCCSENSOR")),
-    ("light_wall", "electrical", "Wall light (sconce)", ("WL",), ("SCONCE", "WALLLIGHT")),
-    ("light_pendant", "electrical", "Pendant light", ("PD",), ("PENDANT",)),
-    ("light_undercabinet", "electrical", "Under-cabinet light", ("UC",), ("UNDERCAB", "UNDERCABINET")),
-    ("light_exterior", "electrical", "Exterior light", (), ("FLOODLIGHT", "EXTLIGHT")),
+    ("light_wall", "electrical", "Wall light (sconce)", ("WL",), ("SCONCE", "WALLLIGHT", "LIGHTWALL")),
+    ("light_pendant", "electrical", "Pendant light", ("PD",), ("PENDANT", "LIGHTPEND")),
+    ("light_undercabinet", "electrical", "Under-cabinet light", ("UC",), ("UNDERCAB", "UNDERCABINET", "LIGHTUC")),
+    ("light_exterior", "electrical", "Exterior light", (), ("FLOODLIGHT", "EXTLIGHT", "LIGHTEXT")),
     ("smoke_co_detector", "electrical", "Smoke and CO detector", ("SD/CO", "SDCO"), ("SMOKECO",)),
     ("doorbell", "electrical", "Doorbell", ("DB",), ("DOORBELL", "CHIME")),
     ("speaker", "low_voltage", "Speaker", ("SPKR",), ("SPEAKER",)),
@@ -70,7 +79,8 @@ _ROWS = (
     ("skylight", "architectural", "Skylight", (), ("SKYLIGHT",)),
     ("column", "architectural", "Column", (), ("COLUMN",)),
     ("thermostat", "mechanical", "Thermostat", ("T", "TSTAT"), ("TSTAT", "THERMOSTAT")),
-    ("exhaust_fan", "mechanical", "Exhaust fan", ("EF",), ("EXHAUST", "EF")),
+    # (2026-11-19: Electrical - the electrician wires and sets a bath fan, so it's counted and priced there.)
+    ("exhaust_fan", "electrical", "Exhaust fan", ("EF",), ("EXHAUST", "EF", "EXH", "FANEXH", "EXHFAN")),
     ("supply_diffuser", "mechanical", "Supply diffuser", ("SA",), ("DIFFUSER", "SUPPLY")),
     ("return_grille", "mechanical", "Return grille", ("RA",), ("RETURN", "GRILLE")),
     # Sprint 14: the rest of a house's HVAC
@@ -127,20 +137,29 @@ _ROWS = (
 )
 
 # Sprint 12: which trade question each symbol counts toward (module id, question id[, choice value]). A symbol not
-# here is listed but not counted by a trade (smoke detectors, panels, cleanouts: priced another way or by a person).
+# here is listed but not counted by a trade (cleanouts and the like: priced another way or by a person).
 FEEDS = {
-    "duplex_receptacle": ("electrical", "outlets"), "duplex_receptacle_usb": ("electrical", "outlets"),
-    "quad_receptacle": ("electrical", "outlets"), "floor_box": ("electrical", "outlets"),
-    "duplex_receptacle_gfci": ("electrical", "gfci"), "duplex_receptacle_wp": ("electrical", "gfci"),
-    "switch": ("electrical", "switches"), "switch_3way": ("electrical", "switches"),
-    "switch_4way": ("electrical", "switches"), "switch_dimmer": ("electrical", "switches"),
-    "switch_occupancy": ("electrical", "switches"),
-    "light_recessed": ("electrical", "lights"), "light_fixture": ("electrical", "lights"),
-    "light_wall": ("electrical", "lights"), "light_pendant": ("electrical", "lights"),
-    "light_undercabinet": ("electrical", "lights"), "light_exterior": ("electrical", "lights"),
-    "exit_sign": ("electrical", "lights"), "emergency_light": ("electrical", "lights"),
+    # 2026-11-19: each outlet type is its own count (a different part to order)
+    "duplex_receptacle": ("electrical", "outlets"), "duplex_receptacle_usb": ("electrical", "usb_outlets"),
+    "quad_receptacle": ("electrical", "quad_outlets"), "floor_box": ("electrical", "floor_boxes"),
+    "duplex_receptacle_gfci": ("electrical", "gfci"), "duplex_receptacle_wp": ("electrical", "wp_outlets"),
+    # 2026-11-19: each switch type is its own count (a different part to order)
+    "switch": ("electrical", "switches"), "switch_3way": ("electrical", "switches_3way"),
+    "switch_4way": ("electrical", "switches_4way"), "switch_dimmer": ("electrical", "dimmers"),
+    "switch_occupancy": ("electrical", "occupancy_switches"),
+    # 2026-11-19: each light type is its own count (a different fixture to order for the BOM)
+    "light_fixture": ("electrical", "lights"), "light_recessed": ("electrical", "recessed_lights"),
+    "light_wall": ("electrical", "wall_lights"), "light_pendant": ("electrical", "pendant_lights"),
+    "light_undercabinet": ("electrical", "undercabinet_lights"), "light_exterior": ("electrical", "exterior_lights"),
+    "exit_sign": ("electrical", "exit_emergency_lights"), "emergency_light": ("electrical", "exit_emergency_lights"),
     "ceiling_fan": ("electrical", "fans"),
+    "exhaust_fan": ("electrical", "exhaust_fans"),        # 2026-11-19: the electrician wires and sets bath fans
+    # 2026-11-20 (David): smoke detectors and the main panel on the plan are counted too.
+    "smoke_detector": ("electrical", "smoke_detectors"), "smoke_co_detector": ("electrical", "smoke_detectors"),
+    "panel": ("electrical", "main_panels"),
     "receptacle_240v": ("electrical", "appliance_circuits"), "receptacle_dedicated": ("electrical", "appliance_circuits"),
+    "range_receptacle": ("electrical", "range_receptacles"), "dryer_receptacle": ("electrical", "dryer_receptacles"),
+    "disconnect": ("electrical", "disconnects"),       # 2026-11-20: the A/C and water heater disconnects
     "ev_charger": ("electrical", "appliance_circuits"),
     "data_outlet": ("electrical", "low_voltage"), "phone_outlet": ("electrical", "low_voltage"),
     "tv_outlet": ("electrical", "low_voltage"), "speaker": ("electrical", "low_voltage"),

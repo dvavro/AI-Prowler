@@ -49,8 +49,10 @@ async function renderSymbolReview(main, planSetId) {
   const estId = ps.estimate.id;
   const msg = el("div", { id: "symrev-message", role: "status" });
   const parts = [el("p", {}, el("a", { href: "#/reviews" }, "← All reviews"), " · ",
-      el("a", { href: "#/projects/" + estId }, "Project page"), " · ", el("a", { href: "#/takeoffs/" + estId }, "📏 Blueprint Review")),
-    el("div", { class: "page-head" }, el("h2", {}, "✅ " + ps.plan_set.original_name), helpLink("reviews")),
+      el("a", { href: "#/projects/" + estId }, "Project page"), " · ", el("a", { href: "#/takeoffs/" + estId }, "📏 Measure")),
+    // 2026-11-20 (David): the heading said "undefined" - the plan set's file name is "file" in the API
+    el("div", { class: "page-head" }, el("h2", { id: "symrev-title" }, "✅ " + (ps.plan_set.file || ps.plan_set.original_name || "Plan set " + planSetId)
+      + (ps.plan_set.revision > 1 ? " (rev " + ps.plan_set.revision + ")" : "")), helpLink("reviews")),
     el("p", { class: "muted" }, ps.estimate.title)];
 
   // Counts by type: a chip per type, click to look at just that type.
@@ -191,7 +193,7 @@ function addMissedForm(sheets, msg) {
       item_type: it.value.trim().toLowerCase().replace(/[\s-]+/g, "_") }, () => "Symbol added", "symrev");
   });
   return el("details", { class: "card section", id: "symrev-add" }, el("summary", {}, "Add a symbol the engine missed"),
-    el("p", { class: "small muted" }, "Where it is on the sheet, in inches from the top-left corner (Blueprint Review shows the position as you point)."),
+    el("p", { class: "small muted" }, "Where it is on the sheet, in inches from the top-left corner (Measure shows the position as you point)."),
     el("div", { class: "row" }, el("label", {}, "Sheet", sheet), el("label", {}, "Across", x), el("label", {}, "Down", y), el("label", {}, "Item type", it), b), ask);
 }
 
@@ -297,26 +299,56 @@ async function renderAgents(main, screen) {
   const r = await api("GET", "/agents");
   const msg = el("div", { id: "agents-message", role: "status" });
   const parts = [el("div", { class: "page-head" }, el("h2", {}, screen.label), helpLink("agents")),
-    el("p", { class: "muted" }, "Watch the takeoff runs and see what was sent to the AI."), msg];
+    el("p", { class: "muted" }, "Watch the measure runs and see what was sent to the AI."), msg];
   const off = (r.agents || []).filter(a => !a.enabled).map(a => a.name);
   parts.push(el("p", { class: "note", id: "agents-settings-where" },
-    "Which trades you quote, how sure each trade's takeoff agent must be and whether it approves by itself are set in AI-Prowler's 🏗 Estimator tab → 🏗 Trades. ",
+    "Which trades you quote, how sure each trade's measuring agent must be and whether it approves by itself are set in AI-Prowler's 🏗 Estimator tab → 🏗 Trades. ",
     off.length ? "Switched off (not quoted, not measured): " + off.join(", ") + "." : "Every trade is on."));
   // 2026-11-13: the AI agents (which AI runs them, what each step does, the budget) are set on the desktop.
   parts.push(el("p", { class: "muted small", id: "agents-ai-settings-where" },
-    "Which AI runs the agents, what each one does (AI takeoff, Reviewer, Bid writer, Follow-up …) and the AI budget are set in AI-Prowler's 🏗 Estimator tab → 🤖 AI agents and budget; the models come from the top of the 🏢 Small Business tab."));
+    "Which AI runs the agents, what each one does (AI measuring, Reviewer, Bid writer, Follow-up …) and the AI budget are set in AI-Prowler's 🏗 Estimator tab → 🤖 AI agents and budget; the models come from the top of the 🏢 Small Business tab."));
 
-  // Runs.
-  parts.push(el("h3", {}, "Takeoff runs"));
+  // 🤖 AI Auto Runs - every trade (2026-11-21, David: "Why were there no measured runs?" - only the Director's runs
+  // were listed, and most measuring is done with the AI Auto Run button on the Measure screen).
+  const autos = r.auto_runs || [];
+  parts.push(el("h3", { id: "auto-runs-head" }, "🤖 AI Auto Runs"));
+  parts.push(autos.length ? el("div", { id: "auto-runs-list" }, autos.map(autoRunCard))
+    : el("div", { class: "card empty", id: "auto-runs-empty" }, "No AI Auto Runs yet. Open a project's plans on the Measure screen and click 🤖 AI Auto Run — every trade's run is listed here."));
+
+  // The Director's runs (a queue of agent tasks per plan job).
+  parts.push(el("h3", {}, "Director measure runs"));
   parts.push(r.runs.length ? el("div", { id: "runs-list" }, r.runs.map(run => runCard(run, r.can_start, msg)))
-    : el("div", { class: "card empty", id: "runs-empty" }, "No takeoff runs yet. The Director starts one for each plan job, or start one from ",
-      el("a", { href: "#/projects" }, "a project's estimate"), "."));
+    : el("div", { class: "card empty", id: "runs-empty" }, "No Director measure runs yet. The Director starts one for each plan job, or start one from ",
+      el("a", { href: "#/projects" }, "a project's estimate"), ". (🤖 AI Auto Runs from the Measure screen are listed above.)"));
 
   // AI Log: every call the Estimator made to the AI, and what came back.
   parts.push(el("h3", {}, "AI Log"));
   parts.push(el("p", {}, el("a", { href: "#/agents/ai-log", id: "agents-ai-log-link" }, "📋 What was sent to the AI and what came back"),
-    " — every LLM call (the LLM takeoff reading a plan, the Reviewer, Bid Writer and Follow-up agents), newest first, with the prompt, the plan images, the reply and the cost."));
+    " — every LLM call (the AI measuring from the plans, the Reviewer, Bid Writer and Follow-up agents), newest first, with the prompt, the plan images, the reply and the cost."));
   main.replaceChildren(...parts);
+}
+
+// One 🤖 AI Auto Run: project, trade, how it went, what it proposed and cost, with links to its Measure page and its
+// AI calls in the AI Log. Any trade: the trade name comes from the server (the trade's own name).
+const AUTO_STATUS = { done: "✓ done", failed: "✗ failed", running: "running…", queued: "waiting to start" };
+function autoRunCard(a) {
+  const when = a.created_at ? new Date(a.created_at).toLocaleString() : "";
+  const took = a.seconds == null ? "" : a.seconds < 90 ? a.seconds + " s" : Math.round(a.seconds / 60) + " min";
+  const cost = a.ai_calls ? a.ai_calls + " AI call" + (a.ai_calls === 1 ? "" : "s") + " · $" + (a.cost_cents / 100).toFixed(2)
+    : "no AI calls (read from the drawing)";
+  const facts = [when, took ? "took " + took : "", a.status === "done" ? a.proposed + " proposed" : "", cost].filter(Boolean).join(" · ");
+  const card = el("div", { class: "card section auto-run-card " + (a.status || ""), id: "auto-run-" + a.id, "data-trade": a.module_id },
+    el("div", { class: "row" },
+      el("strong", {}, "#" + a.id + " " + a.trade),
+      el("span", {}, " — " + (a.estimate_title || "estimate " + a.estimate_id)),
+      el("span", { class: "status" + (a.status === "done" ? "" : " sample") }, AUTO_STATUS[a.status] || a.status)),
+    el("div", { class: "muted small" }, facts));
+  if (a.status === "failed" && a.error) card.append(el("div", { class: "small warn" }, "Why it failed: " + a.error));
+  else if (a.status !== "done" && a.step) card.append(el("div", { class: "small" }, "Now: " + a.step));
+  card.append(el("div", { class: "row small" },
+    el("a", { href: "#/takeoffs/" + a.estimate_id, class: "auto-run-measure" }, "Open its Measure page"),
+    a.ai_calls ? el("a", { href: "#/agents/ai-log?auto_run_id=" + a.id, class: "auto-run-log" }, "📋 Its AI calls") : null));
+  return card;
 }
 
 function runCard(run, canStart, msg) {
@@ -372,7 +404,7 @@ async function renderAiLog(main) {
     total = r.total;
     if (!r.entries.length && offset === 0) {
       list.replaceChildren(el("div", { class: "card empty", id: "ai-log-empty" },
-        runId ? "No AI calls for this run — the AI never ran (the agent measured from the drawing, or LLM takeoff is off)."
+        runId ? "No AI calls for this run — the AI never ran (the agent measured from the drawing, or AI measuring is off)."
               : "No AI calls yet — nothing has been sent to the AI."));
     } else {
       for (const e of r.entries) list.append(aiLogCard(e));

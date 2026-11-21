@@ -86,9 +86,18 @@ def _load_viewport(conn, ctx, viewport_id: int) -> dict:
 # ---------------------------------------------------------------- upload
 
 def upload(conn, ctx: RequestContext, estimate_id: int, file_path: str, supersedes_plan_set_id: int | None = None,
-           confirm: bool = False, design_firm: str | None = None) -> dict:
+           confirm: bool = False, design_firm: str | None = None, keep_old: bool = False) -> dict:
     """Attach a plan file (PDF, image, DXF, DWG) to an estimate after checking it. Asks first.
-    design_firm: the architect or engineer who drew it (a revision keeps the firm of the set it replaces)."""
+    design_firm: the architect or engineer who drew it (a revision keeps the firm of the set it replaces).
+
+    A revised set (supersedes_plan_set_id) REPLACES the old one (2026-11-21, David: keeping Rev 1 and Rev 2 side by
+    side "is too complex and problematic for most users and confusing"): once the new file is attached, the old plan
+    set is removed with everything that came from it - its sheets and every measurement on them, approved or not
+    (plan_delete.delete_plan_set). The person then measures the new plans from scratch (AI Auto Run, ⚡ Run wiring),
+    approves, and prices with 🔄 Update from the plans. The priced estimate itself is untouched until then. The question
+    says exactly what goes, and replacing needs a role that may remove plans.
+    keep_old=True keeps the old set beside the new one (the older Rev A / Rev B compare report, drawing_model.revisions,
+    needs both); the app's screens and the plan_upload tool never pass it."""
     _role(ctx, UPLOAD_ROLES, "upload plans")
     firm = _clean_firm(design_firm) if design_firm else None
     est = service._load_row(conn, ctx, int(estimate_id))
@@ -96,27 +105,43 @@ def upload(conn, ctx: RequestContext, estimate_id: int, file_path: str, supersed
     dup = conn.execute("SELECT id FROM plan_sets WHERE company_id = ? AND estimate_id = ? AND sha256 = ?",
                        (ctx.company_id, est["id"], checked["sha256"])).fetchone()
     if dup:
-        raise InvalidInput(f"{checked['name']} is already on this estimate as plan set {dup['id']}",
+        raise InvalidInput(f"{checked['name']} is already on this estimate as plan set #{plan_set_number(conn, ctx.company_id, est['id'], dup['id'])}",
                            plan_set_id=dup["id"])
-    revision, prev = 1, None
+    revision, prev, gone = 1, None, None
     if supersedes_plan_set_id:
+        if not keep_old:
+            _role(ctx, EDIT_ROLES, "replace plans with a new revision (it removes the old plans and their measurements)")
         prev = load_plan_set(conn, ctx, int(supersedes_plan_set_id))
         if prev["estimate_id"] != est["id"]:
             raise InvalidInput("a revised plan set must replace one on the same estimate")
         revision = prev["revision"] + 1
+        if not keep_old:
+            from estimator.takeoff import plan_delete
+            gone = plan_delete.plan_set_counts(conn, ctx, prev)
     firm_source = "typed" if firm else None
     if firm:
         firm = _known_spelling(conn, ctx, firm)
     elif prev and prev.get("design_firm"):
-        firm, firm_source = prev["design_firm"], f"plan set {prev['id']}"
+        firm, firm_source = prev["design_firm"], f"plan set {plan_set_label(conn, prev)}"
     summary = {"file": checked["name"], "file_type": checked["file_type"],
                "size_mb": round(checked["size"] / (1024 * 1024), 2), "revision": revision,
                "warnings": checked["warnings"]}
     if firm:
         summary["design_firm"] = firm
-    _confirm(confirm, f"Attach {checked['name']} ({checked['file_type'].upper()}, {summary['size_mb']} MB) to "
-             f"estimate {est['id']}" + (f" as revision {revision} of plan set {prev['id']}" if prev else "") + "?",
-             **summary)
+    question = (f"Attach {checked['name']} ({checked['file_type'].upper()}, {summary['size_mb']} MB) to "
+                f"estimate {est['id']}" + (f" as revision {revision}, replacing plan set {plan_set_label(conn, prev)}"
+                                           f" ({prev['original_name']})" if prev else "") + "?")
+    if gone is not None:
+        n, ok = gone["measurements"], gone["measurements_approved"]
+        what = ", ".join(b for b in (
+            f"{gone['sheets']} sheet{'s' if gone['sheets'] != 1 else ''}" if gone["sheets"] else "",
+            (f"{n} measurement{'s' if n != 1 else ''}" + (f" ({ok} approved)" if ok else "")) if n else "") if b)
+        question += (" The old plans are removed" + (f" with {what}" if what else "") + ", and this can't be undone."
+                     " Then measure the new plans from scratch (AI Auto Run, ⚡ Run wiring), approve the counts, and"
+                     " click 🔄 Update from the plans on the estimate. The estimate's prices stay as they are until then.")
+        summary["replaces"] = {"plan_set_id": prev["id"], "file": prev["original_name"], "sheets": gone["sheets"],
+                               "measurements": n, "measurements_approved": ok}
+    _confirm(confirm, question, **summary)
     folder = uploads.plans_folder(est["id"])
     with service.transaction(conn):
         cur = conn.execute(
@@ -137,8 +162,21 @@ def upload(conn, ctx: RequestContext, estimate_id: int, file_path: str, supersed
         service._log(conn, ctx, est["id"], "plan_uploaded",
                      {"plan_set_id": plan_set_id, "file": checked["name"], "revision": revision,
                       "design_firm": firm})
-    out = {"ok": True, "plan_set_id": plan_set_id, "estimate_id": est["id"], "status": "uploaded", **summary,
+    removed = None
+    if gone is not None:                           # the new file is safely in: now the old plans go, measurements and all
+        from estimator.takeoff import plan_delete
+        removed = plan_delete.delete_plan_set(conn, ctx, prev["id"], confirm=True)
+        if prev["file_type"] == "dxf":                # the wiring run's routes were on the old drawing
+            from estimator.takeoff import wiring_run
+            wiring_run.clear(est["id"])
+    out = {"ok": True, "plan_set_id": plan_set_id, "estimate_id": est["id"],
+           "number": plan_set_number(conn, ctx.company_id, est["id"], plan_set_id),   # the project's #, as shown
+           "status": "uploaded", **summary,
            "next": "plan_process to read the sheets (needs the plan engine), then plan_get_sheets"}
+    if removed:
+        out["replaced"] = removed["summary"]
+        out["next"] += ("; then measure them again (AI Auto Run, wiring run), approve, and price the estimate with the "
+                        "approved measurements (Update from the plans)")
     if ctx.mode == "server":                       # heavy work: queued for a processing PC (spec: compute limits)
         from estimator.drawing_model import server_jobs
         q = server_jobs.enqueue(conn, ctx, load_plan_set(conn, ctx, plan_set_id), "uploaded in Server mode")
@@ -190,8 +228,8 @@ def set_design_firm(conn, ctx: RequestContext, plan_set_id: int, design_firm: st
         return {"ok": True, "plan_set_id": ps["id"], "design_firm": firm, "changed": False}
     others = conn.execute("SELECT COUNT(*) FROM plan_sets WHERE company_id = ? AND design_firm = ? AND id != ?",
                           (ctx.company_id, firm, ps["id"])).fetchone()[0] if firm else 0
-    what = (f"Record {firm} as the design firm of plan set {ps['id']} ({ps['original_name']})"
-            if firm else f"Clear the design firm of plan set {ps['id']} (was {ps.get('design_firm')})")
+    what = (f"Record {firm} as the design firm of plan set {plan_set_label(conn, ps)} ({ps['original_name']})"
+            if firm else f"Clear the design firm of plan set {plan_set_label(conn, ps)} (was {ps.get('design_firm')})")
     if firm and ps.get("design_firm"):
         what += f", replacing {ps['design_firm']}"
     _confirm(confirm, what + "?", design_firm=firm, previous=ps.get("design_firm"), same_firm_plan_sets=others)
@@ -212,13 +250,47 @@ def list_plan_sets(conn, ctx: RequestContext, estimate_id: int) -> dict:
     return {"ok": True, "estimate_id": int(estimate_id), "count": len(rows), "plan_sets": rows}
 
 
+def plan_set_number(conn, company_id: str, estimate_id: int, plan_set_id: int) -> int:
+    """A plan set's number within its project (1-based, by upload order): the number the
+    project page shows in its "#" column — not the plan set's global id, which counts
+    every plan set on every project. Computed at read time, so deleting a set renumbers
+    the survivors (delete #1, the old #2 becomes #1)."""
+    n = conn.execute(
+        "SELECT COUNT(*) FROM plan_sets WHERE company_id = ? AND estimate_id = ? AND id < ?",
+        (company_id, int(estimate_id), int(plan_set_id))).fetchone()[0]
+    return int(n) + 1
+
+
+def plan_set_label(conn, ps: dict) -> str:
+    """How messages name a plan set: "#1", its number within its project (as the project page's "#" column shows it),
+    never the global id (2026-11-20, David: "all numbering of plans should be based on the project")."""
+    return f"#{plan_set_number(conn, ps['company_id'], ps['estimate_id'], ps['id'])}"
+
+
+def display_sheet_title(title, plan_set_id: int, number: int, file_type: str) -> str | None:
+    """The title a sheet shows. For the file types whose title comes from the stored
+    filename (DXF/DWG/images), the stored title starts with the plan set's global id
+    ("4 house wiring..." — uploads.stored_name() names the file "{id}_{stem}" and the
+    reader turns the stem into the title). That exact prefix is swapped for the plan
+    set's number within its project, so the picker and the sheets tables agree with the
+    project page. Title-block titles (PDF, and OCR'd images) never carry the prefix and
+    are untouched — a title like "11 TO RAFTER CONNECTION DETAIL" keeps its own number."""
+    if not title or (file_type or "").lower() not in ("dxf", "dwg", "image"):
+        return title
+    prefix = f"{int(plan_set_id)} "
+    if not title.startswith(prefix):
+        return title
+    rest = title[len(prefix):]
+    return f"{int(number)} {rest}" if rest else title
+
+
 def _plan_set_out(conn, ps: dict) -> dict:
     counts = conn.execute(
         "SELECT COUNT(DISTINCT s.id) AS sheets, COUNT(DISTINCT v.id) AS viewports FROM sheets s"
         " LEFT JOIN viewports v ON v.sheet_id = s.id WHERE s.plan_set_id = ?", (ps["id"],)).fetchone()
     objects = conn.execute("SELECT COUNT(*) FROM drawing_objects o JOIN sheets s ON s.id = o.sheet_id"
                            " WHERE s.plan_set_id = ?", (ps["id"],)).fetchone()[0]
-    return {"id": ps["id"], "estimate_id": ps["estimate_id"], "file": ps["original_name"], "file_type": ps["file_type"],
+    return {"id": ps["id"], "number": plan_set_number(conn, ps["company_id"], ps["estimate_id"], ps["id"]), "estimate_id": ps["estimate_id"], "file": ps["original_name"], "file_type": ps["file_type"],
             "revision": ps["revision"], "supersedes_plan_set_id": ps["supersedes_plan_set_id"],
             "status": ps["status"], "error": ps["error"], "engine": ps["engine"], "page_count": ps["page_count"],
             "sheets": counts["sheets"], "viewports": counts["viewports"], "objects": objects,
@@ -553,6 +625,7 @@ def _cal(v: dict) -> dict | None:
 
 def sheets(conn, ctx: RequestContext, plan_set_id: int, discipline: str | None = None) -> dict:
     ps = load_plan_set(conn, ctx, plan_set_id)
+    number = plan_set_number(conn, ctx.company_id, ps["estimate_id"], ps["id"])
     sql, args = "SELECT * FROM sheets WHERE plan_set_id = ?", [ps["id"]]
     if discipline:
         sql += " AND discipline = ?"
@@ -564,7 +637,7 @@ def sheets(conn, ctx: RequestContext, plan_set_id: int, discipline: str | None =
         n_objects = conn.execute("SELECT COUNT(*) FROM drawing_objects WHERE sheet_id = ?", (s["id"],)).fetchone()[0]
         paper = s["units"] == "paper_in"
         needs = paper and (not vps or any(not v["measurable"] and not v["is_nts"] for v in vps))
-        out.append({"id": s["id"], "page_no": s["page_no"], "sheet_no": s["sheet_no"], "title": s["title"],
+        out.append({"id": s["id"], "page_no": s["page_no"], "sheet_no": s["sheet_no"], "title": display_sheet_title(s["title"], ps["id"], number, ps["file_type"]),
                     "discipline": s["discipline"], "revision": s["revision"], "revision_date": s["revision_date"],
                     "units": s["units"], "has_image": bool(s["image_path"]), "objects": n_objects,
                     "viewports": [{k: v[k] for k in ("id", "label", "scale_note", "scale_ratio", "is_nts",

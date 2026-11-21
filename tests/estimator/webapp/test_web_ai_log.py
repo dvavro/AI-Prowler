@@ -54,7 +54,7 @@ def _png(path, w=400, h=300):
 
 def _seed(db, **over):
     vals = {"provider": "claude_api", "model": "claude-sonnet-5-5", "role": "llm_takeoff",
-            "purpose": "LLM takeoff: read the slab dimensions",
+            "purpose": "AI measuring: read the slab dimensions",
             "system_prompt": "You read plans.", "user_prompt": "Read this slab.",
             "response_text": '{"slab_width_ft": "45\'-7\\""}',
             "parsed": {"slab_width_ft": "45'-7\""}, "auto_run_id": 5, "estimate_id": 2}

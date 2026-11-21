@@ -147,12 +147,96 @@ def test_code_only_legend_entries_counted_where_the_code_stands_alone(tmp_path):
                                         ("E-SMOKE-DET", "smoke_detector"), ("P_TOILET", "water_closet"),
                                         ("DOOR_36", "door"), ("NORTH_ARROW", None),   # doors count since 2026-11-13
                                         ("DOORBELL", "doorbell"), ("DOOR_CONTACT", "door_contact"),
-                                        ("DOUBLE_DOOR_72", "door_double"), ("SKYLIGHT_2X4", "skylight")])
+                                        ("DOUBLE_DOOR_72", "door_double"), ("SKYLIGHT_2X4", "skylight"),
+                                         # 2026-11-19: the house electrical test plan's blocks
+                                         ("FAN", "ceiling_fan"), ("FAN_EXH", "exhaust_fan"), ("EXHAUST_FAN", "exhaust_fan"),
+                                         ("SWITCH_DIM", "switch_dimmer"), ("LIGHT_WALL", "light_wall"),
+                                         ("LIGHT_CEIL", "light_fixture"), ("DIM_ARROW", None),
+                                          # 2026-11-20: a recessed can is its own light type, not a plain fixture
+                                          ("LIGHT_REC", "light_recessed"), ("LIGHT_PEND", "light_pendant"),
+                                          ("LIGHT_UC", "light_undercabinet"), ("LIGHT_EXT", "light_exterior")])
 def test_block_names(name, item):                                                    # C2S10-E07
     got = lib.by_block_name(name)
     assert (got["item_type"] if got else None) == item
     assert lib.by_alias("gfi")["item_type"] == "duplex_receptacle_gfci" and lib.by_alias("$3")["item_type"] == "switch_3way"
     assert lib.by_alias("XYZ") is None
+
+
+def _cad_sheet(objects, w=108.0, h=64.0):
+    return {"width": w, "height": h, "discipline": "electrical", "objects": objects}
+
+
+def _blk(name, x, y):
+    return {"kind": "symbol", "block_name": name, "geometry": {"type": "point", "points": [[x, y]]}}
+
+
+def _txt(label, x, y):
+    return {"kind": "text", "label": label, "geometry": {"type": "point", "points": [[x, y]]}}
+
+
+def _room(x0, y0, x1, y1, label="ROOM"):
+    return {"kind": "room", "label": label,
+            "geometry": {"type": "polygon", "points": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]}}
+
+
+def test_cad_legend_samples_are_not_devices():                                       # 2026-11-20
+    """David: "your counts include the legend itself". The LEGEND title and its rows below the plan make a legend box;
+    its samples stay plain blocks. The sheet border read as a room doesn't hide it."""
+    from estimator.plan_engine import symbols
+    objs = [_room(0, 0, 108, 64, "AC 30A"),                       # the sheet's border, read as a room
+            _room(4, 4, 44, 34, "LIVING"), _room(64, 4, 104, 34, "BEDROOM"),
+            _blk("LIGHT_CEIL", 10, 10), _blk("LIGHT_CEIL", 70, 10), _blk("LIGHT_REC", 20, 20), _blk("LIGHT_WALL", 4.3, 15),
+            _txt("LEGEND", 6, 45),
+            _blk("LIGHT_CEIL", 8, 50), _txt("CEILING LIGHT", 10, 50),
+            _blk("LIGHT_REC", 58, 47.5), _txt("RECESSED LIGHT", 60, 47.5),
+            _blk("LIGHT_WALL", 58, 49.2), _txt("WALL LIGHT", 60, 49.2)]
+    sheet = _cad_sheet(objs)
+    assert symbols.cad_symbols(sheet) == 4                        # the 4 on the plan, not the 3 samples
+    got = sorted((o["symbol"]["item_type"], o["geometry"]["points"][0][1]) for o in objs if o.get("symbol"))
+    assert got == [("light_fixture", 10), ("light_fixture", 10), ("light_recessed", 20), ("light_wall", 15)]
+    (lg,) = sheet["legends"]
+    assert lg["bbox"][1] < 45 < 50 < lg["bbox"][3] and lg["bbox"][1] > 34   # below the plan, round the rows
+
+
+def test_wall_lights_outside_the_building_are_exterior_lights():                     # 2026-11-20
+    """David: exterior lights found 2 but lit up nothing. His plan draws the porch lights with the plain wall-light
+    block, just outside the outside walls; those are exterior lights. Wall lights inside (even on the inside face of an
+    outside wall, or in a hall no room was read for) stay wall lights. Two floors side by side are two buildings."""
+    from estimator.plan_engine import symbols
+    objs = [_room(0, 0, 108, 64, "AC 30A"),                       # the sheet's border, read as a room: not a building
+            _room(4, 16, 23, 34, "FAMILY"), _room(4, 4, 23, 19, "LIVING"), _room(25, 4, 44, 34, "KITCHEN"),
+            _room(64, 6.5, 104, 34, "BEDROOM"),
+            _blk("LIGHT_WALL", 10, 34.7), _blk("LIGHT_WALL", 10, 3.3),          # outside the ground floor: porch lights
+            _blk("LIGHT_WALL", 24, 15), _blk("LIGHT_WALL", 64.7, 17),            # inside (a hall gap; an outside wall)
+            _blk("LIGHT_WALL", 54, 20)]                                          # between the floors: outside both
+    sheet = _cad_sheet(objs)
+    assert symbols.cad_symbols(sheet) == 5
+    got = sorted((o["symbol"]["item_type"], tuple(o["geometry"]["points"][0])) for o in objs if o.get("symbol"))
+    assert got == [("light_exterior", (10, 3.3)), ("light_exterior", (10, 34.7)), ("light_exterior", (54, 20)),
+                   ("light_wall", (24, 15)), ("light_wall", (64.7, 17))]
+    assert all(o["symbol"]["method"] == "cad" for o in objs if o.get("symbol"))   # a method the store keeps
+    # No rooms read: nothing to tell inside from outside, so wall lights stay wall lights.
+    bare = [_blk("LIGHT_WALL", 10, 34.7)]
+    symbols.cad_symbols(_cad_sheet(bare))
+    assert bare[0]["symbol"]["item_type"] == "light_wall"
+
+
+def test_cad_legend_beside_the_plan_doesnt_swallow_it():                             # 2026-11-20
+    from estimator.plan_engine import symbols
+    objs = [_room(4, 4, 60, 60, "LIVING"),
+            _blk("LIGHT_CEIL", 10, 50), _blk("LIGHT_CEIL", 50, 52),           # devices low on the plan
+            _txt("ELECTRICAL LEGEND", 80, 40),
+            _blk("LIGHT_CEIL", 80, 42), _txt("CEILING LIGHT", 82, 42), _blk("LIGHT_REC", 80, 43.7),
+            _txt("RECESSED LIGHT", 82, 43.7)]
+    sheet = _cad_sheet(objs)
+    assert symbols.cad_symbols(sheet) == 2
+    assert all(o["geometry"]["points"][0][0] < 60 for o in objs if o.get("symbol"))
+
+
+def test_no_legend_title_no_legend():                                                 # 2026-11-20
+    from estimator.plan_engine import symbols
+    sheet = _cad_sheet([_room(4, 4, 44, 34), _blk("LIGHT_CEIL", 10, 10), _blk("LIGHT_CEIL", 10, 50)])
+    assert symbols.cad_symbols(sheet) == 2 and not sheet.get("legends")
 
 
 def test_cad_blocks_become_detections(tmp_path):                                     # C2S10-E08

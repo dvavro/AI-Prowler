@@ -115,7 +115,7 @@ def revs(db, tmp_path):
     porch = m.propose(db, CTX, est, "roofing", o["PORCH"], kind="area", label="porch", confirm=True)["proposed"][0]["id"]
     typed = m.manual(db, CTX, est, "roofing", feeds="ridge_lf", qty="20", unit="lf", confirm=True)["measurement"]["id"]
     m.confirm_measurements(db, CTX, [keep, slab, porch], confirm=True)
-    b = store.upload(db, CTX, est, _pdf(tmp_path / "revB.pdf", 2, "B"), supersedes_plan_set_id=a,
+    b = store.upload(db, CTX, est, _pdf(tmp_path / "revB.pdf", 2, "B"), supersedes_plan_set_id=a, keep_old=True,
                      confirm=True)["plan_set_id"]
     store.save_results(db, CTX, b, PLAN("B"), "fake")
     db.commit()
@@ -526,10 +526,12 @@ def test_reports_settings_and_revision_pages_are_wired():                       
 def test_guides_cover_reports_settings_and_revisions():                         # C2S17-W32
     reports = (HELP / "use_reports.md").read_text(encoding="utf-8")
     assert "# Use the reports" in reports and "Win / loss" in reports
-    assert "Takeoff report" in reports and "Plan revisions" in reports
+    assert "Measurements report" in reports and "Plan revisions" in reports
     settings = (HELP / "change_your_settings.md").read_text(encoding="utf-8")
     assert "# Change your settings" in settings and "owner only" in settings
     assert "Back up now" in settings and "Audit log" in settings
+    # 2026-11-21 (David: revisions simplified): a new revision replaces the old plans; the guide says so, and points
+    # to the revision reports made before.
     revisions = (HELP / "compare_plan_revisions.md").read_text(encoding="utf-8")
-    assert "# Compare plan revisions" in revisions and "green boxes are new" in revisions
-    assert "Owners and estimators compare" in revisions
+    assert "# Replace plans with a new revision" in revisions and "measure the new plans from scratch" in revisions
+    assert "Update from the plans" in revisions and "Plan revisions" in revisions

@@ -21,6 +21,9 @@ def _lines(e):
 
 
 BASE = {"outlets": 10, "switches": 4, "lights": 6}
+# 2026-11-20 (David's quote review): branch breakers are AFCI by default ($45, was $35 single-pole), each box gets a set
+# of small parts ($1.50: wire nuts, staples, clamps), and the lights have their own labor line (fixture_labor) - the
+# same hours as before, split from device_labor.
 
 
 def test_new_questions_are_asked_with_sane_defaults(db):  # C-Q01
@@ -43,28 +46,29 @@ def test_required_any_includes_new_counts():  # C-Q02
 
 def test_voltage_220_changes_wire_and_breakers(db):  # C-V01
     std, v220 = _price(db, BASE), _price(db, {**BASE, "voltage": "220"})
-    assert _lines(std)["wire"] == 31625 and _lines(std)["breakers"] == 7000
+    assert _lines(std)["wire"] == 31625 and _lines(std)["breakers_afci"] == 9000
     lines = _lines(v220)
-    assert "wire" not in lines and "breakers" not in lines
+    assert "wire" not in lines and "breakers_afci" not in lines
     assert lines["wire_220"] == 48875 and lines["breakers_2pole"] == 14000
-    assert v220["totals"]["total_cents"] == 197975 > std["totals"]["total_cents"]
+    assert v220["totals"]["total_cents"] == 202775 > std["totals"]["total_cents"]      # 2026-11-20: + fixture boxes
 
 
 def test_three_phase_costs_more_labor_and_uses_3pole(db):  # C-V02
     std, ph3 = _price(db, BASE), _price(db, {**BASE, "voltage": "220_3ph"})
     lines = _lines(ph3)
-    assert lines["device_labor"] == 129375            # 11.5 hr x 1.25 x $90
+    assert lines["device_labor"] + lines["fixture_labor"] == 129375   # 11.5 hr x 1.25 x $90
+    assert lines["device_labor"] == 78750 and lines["fixture_labor"] == 50625
     assert lines["device_labor"] > _lines(std)["device_labor"]
     assert lines["wire_3ph"] == 69000 and lines["breakers_3pole"] == 21000
-    assert "wire" not in lines and "breakers" not in lines
-    assert ph3["totals"]["total_cents"] == 250975
+    assert "wire" not in lines and "breakers_afci" not in lines
+    assert ph3["totals"]["total_cents"] == 255775
 
 
 def test_15a_and_30a_circuits_price_differently(db):  # C-A01
     a15 = _price(db, {"circuits_15a": 1, "avg_run_ft": 30})
     a30 = _price(db, {"appliance_circuits": 1, "avg_run_ft": 30})
     l15, l30 = _lines(a15), _lines(a30)
-    assert l15["wire_15a"] == 1898 and l15["breakers"] == 3500      # 12/2 + single-pole
+    assert l15["wire_15a"] == 1898 and l15["breakers_afci"] == 4500  # 12/2 + single-pole AFCI
     assert l30["heavy_wire"] == 8625 and l30["breakers_2pole"] == 7000
     assert "wire_15a" not in l30 and "heavy_wire" not in l15
     assert l15["circuit_labor"] == l30["circuit_labor"] == 27000   # same 3 hr each
@@ -76,7 +80,7 @@ def test_old_appliance_circuits_answers_still_price_as_30a(db):  # C-A02
                     "appliance_circuits": 1, "avg_run_ft": 40})
     lines = _lines(e)
     assert lines["heavy_wire"] == 11500 and lines["breakers_2pole"] == 7000
-    assert e["totals"]["total_cents"] == 168120
+    assert e["totals"]["total_cents"] == 169720         # was 168120: + $10 AFCI breaker + 4 small-parts sets
 
 
 def test_metal_boxes_cost_more_than_plastic(db):  # C-B01
@@ -91,7 +95,7 @@ def test_underground_run_adds_its_own_line(db):  # C-U01
     assert "underground_wire" not in _lines(_price(db, {"outlets": 2}))
     e = _price(db, {"outlets": 2, "underground_ft": 100})
     assert _lines(e)["underground_wire"] == 47250              # 100 ft x 1.05 x $4.50
-    assert e["totals"]["total_cents"] == 84313
+    assert e["totals"]["total_cents"] == 85613           # was 84313: + $10 AFCI breaker + 2 small-parts sets
 
 
 def test_subpanel_100a_vs_200a(db):  # C-S01

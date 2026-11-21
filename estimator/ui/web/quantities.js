@@ -53,7 +53,7 @@ async function renderQuantities(main, estimateId) {
   const qs = new URLSearchParams();
   if (height) qs.set("height", height);
   if (proposed) qs.set("proposed", "1");
-  const head = [el("p", {}, el("a", { href: "#/takeoffs/" + estimateId }, "← 📏 Blueprint Review"), " · ",
+  const head = [el("p", {}, el("a", { href: "#/takeoffs/" + estimateId }, "← 📏 Measure"), " · ",
       el("a", { href: "#/projects/" + estimateId }, "Project page"), " · ", el("a", { href: "#/estimates/" + estimateId }, "🧮 Estimate")),
     el("div", { class: "page-head" }, el("h2", {}, "📐 Plan quantities"), helpLink("takeoffs"))];
   let r;

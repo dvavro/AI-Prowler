@@ -61,11 +61,30 @@ MODULE_ID = "electrical"            # this trade's module id (the manifest, the 
 # The Electrical manifest's count questions, in manifest order:
 # (question id, the manifest's label, the short plural used in labels and the summary).
 COUNT_QUESTIONS = (
-    ("outlets", "Outlets", "outlets"),
-    ("switches", "Switches", "switches"),
+    ("outlets", "Outlets (standard duplex)", "outlets"),
+    ("usb_outlets", "USB outlets", "USB outlets"),
+    ("quad_outlets", "Quad outlets (4-plex)", "quad outlets"),
+    ("floor_boxes", "Floor boxes", "floor boxes"),
+    ("wp_outlets", "Weatherproof outdoor outlets (GFCI, in-use cover)", "weatherproof outlets"),
+    ("switches", "Single-pole switches", "single-pole switches"),
+    ("switches_3way", "3-way switches", "3-way switches"),
+    ("switches_4way", "4-way switches", "4-way switches"),
+    ("dimmers", "Dimmer switches", "dimmer switches"),
+    ("occupancy_switches", "Occupancy sensor switches", "occupancy sensor switches"),
     ("gfci", "GFCI outlets", "GFCI outlets"),
-    ("lights", "Light fixtures or recessed lights", "lights"),
+    # 2026-11-20 (David): each light type is its own count - a different fixture to order for the BOM.
+    ("lights", "Ceiling lights (surface fixtures)", "ceiling lights"),
+    ("recessed_lights", "Recessed lights (cans)", "recessed lights"),
+    ("wall_lights", "Wall lights (sconces)", "wall lights"),
+    ("pendant_lights", "Pendant lights", "pendant lights"),
+    ("undercabinet_lights", "Under-cabinet lights", "under-cabinet lights"),
+    ("exterior_lights", "Exterior lights (floods, porch lights)", "exterior lights"),
+    ("exit_emergency_lights", "Exit signs and emergency lights", "exit and emergency lights"),
     ("fans", "Ceiling fans", "ceiling fans"),
+    ("exhaust_fans", "Bath exhaust fans", "exhaust fans"),
+    # 2026-11-20 (David): smoke detectors and the main panel on the plan are counted too.
+    ("smoke_detectors", "Smoke detectors (hardwired)", "smoke detectors"),
+    ("main_panels", "Main panels (new service)", "main panels"),
     ("appliance_circuits", "Dedicated 30 Amp circuits (range, dryer, AC, EV charger)",
      "dedicated 30A circuits"),
     ("circuits_15a", "Dedicated 15 Amp circuits (microwave, disposal, fridge)",
@@ -73,6 +92,11 @@ COUNT_QUESTIONS = (
     ("low_voltage", "Data or TV drops", "data/TV drops"),
 )
 COUNT_IDS = tuple(q[0] for q in COUNT_QUESTIONS)
+# Counts added after the first eight: an answer without one (a saved reading, an older prompt) counts it as 0.
+LATER_COUNTS = ("exhaust_fans", "switches_3way", "switches_4way", "dimmers", "occupancy_switches",
+                "usb_outlets", "quad_outlets", "floor_boxes", "wp_outlets",
+                "recessed_lights", "wall_lights", "pendant_lights", "undercabinet_lights", "exterior_lights",
+                "exit_emergency_lights", "smoke_detectors", "main_panels")
 LABELS = {q[0]: q[1] for q in COUNT_QUESTIONS}
 PLURALS = {q[0]: q[2] for q in COUNT_QUESTIONS}
 
@@ -115,6 +139,8 @@ def parse_electrical_reading(text: str, sheet_id: int) -> dict:
     obj = lt._parse_json_object(text)
     counts = {}
     for feeds in COUNT_IDS:
+        if feeds not in obj and feeds in LATER_COUNTS:
+            obj[feeds] = 0          # an answer from before the count was asked for (2026-11-19: exhaust fans)
         if feeds not in obj:
             raise lt.LlmTakeoffError(f"the AI's answer is missing the {feeds} count")
         v = obj[feeds]
@@ -166,19 +192,53 @@ def read_prompt(sheet: dict) -> str:
     return (
         f"This is {lt._sheet_label(sheet)} of a plan set. Count the electrical devices shown on it."
         " Count each symbol once, from the drawing itself (use the legend when one is printed):"
-        " outlets are standard duplex wall receptacles; switches are light switches (single, 3-way, 4-way,"
-        " dimmer); gfci are GFCI or GFI-protected outlets; lights are light fixtures, recessed cans, pendants"
-        " and wall lights; fans are ceiling fans; circuits_15a are dedicated 15 Amp circuits (microwave,"
-        " disposal, fridge); appliance_circuits are dedicated 30 Amp / 240 V circuits (range, dryer, AC,"
-        " EV charger, 240 V receptacles); low_voltage are data, TV/CATV and phone drops."
+        " outlets are standard duplex wall receptacles only - count usb_outlets (USB receptacles), quad_outlets"
+        " (4-plex), floor_boxes and wp_outlets (weatherproof exterior receptacles) on their own, never in outlets;"
+        " switches are single-pole light switches only - count"
+        " each other kind of switch on its own (switches_3way, switches_4way, dimmers, occupancy_switches),"
+        " never in switches, because each kind is a different part to order; gfci are GFCI or GFI-protected"
+        " outlets; lights are ceiling-mounted surface light fixtures only - count each other kind of light on its"
+        " own, never in lights and never bundled together, because each kind is a different fixture to order:"
+        " recessed_lights (recessed cans, downlights), wall_lights (wall-mounted lights and sconces, inside),"
+        " pendant_lights, undercabinet_lights, exterior_lights (floods, porch and other outside lights, including"
+        " wall lights on an outside wall) and exit_emergency_lights (exit signs and emergency lights);"
+        " use the legend to tell the light types apart; fans are ceiling fans;"
+        " exhaust_fans are bath (or laundry) exhaust fans;"
+        " smoke_detectors are smoke (and combination smoke/CO) detectors;"
+        " main_panels are the main electrical panels drawn on the plan (the service panel, e.g. 200A MAIN PANEL) -"
+        " not the panel schedule, and not a subpanel;"
+        " circuits_15a are dedicated 15 Amp circuits (microwave, disposal, fridge); appliance_circuits are"
+        " dedicated 30 Amp / 240 V circuits (range, dryer, AC, EV charger, 240 V receptacles);"
+        " low_voltage are data, TV/CATV and phone drops."
         " Do not double-count: a GFCI outlet counts as gfci, not outlets; a 240 V receptacle counts as"
-        " appliance_circuits, not outlets."
+        " appliance_circuits, not outlets; a wall light on an outside wall (outside the building's walls, e.g. by an"
+        " entry door) counts only as exterior_lights, never also in wall_lights - wall_lights + exterior_lights must"
+        " not be more than the wall-light symbols on the plan."
+        " Tell the symbols apart by their shape: a ceiling fan is a circle with an X (or blades) - count"
+        " it as fans, not lights; an exhaust fan (marked EF or EXH, usually in a bath or laundry) counts as"
+        " exhaust_fans, not fans; a diamond inside a circle is a smoke detector - count it as smoke_detectors,"
+        " not a light; a data or TV drop is a triangle - a half-circle is a door swing, not a drop; a GFCI is"
+        " a circle inside a square - count it as gfci, not outlets; an exterior double-circle receptacle is"
+        " a weatherproof (WP) receptacle - count it as wp_outlets, not gfci or appliance_circuits."
+        " The legend shows one of each symbol: use it to tell the symbols apart, but do not count the legend"
+        " row itself - it sits apart from the floor plans, usually at the bottom of the sheet."
         " Reply with ONLY this JSON: {\"electrical_sheet_id\": " + str(sheet["id"])
-        + ", \"outlets\": 12, \"switches\": 4, \"gfci\": 2, \"lights\": 6, \"fans\": 1,"
-          " \"circuits_15a\": 1, \"appliance_circuits\": 1, \"low_voltage\": 3, \"confidence\": 0.9,"
+        + ", \"outlets\": 12, \"switches\": 4, \"gfci\": 2, \"lights\": 6, \"fans\": 1, \"exhaust_fans\": 2,"
+          " \"circuits_15a\": 1, \"appliance_circuits\": 1, \"low_voltage\": 3, \"switches_3way\": 2,"
+          " \"switches_4way\": 0, \"dimmers\": 1, \"occupancy_switches\": 0, \"usb_outlets\": 0,"
+          " \"quad_outlets\": 0, \"floor_boxes\": 0, \"wp_outlets\": 2, \"recessed_lights\": 4, \"wall_lights\": 2,"
+          " \"pendant_lights\": 0, \"undercabinet_lights\": 0, \"exterior_lights\": 2, \"exit_emergency_lights\": 0,"
+          " \"smoke_detectors\": 3, \"main_panels\": 1,"
+          " \"confidence\": 0.9,"
           " \"notes\": \"one line\", \"evidence\": {\"outlets\": \"what was counted, which symbols and areas\","
-          " \"switches\": \"...\", \"gfci\": \"...\", \"lights\": \"...\", \"fans\": \"...\","
-          " \"circuits_15a\": \"...\", \"appliance_circuits\": \"...\", \"low_voltage\": \"...\"}}."
+          " \"switches\": \"...\", \"gfci\": \"...\", \"lights\": \"...\", \"fans\": \"...\", \"exhaust_fans\": \"...\","
+          " \"circuits_15a\": \"...\", \"appliance_circuits\": \"...\", \"low_voltage\": \"...\","
+          " \"switches_3way\": \"...\", \"switches_4way\": \"...\", \"dimmers\": \"...\","
+          " \"occupancy_switches\": \"...\", \"usb_outlets\": \"...\", \"quad_outlets\": \"...\","
+          " \"floor_boxes\": \"...\", \"wp_outlets\": \"...\", \"recessed_lights\": \"...\", \"wall_lights\": \"...\","
+          " \"pendant_lights\": \"...\", \"undercabinet_lights\": \"...\", \"exterior_lights\": \"...\","
+          " \"exit_emergency_lights\": \"...\", \"smoke_detectors\": \"...\", \"main_panels\": \"...\"}}."
+        " Keep each evidence line short (one sentence)."
         " Rules: every count is a whole number - answer 0 when there are none, never null, never a guess."
         " evidence says what was counted for each number, so a person can check it; confidence is 0-1,"
         " how sure you are about the counts.")
@@ -223,9 +283,10 @@ def create_measurements(conn, ctx: RequestContext, run: dict, reading: dict, qua
     made = []
     now = lt._now()
     with service.transaction(conn):
+        kept = lt.replace_earlier_proposals(conn, ctx, run, MODULE_ID, sheet_id)   # a rerun replaces, never adds
         for feeds in COUNT_IDS:
             qty = quantities["counts"][feeds]
-            if qty <= 0:
+            if qty <= 0 or feeds in kept:        # kept: already approved, and the run keeps approved items
                 continue
             how = reading["evidence"].get(feeds) or f"{qty} counted on the electrical plan"
             calc = {"source": "llm", "auto_run_id": run["id"], "candidate_id": lt.CANDIDATE_ID,
@@ -264,11 +325,11 @@ def run_llm_electrical(conn, ctx: RequestContext, run: dict, on_step=None) -> di
 
     cfg = roles.get_role(conn, ctx.company_id, lt.ROLE)
     if cfg["provider"] not in providers.API_PROVIDERS:
-        raise lt.LlmTakeoffError("LLM takeoff is off - turn it on in \U0001f916 AI agents (Setup) to let the AI"
+        raise lt.LlmTakeoffError("AI measuring is off - turn it on in \U0001f916 AI agents (Setup) to let the AI"
                                  " count the devices on the plan")
     ok_budget, why = roles.budget_left(conn, ctx.company_id)
     if not ok_budget:
-        raise lt.LlmTakeoffError(f"LLM takeoff can't run: {why}")
+        raise lt.LlmTakeoffError(f"AI measuring can't run: {why}")
     sheet = conn.execute("SELECT * FROM sheets WHERE id = ? AND company_id = ?",
                          (int(run["sheet_id"]), ctx.company_id)).fetchone()
     if sheet is None:
@@ -297,7 +358,7 @@ def run_llm_electrical(conn, ctx: RequestContext, run: dict, on_step=None) -> di
     else:
         shown = ranked[:lt.CLASSIFY_MAX_SHEETS]
         preps = [lt._prepare_image(conn, person_ctx, s["id"],
-                                   "LLM takeoff: find the electrical sheet", cfg["provider"]) for s in shown]
+                                   "AI measuring: find the electrical sheet", cfg["provider"]) for s in shown]
         images = [lt._image_payload(Path(p["file_path"]), lt.CLASSIFY_MAX_PX) for p in preps]
         refs = [lt._image_ref(p, lt.CLASSIFY_MAX_PX) for p in preps]
         listed = "\n".join(f"{i + 1}. {lt._sheet_label(s)}" for i, s in enumerate(shown))
@@ -307,7 +368,7 @@ def run_llm_electrical(conn, ctx: RequestContext, run: dict, on_step=None) -> di
                                         " Reply with ONLY this JSON: {\"electrical_sheet_id\": <the"
                                         " sheet's id, or null if none of these sheets shows an electrical drawing>,"
                                         " \"notes\": \"one line saying why\"}. If you cannot tell, return null - never guess.",
-                                      images, purpose="LLM takeoff: find the electrical sheet",
+                                      images, purpose="AI measuring: find the electrical sheet",
                                       images_refs=refs, step="classify")
         try:
             found_id, notes = parse_electrical_classification(text, [s["id"] for s in shown])
@@ -324,12 +385,12 @@ def run_llm_electrical(conn, ctx: RequestContext, run: dict, on_step=None) -> di
 
     step("reading the plan with the AI")
     prep = lt._prepare_image(conn, person_ctx, electrical["id"],
-                             "LLM takeoff: read the electrical plan", cfg["provider"])
+                             "AI measuring: read the electrical plan", cfg["provider"])
     path = Path(prep["file_path"])
     text, provider, model, log_id = lt._call(
         conn, ctx, cfg, run, ELECTRICAL_READ_SYSTEM, read_prompt(electrical),
         [lt._image_payload(path)],
-        purpose="LLM takeoff: read the electrical plan", images_refs=[lt._image_ref(prep)])
+        purpose="AI measuring: read the electrical plan", images_refs=[lt._image_ref(prep)])
     try:
         reading = parse_electrical_reading(text, electrical["id"])
     except lt.LlmTakeoffError as exc:
@@ -389,4 +450,5 @@ def electrical_results(conn, ctx, row: dict) -> dict | None:
     return {"lines": lines,
             "electrical": {"counts": out_counts, "sheet_id": sheet_id,
                            "confidence": (cand or {}).get("confidence"),
-                           "notes": (cand or {}).get("notes") or ""}}
+                           "notes": (cand or {}).get("notes") or "",
+                           "wiring": (cand or {}).get("wiring")}}     # the Wiring stage, when AI Auto Run routed it

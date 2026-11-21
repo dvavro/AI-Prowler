@@ -164,7 +164,7 @@ def test_one_dimension_alone_is_used_but_marked_unchecked(db, fake, sheet):     
 
 def test_ai_off_and_no_drawn_dimensions_needs_a_person_without_calling(db, fake, sheet):         # AC-06
     got = ac.auto_calibrate(db, CTX, sheet["vp"])
-    assert got["status"] == "manual_required" and "AI takeoff is off" in got["reason"]
+    assert got["status"] == "manual_required" and "AI measuring is off" in got["reason"]
     assert fake.calls == []
 
 

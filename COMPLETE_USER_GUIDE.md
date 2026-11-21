@@ -34,7 +34,7 @@
 26. Remote PWA App
 27. Service Desk (tickets)
 28. AI Agents — Service Desk, Booking & scheduling, Jobs (with Route flow) and HR
-29. Estimator — Estimates, Takeoffs and Bids
+29. Estimator — Estimates, Measuring and Bids
 
 ---
 
@@ -3387,7 +3387,7 @@ By voice: *"Run the AI-Prowler agent"*, *"What is the agent waiting on?"*, *"App
 
 ---
 
-## 29. Estimator — Estimates, Takeoffs and Bids
+## 29. Estimator — Estimates, Measuring and Bids
 
 ### What it is
 
@@ -3408,7 +3408,7 @@ The tab is the Estimator's control panel. From top to bottom:
 
 - **🧭 Estimator setup** — on/off, what is installed, the setup checklist, and the practice project.
 - **🏢 Company and pricing** — name, phone, license, sales tax, overhead, profit, minimum charge.
-- **🏗 Trades** — which construction trades the Estimator runs takeoffs for.
+- **🏗 Trades** — which construction trades the Estimator measures.
 - **🤖 AI agents and budget** — which AI runs each agent, its backup, and the daily and monthly budget.
 - **🧑‍💼 Director** — review limit, quick-send limit, follow-ups, the daily briefing, and the watcher.
 - **📦 Modules** — every installed trade and service, its version, and how it is priced.
@@ -3452,13 +3452,13 @@ Most day-to-day work is just asking. For example:
 
 Ask "how do I use the Estimator?" and your AI will read the Estimator's own instructions and walk you through it.
 
-### Plans and takeoffs
+### Plans and measuring
 
-Give the Estimator a plan set — PDF pages, a DXF drawing, or a DWG (with the converter below) — and set the scale once. It then measures lengths, areas and counts sheet by sheet. Symbols (doors, windows, fixtures, devices) can be counted with AI help: the AI proposes, you confirm, and crops are only sent if you have that turned on. **Blueprint Review** checks the finished takeoff before it is priced. When revised plans arrive, the Estimator re-measures the changed sheets instead of starting over. Quantities from the takeoff flow straight into the estimate, so the bid and the drawings always agree.
+Give the Estimator a plan set — PDF pages, a DXF drawing, or a DWG (with the converter below) — and set the scale once. It then measures lengths, areas and counts sheet by sheet. Symbols (doors, windows, fixtures, devices) can be counted with AI help: the AI proposes, you confirm, and crops are only sent if you have that turned on. **Measure from plans (takeoff)** checks the finished measurements before they are priced. When revised plans arrive, the Estimator re-measures the changed sheets instead of starting over. Quantities from the measurements flow straight into the estimate, so the bid and the drawings always agree.
 
 ### The Runner
 
-For a guided pass over a plan set, start a **Runner**: it walks the set sheet by sheet, you confirm each measurement as it goes, and nothing is priced until the takeoff is reviewed. Reviews are a separate step from measuring — the person who approves can be different from the person who measured, and a **second check** by another person can sign off an approved version. The approver can't second-check their own approval.
+For a guided pass over a plan set, start a **Runner**: it walks the set sheet by sheet, you confirm each measurement as it goes, and nothing is priced until the measurements are reviewed. Reviews are a separate step from measuring — the person who approves can be different from the person who measured, and a **second check** by another person can sign off an approved version. The approver can't second-check their own approval.
 
 ### Quotes, approvals and sending
 
@@ -3476,7 +3476,7 @@ Sign-in uses your normal AI-Prowler accounts. What a person can do in the Estima
 | Person | In the Estimator they can… |
 | --- | --- |
 | Owner | Everything, including setup, prices, approvals and data moves |
-| Manager or staff, **with** the Estimating scope | Work as an **estimator**: create and change estimates, run takeoffs, review and approve |
+| Manager or staff, **with** the Estimating scope | Work as an **estimator**: create and change estimates, measure from plans, review and approve |
 | Manager or staff, without the scope | Work as **office**: see estimates and bids, approve measurements and symbol counts |
 | Field crew | Look only — job totals, never costs or margins, and no approving |
 

@@ -48,6 +48,43 @@ def handles(sub: str) -> bool:
             or sub.startswith("/runs/") or sub.startswith("/runner-tasks/"))
 
 
+def _auto_runs(conn, ctx, reg) -> list[dict]:
+    """The recent 🤖 AI Auto Runs, every trade (2026-11-21, David: "Why were there no measured runs?" - the Agents page
+    listed only the Director's runs): project, trade, status, the step it reached or why it failed, when, how long, what
+    it proposed, and what its AI calls cost (from the AI log)."""
+    from datetime import datetime
+    out = []
+    rows = conn.execute(
+        "SELECT a.id, a.estimate_id, a.module_id, a.status, a.step, a.error, a.sheet_id, a.measurement_ids_json,"
+        " a.created_at, a.updated_at, e.title FROM auto_runs a"
+        " JOIN estimates e ON e.id = a.estimate_id AND e.company_id = a.company_id"
+        " WHERE a.company_id = ? ORDER BY a.id DESC LIMIT ?", (ctx.company_id, RECENT_RUNS)).fetchall()
+    for r in rows:
+        r = dict(r)
+        try:
+            trade = reg.get(r["module_id"]).name
+        except Exception:  # noqa: BLE001 - a trade no longer installed still lists, by its id
+            trade = (r["module_id"] or "").replace("_", " ").title()
+        cost = conn.execute("SELECT COUNT(*), COALESCE(SUM(cost_micros), 0) FROM ai_log WHERE company_id = ?"
+                            " AND auto_run_id = ?", (ctx.company_id, r["id"])).fetchone()
+        try:
+            mids = json.loads(r["measurement_ids_json"] or "[]")
+        except ValueError:
+            mids = []
+        secs = None
+        if r["status"] in ("done", "failed"):
+            try:
+                secs = int((datetime.fromisoformat(r["updated_at"]) - datetime.fromisoformat(r["created_at"])).total_seconds())
+            except (TypeError, ValueError):
+                secs = None
+        out.append({"id": r["id"], "estimate_id": r["estimate_id"], "estimate_title": r["title"],
+                    "module_id": r["module_id"], "trade": trade, "status": r["status"], "step": r["step"],
+                    "error": r["error"], "sheet_id": r["sheet_id"], "proposed": len(mids),
+                    "ai_calls": cost[0], "cost_cents": round(cost[1] / 10000, 2),
+                    "seconds": secs, "created_at": r["created_at"], "updated_at": r["updated_at"]})
+    return out
+
+
 def _refuse(message: str, status: int = 400, error: str = "invalid_input"):
     from estimator.api.router import _Refuse
     return _Refuse(status, error, message)
@@ -209,6 +246,7 @@ def route(m: str, sub: str, req, ctx, conn):
             prog = round(sum(t["progress"] or 0 for t in tasks) / len(tasks)) if tasks else 0
             runs.append({**dict(r), "estimate_title": r["title"], "progress": prog, "tasks": tasks})
         return _ok(agents=cfg["agents"], enabled=cfg["enabled"], turned_off=cfg["turned_off"], runs=runs,
+                   auto_runs=_auto_runs(conn, ctx, get_registry()),           # 2026-11-21: 🤖 AI Auto Run, every trade
                    task_states=list(runner.TASK_STATES), can_configure=False,
                    settings_where="AI-Prowler's 🏗 Estimator tab → 🏗 Trades",
                    can_start=ctx.role in runner.START_ROLES)
@@ -238,12 +276,12 @@ def route(m: str, sub: str, req, ctx, conn):
         if not isinstance(trades, list) or not trades or not all(isinstance(t, str) and t.strip() for t in trades):
             raise _refuse('trades is a list of trades, e.g. ["framing", "drywall"]')
         if ctx.role not in runner.START_ROLES:
-            raise PermissionDenied(f"role '{ctx.role}' can't start a takeoff run", role=ctx.role)
+            raise PermissionDenied(f"role '{ctx.role}' can't start a measure run", role=ctx.role)
         if b.get("confirm") is not True:
             from estimator.estimating import service
             est = service.get_estimate(conn, ctx, eid)
             return _ok(needs_confirmation=True, estimate_id=eid, trades=trades,
-                       question=_question(f"Start a takeoff run on {est['title']} for {', '.join(trades)}"))
+                       question=_question(f"Start a measure run on {est['title']} for {', '.join(trades)}"))
         got = runner.start_run(conn, ctx, eid, trades)
         return _ok(**{k: v for k, v in got.items() if k != "ok"})
 
@@ -255,7 +293,7 @@ def route(m: str, sub: str, req, ctx, conn):
         b = _body(req)
         if b.get("confirm") is not True:
             return _ok(needs_confirmation=True, task_id=int(mm.group(1)),
-                       question=_question(f"Try takeoff task {mm.group(1)} again"))
+                       question=_question(f"Try measuring task {mm.group(1)} again"))
         got = runner.retry_task(conn, ctx, int(mm.group(1)))
         return _ok(**{k: v for k, v in got.items() if k != "ok"})
 

@@ -98,11 +98,17 @@ def parse_insulation_reading(text: str, sheet_id: int) -> dict:
     the evidence for each area, confidence 0-1 (or None), notes. Any defect rejects
     the whole answer. The insulation sheet is the one that was shown, whatever id
     the AI wrote down. No wall runs means the plan doesn't dimension the walls -
-    the evidence says so. The dimensions are only checked as text here;
-    quantities_from_reading parses them (and fails loudly when one isn't a length)."""
+    the evidence says so. A dimension that isn't a length rejects the whole answer
+    here, so the AI Log says which one was wrong."""
     obj = lt._parse_json_object(text)
     rooms = lq.parse_rooms(obj.get("rooms"), "rooms")
     wall_runs = parse_wall_runs(obj.get("wall_runs"))
+    for r in rooms:      # the dimensions must parse now - a bad one rejects the whole answer
+        lq.dimension_inches(r["width_ft"], f"room {r['name'] or '?'} width")
+        lq.dimension_inches(r["length_ft"], f"room {r['name'] or '?'} length")
+    for r in wall_runs:
+        lq.dimension_inches(r["length_ft"], f"wall run {r['name'] or '?'} length")
+        lq.dimension_inches(r["height_ft"], f"wall run {r['name'] or '?'} height")
     ev = lq.parse_evidence(obj, ALL_IDS)
     if not wall_runs and not ev["wall_sqft"]:
         ev["wall_sqft"] = "the plan doesn't dimension the walls"

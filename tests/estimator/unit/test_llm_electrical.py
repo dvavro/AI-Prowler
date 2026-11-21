@@ -117,9 +117,9 @@ def _parsed(sheet_id, **over):
 def test_parse_electrical_reading_full():
     got = le.parse_electrical_reading(_reading(4), 4)
     assert got == {"electrical_sheet_id": 4,
-                   "counts": {"outlets": 12, "switches": 4, "gfci": 2, "lights": 6, "fans": 1,
+                   "counts": {"outlets": 12, "switches": 4, "gfci": 2, "lights": 6, "fans": 1, "exhaust_fans": 0, "switches_3way": 0, "switches_4way": 0, "dimmers": 0, "occupancy_switches": 0, "usb_outlets": 0, "quad_outlets": 0, "floor_boxes": 0, "wp_outlets": 0, "recessed_lights": 0, "wall_lights": 0, "pendant_lights": 0, "undercabinet_lights": 0, "exterior_lights": 0, "exit_emergency_lights": 0, "smoke_detectors": 0, "main_panels": 0,
                               "circuits_15a": 1, "appliance_circuits": 1, "low_voltage": 0},
-                   "evidence": dict(EVIDENCE), "confidence": 0.9, "notes": "symbols clear on the plan"}
+                   "evidence": {**EVIDENCE, "exhaust_fans": "", "switches_3way": "", "switches_4way": "", "dimmers": "", "occupancy_switches": "", "usb_outlets": "", "quad_outlets": "", "floor_boxes": "", "wp_outlets": "", "recessed_lights": "", "wall_lights": "", "pendant_lights": "", "undercabinet_lights": "", "exterior_lights": "", "exit_emergency_lights": "", "smoke_detectors": "", "main_panels": ""}, "confidence": 0.9, "notes": "symbols clear on the plan"}
 
 
 def test_parse_electrical_reading_fenced_with_nulls():
@@ -136,6 +136,18 @@ def test_parse_electrical_reading_rejects_bad_answers():
         le.parse_electrical_reading('[1, 2]', 4)
     with pytest.raises(lt.LlmTakeoffError, match="couldn't be read"):
         le.parse_electrical_reading('{not json}', 4)
+
+
+def test_exhaust_fans_are_counted():                                                  # 2026-11-19
+    """Bath exhaust fans are an Electrical count now: the AI is asked for them, and its answer carries them (an older
+    answer with no exhaust_fans reads as 0 - see the test above)."""
+    got = le.parse_electrical_reading(_reading(4, exhaust_fans=4), 4)
+    assert got["counts"]["exhaust_fans"] == 4 and got["counts"]["fans"] == 1
+    assert le.quantities_from_reading(got)["total_devices"] == 31
+    prompt = _prompt()
+    assert "exhaust_fans are bath (or laundry) exhaust fans" in prompt and '"exhaust_fans": 2,' in prompt
+    with pytest.raises(lt.LlmTakeoffError):
+        le.parse_electrical_reading(_reading(4, exhaust_fans=-1), 4)
 
 
 @pytest.mark.parametrize("field,bad", [
@@ -169,6 +181,52 @@ def test_parse_electrical_classification():
         le.parse_electrical_classification("nope", [4])
 
 
+# ------------------------------------------------------------------ the reader prompt
+
+def _prompt():
+    return le.read_prompt({"id": 4, "sheet_no": "E-1", "page_no": 1, "title": "ELECTRICAL PLAN"})
+
+
+def test_read_prompt_tells_the_symbols_apart_by_shape():
+    """The first live run (estimate 9, house wiring DXF) read the symbols by
+    convention and misread them: fans and smoke detectors counted as lights,
+    door swings as data drops, weatherproof receptacles as 30A circuits. Each
+    rule below pins one of those misreads to the shape on the drawing."""
+    prompt = _prompt()
+    assert "a ceiling fan is a circle with an X (or blades) - count it as fans, not lights" in prompt
+    assert "a diamond inside a circle is a smoke detector - count it as smoke_detectors" in prompt
+    assert "a data or TV drop is a triangle - a half-circle is a door swing, not a drop" in prompt
+    assert "a GFCI is a circle inside a square - count it as gfci, not outlets" in prompt
+    assert ("an exterior double-circle receptacle is a weatherproof (WP) receptacle"
+            " - count it as wp_outlets, not gfci or appliance_circuits") in prompt
+    # the strict JSON contract is unchanged: the eight counts in the same skeleton
+    assert '"outlets": 12, "switches": 4, "gfci": 2, "lights": 6, "fans": 1,' in prompt
+
+
+def test_lights_are_counted_by_type():                                                    # 2026-11-20
+    """David: "for the lights we need to count separately each type of light needed for the BOM so ask AI Auto Run
+    not to bundle symbols"."""
+    prompt = _prompt()
+    assert "never bundled together" in prompt and "each kind is a different fixture to order" in prompt
+    for k in ("recessed_lights", "wall_lights", "pendant_lights", "undercabinet_lights", "exterior_lights",
+              "exit_emergency_lights"):
+        assert f'"{k}":' in prompt                                                     # asked for, in the JSON
+    got = _parsed(4, lights=15, recessed_lights=4, wall_lights=6, exterior_lights=2)
+    assert {k: got["counts"][k] for k in ("lights", "recessed_lights", "wall_lights", "pendant_lights",
+                                          "exterior_lights")} == {"lights": 15, "recessed_lights": 4, "wall_lights": 6,
+                                                                  "pendant_lights": 0, "exterior_lights": 2}
+    assert le.LABELS["recessed_lights"] == "Recessed lights (cans)" and le._label("lights") == "Ceiling lights"
+
+
+def test_read_prompt_excludes_the_legend():
+    """The legend shows one of each symbol - the live run counted the legend
+    row, adding one switch and one GFCI. The prompt says to use the legend to
+    tell the symbols apart, never to count it."""
+    prompt = _prompt()
+    assert "do not count the legend row itself" in prompt
+    assert "usually at the bottom of the sheet" in prompt
+
+
 # ------------------------------------------------------------------ the count measurements
 
 def test_create_measurements_proposes_one_per_nonzero_count(db, plans):
@@ -176,7 +234,7 @@ def test_create_measurements_proposes_one_per_nonzero_count(db, plans):
     run = autorun_api._load_run(db, CTX, rid)
     reading = _parsed(plans["s1"])
     quantities = le.quantities_from_reading(reading)
-    assert quantities == {"counts": {"outlets": 12, "switches": 4, "gfci": 2, "lights": 6, "fans": 1,
+    assert quantities == {"counts": {"outlets": 12, "switches": 4, "gfci": 2, "lights": 6, "fans": 1, "exhaust_fans": 0, "switches_3way": 0, "switches_4way": 0, "dimmers": 0, "occupancy_switches": 0, "usb_outlets": 0, "quad_outlets": 0, "floor_boxes": 0, "wp_outlets": 0, "recessed_lights": 0, "wall_lights": 0, "pendant_lights": 0, "undercabinet_lights": 0, "exterior_lights": 0, "exit_emergency_lights": 0, "smoke_detectors": 0, "main_panels": 0,
                                      "circuits_15a": 1, "appliance_circuits": 1, "low_voltage": 0},
                           "total_devices": 27}
     ids = le.create_measurements(db, CTX, run, reading, quantities, "claude_api", "claude-sonnet-5-5")
@@ -190,7 +248,7 @@ def test_create_measurements_proposes_one_per_nonzero_count(db, plans):
     assert (by_feeds["outlets"]["qty"], by_feeds["outlets"]["unit"]) == ("12", "ea")
     assert by_feeds["outlets"]["label"] == "Outlets (AI)"
     assert by_feeds["appliance_circuits"]["label"] == "Dedicated 30A circuits (AI)"
-    assert by_feeds["lights"]["label"] == "Lights (AI)"
+    assert by_feeds["lights"]["label"] == "Ceiling lights (AI)"                # 2026-11-20: lights by type
     for r in rows:
         assert r["kind"] == "count" and r["module_id"] == "electrical"
         assert r["proposed_by"] == "llm-takeoff" and r["method"] == "ai"
@@ -204,6 +262,51 @@ def test_create_measurements_proposes_one_per_nonzero_count(db, plans):
         assert calc["counts"]["outlets"] == 12 and calc["counts"]["low_voltage"] == 0
         assert calc["provider"] == "claude_api" and calc["model"] == "claude-sonnet-5-5"
         assert calc["notes"] == "symbols clear on the plan"
+
+
+def test_keep_approved_choice_from_the_request(db, plans):                                  # 2026-11-19
+    k = autorun_api._keep_approved
+    assert k({}) is True and k({"keep_approved": True}) is True and k(None) is True       # on unless said otherwise
+    assert k({"keep_approved": False}) is False and k({"keep_approved": "0"}) is False
+    rid = autorun_api.create_run(db, CTX, plans["est"], plans["s1"], plans["vp"], "electrical", [], keep_approved=False)
+    assert autorun_api._load_run(db, CTX, rid)["keep_approved"] == 0
+    assert autorun_api._load_run(db, CTX, _run(db, plans))["keep_approved"] == 1
+
+
+@pytest.mark.parametrize("keep", [True, False], ids=["keep-approved", "from-scratch"])
+def test_a_rerun_replaces_the_earlier_run(db, plans, keep):                                   # 2026-11-19
+    """David: To measure said 4 weatherproof outlets, everything else said 2 - two runs' proposals were both waiting.
+    A rerun on the same sheet replaces the earlier AI measurements of the trade there, never adds to them. With
+    "Keep approved items" (the default) what a person approved stays and isn't proposed again; without it the trade
+    starts over from scratch. A measurement a person typed always stays."""
+    from estimator.takeoff import measurements as ms
+    reading = _parsed(plans["s1"], wp_outlets=2)
+    quantities = le.quantities_from_reading(reading)
+    first = le.create_measurements(db, CTX, autorun_api._load_run(db, CTX, _run(db, plans)), reading, quantities,
+                                   "claude_api", "m")
+    outlets = next(i for i in first if db.execute("SELECT feeds FROM measurements WHERE id = ?", (i,)).fetchone()[0]
+                   == "outlets")
+    ms.confirm_measurements(db, CTX, [outlets], confirm=True)
+    typed = ms.manual(db, CTX, plans["est"], "electrical", feeds="dimmers", qty="3", unit="ea",
+                      confirm=True)["measurement"]["id"]                                 # a person's own count
+    rid2 = autorun_api.create_run(db, CTX, plans["est"], plans["s1"], plans["vp"], "electrical", [],
+                                  keep_approved=keep)
+    second = le.create_measurements(db, CTX, autorun_api._load_run(db, CTX, rid2), reading, quantities,
+                                    "claude_api", "m")
+    ai = {r["feeds"]: dict(r) for r in db.execute(
+        "SELECT id, feeds, qty, status FROM measurements WHERE proposed_by = 'llm-takeoff'")}
+    waiting = [r for r in ai.values() if r["status"] == "proposed"]
+    assert sorted(r["id"] for r in waiting) == sorted(second)                            # one new set, nothing doubled
+    assert ai["wp_outlets"]["qty"] == "2" and ai["wp_outlets"]["status"] == "proposed"
+    if keep:
+        assert ai["outlets"]["id"] == outlets and ai["outlets"]["status"] == "approved"  # kept ...
+        assert len(second) == len(first) - 1                                             # ... and not proposed again
+    else:
+        assert ai["outlets"]["status"] == "proposed" and len(second) == len(first)      # from scratch
+    assert db.execute("SELECT COUNT(*) FROM measurements WHERE id = ?", (typed,)).fetchone()[0] == 1
+    reasons = [json.loads(r[0])["reason"] for r in db.execute(
+        "SELECT after_json FROM estimate_events WHERE action = 'measurement_deleted'")]
+    assert reasons == [f"replaced by AI Auto Run #{rid2}"] * (len(first) - (1 if keep else 0))
 
 
 def test_create_measurements_all_zero_proposes_nothing(db, plans):
@@ -234,12 +337,12 @@ def test_run_llm_electrical_direct(db, fake, plans):
     assert out["quantities"]["total_devices"] == 27
     assert out["sheet_id"] == plans["s1"] and out["provider"] == "claude_api"
     assert out["candidate"] == {"id": "llm", "source": "llm",
-                                "counts": {"outlets": 12, "switches": 4, "gfci": 2, "lights": 6, "fans": 1,
+                                "counts": {"outlets": 12, "switches": 4, "gfci": 2, "lights": 6, "fans": 1, "exhaust_fans": 0, "switches_3way": 0, "switches_4way": 0, "dimmers": 0, "occupancy_switches": 0, "usb_outlets": 0, "quad_outlets": 0, "floor_boxes": 0, "wp_outlets": 0, "recessed_lights": 0, "wall_lights": 0, "pendant_lights": 0, "undercabinet_lights": 0, "exterior_lights": 0, "exit_emergency_lights": 0, "smoke_detectors": 0, "main_panels": 0,
                                            "circuits_15a": 1, "appliance_circuits": 1, "low_voltage": 0},
-                                "evidence": dict(EVIDENCE), "confidence": 0.9,
+                                "evidence": {**EVIDENCE, "exhaust_fans": "", "switches_3way": "", "switches_4way": "", "dimmers": "", "occupancy_switches": "", "usb_outlets": "", "quad_outlets": "", "floor_boxes": "", "wp_outlets": "", "recessed_lights": "", "wall_lights": "", "pendant_lights": "", "undercabinet_lights": "", "exterior_lights": "", "exit_emergency_lights": "", "smoke_detectors": "", "main_panels": ""}, "confidence": 0.9,
                                 "notes": "symbols clear on the plan", "sheet_id": plans["s1"],
                                 "provider": "claude_api", "model": "claude-sonnet-5-5"}
-    assert out["summary"] == ("counted 27 devices on sheet %d (12 outlets, 4 switches, 2 GFCI outlets, 6 lights,"
+    assert out["summary"] == ("counted 27 devices on sheet %d (12 outlets, 4 single-pole switches, 2 GFCI outlets, 6 ceiling lights,"
                               " 1 ceiling fans, 1 dedicated 30A circuits, 1 dedicated 15A circuits); measurements %s"
                               % (plans["s1"], out["measurement_ids"]))
     assert len(out["measurement_ids"]) == 7
@@ -249,6 +352,39 @@ def test_run_llm_electrical_direct(db, fake, plans):
     sent = db.execute("SELECT COUNT(*) FROM ai_send_log WHERE company_id = 'default'"
                       " AND kind = 'full_sheet'").fetchone()[0]
     assert sent == 1
+
+
+def test_run_llm_electrical_legend_excluded_counts(db, fake, plans):
+    """A fake-provider reply shaped like the first live run's answer (estimate 9,
+    house wiring DXF) - but with the legend row excluded, as the fixed prompt
+    asks: the counts the drawing actually holds, carried through the parse and
+    quantities path to proposed measurements."""
+    _on(db)
+    fake.replies["claude_api"] = [_reading(plans["s1"], outlets=41, switches=25, gfci=14,
+                                           lights=25, fans=5, circuits_15a=0,
+                                           appliance_circuits=4, low_voltage=5,
+                                           confidence=0.45, notes="legend row excluded",
+                                           evidence={
+                                               "outlets": "41 duplex receptacles on the floor plans",
+                                               "switches": "25 switches by the doors",
+                                               "gfci": "12 GFCI outlets + 2 weatherproof receptacles",
+                                               "lights": "25 ceiling, recessed and wall lights",
+                                               "fans": "5 ceiling fans (circle with an X)",
+                                               "circuits_15a": "no dedicated 15A circuits labeled",
+                                               "appliance_circuits": "range, dryer, water heater, AC",
+                                               "low_voltage": "5 triangle data/TV drops",
+                                           })]
+    rid = _run(db, plans)
+    out = le.run_llm_electrical(db, CTX, autorun_api._load_run(db, CTX, rid))
+    assert out["quantities"] == {"counts": {"outlets": 41, "switches": 25, "gfci": 14, "lights": 25,
+                                            "fans": 5, "exhaust_fans": 0, "switches_3way": 0, "switches_4way": 0, "dimmers": 0, "occupancy_switches": 0, "usb_outlets": 0, "quad_outlets": 0, "floor_boxes": 0, "wp_outlets": 0, "recessed_lights": 0, "wall_lights": 0, "pendant_lights": 0, "undercabinet_lights": 0, "exterior_lights": 0, "exit_emergency_lights": 0, "smoke_detectors": 0, "main_panels": 0, "circuits_15a": 0, "appliance_circuits": 4,
+                                            "low_voltage": 5},
+                                 "total_devices": 119}
+    assert len(out["measurement_ids"]) == 7   # circuits_15a is 0: no row for it
+    assert out["candidate"]["confidence"] == 0.45
+    assert out["candidate"]["notes"] == "legend row excluded"
+    # the prompt the fake provider was shown carries the legend rule
+    assert "do not count the legend row itself" in fake.calls[0]["user"]
 
 
 def test_run_llm_electrical_rules_settle_on_the_electrical_sheet(db, fake, plans, tmp_path):
@@ -304,7 +440,7 @@ def test_run_llm_electrical_off_makes_no_call(db, fake, plans):
     rid = _run(db, plans)
     with pytest.raises(lt.LlmTakeoffError) as exc:
         le.run_llm_electrical(db, CTX, autorun_api._load_run(db, CTX, rid))
-    assert "LLM takeoff is off" in str(exc.value) and "count the devices" in str(exc.value)
+    assert "AI measuring is off" in str(exc.value) and "count the devices" in str(exc.value)
     assert fake.calls == []
 
 
@@ -380,7 +516,7 @@ def test_electrical_results_shape(db, fake, plans):
                                    "how": EVIDENCE["outlets"]}
     counts = {c["feeds"]: c for c in got["electrical"]["counts"]}
     assert set(counts) == set(le.COUNT_IDS)           # all eight questions, zeros included
-    assert counts["outlets"] == {"feeds": "outlets", "label": "Outlets", "qty": 12,
+    assert counts["outlets"] == {"feeds": "outlets", "label": "Outlets (standard duplex)", "qty": 12,
                                  "evidence": EVIDENCE["outlets"]}
     assert counts["low_voltage"] == {"feeds": "low_voltage", "label": "Data or TV drops", "qty": 0,
                                      "evidence": EVIDENCE["low_voltage"]}   # zero: the candidate's evidence
@@ -392,7 +528,7 @@ def test_electrical_results_shape(db, fake, plans):
 def test_electrical_results_all_zero_counts(db, plans):
     rid = _run(db, plans)
     cand = {"id": "llm", "source": "llm", "counts": {f: 0 for f in le.COUNT_IDS},
-            "evidence": dict(EVIDENCE), "confidence": 0.8, "notes": "empty plan",
+            "evidence": {**EVIDENCE, "exhaust_fans": "", "switches_3way": "", "switches_4way": "", "dimmers": "", "occupancy_switches": "", "usb_outlets": "", "quad_outlets": "", "floor_boxes": "", "wp_outlets": "", "recessed_lights": "", "wall_lights": "", "pendant_lights": "", "undercabinet_lights": "", "exterior_lights": "", "exit_emergency_lights": "", "smoke_detectors": "", "main_panels": ""}, "confidence": 0.8, "notes": "empty plan",
             "sheet_id": plans["s1"]}
     row = _finish_run(db, rid, cand, [])
     got = le.electrical_results(db, CTX, row)

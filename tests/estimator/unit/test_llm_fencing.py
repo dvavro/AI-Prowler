@@ -328,7 +328,7 @@ def test_run_llm_fencing_off_makes_no_call(db, fake, plans):
     rid = _run(db, plans)
     with pytest.raises(lt.LlmTakeoffError) as exc:
         lf.run_llm_fencing(db, CTX, autorun_api._load_run(db, CTX, rid))
-    assert "LLM takeoff is off" in str(exc.value) and "read the Fencing plan" in str(exc.value)
+    assert "AI measuring is off" in str(exc.value) and "read the Fencing plan" in str(exc.value)
     assert fake.calls == []
 
 

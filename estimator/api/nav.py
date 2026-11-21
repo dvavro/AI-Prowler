@@ -34,7 +34,7 @@ SCREENS = (
                "plan_compare_revisions"]},
     # Office (the Jobs app's managers and staff) approve measurements and symbols too; field crews look at symbols
     # only (David, 2026-11-09).
-    {"id": "takeoffs", "label": "Takeoffs", "icon": "📏", "roles": ("owner", "estimator", "reviewer", "office"),
+    {"id": "takeoffs", "label": "Measure", "icon": "📏", "roles": ("owner", "estimator", "reviewer", "office"),
      "status": "ready", "sprint": 7,
      "tools": ["takeoff_propose", "takeoff_list", "takeoff_detail", "takeoff_confirm", "takeoff_edit",
                "takeoff_delete", "takeoff_manual", "takeoff_suggest_change", "plan_get_objects"]},
@@ -93,7 +93,7 @@ PAGES = (
      "tools": ["plan_get_viewports", "plan_get_sheet_image", "plan_set_scale"]},
     # Sprint 7: Blueprint Review for one project - tiled sheet viewer, overlays, tools, layers, measurement list,
     # detail panel, approve/correct.
-    {"id": "takeoff", "label": "Blueprint Review", "from": "takeoffs", "sprint": 7,
+    {"id": "takeoff", "label": "Measure from plans (takeoff)", "from": "takeoffs", "sprint": 7,
      "tools": ["takeoff_list", "takeoff_detail", "takeoff_manual", "takeoff_propose", "takeoff_confirm",
                "takeoff_edit", "takeoff_delete", "takeoff_suggest_change", "plan_get_objects",
                "plan_get_sheet_image", "plan_set_scale"]},

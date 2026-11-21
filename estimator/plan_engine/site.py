@@ -263,7 +263,7 @@ def find_zones(segments, notes_in: list[tuple[str, tuple, tuple]], *, k2: float,
                             "geometry": {"type": "polygon", "points": pts}, "source": source, "confidence": 0.6})
     if missed:
         notes.append(f"{label}: no closed area found for " + ", ".join(f"'{t.strip()}'" for t in missed[:6])
-                     + (" ..." if len(missed) > 6 else "") + " - draw it in Blueprint Review")
+                     + (" ..." if len(missed) > 6 else "") + " - draw it in Measure")
     return objects, notes
 
 
@@ -327,7 +327,7 @@ def find_fences(segments, notes_in, *, kf: float, viewport, source: str, near: f
                 seed = best[1]
                 break
         if seed is None:
-            notes.append(f"{label}: the fence line for '{text.strip()}' wasn't found - draw it in Blueprint Review")
+            notes.append(f"{label}: the fence line for '{text.strip()}' wasn't found - draw it in Measure")
             continue
         if any(seed in r for r in runs):
             continue                                    # a second note on a run already counted

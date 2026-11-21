@@ -7,9 +7,10 @@
  * - A tour is data: {id, title, steps: [{sel, title, body, go}]}. sel names a control
  *   that really exists on that screen; a step whose control isn't there (role-gated,
  *   empty list) is skipped. go navigates first (the practice tour walks across screens).
- * - First open of each screen auto-starts its tour unless the user finished or skipped
- *   it; progress is per user (GET/POST /help/tours/progress). Replay from the Help
- *   screen or the help panel. Skip saves skipped; closing with X saves nothing.
+ * - 2026-11-21, David: tours only start when asked — "🎓 Show me this screen" beside each
+ *   screen's Help button, the help panel, or the Help screen. The Director walks the user
+ *   through the work, so the tours stick to explaining each screen's controls and never
+ *   pop up on their own, and nothing is tracked (no done / skipped).
  * - The "?" on each screen (helpLink) opens the help panel: the guides for that screen,
  *   searchable, plus a Replay tour button. #/help stays the full-page route.
  */
@@ -29,13 +30,11 @@ const TOURS = [
     { sel: ".tiles", title: "Your numbers",
       body: "Click a number to see every estimate with that status." },
     { sel: "#nav a[data-screen=\"projects\"]", title: "The menu",
-      body: "Every screen is in the left menu. The tour for each one starts the first time you open it." },
+      body: "Every screen is in the left menu. On any screen, 🎓 Show me this screen walks you through its controls." },
   ]},
+  // 2026-11-21: starting a project and uploading its plans are the Director's job (it walks the user
+  // through them), so those steps came out; the tours explain the controls.
   { id: "projects", title: "Projects", steps: [
-    { sel: "#new-title", title: "Name the project",
-      body: "Type the job name — customer and address work well, e.g. Miller – 123 Main St." },
-    { sel: "#new-create", title: "Create project",
-      body: "Create project makes the estimate. Then upload its plans on the project page." },
     { sel: "#filter-status", title: "Find by status",
       body: "Filter the list to one status — draft, approved, sent, won or lost." },
     { sel: "#filter-text", title: "Find by name",
@@ -44,10 +43,8 @@ const TOURS = [
   { id: "project", title: "Project page", steps: [
     { sel: "#project-estimate", title: "Open the estimate",
       body: "🧮 Open the estimate shows every trade, line and total, and which measurements each line came from." },
-    { sel: "#project-review", title: "Blueprint Review",
-      body: "📏 Blueprint Review is where plans get measured and approved — only after the plans have been read." },
-    { sel: "#plan-upload", title: "Upload the plans",
-      body: "Pick a file - a PDF, a photo, or a DXF/DWG - and press Upload and read. One click: AI-Prowler adds it to the project, reads the sheets and counts what is on them." },
+    { sel: "#project-review", title: "Measure from plans (takeoff)",
+      body: "📏 Measure from plans (takeoff) is where plans get measured and approved — only after the plans have been read." },
     { sel: "#trades", title: "Trades priced so far",
       body: "Each trade's subtotal and biggest lines. Nothing shows here until a trade is priced." },
   ]},
@@ -55,9 +52,9 @@ const TOURS = [
     { sel: "#plan-sets", title: "Every plan set",
       body: "Each upload is a plan set, with its sheets, revision and whether it's been read." },
     { sel: "#nav a[data-screen=\"takeoffs\"]", title: "Next: measure them",
-      body: "Once a set is read, its measurements are checked in Blueprint Review (Takeoffs)." },
+      body: "Once a set is read, its measurements are checked in Measure from plans (takeoff)." },
     { sel: ".help-link", title: "Stuck?",
-      body: "The ? on any screen opens the guides for that screen, without leaving it." },
+      body: "❓ Help on any screen opens the guides for that screen, without leaving it. 🎓 Show me this screen, next to it, runs a walkthrough like this one." },
   ]},
   { id: "plan_set", title: "Plan set", steps: [
     { sel: "#plan-read", title: "Read the plans",
@@ -65,23 +62,23 @@ const TOURS = [
     { sel: "#plan-compare", title: "Compare a revision",
       body: "When a revised set arrives, compare it with the one it replaces — every change is drawn over the plan." },
     { sel: "#sheets", title: "Sheets",
-      body: "Click a sheet to see its viewports and scales, and to open it in Blueprint Review." },
+      body: "Click a sheet to see its viewports and scales, and to open it in Measure from plans (takeoff)." },
   ]},
   { id: "sheet", title: "Sheet", steps: [
     { sel: "#sheet-stage", title: "The sheet",
       body: "The plan itself, with each viewport outlined. Click a viewport to see what it holds." },
     { sel: "#viewports", title: "Views and scales",
       body: "Every view on this sheet and its scale. A view with no scale can't be measured until it's set." },
-    { sel: "#sheet-review", title: "Open in Blueprint Review",
+    { sel: "#sheet-review", title: "Open in Measure from plans (takeoff)",
       body: "Measure and approve from here — lengths, areas and counts, straight off the plan." },
   ]},
-  { id: "takeoffs", title: "Takeoffs", steps: [
+  { id: "takeoffs", title: "Measure", steps: [
     { sel: "#takeoff-projects", title: "Measurements by project",
       body: "Open a project to check the plans, measure, and approve what gets priced." },
     { sel: ".help-link", title: "How to measure",
       body: "The ? opens the measuring guide — lengths, areas, counts, and fixing a wrong number." },
   ]},
-  { id: "takeoff", title: "Blueprint Review", steps: [
+  { id: "takeoff", title: "Measure from plans (takeoff)", steps: [
     { sel: "#bp-viewer", title: "The plan, tiled",
       body: "Pan and zoom the sheet. Pick a tool (📏 Length, ⬠ Area…) and draw on the plan to measure." },
     { sel: "#bp-pane-list", title: "Measurements",
@@ -169,13 +166,16 @@ const TOURS = [
   ]},
   { id: "agents", title: "Agents", steps: [
     { sel: "#agents-settings-where", title: "Trade settings",
-      body: "Which trades you quote, and how sure each trade's takeoff agent must be, are set once in AI-Prowler's 🏗 Estimator tab → 🏗 Trades. This screen shows them." },
-    { sel: "#runs-list", title: "Takeoff runs",
+      body: "Which trades you quote, and how sure each trade's measuring agent must be, are set once in AI-Prowler's 🏗 Estimator tab → 🏗 Trades. This screen shows them." },
+    // 2026-11-21: the AI Auto Runs are listed here too, every trade.
+    { sel: "#auto-runs-head", title: "AI Auto Runs",
+      body: "Every 🤖 AI Auto Run from the Measure screen, for every trade: how it went, what it proposed, what its AI calls cost, and why it failed if it did." },
+    { sel: "#runs-list", title: "Director measure runs",
       body: "The Director starts one run per plan job. Open one to see each trade's task and what it's waiting on." },
   ]},
   { id: "reports", title: "Reports", steps: [
     { sel: "#report-tabs", title: "Five reports",
-      body: "Win / loss, the takeoff report, plan revisions, estimate vs actual, and exports." },
+      body: "Win / loss, the measurements report, plan revisions, estimate vs actual, and exports." },
     { sel: "#report-body", title: "Pick a project",
       body: "Most tabs start by picking a project — the numbers are for that project alone." },
   ]},
@@ -183,7 +183,7 @@ const TOURS = [
     { sel: "#rev-svg", title: "The overlay",
       body: "Green is added, red (dashed) is removed, orange is changed or moved — drawn over the new sheet." },
     { sel: "#rev-flagged", title: "Measure again",
-      body: "Measurements touching a change are flagged to re-measure. Click one to open it in Blueprint Review." },
+      body: "Measurements touching a change are flagged to re-measure. Click one to open it in Measure from plans (takeoff)." },
     { sel: "#rev-sheet", title: "Old or new",
       body: "Flip between the old sheet and the new one to see what moved." },
   ]},
@@ -236,7 +236,7 @@ const TOURS = [
       body: "Every measurement the plan engine found is listed here. Click a number to see it on the plan." },
     { sel: "#reviews-list", go: "#/reviews", title: "Fix a missed outlet",
       body: "In Reviews, check the symbols the legend gave. A missed outlet gets added here, a wrong one relabelled — counts only price once they're approved." },
-    { sel: "#bp-act-confirm", go: "#/takeoffs/{practice}", title: "Approve the takeoffs",
+    { sel: "#bp-act-confirm", go: "#/takeoffs/{practice}", title: "Approve the measurements",
       body: "Approve a measurement and it locks — that's what gets priced. Nothing is approved automatically." },
     { sel: "#estimate-calc", go: "#/estimates/{practice}", title: "Price it",
       body: "Recalculate works out every line from the approved measurements and your Price Book." },
@@ -253,10 +253,9 @@ const TOUR_IDS = TOURS.map(t => t.id);
 
 // ------------------------------------------------------------------ engine
 
-let tourCurrent = null;          // {def, step, practiceId, markOnFinish}
+let tourCurrent = null;          // {def, step, practiceId, shown}
 let tourPop = null;              // the pop-up element
-let tourProgress = null;         // {tour_id: status} once loaded
-let tourProgressReady = false;
+// 2026-11-21: tours only run when asked, so done / skipped isn't tracked (the server's tour-progress endpoint is unused).
 
 // Which tour belongs to the screen the user is on (app.js: state.screen/state.page).
 const TOUR_SCREEN = { quick: "quick", jobs: "jobs", dashboard: "dashboard", projects: "projects", plans: "plans", takeoffs: "takeoffs",
@@ -270,39 +269,26 @@ function tourIdForPage() {
   return TOUR_SCREEN[state.screen] || null;
 }
 
-async function tourLoadProgress() {
-  if (tourProgressReady) return tourProgress;
-  try {
-    const r = await api("GET", "/help/tours/progress");
-    tourProgress = r.tours || {};
-    tourAuto = r.auto !== false;          // 2026-11-12: the user can turn the automatic tours off
-  } catch (e) { tourProgress = {}; }
-  tourProgressReady = true;
-  return tourProgress;
-}
-
-async function tourSaveProgress(id, status) {
-  tourProgress = tourProgress || {};
-  tourProgress[id] = status;
-  try { await api("POST", "/help/tours/progress", { tour_id: id, status: status }); } catch (e) { /* progress is best-effort */ }
-}
-
 async function tourPractice() {
   try { return await api("GET", "/help/practice"); } catch (e) { return { estimate_id: null, title: null }; }
 }
 
-// Called by route() after each screen renders: start that screen's tour on first open.
-async function maybeStartTour() {
+// 2026-11-21: tours never start on their own any more (the Director guides the work).
+// "🎓 Show me this screen" (helpLink in app.js) calls this: the tour for the screen the user is on.
+function tourForThisScreen(fallback) {
   const id = tourIdForPage();
-  if (!id || !TOUR_BY_ID[id] || tourCurrent) return;
-  const prog = await tourLoadProgress();
-  if (!tourAuto) return;                      // turned off (Settings > Guided tours, or "Don't show tours")
-  if (prog[id]) return;                       // finished or skipped already
-  if (tourIdForPage() !== id) return;          // the user moved on while we fetched
+  if (id && TOUR_BY_ID[id]) return id;
+  return fallback && TOUR_BY_ID[fallback] ? fallback : null;
+}
+function showMeThisScreen(fallback) {
+  const id = tourForThisScreen(fallback);
+  if (!id) { toast("There's no walkthrough for this screen yet — ❓ Help has its guides."); return; }
+  if (typeof closeHelpPanel === "function") closeHelpPanel();
+  if (tourCurrent) tourClose();
   startTour(id);
 }
 
-// Start a tour (from maybeStartTour, the Help screen, or the help panel).
+// Start a tour (from Show me this screen, the Help screen, or the help panel).
 async function startTour(id) {
   const def = TOUR_BY_ID[id];
   if (!def || tourCurrent) return;
@@ -313,15 +299,15 @@ async function startTour(id) {
       tourCurrent = { def: { id: "practice", title: def.title, steps: [
         { title: "First, make the practice project",
           body: "Ask your AI for the sample project (\"make the practice project\"), or start it from Projects — the tour walks the practice project end to end once it exists." } ] },
-        step: 0, practiceId: null, markOnFinish: false };
+        step: 0, practiceId: null };
       tourShow(0);
       return;
     }
-    tourCurrent = { def: def, step: 0, practiceId: p.estimate_id, markOnFinish: true };
+    tourCurrent = { def: def, step: 0, practiceId: p.estimate_id };
     tourShow(0);
     return;
   }
-  tourCurrent = { def: def, step: 0, practiceId: null, markOnFinish: true };
+  tourCurrent = { def: def, step: 0, practiceId: null };
   tourShow(0);
 }
 
@@ -370,6 +356,7 @@ function tourShowStep(step) {
   const target = step.sel ? document.querySelector(step.sel) : null;
   if (step.sel && !target) { tourShow(cur.step + 1); return; }  // control not on this screen: skip
   if (target) target.scrollIntoView({ block: "center" });
+  cur.shown = true;                       // at least one step was really shown (tourFinish)
   tourMark(target);
   const pop = tourPopEl();
   $("tour-title").textContent = step.title;
@@ -383,31 +370,14 @@ function tourShowStep(step) {
 
 function tourNext() { if (tourCurrent) tourShow(tourCurrent.step + 1); }
 function tourBack() { if (tourCurrent && tourCurrent.step > 0) tourShow(tourCurrent.step - 1); }
-function tourSkip() {
-  if (!tourCurrent) return;
-  const id = tourCurrent.def.id;
-  const mark = tourCurrent.markOnFinish;
-  tourClose();
-  if (mark) tourSaveProgress(id, "skipped");
-}
+// 2026-11-21, David: tours only run when asked, so finishing one isn't tracked any more (and "Skip tour" went:
+// it was the same as ✕).
 function tourFinish() {
   if (!tourCurrent) return;
-  const id = tourCurrent.def.id;
-  const mark = tourCurrent.markOnFinish;
+  const shown = !!tourCurrent.shown;
   tourClose();
-  if (mark) tourSaveProgress(id, "completed");
-}
-// "Don't show tours": stop tours starting on their own for this user (they can still be replayed from Help, and turned
-// back on in Settings > Guided tours).
-let tourAuto = true;
-async function setToursAuto(enabled) {
-  tourAuto = !!enabled;
-  await api("POST", "/help/tours/auto", { enabled: !!enabled });
-}
-function tourStopAll() {
-  tourClose();
-  setToursAuto(false).then(() => toast("Tours won't start on their own any more. Replay one from Help, or turn them back on in Settings."),
-                            () => {});
+  // None of its controls were on this screen, so nothing showed - say so.
+  if (!shown) toast("That walkthrough's controls aren't on this screen. Open its screen and click 🎓 Show me this screen.");
 }
 function tourClose() {   // X: close without saving anything
   tourPopHide();
@@ -426,14 +396,10 @@ function tourPopEl() {
       el("span", { class: "muted small", id: "tour-count" }, ""),
       el("span", { class: "tour-btns" },
         el("button", { class: "button", type: "button", id: "tour-back" }, "← Back"),
-        el("button", { class: "primary", type: "button", id: "tour-next" }, "Next"),
-        el("button", { class: "link-btn", type: "button", id: "tour-skip" }, "Skip tour"),
-        el("button", { class: "link-btn", type: "button", id: "tour-stop-all" }, "Don't show tours"))));
+        el("button", { class: "primary", type: "button", id: "tour-next" }, "Next"))));
   document.body.append(tourPop);
-  $("tour-stop-all").addEventListener("click", tourStopAll);
   $("tour-back").addEventListener("click", tourBack);
   $("tour-next").addEventListener("click", tourNext);
-  $("tour-skip").addEventListener("click", tourSkip);
   $("tour-x").addEventListener("click", tourClose);
   window.addEventListener("resize", tourPlaceCurrent);
   document.addEventListener("scroll", tourPlaceCurrent, true);
@@ -478,9 +444,45 @@ function tourPlace(target) {
   pop.style.top = top + "px";
 }
 
-// Replay buttons (Help screen) and the "Replay tour" button in the help panel.
+// Replay buttons (Help screen).
+// 2026-11-21, David: Replay used to run the tour right there on the Help screen, where none of its controls are, so
+// every step was skipped and nothing showed. Now a screen's tour opens that screen first;
+// a page that needs a particular project/estimate/sheet says to open one and use 🎓 Show me this screen.
+const TOUR_HOME = {};            // tour id -> the menu screen it belongs to ("#/<screen>")
+for (const [screen, id] of Object.entries(TOUR_SCREEN)) TOUR_HOME[id] = screen;
+const TOUR_OPEN_FIRST = { project: "a project", plan_set: "a plan set", sheet: "a sheet", takeoff: "a project in Measure",
+  estimate: "an estimate", symbol_review: "a plan set's symbols in Reviews", quantities: "Plan quantities on a project",
+  revision: "a plan revision in Reports", job: "a job on the Jobs board", bid: "a quote in Bids" };
+
+function tourReplay(tourId) {
+  const def = TOUR_BY_ID[tourId];
+  if (!def) return;
+  if (tourCurrent) tourClose();
+  if (tourIdForPage() === tourId || (def.steps[0] && def.steps[0].go)) { startTour(tourId); return; }  // here already, or it navigates itself
+  const screen = TOUR_HOME[tourId];
+  if (!screen) {
+    toast("Open " + (TOUR_OPEN_FIRST[tourId] || "that page") + " first, then click 🎓 Show me this screen.");
+    return;
+  }
+  const go = "#/" + screen;
+  location.hash = go;
+  tourStartWhenReady(tourId, go, 0);
+}
+
+// After Replay opens a screen, wait (up to ~5 s) for it to render, then start its tour.
+function tourStartWhenReady(tourId, go, tries) {
+  if (location.hash.split("?")[0] !== go) return;                 // the user went elsewhere
+  const first = TOUR_BY_ID[tourId].steps.find(s => s.sel);
+  const ready = tourIdForPage() === tourId && (!first || document.querySelector(first.sel) || tries >= 25);
+  if (ready || tries >= 40) { startTour(tourId); return; }
+  setTimeout(() => tourStartWhenReady(tourId, go, tries + 1), 120);
+}
+
 function tourReplayBtn(tourId) {
-  return el("button", { class: "button", type: "button", onclick: () => startTour(tourId) }, "↻ Replay");
+  const page = !TOUR_HOME[tourId] && TOUR_OPEN_FIRST[tourId];
+  return el("button", { class: "button", type: "button", onclick: () => tourReplay(tourId),
+    title: page ? "Open " + TOUR_OPEN_FIRST[tourId] + " first, then click 🎓 Show me this screen" : "Opens the screen and runs its tour" },
+    "↻ Replay");
 }
 
 // ------------------------------------------------------------------ help panel
@@ -526,10 +528,11 @@ async function helpPanelFill(screenId) {
   $("help-panel-all").href = "#/help?screen=" + encodeURIComponent(screenId);
   const replay = $("help-panel-replay");
   replay.replaceChildren();
-  const tour = TOUR_BY_ID[screenId];
+  const tourId = tourForThisScreen(screenId);      // a page (project, estimate…) has its own tour
+  const tour = tourId ? TOUR_BY_ID[tourId] : null;
   if (tour) {
     replay.append(el("button", { class: "button", type: "button",
-      onclick: () => { closeHelpPanel(); startTour(screenId); } }, "↻ Replay the " + tour.title + " tour"));
+      onclick: () => { closeHelpPanel(); startTour(tourId); } }, "↻ Replay the " + tour.title + " tour"));
     if (screenId === "dashboard") {
       replay.append(el("button", { class: "button", type: "button",
         onclick: () => { closeHelpPanel(); startTour("practice"); } }, "▶ Practice project tour"));

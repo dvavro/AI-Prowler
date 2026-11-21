@@ -169,7 +169,7 @@ def test_record_and_read_round_trip(db, fake):
     img = {"ai_send_log_id": 7, "sheet_id": 3, "sheet_no": "S-1", "kind": "full_sheet",
            "file_path": "/data/x.png", "width_px": 400, "height_px": 300, "extra": "dropped"}
     eid = ai_log.record(db, CTX, provider="claude_api", model="claude-sonnet-5-5",
-                        role="llm_takeoff", purpose="LLM takeoff: read the slab dimensions",
+                        role="llm_takeoff", purpose="AI measuring: read the slab dimensions",
                         system_prompt="You read plans.", user_prompt="Read this slab.",
                         images=[img], auto_run_id=5, estimate_id=2,
                         response_text='{"slab_width_ft": "45\'-7\\""}',
@@ -177,7 +177,7 @@ def test_record_and_read_round_trip(db, fake):
                         duration_ms=1234)
     got = ai_log.get_entry(db, CTX, eid)["entry"]
     assert got["provider"] == "claude_api" and got["model"] == "claude-sonnet-5-5"
-    assert got["role"] == "llm_takeoff" and got["purpose"] == "LLM takeoff: read the slab dimensions"
+    assert got["role"] == "llm_takeoff" and got["purpose"] == "AI measuring: read the slab dimensions"
     assert got["auto_run_id"] == 5 and got["estimate_id"] == 2 and got["task_id"] is None
     assert got["system_prompt"] == "You read plans." and got["user_prompt"] == "Read this slab."
     assert got["response_text"] == '{"slab_width_ft": "45\'-7\\""}'
@@ -274,13 +274,13 @@ def test_llm_takeoff_read_call_is_logged(db, fake, plans):
     out = lt.run_llm_takeoff(db, CTX, autorun_api._load_run(db, CTX, rid))
     assert out["quantities"]["area_sqft"] == "2123.42"
     # 2026-11-15: the footer detail read and the AI's check of it are logged too (two more rows, after the read).
-    assert [r["purpose"] for r in _rows(db)][1:] == ["LLM takeoff: read the footer section",
-                                                     "LLM takeoff: check the footer reading against the plan"]
+    assert [r["purpose"] for r in _rows(db)][1:] == ["AI measuring: read the footer section",
+                                                     "AI measuring: check the footer reading against the plan"]
     rows = _plan_rows(db)
     assert len(rows) == 1                       # the sheet rules settle it: no classify call
     r = rows[0]
     assert r["provider"] == "claude_api" and r["model"] == "claude-sonnet-5-5"
-    assert r["role"] == "llm_takeoff" and r["purpose"] == "LLM takeoff: read the slab dimensions"
+    assert r["role"] == "llm_takeoff" and r["purpose"] == "AI measuring: read the slab dimensions"
     assert r["auto_run_id"] == rid and r["estimate_id"] == plans["est"] and r["task_id"] is None
     assert "Read the slab's overall dimensions" in r["user_prompt"]
     assert r["system_prompt"] and r["response_text"] == _reading(plans["s1"])
@@ -313,12 +313,12 @@ def test_llm_takeoff_classify_and_read_are_both_logged(db, fake, plans, tmp_path
     rows = _plan_rows(db)
     assert len(rows) == 2
     classify, read = rows
-    assert classify["purpose"] == "LLM takeoff: find the foundation sheet"
+    assert classify["purpose"] == "AI measuring: find the foundation sheet"
     assert json.loads(classify["parsed_json"]) == {"foundation_sheet_id": s3, "notes": "the slab is on S-2"}
     thumbs = json.loads(classify["images_json"])
     assert len(thumbs) == 3                                        # thumbnails of all three sheets
     assert all(t["sent_max_px"] == 768 for t in thumbs)            # sent downscaled, stored full-size
-    assert read["purpose"] == "LLM takeoff: read the slab dimensions"
+    assert read["purpose"] == "AI measuring: read the slab dimensions"
     assert json.loads(read["images_json"])[0]["sheet_no"] == "S-2"
     assert all(r["auto_run_id"] == rid and r["ok"] == 1 for r in rows)
     listed = [e for e in ai_log.list_entries(db, CTX, auto_run_id=rid)["entries"] if "footer" not in e["purpose"]]
@@ -376,7 +376,7 @@ def test_llm_takeoff_off_logs_nothing(db, fake, plans):
     """The NSB situation: LLM takeoff off means no call and no row - the empty
     log is itself the answer to 'did the AI run?'."""
     rid = _run(db, plans)
-    with pytest.raises(lt.LlmTakeoffError, match="LLM takeoff is off"):
+    with pytest.raises(lt.LlmTakeoffError, match="AI measuring is off"):
         lt.run_llm_takeoff(db, CTX, autorun_api._load_run(db, CTX, rid))
     assert fake.calls == [] and _rows(db) == []
 

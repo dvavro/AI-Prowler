@@ -89,7 +89,7 @@ def dismiss_tour(page):
     page.wait_for_timeout(400)
     pop = page.locator("#tour-pop:visible")
     if pop.count():
-        page.click("#tour-skip")
+        page.click("#tour-x")          # 2026-11-21: Skip tour is gone; tours no longer auto-start anyway
         page.wait_for_selector("#tour-pop", state="hidden")
 
 
@@ -183,7 +183,7 @@ def make_revs(db, tmp_path, title="Lopez remodel"):
     porch = m.propose(db, CTX, est, "roofing", o["PORCH"], kind="area", label="porch", confirm=True)["proposed"][0]["id"]
     typed = m.manual(db, CTX, est, "roofing", feeds="ridge_lf", qty="20", unit="lf", confirm=True)["measurement"]["id"]
     m.confirm_measurements(db, CTX, [keep, slab, porch], confirm=True)
-    b = store.upload(db, CTX, est, _pdf(tmp_path / "revB.pdf", 2, "B"), supersedes_plan_set_id=a,
+    b = store.upload(db, CTX, est, _pdf(tmp_path / "revB.pdf", 2, "B"), supersedes_plan_set_id=a, keep_old=True,
                      confirm=True)["plan_set_id"]
     store.save_results(db, CTX, b, PLAN("B"), "fake")
     db.commit()

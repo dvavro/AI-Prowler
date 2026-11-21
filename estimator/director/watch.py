@@ -37,7 +37,7 @@ from estimator.estimating import service
 log = logging.getLogger("estimator.watch")
 MAX_EMAIL_ATTEMPTS = 5
 WAITING_FOR = {"reviewer": "a reviewer", "approver": "an approval", "staff": "staff to make the quote",
-               "takeoff": "trade takeoffs"}
+               "takeoff": "trade measurements"}
 
 
 def _utc() -> str:

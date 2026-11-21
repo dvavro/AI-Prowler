@@ -9,10 +9,10 @@ name: Electrical
 version: 0.1.0
 category: construction
 path: both
-description: Outlets, switches, GFCIs, lights, ceiling fans, dedicated 15 and 30 Amp appliance and EV circuits, low-voltage drops, subpanels and panel upgrades, priced by labor hours per device with wire, boxes, breakers and permit. Voltage and phase, box material, underground runs and subpanel size change the price.
+description: Outlets, switches, GFCIs, lights, ceiling fans, bath exhaust fans, dedicated 15 and 30 Amp appliance and EV circuits, low-voltage drops, subpanels and panel upgrades, priced by labor hours per device with wire, boxes, breakers and permit. Voltage and phase, box material, underground runs and subpanel size change the price.
 minimum_charge: "200.00"
 keywords: [electrical, electrician, outlet, outlets, lights, install lights, wiring, light fixture, ceiling fan, recessed lights, can lights, panel upgrade, subpanel, ev charger, gfci, rewire, new circuit, dedicated circuit, 220v, 3-phase, underground wire]
-required_any: [outlets, switches, gfci, lights, fans, appliance_circuits, circuits_15a, low_voltage, underground_ft, panel]
+required_any: [outlets, usb_outlets, quad_outlets, floor_boxes, wp_outlets, switches, switches_3way, switches_4way, dimmers, occupancy_switches, gfci, lights, recessed_lights, wall_lights, pendant_lights, undercabinet_lights, exterior_lights, exit_emergency_lights, fans, exhaust_fans, smoke_detectors, main_panels, appliance_circuits, circuits_15a, range_receptacles, dryer_receptacles, low_voltage, underground_ft, panel]
 notes:
   - "Panel upgrades and new circuits need a permit and inspection; a service upgrade may need the utility to schedule a disconnect."
 
@@ -36,12 +36,51 @@ questions:
       - {value: "110", label: "110 V (standard residential)", factor: "1"}
       - {value: "220", label: "220 V (single-phase)", factor: "2"}
       - {value: "220_3ph", label: "220 V 3-phase (commercial)", factor: "3"}
-  - {id: outlets, label: "Outlets", type: integer, default: 0, min: 0, max: 1000}
-  - {id: switches, label: "Switches", type: integer, default: 0, min: 0, max: 1000}
+  # 2026-11-19 (David): outlets are counted by type too - each is a different part to order (the BOM lists them apart).
+  - {id: outlets, label: "Outlets (standard duplex)", type: integer, default: 0, min: 0, max: 1000}
+  - {id: usb_outlets, label: "USB outlets", type: integer, default: 0, min: 0, max: 200}
+  - {id: quad_outlets, label: "Quad outlets (4-plex)", type: integer, default: 0, min: 0, max: 200}
+  - {id: floor_boxes, label: "Floor boxes", type: integer, default: 0, min: 0, max: 100}
+  - {id: wp_outlets, label: "Weatherproof outdoor outlets (GFCI, in-use cover)", type: integer, default: 0, min: 0,
+     max: 100}
+  # 2026-11-19 (David): switches are counted by type - each is a different part to order (the BOM lists them apart).
+  # An older estimate's "switches" count reads as single-pole switches.
+  - {id: switches, label: "Single-pole switches", type: integer, default: 0, min: 0, max: 1000}
+  - {id: switches_3way, label: "3-way switches", type: integer, default: 0, min: 0, max: 500}
+  - {id: switches_4way, label: "4-way switches", type: integer, default: 0, min: 0, max: 200}
+  - {id: dimmers, label: "Dimmer switches", type: integer, default: 0, min: 0, max: 500}
+  - {id: occupancy_switches, label: "Occupancy sensor switches", type: integer, default: 0, min: 0, max: 200}
   - {id: gfci, label: "GFCI outlets", type: integer, default: 0, min: 0, max: 500}
-  - {id: lights, label: "Light fixtures or recessed lights", type: integer, default: 0, min: 0, max: 1000,
-     help: "Fixtures themselves are supplied by the customer."}
+  # 2026-11-20 (David): lights are counted by type - each is a different fixture to order (the BOM lists them apart).
+  # Fixtures are supplied by the customer unless you set prices; an older estimate's "lights" reads as ceiling lights.
+  - {id: lights, label: "Ceiling lights (surface fixtures)", type: integer, default: 0, min: 0, max: 1000}
+  - {id: recessed_lights, label: "Recessed lights (cans)", type: integer, default: 0, min: 0, max: 1000}
+  - {id: wall_lights, label: "Wall lights (sconces)", type: integer, default: 0, min: 0, max: 500}
+  - {id: pendant_lights, label: "Pendant lights", type: integer, default: 0, min: 0, max: 300}
+  - {id: undercabinet_lights, label: "Under-cabinet lights", type: integer, default: 0, min: 0, max: 300}
+  - {id: exterior_lights, label: "Exterior lights (floods, porch lights)", type: integer, default: 0, min: 0, max: 300}
+  - {id: exit_emergency_lights, label: "Exit signs and emergency lights", type: integer, default: 0, min: 0, max: 300}
   - {id: fans, label: "Ceiling fans", type: integer, default: 0, min: 0, max: 200}
+  # 2026-11-20 (David: "if the customer provides the light fixtures, to install them as well as fans takes labor"):
+  # who buys the fixtures and fan units. Either way the electrician hangs and wires them (its own labor line).
+  - id: fixtures
+    label: "Who supplies the light fixtures and ceiling fans?"
+    type: choice
+    default: owner
+    help: "The owner: the fixture lines show their counts as 'supplied by the owner' and only the labor to hang and wire them is charged. Us: the fixtures and fan units are priced and on the Bill of Materials."
+    # factor is a code used by the fixture line gates: 1 = the owner supplies them, 2 = we supply them.
+    choices:
+      - {value: owner, label: "The owner supplies them (we install)", factor: "1"}
+      - {value: us, label: "We supply and install them", factor: "2"}
+  # 2026-11-19 (David): bath exhaust fans are wired and set by the electrician; the fan unit is supplied by the customer
+  # and the duct to the outside isn't included.
+  - {id: exhaust_fans, label: "Bath exhaust fans", type: integer, default: 0, min: 0, max: 100,
+     help: "Wiring and installing the fan; the fan unit is supplied by the customer, the duct to the outside isn't included."}
+  # 2026-11-20 (David): the smoke detectors and the main panel on the plan are counted too.
+  - {id: smoke_detectors, label: "Smoke detectors (hardwired)", type: integer, default: 0, min: 0, max: 200,
+     help: "Hardwired and interconnected, with battery backup; each gets a box and goes on a lighting circuit."}
+  - {id: main_panels, label: "Main panels (new service)", type: integer, default: 0, min: 0, max: 10,
+     help: "A new main panel and service on a new build. For an existing house use Panel work (subpanel or upgrade) instead - an upgrade and a new main panel aren't priced together."}
   - id: box_material
     label: "Box material"
     type: choice
@@ -58,7 +97,39 @@ questions:
      max: 100}
   - {id: circuits_15a, label: "Dedicated 15 Amp circuits (microwave, disposal, fridge)", type: integer, default: 0, min: 0,
      max: 100}
+  # 2026-11-20 (David): the range and dryer plug into their own 240 V receptacles - a part to order.
+  - {id: range_receptacles, label: "Range receptacles (240 V, NEMA 14-50)", type: integer, default: 0, min: 0, max: 20}
+  - {id: dryer_receptacles, label: "Dryer receptacles (240 V, NEMA 14-30)", type: integer, default: 0, min: 0, max: 20}
+  # 2026-11-20 (David: "add any new symbols needed"): equipment the code wants a disconnect in sight of - the A/C
+  # condenser (NEC 440.14) and, unless its breaker locks off, the water heater (NEC 422.31).
+  - {id: disconnects, label: "Equipment disconnects (A/C, water heater)", type: integer, default: 0, min: 0, max: 50,
+     help: "A 60 A non-fused disconnect at each A/C condenser (NEC 440.14), and at the water heater unless its breaker can be locked off (NEC 422.31)."}
+  # 2026-11-20 (David): the real number of branch circuits (the panel schedule's C-1, C-2 ...) gives the breaker count;
+  # 0 estimates one circuit per 10 devices.
+  - {id: branch_circuits, label: "Branch circuits (from the panel schedule)", type: integer, default: 0, min: 0, max: 200,
+     help: "The 15 and 20 Amp circuits on the panel schedule (C-1, C-2 ...), not the 30 Amp ones. 0 = estimate one circuit per 10 devices."}
+  # 2026-11-20 (David): the 2020 NEC (210.12) wants AFCI protection on nearly every 15 and 20 Amp circuit in a home.
+  - id: breaker_type
+    label: "Branch breakers"
+    type: choice
+    default: afci
+    help: "AFCI breakers are required on most 15 and 20 Amp circuits in a home (NEC 210.12); dual-function adds GFCI protection too."
+    # factor is a code used by the breaker line gates: 1 = standard, 2 = AFCI, 3 = dual-function AFCI/GFCI.
+    choices:
+      - {value: standard, label: "Standard breakers", factor: "1"}
+      - {value: afci, label: "AFCI breakers (code for homes)", factor: "2"}
+      - {value: dual, label: "Dual-function AFCI/GFCI breakers", factor: "3"}
   - {id: low_voltage, label: "Data or TV drops", type: integer, default: 0, min: 0, max: 500}
+  # 2026-11-19 (David): cable measured by the wiring takeoff (Measure screen, Wiring run), one question per size.
+  # When any is filled in, these lines price the cable and the 'average run per device' lines step aside.
+  - {id: wire_14_2_ft, label: "Measured cable 14/2 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
+  - {id: wire_14_3_ft, label: "Measured cable 14/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
+  - {id: wire_12_2_ft, label: "Measured cable 12/2 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
+  - {id: wire_12_3_ft, label: "Measured cable 12/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
+  - {id: wire_10_2_ft, label: "Measured cable 10/2 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
+  - {id: wire_10_3_ft, label: "Measured cable 10/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
+  - {id: wire_8_3_ft, label: "Measured cable 8/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
+  - {id: wire_6_3_ft, label: "Measured cable 6/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
   - {id: avg_run_ft, label: "Average wire run per device", type: number, unit: ft, default: 25, min: 5, max: 200}
   - {id: underground_ft, label: "Underground run", type: number, unit: ft, default: 0, min: 0, max: 5000,
      help: "Feet of run buried underground (direct-burial cable in conduit), e.g. to a detached garage or shed."}
@@ -83,50 +154,155 @@ questions:
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 lines:
-  # hours per device: outlet 0.5, switch 0.5, GFCI 0.75, light 0.75, fan 1.5; 3-phase labor is 1.25x
-  - {id: device_labor, description: "Install devices and lights", kind: labor, unit: hr,
-     quantity: "(outlets * 0.5 + switches * 0.5 + gfci * 0.75 + lights * 0.75 + fans * 1.5) * work * (1.25 if voltage == 3 else 1)",
-     price_key: el_labor_hr, when: "outlets + switches + gfci + lights + fans > 0"}
+  # hours per device: outlet 0.5 (USB 0.5, quad 0.75, floor box 1.5, weatherproof 1.0), switch 0.5 (3-way, 4-way and occupancy 0.75, dimmer 0.5), GFCI 0.75, smoke detector 0.75; 3-phase labor is 1.25x
+  - {id: device_labor, description: "Install outlets, switches and devices", kind: labor, unit: hr,
+     quantity: "(outlets * 0.5 + usb_outlets * 0.5 + quad_outlets * 0.75 + floor_boxes * 1.5 + wp_outlets * 1.0 + switches * 0.5 + (switches_3way + switches_4way + occupancy_switches) * 0.75 + dimmers * 0.5 + gfci * 0.75 + smoke_detectors * 0.75 + disconnects * 1.0) * work * (1.25 if voltage == 3 else 1)",
+     price_key: el_labor_hr, when: "outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + smoke_detectors + disconnects > 0"}
+  # 2026-11-20 (David: "with the light fixtures it's usually necessary for the electrician to place and wire them to the
+  # boxes, that takes labor ... and if the customer provides them, to install them as well as fans"): its own line,
+  # whoever supplies the fixtures. Hours each: light 0.75 (pendant, exterior and exit/emergency 1.0), ceiling fan 1.5
+  # (assemble, hang, balance), bath exhaust fan 1.0.
+  - {id: fixture_labor, description: "Hang and wire light fixtures and fans", kind: labor, unit: hr,
+     quantity: "(lights * 0.75 + recessed_lights * 0.75 + wall_lights * 0.75 + pendant_lights * 1.0 + undercabinet_lights * 0.75 + exterior_lights * 1.0 + exit_emergency_lights * 1.0 + fans * 1.5 + exhaust_fans * 1.0) * work * (1.25 if voltage == 3 else 1)",
+     price_key: el_labor_hr, when: "lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + fans + exhaust_fans > 0"}
   - {id: circuit_labor, description: "Run dedicated circuits", kind: labor, unit: hr,
      quantity: "(appliance_circuits + circuits_15a) * 3 * work * (1.25 if voltage == 3 else 1)", price_key: el_labor_hr,
      when: "appliance_circuits + circuits_15a > 0"}
   - {id: outlets, description: "Outlets and plates", kind: material, unit: ea, quantity: "outlets",
      price_key: el_outlet_ea, when: "outlets > 0"}
-  - {id: switches, description: "Switches and plates", kind: material, unit: ea, quantity: "switches",
+  - {id: usb_outlets, description: "USB outlets and plates", kind: material, unit: ea, quantity: "usb_outlets",
+     price_key: el_usb_outlet_ea, when: "usb_outlets > 0"}
+  - {id: quad_outlets, description: "Quad outlets (2 duplex, 2-gang plate)", kind: material, unit: ea,
+     quantity: "quad_outlets", price_key: el_quad_outlet_ea, when: "quad_outlets > 0"}
+  - {id: floor_boxes, description: "Floor boxes with outlet and cover", kind: material, unit: ea,
+     quantity: "floor_boxes", price_key: el_floor_box_ea, when: "floor_boxes > 0"}
+  - {id: wp_outlets, description: "Weatherproof GFCI outlets with in-use covers", kind: material, unit: ea,
+     quantity: "wp_outlets", price_key: el_wp_outlet_ea, when: "wp_outlets > 0"}
+  - {id: switches, description: "Single-pole switches and plates", kind: material, unit: ea, quantity: "switches",
      price_key: el_switch_ea, when: "switches > 0"}
+  - {id: switches_3way, description: "3-way switches and plates", kind: material, unit: ea, quantity: "switches_3way",
+     price_key: el_switch_3way_ea, when: "switches_3way > 0"}
+  - {id: switches_4way, description: "4-way switches and plates", kind: material, unit: ea, quantity: "switches_4way",
+     price_key: el_switch_4way_ea, when: "switches_4way > 0"}
+  - {id: dimmers, description: "Dimmer switches and plates", kind: material, unit: ea, quantity: "dimmers",
+     price_key: el_dimmer_ea, when: "dimmers > 0"}
+  - {id: occupancy_switches, description: "Occupancy sensor switches", kind: material, unit: ea,
+     quantity: "occupancy_switches", price_key: el_occupancy_switch_ea, when: "occupancy_switches > 0"}
   - {id: gfci, description: "GFCI outlets", kind: material, unit: ea, quantity: "gfci", price_key: el_gfci_ea,
      when: "gfci > 0"}
+  # 2026-11-20 (David): fixtures the owner supplies show their counts on the quote, "supplied by the owner", at $0 - they
+  # aren't parts to order, so they're not on the Bill of Materials (kind other). The labor to hang them is fixture_labor.
+  - {id: lights, description: "Ceiling light fixtures (supplied by the owner)", kind: other, unit: ea, quantity: "lights",
+     price_key: el_owner_light_ceiling_ea, when: "lights > 0 and fixtures == 1"}
+  - {id: recessed_lights, description: "Recessed lights (supplied by the owner)", kind: other, unit: ea, quantity: "recessed_lights",
+     price_key: el_owner_light_recessed_ea, when: "recessed_lights > 0 and fixtures == 1"}
+  - {id: wall_lights, description: "Wall lights / sconces (supplied by the owner)", kind: other, unit: ea, quantity: "wall_lights",
+     price_key: el_owner_light_wall_ea, when: "wall_lights > 0 and fixtures == 1"}
+  - {id: pendant_lights, description: "Pendant lights (supplied by the owner)", kind: other, unit: ea, quantity: "pendant_lights",
+     price_key: el_owner_light_pendant_ea, when: "pendant_lights > 0 and fixtures == 1"}
+  - {id: undercabinet_lights, description: "Under-cabinet lights (supplied by the owner)", kind: other, unit: ea,
+     quantity: "undercabinet_lights", price_key: el_owner_light_undercabinet_ea, when: "undercabinet_lights > 0 and fixtures == 1"}
+  - {id: exterior_lights, description: "Exterior lights (supplied by the owner)", kind: other, unit: ea, quantity: "exterior_lights",
+     price_key: el_owner_light_exterior_ea, when: "exterior_lights > 0 and fixtures == 1"}
+  - {id: exit_emergency_lights, description: "Exit signs and emergency lights (supplied by the owner)", kind: other, unit: ea,
+     quantity: "exit_emergency_lights", price_key: el_owner_light_exit_emergency_ea, when: "exit_emergency_lights > 0 and fixtures == 1"}
+  - {id: fan_units, description: "Ceiling fans (supplied by the owner)", kind: other, unit: ea, quantity: "fans",
+     price_key: el_owner_fan_ea, when: "fans > 0 and fixtures == 1"}
+  # ... and the fixtures we supply: priced, on the Bill of Materials.
+  - {id: lights_us, description: "Ceiling light fixtures", kind: material, unit: ea, quantity: "lights", price_key: el_light_ceiling_ea,
+     when: "lights > 0 and fixtures == 2"}
+  - {id: recessed_lights_us, description: "Recessed lights (cans and trims)", kind: material, unit: ea, quantity: "recessed_lights",
+     price_key: el_light_recessed_ea, when: "recessed_lights > 0 and fixtures == 2"}
+  - {id: wall_lights_us, description: "Wall lights (sconces)", kind: material, unit: ea, quantity: "wall_lights", price_key: el_light_wall_ea,
+     when: "wall_lights > 0 and fixtures == 2"}
+  - {id: pendant_lights_us, description: "Pendant lights", kind: material, unit: ea, quantity: "pendant_lights", price_key: el_light_pendant_ea,
+     when: "pendant_lights > 0 and fixtures == 2"}
+  - {id: undercabinet_lights_us, description: "Under-cabinet lights", kind: material, unit: ea, quantity: "undercabinet_lights",
+     price_key: el_light_undercabinet_ea, when: "undercabinet_lights > 0 and fixtures == 2"}
+  - {id: exterior_lights_us, description: "Exterior lights", kind: material, unit: ea, quantity: "exterior_lights", price_key: el_light_exterior_ea,
+     when: "exterior_lights > 0 and fixtures == 2"}
+  - {id: exit_emergency_lights_us, description: "Exit signs and emergency lights", kind: material, unit: ea, quantity: "exit_emergency_lights",
+     price_key: el_light_exit_emergency_ea, when: "exit_emergency_lights > 0 and fixtures == 2"}
+  - {id: fan_units_us, description: "Ceiling fans", kind: material, unit: ea, quantity: "fans", price_key: el_fan_unit_ea,
+     when: "fans > 0 and fixtures == 2"}
   - {id: fan_boxes, description: "Fan-rated boxes and bracing", kind: material, unit: ea, quantity: "fans",
      price_key: el_fan_box_ea, when: "fans > 0"}
-  - {id: boxes_plastic, description: "Plastic electrical boxes", kind: material, unit: ea, quantity: "outlets + switches + gfci + lights",
-     price_key: el_box_plastic_ea, when: "box_material == 1 and work >= 1 and outlets + switches + gfci + lights > 0"}
-  - {id: boxes_metal, description: "Metal electrical boxes", kind: material, unit: ea, quantity: "outlets + switches + gfci + lights",
-     price_key: el_box_metal_ea, when: "box_material == 2 and work >= 1 and outlets + switches + gfci + lights > 0"}
+  - {id: smoke_detectors, description: "Smoke detectors, hardwired and interconnected", kind: material, unit: ea,
+     quantity: "smoke_detectors", price_key: el_smoke_detector_ea, when: "smoke_detectors > 0"}
+  # 2026-11-20 (David: "we have to charge something for the light fixture install boxes"): a light gets a round
+  # fixture-rated box with its mounting bracket, whoever supplies the fixture; a recessed light's can is its box -
+  # the housing is ours to set at rough-in when the owner supplies the trims (ours: it's in "cans and trims").
+  - {id: fixture_boxes, description: "Light fixture boxes, round fixture-rated with bracket", kind: material, unit: ea,
+     quantity: "lights + wall_lights + pendant_lights + exterior_lights + exit_emergency_lights", price_key: el_fixture_box_ea,
+     when: "work >= 1 and lights + wall_lights + pendant_lights + exterior_lights + exit_emergency_lights > 0"}
+  - {id: recessed_housings, description: "Recessed light housings, new construction (owner supplies the trims)", kind: material,
+     unit: ea, quantity: "recessed_lights", price_key: el_recessed_housing_ea,
+     when: "work >= 1 and recessed_lights > 0 and fixtures == 1"}
+  - {id: boxes_plastic, description: "Plastic electrical boxes", kind: material, unit: ea, quantity: "outlets + usb_outlets + quad_outlets + wp_outlets + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + undercabinet_lights + smoke_detectors",
+     price_key: el_box_plastic_ea, when: "box_material == 1 and work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + undercabinet_lights + smoke_detectors > 0"}
+  - {id: boxes_metal, description: "Metal electrical boxes", kind: material, unit: ea, quantity: "outlets + usb_outlets + quad_outlets + wp_outlets + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + undercabinet_lights + smoke_detectors",
+     price_key: el_box_metal_ea, when: "box_material == 2 and work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + undercabinet_lights + smoke_detectors > 0"}
   - {id: wire, description: "Branch circuit wire (12/2)", kind: material, unit: lf,
-     quantity: "(outlets + switches + gfci + lights + fans) * avg_run_ft", waste: "0.15", price_key: el_wire_lf,
-     when: "voltage == 1 and work >= 1 and outlets + switches + gfci + lights + fans > 0"}
+     quantity: "(outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans) * avg_run_ft", waste: "0.15", price_key: el_wire_lf,
+     when: "(wire_14_2_ft + wire_14_3_ft + wire_12_2_ft + wire_12_3_ft + wire_10_2_ft + wire_10_3_ft + wire_8_3_ft + wire_6_3_ft) == 0 and voltage == 1 and work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans > 0"}
   - {id: wire_220, description: "Branch circuit wire, 220 V (12/3)", kind: material, unit: lf,
-     quantity: "(outlets + switches + gfci + lights + fans) * avg_run_ft", waste: "0.15", price_key: el_wire_220_lf,
-     when: "voltage == 2 and work >= 1 and outlets + switches + gfci + lights + fans > 0"}
+     quantity: "(outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans) * avg_run_ft", waste: "0.15", price_key: el_wire_220_lf,
+     when: "(wire_14_2_ft + wire_14_3_ft + wire_12_2_ft + wire_12_3_ft + wire_10_2_ft + wire_10_3_ft + wire_8_3_ft + wire_6_3_ft) == 0 and voltage == 2 and work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans > 0"}
   - {id: wire_3ph, description: "Branch circuit wire, 220 V 3-phase", kind: material, unit: lf,
-     quantity: "(outlets + switches + gfci + lights + fans) * avg_run_ft", waste: "0.15", price_key: el_wire_3ph_lf,
-     when: "voltage == 3 and work >= 1 and outlets + switches + gfci + lights + fans > 0"}
+     quantity: "(outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans) * avg_run_ft", waste: "0.15", price_key: el_wire_3ph_lf,
+     when: "(wire_14_2_ft + wire_14_3_ft + wire_12_2_ft + wire_12_3_ft + wire_10_2_ft + wire_10_3_ft + wire_8_3_ft + wire_6_3_ft) == 0 and voltage == 3 and work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans > 0"}
   - {id: wire_15a, description: "Wire for 15 Amp dedicated circuits (12/2)", kind: material, unit: lf,
-     quantity: "circuits_15a * avg_run_ft", waste: "0.15", price_key: el_wire_lf, when: "circuits_15a > 0"}
+     quantity: "circuits_15a * avg_run_ft", waste: "0.15", price_key: el_wire_lf, when: "(wire_14_2_ft + wire_14_3_ft + wire_12_2_ft + wire_12_3_ft + wire_10_2_ft + wire_10_3_ft + wire_8_3_ft + wire_6_3_ft) == 0 and circuits_15a > 0"}
   - {id: heavy_wire, description: "Heavy-gauge wire for 30 Amp circuits", kind: material, unit: lf,
      quantity: "appliance_circuits * avg_run_ft", waste: "0.15", price_key: el_heavy_wire_lf,
-     when: "appliance_circuits > 0"}
+     when: "(wire_14_2_ft + wire_14_3_ft + wire_12_2_ft + wire_12_3_ft + wire_10_2_ft + wire_10_3_ft + wire_8_3_ft + wire_6_3_ft) == 0 and appliance_circuits > 0"}
   # Branch breakers follow the voltage (single-pole at 110 V, 2-pole at 220 V, 3-pole at 3-phase);
   # dedicated circuits keep their amperage breaker (15 Amp single-pole, 30 Amp 2-pole).
+  # 2026-11-20 (David): the branch breakers are counted from the panel schedule when given (else one per 10 devices),
+  # and are AFCI by default - the 2020 NEC (210.12) wants AFCI on nearly every 15/20 Amp circuit in a home.
   - {id: breakers, description: "Breakers (single-pole)", kind: material, unit: ea,
-     quantity: "circuits_15a + (ceil((outlets + switches + gfci + lights + fans) / 10) if work >= 1 and voltage == 1 else 0)",
-     price_key: el_breaker_ea, when: "circuits_15a > 0 or (voltage == 1 and work >= 1 and outlets + switches + gfci + lights + fans > 0)"}
+     quantity: "circuits_15a + ((branch_circuits if branch_circuits > 0 else ceil((outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans) / 10)) if work >= 1 and voltage == 1 else 0)",
+     price_key: el_breaker_ea, when: "breaker_type == 1 and (circuits_15a > 0 or (voltage == 1 and work >= 1 and (branch_circuits > 0 or outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans > 0)))"}
+  - {id: breakers_afci, description: "AFCI breakers (single-pole)", kind: material, unit: ea,
+     quantity: "circuits_15a + ((branch_circuits if branch_circuits > 0 else ceil((outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans) / 10)) if work >= 1 and voltage == 1 else 0)",
+     price_key: el_breaker_afci_ea, when: "breaker_type == 2 and (circuits_15a > 0 or (voltage == 1 and work >= 1 and (branch_circuits > 0 or outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans > 0)))"}
+  - {id: breakers_dual, description: "Dual-function AFCI/GFCI breakers (single-pole)", kind: material, unit: ea,
+     quantity: "circuits_15a + ((branch_circuits if branch_circuits > 0 else ceil((outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans) / 10)) if work >= 1 and voltage == 1 else 0)",
+     price_key: el_breaker_dual_ea, when: "breaker_type == 3 and (circuits_15a > 0 or (voltage == 1 and work >= 1 and (branch_circuits > 0 or outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans > 0)))"}
   - {id: breakers_2pole, description: "Breakers, 2-pole (220 V / 30 Amp)", kind: material, unit: ea,
-     quantity: "appliance_circuits + (ceil((outlets + switches + gfci + lights + fans) / 10) if work >= 1 and voltage == 2 else 0)",
-     price_key: el_breaker_2pole_ea, when: "appliance_circuits > 0 or (voltage == 2 and work >= 1 and outlets + switches + gfci + lights + fans > 0)"}
+     quantity: "appliance_circuits + (ceil((outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans) / 10) if work >= 1 and voltage == 2 else 0)",
+     price_key: el_breaker_2pole_ea, when: "appliance_circuits > 0 or (voltage == 2 and work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans > 0)"}
   - {id: breakers_3pole, description: "Breakers, 3-pole (220 V 3-phase)", kind: material, unit: ea,
-     quantity: "ceil((outlets + switches + gfci + lights + fans) / 10) if work >= 1 else 0",
-     price_key: el_breaker_3pole_ea, when: "voltage == 3 and work >= 1 and outlets + switches + gfci + lights + fans > 0"}
+     quantity: "ceil((outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans) / 10) if work >= 1 else 0",
+     price_key: el_breaker_3pole_ea, when: "voltage == 3 and work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans > 0"}
+  # 2026-11-19: measured cable (wiring takeoff), 10% waste on top of the routed feet and box make-up.
+  - {id: cable_14_2, description: "Cable 14/2 NM-B (measured)", kind: material, unit: lf,
+     quantity: "wire_14_2_ft", waste: "0.10", price_key: el_wire_14_2_lf, when: "wire_14_2_ft > 0"}
+  - {id: cable_14_3, description: "Cable 14/3 NM-B (measured)", kind: material, unit: lf,
+     quantity: "wire_14_3_ft", waste: "0.10", price_key: el_wire_14_3_lf, when: "wire_14_3_ft > 0"}
+  - {id: cable_12_2, description: "Cable 12/2 NM-B (measured)", kind: material, unit: lf,
+     quantity: "wire_12_2_ft", waste: "0.10", price_key: el_wire_lf, when: "wire_12_2_ft > 0"}
+  - {id: cable_12_3, description: "Cable 12/3 NM-B (measured)", kind: material, unit: lf,
+     quantity: "wire_12_3_ft", waste: "0.10", price_key: el_wire_220_lf, when: "wire_12_3_ft > 0"}
+  - {id: cable_10_2, description: "Cable 10/2 NM-B (measured)", kind: material, unit: lf,
+     quantity: "wire_10_2_ft", waste: "0.10", price_key: el_wire_10_2_lf, when: "wire_10_2_ft > 0"}
+  - {id: cable_10_3, description: "Cable 10/3 NM-B (measured)", kind: material, unit: lf,
+     quantity: "wire_10_3_ft", waste: "0.10", price_key: el_wire_10_3_lf, when: "wire_10_3_ft > 0"}
+  - {id: cable_8_3, description: "Cable 8/3 NM-B (measured)", kind: material, unit: lf,
+     quantity: "wire_8_3_ft", waste: "0.10", price_key: el_wire_8_3_lf, when: "wire_8_3_ft > 0"}
+  - {id: cable_6_3, description: "Cable 6/3 NM-B (measured)", kind: material, unit: lf,
+     quantity: "wire_6_3_ft", waste: "0.10", price_key: el_wire_6_3_lf, when: "wire_6_3_ft > 0"}
+  # 2026-11-20 (David): the range and dryer plug into 240 V receptacles - parts to order.
+  - {id: range_receptacles, description: "Range receptacles (240 V, NEMA 14-50)", kind: material, unit: ea,
+     quantity: "range_receptacles", price_key: el_range_receptacle_ea, when: "range_receptacles > 0"}
+  - {id: dryer_receptacles, description: "Dryer receptacles (240 V, NEMA 14-30)", kind: material, unit: ea,
+     quantity: "dryer_receptacles", price_key: el_dryer_receptacle_ea, when: "dryer_receptacles > 0"}
+  - {id: disconnects, description: "Equipment disconnects, 60 A non-fused (A/C, water heater)", kind: material, unit: ea,
+     quantity: "disconnects", price_key: el_disconnect_ea, when: "disconnects > 0"}
+  # 2026-11-20: the small parts every box uses - wire nuts, staples, cable clamps, grounding pigtails - per device.
+  - {id: small_parts, description: "Small parts: wire nuts, staples, cable clamps, ground pigtails", kind: material, unit: ea,
+     quantity: "outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans + range_receptacles + dryer_receptacles + disconnects",
+     price_key: el_small_parts_ea, when: "work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans + range_receptacles + dryer_receptacles + disconnects > 0"}
   - {id: low_voltage, description: "Data or TV drop, cable and jack", kind: other, unit: ea, quantity: "low_voltage",
      price_key: el_lv_drop_ea, when: "low_voltage > 0"}
   - {id: underground_wire, description: "Underground feeder, direct-burial cable in conduit", kind: material, unit: lf,
@@ -135,6 +311,15 @@ lines:
      when: "panel == 1 and subpanel_amps == 100"}
   - {id: subpanel_200a, description: "200 Amp subpanel, installed", kind: material, unit: ea, quantity: "1", price_key: el_subpanel_200a_ea,
      when: "panel == 1 and subpanel_amps == 200"}
+  # 2026-11-20 (David): a new build's main panel (counted on the plan); not with Panel work "Upgrade" (that line is it).
+  # 2026-11-20 (David: "there is no panels" on the Bill of Materials): the panel and the meter base are parts to order,
+  # setting them is its own labor line (mount, bond and ground, land the service and the branch circuits).
+  - {id: main_panel, description: "200 A main panel (load center with main breaker)", kind: material, unit: ea,
+     quantity: "main_panels", price_key: el_main_panel_ea, when: "main_panels > 0 and panel != 2"}
+  - {id: meter_base, description: "200 A meter base", kind: material, unit: ea,
+     quantity: "main_panels", price_key: el_meter_base_ea, when: "main_panels > 0 and panel != 2"}
+  - {id: panel_labor, description: "Set the main panel and service (ground, bond, land the circuits)", kind: labor, unit: hr,
+     quantity: "main_panels * 12", price_key: el_labor_hr, when: "main_panels > 0 and panel != 2"}
   - {id: panel_upgrade, description: "200 A panel and service upgrade, installed", kind: other, unit: ea, quantity: "1",
      price_key: el_panel_upgrade_ea, when: "panel == 2"}
   - {id: permit, description: "Electrical permit", kind: other, unit: ea, quantity: "1", price_key: el_permit_ea,

@@ -32,6 +32,24 @@ KINDS = ("area", "length", "perimeter", "count", "volume", "other")
 KIND_UNITS = {"area": "sqft", "length": "lf", "perimeter": "lf", "count": "ea"}
 SOURCE_METHODS = {"cad": "cad", "vector": "vector", "raster": "raster", "ai": "ai", "manual": "manual"}
 MAX_OBJECTS = 5000
+# The agents whose measurements always sit on a sheet (AI Auto Run's counts, the wiring run's cable). One of theirs
+# with no sheet lost it when the plans were read again (the old sheets go; sheet_id becomes NULL).
+SHEET_AGENTS = ("llm-takeoff", "wiring-takeoff")
+
+
+def _superseded(conn, ctx, m: dict) -> list[dict]:
+    """Approved measurements a newly approved one replaces (2026-11-20, David: "why AI counted 18 but the highlighted
+    shows 12"): the same question's approved counts from AI Auto Run or the wiring run whose sheet is gone because the
+    plans were read again. Reading again flags them to re-measure; a rerun then proposes the new count on the new sheet,
+    and approving it used to leave the old one approved too, so both were priced (outlets 41 + 41). Approving the new
+    one retires the old one."""
+    if not m.get("feeds") or not m.get("sheet_id"):
+        return []
+    marks = ",".join("?" * len(SHEET_AGENTS))
+    return [dict(r) for r in conn.execute(
+        f"SELECT * FROM measurements WHERE company_id = ? AND estimate_id = ? AND module_id = ? AND feeds = ?"
+        f" AND status = 'approved' AND sheet_id IS NULL AND proposed_by IN ({marks}) AND id != ? ORDER BY id",
+        (ctx.company_id, m["estimate_id"], m["module_id"], m["feeds"], *SHEET_AGENTS, m["id"]))]
 
 
 def _now() -> str:
@@ -327,14 +345,27 @@ def confirm_measurements(conn, ctx: RequestContext, measurement_ids: list | None
         skipped = [m["id"] for m in rows if m not in todo]
         what = f"Accept the suggested change on {len(todo)} approved measurement(s)"
     else:
-        todo = [m for m in rows if m["status"] == "proposed"]
+        # 2026-11-20 (David): a person can change their mind - one they rejected can be approved again, by its id.
+        # A bulk approve (above_confidence) still only takes the ones waiting for review.
+        ok = ("proposed", "rejected") if measurement_ids else ("proposed",)
+        todo = [m for m in rows if m["status"] in ok]
         skipped = [m["id"] for m in rows if m not in todo]
         what = f"Approve and lock {len(todo)} measurement(s)"
     if not todo:
         raise InvalidInput("nothing to do: none of these are " + ("approved with a suggested change"
                                                                  if accept_suggestion else "waiting for approval"),
                            skipped=skipped)
-    _confirm(confirm, what + "?", ids=[m["id"] for m in todo], skipped=skipped)
+    replaces, seen = {}, set()
+    if not accept_suggestion:
+        for m in todo:                                  # an old one is replaced once, by the first that replaces it
+            replaces[m["id"]] = [o for o in _superseded(conn, ctx, m) if o["id"] not in seen]
+            seen.update(o["id"] for o in replaces[m["id"]])
+    old = [o for olds in replaces.values() for o in olds]
+    if old:
+        what += ("; it replaces the approved " + ", ".join(f"{o['qty']} {o['unit']}" for o in old)
+                 + " from before the plans were read again, which won't be priced any more")
+    _confirm(confirm, what + "?", ids=[m["id"] for m in todo], skipped=skipped,
+             replaces=[o["id"] for o in old])
     now = _now()
     with service.transaction(conn):
         for m in todo:
@@ -344,10 +375,17 @@ def confirm_measurements(conn, ctx: RequestContext, measurement_ids: list | None
                              " approved_at = ?, updated_at = ? WHERE id = ?", (ctx.actor, now, now, m["id"]))
                 _log(conn, ctx, m, "measurement_suggestion_accepted", {"qty": m["suggested_qty"]}, before={"qty": m["qty"]})
             else:
-                conn.execute("UPDATE measurements SET status = 'approved', locked = 1, approved_by = ?, approved_at = ?,"
-                             " updated_at = ? WHERE id = ?", (ctx.actor, now, now, m["id"]))
-                _log(conn, ctx, m, "measurement_approved", {"qty": m["qty"]})
-    return {"ok": True, "done": [m["id"] for m in todo], "skipped": skipped}
+                conn.execute("UPDATE measurements SET status = 'approved', locked = 1, reject_reason = NULL,"
+                             " approved_by = ?, approved_at = ?, updated_at = ? WHERE id = ?",
+                             (ctx.actor, now, now, m["id"]))
+                _log(conn, ctx, m, "measurement_approved",
+                     {"qty": m["qty"], **({"was": "rejected"} if m["status"] == "rejected" else {})})
+                for o in replaces.get(m["id"], []):
+                    why = f"replaced by measurement {m['id']} ({m['qty']} {m['unit']}) after the plans were read again"
+                    conn.execute("UPDATE measurements SET status = 'rejected', locked = 0, reject_reason = ?,"
+                                 " updated_at = ? WHERE id = ?", (why, now, o["id"]))
+                    _log(conn, ctx, o, "measurement_rejected", {"reason": why, "replaced_by": m["id"]})
+    return {"ok": True, "done": [m["id"] for m in todo], "skipped": skipped, "replaced": [o["id"] for o in old]}
 
 
 def edit(conn, ctx: RequestContext, measurement_id: int, *, qty=None, label: str | None = None,
@@ -357,7 +395,10 @@ def edit(conn, ctx: RequestContext, measurement_id: int, *, qty=None, label: str
     m = _load(conn, ctx, measurement_id)
     _role(ctx, PROPOSE_ROLES + ("reviewer",), "edit measurements")
     if m["status"] == "rejected":
-        raise NotEditable("that measurement was rejected; add a new one instead", measurement_id=m["id"])
+        # A person can change a rejected one (then approve it again); an agent can't bring it back.
+        if ctx.agent:
+            raise NotEditable("that measurement was rejected; add a new one instead", measurement_id=m["id"])
+        _person(ctx, "change a rejected measurement")
     if m["locked"]:
         if ctx.agent:
             raise NotEditable("that measurement is approved and locked; an agent can only suggest a change "
@@ -487,7 +528,8 @@ def list_measurements(conn, ctx: RequestContext, estimate_id: int, module_id: st
 
 def approved_answers(conn, ctx: RequestContext, estimate_id: int, module_id: str | None = None,
                      registry=None) -> dict:
-    """{module_id: {question: total}} from approved measurements, in each question's unit."""
+    """{module_id: {question: total}} from approved measurements, in each question's unit. (A new plan revision removes
+    the old plans and their measurements - drawing_model.store.upload - so every approved measurement counts.)"""
     reg = _registry(registry)
     sql = ("SELECT module_id, feeds, qty, unit FROM measurements WHERE company_id = ? AND estimate_id = ?"
            " AND status = 'approved' AND feeds IS NOT NULL")

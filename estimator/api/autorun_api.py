@@ -117,7 +117,17 @@ def _shape_run(row) -> dict:
             "source": "llm" if any(c.get("source") == "llm" for c in cands) else "geometry",
             "calibration": next((c["calibration"] for c in cands if c.get("calibration")), None),
             "measurement_ids": json.loads(r["measurement_ids_json"] or "[]"),
+            # The AI's progress while it reads (2026-11-21): its latest sentence and how much has come back.
+            "live": _live(r) if r["status"] in ("queued", "running") else None,
             "created_at": r["created_at"], "updated_at": r["updated_at"]}
+
+
+def _live(r: dict):
+    try:
+        v = json.loads(r.get("live_json") or "null")
+    except ValueError:
+        return None
+    return v if isinstance(v, dict) else None
 
 
 def _load_run(conn, ctx, run_id: int) -> dict:
@@ -129,16 +139,23 @@ def _load_run(conn, ctx, run_id: int) -> dict:
     return dict(row)
 
 
+def _keep_approved(body: dict) -> bool:
+    """The run's keep-approved choice from the request: on unless the caller says false (2026-11-19, David)."""
+    v = (body or {}).get("keep_approved", True)
+    return not (v is False or str(v).strip().lower() in ("0", "false", "no", "off"))
+
+
 def create_run(conn, ctx, estimate_id: int, sheet_id: int, viewport_id: int,
-               module_id: str, candidates: list | None = None) -> int:
-    """A run row, starting. The caller starts the agent (or marks it failed)."""
+               module_id: str, candidates: list | None = None, keep_approved: bool = True) -> int:
+    """A run row, starting. The caller starts the agent (or marks it failed). keep_approved: the rerun keeps the
+    items a person already approved (and doesn't propose them again) - else it starts the trade over from scratch."""
     now = _now()
     cur = conn.execute(
         "INSERT INTO auto_runs (company_id, estimate_id, sheet_id, viewport_id, module_id, status, step,"
-        " candidates_json, measurement_ids_json, created_by, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, 'running', 'starting', ?, '[]', ?, ?, ?)",
+        " candidates_json, measurement_ids_json, created_by, created_at, updated_at, keep_approved)"
+        " VALUES (?, ?, ?, ?, ?, 'running', 'starting', ?, '[]', ?, ?, ?, ?)",
         (ctx.company_id, estimate_id, sheet_id, viewport_id, module_id,
-         json.dumps(candidates or []), ctx.actor, now, now))
+         json.dumps(candidates or []), ctx.actor, now, now, 1 if keep_approved else 0))
     return cur.lastrowid
 
 
@@ -293,13 +310,13 @@ def _start_run(conn, ctx, run_id: int, candidates: list, module_id: str):
         update_run(conn, run_id, status="failed", step="failed", error=msg)
         return _ok(run_id=run_id, status="failed", error=msg)
     if not setting["ready"]:
-        msg = (f"LLM takeoff is on but {setting['provider_label']} isn't ready: {setting['why_not']}."
-               " Save a key in 🔑 Agent API Key, or turn LLM takeoff off.")
+        msg = (f"AI measuring is on but {setting['provider_label']} isn't ready: {setting['why_not']}."
+               " Save a key in 🔑 Agent API Key, or turn AI measuring off.")
         update_run(conn, run_id, status="failed", step="failed", error=msg)
         return _ok(run_id=run_id, status="failed", error=msg)
     ok_budget, why = roles.budget_left(conn, ctx.company_id)
     if not ok_budget:
-        msg = f"LLM takeoff can't run: {why}"
+        msg = f"AI measuring can't run: {why}"
         update_run(conn, run_id, status="failed", step="failed", error=msg)
         return _ok(run_id=run_id, status="failed", error=msg)
     return _start_llm_agent(conn, ctx, run_id)
@@ -525,7 +542,7 @@ STRATEGIES = {
         "find_candidates": _slab_candidates,
         "results": concrete_results,
         "geometric": True,            # the drawing-only agent is the fallback when the AI can't run
-        "llm_off": ("No slab outline found on this sheet — the AI did not run because LLM takeoff is off. "
+        "llm_off": ("No slab outline found on this sheet — the AI did not run because AI measuring is off. "
                     "Turn it on in 🤖 AI agents (Setup) to let the AI read the plan, or measure the slab manually."),
     },
     "electrical": {
@@ -536,7 +553,7 @@ STRATEGIES = {
         "find_candidates": _no_candidates,
         "results": electrical_results,
         "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
-        "llm_off": ("electrical auto-run reads the plan with the AI — turn LLM takeoff on in 🤖 AI agents (Setup)"
+        "llm_off": ("electrical auto-run reads the plan with the AI — turn AI measuring on in 🤖 AI agents (Setup)"
                     " to let it count the devices, or count them manually."),
     },
 
@@ -548,7 +565,7 @@ STRATEGIES = {
         "find_candidates": _no_candidates,
         "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "plumbing"),
         "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
-        "llm_off": ("plumbing auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+        "llm_off": ("plumbing auto-run reads the plan with the AI \u2014 turn AI measuring on in \U0001f916 AI agents (Setup)"
                     " to let it count the fixtures, or count them manually."),
     },
     "hvac": {
@@ -559,7 +576,7 @@ STRATEGIES = {
         "find_candidates": _no_candidates,
         "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "hvac"),
         "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
-        "llm_off": ("HVAC auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+        "llm_off": ("HVAC auto-run reads the plan with the AI \u2014 turn AI measuring on in \U0001f916 AI agents (Setup)"
                     " to let it read the mechanical plan, or measure it manually."),
     },
     "flooring": {
@@ -570,7 +587,7 @@ STRATEGIES = {
         "find_candidates": _no_candidates,
         "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "flooring"),
         "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
-        "llm_off": ("flooring auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+        "llm_off": ("flooring auto-run reads the plan with the AI \u2014 turn AI measuring on in \U0001f916 AI agents (Setup)"
                     " to let it read the floor areas, or measure them manually."),
     },
     "roofing": {
@@ -581,7 +598,7 @@ STRATEGIES = {
         "find_candidates": _no_candidates,
         "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "roofing"),
         "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
-        "llm_off": ("roofing auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+        "llm_off": ("roofing auto-run reads the plan with the AI \u2014 turn AI measuring on in \U0001f916 AI agents (Setup)"
                     " to let it read the roof plan, or measure it manually."),
     },
     "framing": {
@@ -592,7 +609,7 @@ STRATEGIES = {
         "find_candidates": _no_candidates,
         "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "framing"),
         "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
-        "llm_off": ("framing auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+        "llm_off": ("framing auto-run reads the plan with the AI \u2014 turn AI measuring on in \U0001f916 AI agents (Setup)"
                     " to let it read the framing plan, or measure it manually."),
     },
     "windows_doors": {
@@ -603,7 +620,7 @@ STRATEGIES = {
         "find_candidates": _no_candidates,
         "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "windows_doors"),
         "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
-        "llm_off": ("windows and doors auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+        "llm_off": ("windows and doors auto-run reads the plan with the AI \u2014 turn AI measuring on in \U0001f916 AI agents (Setup)"
                     " to let it count the windows and doors, or count them manually."),
     },
     "insulation": {
@@ -614,7 +631,7 @@ STRATEGIES = {
         "find_candidates": _no_candidates,
         "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "insulation"),
         "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
-        "llm_off": ("insulation auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+        "llm_off": ("insulation auto-run reads the plan with the AI \u2014 turn AI measuring on in \U0001f916 AI agents (Setup)"
                     " to let it read the insulated areas, or measure them manually."),
     },
     "demolition": {
@@ -625,7 +642,7 @@ STRATEGIES = {
         "find_candidates": _no_candidates,
         "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "demolition"),
         "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
-        "llm_off": ("demolition auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+        "llm_off": ("demolition auto-run reads the plan with the AI \u2014 turn AI measuring on in \U0001f916 AI agents (Setup)"
                     " to let it read the demolition plan, or measure it manually."),
     },
     "drywall": {
@@ -636,7 +653,7 @@ STRATEGIES = {
         "find_candidates": _no_candidates,
         "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "drywall"),
         "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
-        "llm_off": ("drywall auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+        "llm_off": ("drywall auto-run reads the plan with the AI \u2014 turn AI measuring on in \U0001f916 AI agents (Setup)"
                     " to let it read the wall and ceiling areas, or measure them manually."),
     },
     "siding": {
@@ -647,7 +664,7 @@ STRATEGIES = {
         "find_candidates": _no_candidates,
         "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "siding"),
         "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
-        "llm_off": ("siding auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+        "llm_off": ("siding auto-run reads the plan with the AI \u2014 turn AI measuring on in \U0001f916 AI agents (Setup)"
                     " to let it read the outside walls, or measure them manually."),
     },
     "fencing": {
@@ -658,7 +675,7 @@ STRATEGIES = {
         "find_candidates": _no_candidates,
         "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "fencing"),
         "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
-        "llm_off": ("fencing auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+        "llm_off": ("fencing auto-run reads the plan with the AI \u2014 turn AI measuring on in \U0001f916 AI agents (Setup)"
                     " to let it read the fence line, or measure it manually."),
     },
     "landscaping": {
@@ -669,7 +686,7 @@ STRATEGIES = {
         "find_candidates": _no_candidates,
         "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "landscaping"),
         "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
-        "llm_off": ("landscaping auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+        "llm_off": ("landscaping auto-run reads the plan with the AI \u2014 turn AI measuring on in \U0001f916 AI agents (Setup)"
                     " to let it read the landscape plan, or measure it manually."),
     },
     "painting": {
@@ -680,7 +697,7 @@ STRATEGIES = {
         "find_candidates": _no_candidates,
         "results": lambda conn, ctx, row: _trade_results(conn, ctx, row, "painting"),
         "geometric": False,           # LLM-only: no drawing detection, so no geometric fallback
-        "llm_off": ("painting auto-run reads the plan with the AI \u2014 turn LLM takeoff on in \U0001f916 AI agents (Setup)"
+        "llm_off": ("painting auto-run reads the plan with the AI \u2014 turn AI measuring on in \U0001f916 AI agents (Setup)"
                     " to let it read the areas to paint, or measure them manually."),
     },
 }
@@ -1170,7 +1187,7 @@ def route(m: str, sub: str, req, ctx, conn):
     from estimator.takeoff import slab_find
 
     if not nav.can_open(ctx.role, "takeoffs"):
-        raise _refuse("your role can't open takeoffs", 403, "permission_denied")
+        raise _refuse("your role can't open the Measure screen", 403, "permission_denied")
 
     mm = _CANDIDATES.match(sub)
     if mm and m == "GET":
@@ -1186,7 +1203,7 @@ def route(m: str, sub: str, req, ctx, conn):
         return _ok(**found)
 
     if _RUNS.match(sub) and m == "POST":
-        _role(ctx, ms.PROPOSE_ROLES, "run the takeoff agent")
+        _role(ctx, ms.PROPOSE_ROLES, "run the measuring agent")
         b = _body(req)
         estimate_id = _int_opt(b.get("estimate_id"))
         sheet_id = _int_opt(b.get("sheet_id"))
@@ -1229,7 +1246,8 @@ def route(m: str, sub: str, req, ctx, conn):
         if busy is not None:
             raise _refuse("an auto-run is already going for this viewport; wait for it to finish")
         found = strategy["find_candidates"](conn, ctx.company_id, viewport_id)
-        run_id = create_run(conn, ctx, estimate_id, sheet_id, viewport_id, module_id, found["candidates"])
+        run_id = create_run(conn, ctx, estimate_id, sheet_id, viewport_id, module_id, found["candidates"],
+                            keep_approved=_keep_approved(b))
         return _start_run(conn, ctx, run_id, found["candidates"], module_id)
 
     if _RUNS.match(sub) and m == "GET":
@@ -1296,7 +1314,7 @@ def route(m: str, sub: str, req, ctx, conn):
 
     mm = _RERUN.match(sub)
     if mm and m == "POST":
-        _role(ctx, ms.PROPOSE_ROLES, "re-run the takeoff agent")
+        _role(ctx, ms.PROPOSE_ROLES, "re-run the measuring agent")
         from estimator.estimating import service
         old = _load_run(conn, ctx, int(mm.group(1)))
         if old["status"] == "running":
@@ -1325,7 +1343,7 @@ def route(m: str, sub: str, req, ctx, conn):
             service._log(conn, ctx, old["estimate_id"], "auto_run_rerun",
                          {"run_id": old["id"], "deleted_measurement_ids": doomed})
             new_id = create_run(conn, ctx, old["estimate_id"], old["sheet_id"], old["viewport_id"],
-                                old["module_id"], found["candidates"])
+                                old["module_id"], found["candidates"], keep_approved=_keep_approved(_body(req)))
         return _start_run(conn, ctx, new_id, found["candidates"], old["module_id"])
 
     mm = _MEAS_ACT.match(sub)

@@ -317,6 +317,24 @@ def _api(req: Request, open_db) -> Response:
         conn.close()
 
 
+def _plans_changed(conn, ctx, eid: int):
+    """After approval the Director is on approving / sending; if the plans were measured again since (new counts waiting,
+    or approved counts the prices don't match), the panel leads with that (2026-11-21, David: the Director is the master
+    guide all the way through). None when nothing changed, or when this person can't change the estimate."""
+    from estimator.api.estimate_api import plan_changes
+    from estimator.estimating import reopen, service
+    from estimator.modules import get_registry
+    est = service.get_estimate(conn, ctx, int(eid))
+    if est["status"] in service.EDITABLE_STATUSES or ctx.role not in service.EDIT_ROLES or not reopen.can_reopen(conn, est):
+        return None
+    waiting = conn.execute("SELECT COUNT(*) FROM measurements WHERE company_id = ? AND estimate_id = ? AND status ="
+                           " 'proposed'", (ctx.company_id, est["id"])).fetchone()[0]
+    behind = [t["name"] for t in plan_changes(conn, ctx, est, get_registry())]
+    if not waiting and not behind:
+        return None
+    return {"waiting": waiting, "trades": behind, "rev": est["rev"], "status": est["status"]}
+
+
 _EST = re.compile(r"^/estimates/(\d+)$")
 _EST_EVENTS = re.compile(r"^/estimates/(\d+)/events$")
 _EST_DIRECTOR = re.compile(r"^/estimates/(\d+)/director$")
@@ -485,7 +503,9 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
             return _ok(job=None, next_step=None)
         bid = bids.latest_for_estimate(conn, ctx, out["job"]["estimate_id"])
         return _json(200, _no_paths(redact({**out, "bid": bids._public(bid) if bid else None,
-                                            "can_open_bids": nav.can_open(ctx.role, "bids")}, see)))
+                                            "can_open_bids": nav.can_open(ctx.role, "bids"),
+                                            "plans_changed": _plans_changed(conn, ctx, out["job"]["estimate_id"])},
+                                           see)))
 
     mm = _EST.match(sub)
     if mm and m == "GET":
@@ -513,7 +533,8 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
         plans = store.list_plan_sets(conn, ctx, eid)["plan_sets"]
         return _ok(estimate=redact(est, see), status=redact(status, see), plan_sets=plans,
                    can_upload=ctx.role in store.UPLOAD_ROLES, can_quick=ctx.role in service.QUICK_ROLES,
-                   editable=est["status"] in service.EDITABLE_STATUSES)
+                   editable=est["status"] in service.EDITABLE_STATUSES,
+                   can_edit=ctx.role in store.EDIT_ROLES)
 
     mm = _PLANS.match(sub)
     if mm and m == "GET":
@@ -599,6 +620,11 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
     from estimator.api import autorun_api
     if autorun_api.handles(sub):
         return autorun_api.route(m, sub, req, ctx, conn)
+
+    # ---------------------------------------------------------- 2026-11-19: the Wiring run (Measure screen)
+    from estimator.api import wiring_api
+    if wiring_api.handles(sub):
+        return wiring_api.route(m, sub, req, ctx, conn)
 
     # ---------------------------------------------------------- AI Log: what was sent to the AI and what came back.
     from estimator.api import ai_log_api
@@ -870,7 +896,7 @@ _BID_ACT = re.compile(r"^/bids/(\d+)/(send|status|convert|file)$")
 _GUIDE = re.compile(r"^/help/guides/([a-z0-9_]{1,64})$")
 # What the page may hand est_director_next. Flags must be literal true/false (never "yes" or 1).
 NEXT_FLAGS = ("approve", "confirm_sample_prices", "checklist_done", "reviewed", "send", "convert", "ready",
-              "without_scope")
+              "without_scope", "skip_audit")
 NEXT_TEXT = ("module_id", "send_to", "outcome", "service_date")
 NEXT_KEYS = set(NEXT_FLAGS) | set(NEXT_TEXT) | {"answers", "customer", "rev", "confirm"}
 # Where the bid files live on the PC or server: the browser gets them through /bids/<id>/file, never the path.
@@ -1096,6 +1122,7 @@ def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
     """GET  /plans                        every plan set on the company's projects (Plans screen)
        GET  /plan-sets/<id>               plan_status + plan_get_sheets
        GET  /plan-sets/<id>?module_id=<trade>     the sheets with active_for_trade for that trade
+       GET  /plan-sets/<id>?module_id=all         the sheets with active_by_trade for every trade
        POST /plan-sets/<id>/process {confirm}     plan_process (asks first; reads in the background)
        POST /plan-sets/<id>/remove {confirm}      remove the plan set and everything from it (asks first)
        GET  /sheets/<id>                  the sheet (with its size, for calibration clicks) + plan_get_viewports
@@ -1128,8 +1155,32 @@ def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
         est = service.get_estimate(conn, ctx, st["estimate_id"])
         sheets = store.sheets(conn, ctx, pid)["sheets"]
         extra = {}
+        # The estimate's trades, priced first then picked-but-not-priced — the same list the
+        # takeoff page measures (takeoff_api.py): the plan-set page defaults its trade to the first.
+        from estimator.director import engine as director
+        from estimator.modules import get_registry
+        _reg, _mine, modules = get_registry(), set(), []
+        for _mid in [s["module_id"] for s in est["sections"]] + director.planned_trades(conn, ctx, st["estimate_id"]):
+            if _mid in _mine:
+                continue
+            try:
+                _mod = _reg.get(_mid)
+            except Exception:  # noqa: BLE001 - a module that was removed
+                continue
+            _mine.add(_mod.id)
+            modules.append(_mod.id)
         trade = (req.query.get("module_id") or "").strip() or None
-        if trade:
+        if trade == "all":
+            # "All trades": each sheet says which trades it is on for — only trades with a row
+            # appear (no row means active), so the page can show on / off / mixed per sheet.
+            from estimator.takeoff import sheet_trades
+            states = sheet_trades.list_all_for_plan_set(conn, ctx.company_id, pid)
+            for s in sheets:
+                by_trade = states.get(s["id"], {})
+                s["active_by_trade"] = by_trade
+                s["active_for_trade"] = all(by_trade.values())
+            extra = {"trade_module_id": trade}
+        elif trade:
             # Per-trade sheet activation: each sheet says whether it counts for that trade's takeoff.
             from estimator.takeoff import sheet_trades
             states = {s["sheet_id"]: s["active"]
@@ -1138,7 +1189,8 @@ def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
                 s["active_for_trade"] = states.get(s["id"], True)
             extra = {"trade_module_id": trade}
         return _ok(plan_set=st, sheets=sheets, engine=plan_engine.engine_info(),
-                   estimate={"id": est["id"], "title": est["title"]}, can_edit=can_edit, **extra)
+                   estimate={"id": est["id"], "title": est["title"], "modules": modules},
+                   can_edit=can_edit, **extra)
 
     mm = _PLAN_SET_TABLES.match(sub)
     if mm and m == "GET":
@@ -1200,6 +1252,10 @@ def _plans(m: str, sub: str, req: Request, ctx, conn) -> Response:
         sheet = {k: s[k] for k in SHEET_FIELDS}
         sheet["has_image"] = bool(s["image_path"])
         ps = store.load_plan_set(conn, ctx, s["plan_set_id"])
+        # The sheet's display title carries its plan set's number within the project, like the
+        # sheets list does — the Detail tab and the picker must show the same title.
+        sheet["title"] = store.display_sheet_title(sheet["title"], ps["id"],
+            store.plan_set_number(conn, ctx.company_id, ps["estimate_id"], ps["id"]), ps["file_type"])
         from estimator.plan_engine import tiles
         from estimator.takeoff import sheet_trades
         return _ok(sheet=sheet, viewports=store.viewports(conn, ctx, s["id"])["viewports"],

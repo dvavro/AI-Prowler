@@ -462,7 +462,7 @@ def _changes(counts: dict, what: str, file_line: str) -> list[str]:
     if counts["runs_unlinked"]:
         lines.append(_plural(counts["runs_unlinked"], "agent run") + " unlinked from this plan set")
     if counts["takeoff_tasks_scrubbed"]:
-        lines.append(_plural(counts["takeoff_tasks_scrubbed"], "takeoff task")
+        lines.append(_plural(counts["takeoff_tasks_scrubbed"], "measuring task")
                      + " no longer lists these sheets")
     if counts["assembly_uses_scrubbed"]:
         lines.append(_plural(counts["assembly_uses_scrubbed"], "assembly record")
@@ -621,6 +621,12 @@ def _summary(what: str, counts: dict) -> str:
 # ------------------------------------------------------------------ public: plan sets and sheets
 
 
+def plan_set_counts(conn, ctx: RequestContext, ps: dict) -> dict:
+    """What removing a plan set would delete (the same counts delete_plan_set asks with); changes nothing. Used when a
+    new revision replaces the plan set, so the upload question can say what goes."""
+    return _counts(_plan_set_scope(conn, ctx, ps))
+
+
 def delete_plan_set(conn, ctx: RequestContext, plan_set_id: int, confirm: bool = False) -> dict:
     """Remove a plan set and everything that came from it. Asks first unless confirm=true."""
     store._role(ctx, store.EDIT_ROLES, "remove plans")
@@ -639,9 +645,9 @@ def delete_plan_set(conn, ctx: RequestContext, plan_set_id: int, confirm: bool =
     if scope["log_files"]:
         file_bits.append(_plural(len(scope["log_files"]), "AI crop"))
     file_line = ("Files: " + ", ".join(file_bits) + ".") if file_bits else ""
-    what = f"Plan set {ps['id']} ({ps['original_name']})"
+    what = f"Plan set {store.plan_set_label(conn, ps)} ({ps['original_name']})"
     if not confirm:
-        _ask(counts, f"Remove plan set {ps['id']} ({ps['original_name']}) and everything that came from it?",
+        _ask(counts, f"Remove plan set {store.plan_set_label(conn, ps)} ({ps['original_name']}) and everything that came from it?",
              what, file_line, plan_set_id=ps["id"], estimate_id=ps["estimate_id"])
     with service.transaction(conn):
         _delete_rows(conn, scope, plan_set=True)
@@ -676,7 +682,7 @@ def delete_sheet(conn, ctx: RequestContext, sheet_id: int, confirm: bool = False
         label += f" ({sheet['title']})"
     what = f"Sheet {label}"
     if not confirm:
-        _ask(counts, f"Remove sheet {label} from plan set {ps['id']}?",
+        _ask(counts, f"Remove sheet {label} from plan set {store.plan_set_label(conn, ps)}?",
              what, file_line, sheet_id=sheet["id"], plan_set_id=ps["id"], estimate_id=ps["estimate_id"])
     with service.transaction(conn):
         _delete_rows(conn, scope, plan_set=False)

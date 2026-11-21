@@ -67,8 +67,9 @@ def record(conn, ctx, *, provider: str, model: str, role: str, purpose: str,
 
     usage is {"input": n, "output": n} from the provider; the cost comes from
     AI-Prowler's price table (providers.cost_micros), like agent_usage.
-    A failed call (ok=False) has no response and no usage - but the prompt
-    and the images it was sent with are still recorded.
+    A failed call (ok=False) has no response - but the prompt and the images
+    it was sent with are still recorded, and so are the tokens of one that
+    failed after the AI had worked (a cut-off answer is paid for, 2026-11-20).
     """
     usage = usage or {}
     micros = providers.cost_micros(model, usage) if usage else 0

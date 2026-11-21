@@ -20,6 +20,7 @@ import argparse
 import importlib
 import sqlite3
 import sys
+from datetime import datetime, timezone
 
 from estimator.agents.concrete_autorun import AgentError, RunStore
 from estimator.agents import providers
@@ -52,6 +53,33 @@ def _run_trade_reader(conn, ctx, run_row, module_id, on_step=None):
     return fn(conn, ctx, run_row, on_step=on_step)
 
 
+def run_wiring_stage(conn, ctx, estimate_id, on_step=None, keep_approved: bool = True) -> dict:
+    """Electrical's second stage inside AI Auto Run: route the wiring from the panel to every device (plain geometry,
+    no AI tokens) and propose the cable measurements - when the project has both CAD drawings (the electrical floor
+    plan and the panel drawing). The last Wiring run's settings and device moves are kept. A missing drawing or a
+    wiring problem never fails the device count; it is reported instead."""
+    from estimator.takeoff import wiring_run
+    try:
+        src = wiring_run.sources(conn, ctx, estimate_id)
+        if not src["plan"]:
+            # 2026-11-21: only the floor plan is needed; with no panel drawing the circuits are laid out for it.
+            return {"ran": False, "why": "wiring not routed - upload the electrical floor plan as a DXF (CAD) file on "
+                                         "the Plans screen (a panel drawing with its schedule is used when there is one)"}
+        if on_step:
+            on_step("routing the wiring")
+        last = wiring_run.latest(ctx, estimate_id) or {}
+        r = wiring_run.run(conn, ctx, estimate_id, last.get("settings"), last.get("overrides"),
+                           keep_approved=keep_approved, on_step=on_step)
+    except Exception as e:  # noqa: BLE001 - the count stands; say why the wiring didn't
+        return {"ran": False, "why": f"wiring not routed - {e}"}
+    cable = ", ".join(f"{b['measured_ft']:g} ft of {b['cable'].split()[0]}" for b in r["bom"])
+    laid_out = r.get("circuits_from") == "laid_out"
+    return {"ran": True, "measurement_ids": r["measurement_ids"], "circuits": len(r["circuits"]),
+            "unassigned": len(r["unassigned"]), "bom": r["bom"], "circuits_from": r.get("circuits_from", "schedule"),
+            "summary": f"{len(r['circuits'])} circuits routed"
+                       + (" (no panel schedule - circuits laid out by AI-Prowler)" if laid_out else "") + f": {cable}"}
+
+
 class LlmTakeoffRun:
     def __init__(self, *, db_path: str, run_id: int):
         self.store = RunStore(db_path)
@@ -70,13 +98,21 @@ class LlmTakeoffRun:
         self.step = step
         self.log(step)
         try:
-            self.store.update(self.run_id, step=step)
+            self.store.update(self.run_id, step=step, live=None)      # a new step starts with no AI progress yet
         except sqlite3.Error as e:
             self.log(f"could not write step '{step}' to the run row: {e}")
 
+    def set_live(self, info: dict) -> None:
+        """The AI's progress while it answers (2026-11-21, David): the waiting message shows its latest sentence
+        and how much has come back. Best effort - a busy database just skips one update."""
+        try:
+            self.store.update(self.run_id, live={**info, "at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+        except sqlite3.Error:
+            pass
+
     def _mark_failed(self, message: str) -> None:
         try:
-            self.store.update(self.run_id, status="failed", step=self.step, error=message)
+            self.store.update(self.run_id, status="failed", step=self.step, error=message, live=None)
         except Exception as e:  # noqa: BLE001 - failing to record the failure must not hide it
             self.log(f"could not mark the run failed: {e}")
 
@@ -96,6 +132,7 @@ class LlmTakeoffRun:
         try:
             self.run_row = self.store.read_run(self.run_id)
             self.store.update(self.run_id, status="running", step="starting")
+            providers.set_progress(self.set_live)    # every trade's AI reading shows its progress (2026-11-21)
             from estimator.database import open_database
             self.conn = open_database(self.db_path)
             ctx = RequestContext(company_id=self.run_row["company_id"],
@@ -107,9 +144,15 @@ class LlmTakeoffRun:
             else:
                 result = _run_trade_reader(self.conn, ctx, self.run_row, module_id,
                                          on_step=self.set_step)
+            if module_id == "electrical":            # the second stage: wire sizes and lengths (2026-11-19, David)
+                wired = run_wiring_stage(self.conn, ctx, self.run_row["estimate_id"], on_step=self.set_step,
+                                         keep_approved=bool(self.run_row.get("keep_approved", 1)))
+                result["candidate"] = {**result["candidate"], "wiring": wired}
+                result["measurement_ids"] = list(result["measurement_ids"]) + wired.get("measurement_ids", [])
+                self.log(f"wiring: {wired.get('summary') or wired.get('why')}")
             self.store.update(self.run_id, status="done", step="done",
                               candidate_id=llm_takeoff.CANDIDATE_ID, candidates=[result["candidate"]],
-                              measurement_ids=result["measurement_ids"])
+                              measurement_ids=result["measurement_ids"], live=None)
             self.log(f"done: {result['summary']}")
             return 0
         except (AgentError, llm_takeoff.LlmTakeoffError, providers.ProviderError) as e:
@@ -122,6 +165,7 @@ class LlmTakeoffRun:
             self.log(f"FAILED: {message}")
             return 1
         finally:
+            providers.set_progress(None)
             self._close()
 
 

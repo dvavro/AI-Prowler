@@ -298,13 +298,14 @@ def _run_one(conn, ctx, task: dict, cfg: dict, reg) -> dict:
         try:
             text, usage = providers.ask(which, system, user, model)
         except providers.ProviderError as exc:
+            spent = getattr(exc, "usage", None)          # a cut-off answer was still paid for (2026-11-20)
             with service.transaction(conn):
                 roles.record_usage(conn, ctx, task_id=task["id"], role=task["role"], provider=which, model=model,
-                                   usage=None, ok=False, error=str(exc))
+                                   usage=spent, ok=False, error=str(exc))
             # The AI Log row is written outside the transaction, so it stays even
             # when the run that made it fails afterwards (autocommit connection).
             ai_log.record(conn, ctx, provider=which, model=model, role=task["role"], purpose=purpose,
-                          system_prompt=system, user_prompt=user, task_id=task["id"],
+                          system_prompt=system, user_prompt=user, task_id=task["id"], usage=spent,
                           estimate_id=task["estimate_id"],
                           duration_ms=int((time.monotonic() - started) * 1000),
                           ok=False, error=str(exc))

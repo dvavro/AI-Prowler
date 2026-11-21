@@ -104,7 +104,7 @@ def test_E2E_S10_M6_jobs_board_links(page, power, db):
     page.wait_for_selector("#jobs-summary")
     dismiss_tour(page)
     summary = page.inner_text("#jobs-summary")
-    assert "Plan takeoffs: 1" in summary and "1 waiting on you" in summary
+    assert "Measure from plans: 1" in summary and "1 waiting on you" in summary
     row = page.locator(f"table[data-lane=full_takeoff] tr[data-id='{jid}']")
     assert row.count() == 1
     assert "step 3 of 8" in row.inner_text() and "Price approved quantities" in row.inner_text()

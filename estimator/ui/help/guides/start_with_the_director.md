@@ -7,7 +7,7 @@ The Director asks what the job is, then walks you through every step to sending 
 3. For construction work the Director asks **Do you have plans?** Pick **📐 Yes** to upload them, or **✏ No** to type the measurements.
 4. Add the customer's name and email (you can skip this and add it later), then click **Start →**.
 5. You land on the next page: the project page to upload plans, or the measurements form for the trade. Service jobs (washing, cleaning) become a quick quote.
-6. Every project page and estimate page has the **🧭 Director** box: the next step, **Why**, and a checklist of what's done. Click a step to go there.
+6. Every project page, plan set page, Measure page and estimate page has the **🧭 Director** box: the next step, **Why**, and a checklist of what's done. Click a step to go there. It follows along as you work — measure with **🤖 AI Auto Run** (and **⚡ Run wiring** for Electrical), approve, and the next step updates by itself. When new plans or approvals mean the estimate is behind, it offers **🔄 Update from the plans**.
 7. When the estimate is complete, click **✓ The estimate is ready — check it and get it approved**. The Director runs the checks, then shows **✓ Approve**, makes the quote and shows **📨 Send the quote…**.
 
 ## Good to know
@@ -17,4 +17,4 @@ The Director asks what the job is, then walks you through every step to sending 
 - Need a change after approving or sending? **✏️ Reopen for changes…** on the estimate takes the job back to its first step; the Director says "Reopened for changes" and the next approval lists only what changed. After the customer says yes, use **➕ Change order…** instead.
 - If the **Bid Writer** agent is on, the quote waits for its scope and **Included** / **Not included** lists after you approve.
 - The job is on the **📋 Jobs board** under **Projects**, with all its steps.
-- Tired of the guided tours popping up? Click **Don't show tours** on any tour, or untick it in **Settings → 🎓 Guided tours**. You can still replay a tour from **❓ Help**.
+- The Director walks you through the work. To learn what the controls on a screen do, click **🎓 Show me this screen** next to its **❓ Help** button — a short walkthrough that only runs when you ask. Every walkthrough is also listed on the **❓ Help** screen.

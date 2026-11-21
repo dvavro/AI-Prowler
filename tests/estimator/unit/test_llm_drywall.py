@@ -336,7 +336,7 @@ def test_run_llm_drywall_off_makes_no_call(db, fake, plans):
     rid = _run(db, plans)
     with pytest.raises(lt.LlmTakeoffError) as exc:
         lw.run_llm_drywall(db, CTX, autorun_api._load_run(db, CTX, rid))
-    assert "LLM takeoff is off" in str(exc.value) and "read the Drywall plan" in str(exc.value)
+    assert "AI measuring is off" in str(exc.value) and "read the Drywall plan" in str(exc.value)
     assert fake.calls == []
 
 

@@ -440,6 +440,7 @@ Source: "estimator\api\ai_log_api.py"; DestDir: "{app}\estimator\api"; Flags: ig
 Source: "estimator\api\asgi_bridge.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\auth.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\autorun_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
+Source: "estimator\api\wiring_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\estimate_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\jobs_board.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\links.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
@@ -636,6 +637,10 @@ Source: "estimator\takeoff\__init__.py"; DestDir: "{app}\estimator\takeoff"; Fla
 Source: "estimator\takeoff\auto_calibrate.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\from_plans.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\llm_electrical.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
+Source: "estimator\takeoff\wiring.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
+Source: "estimator\takeoff\wiring_schematic.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
+Source: "estimator\takeoff\wiring_run.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
+Source: "estimator\takeoff\audit.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\llm_demolition.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\llm_drywall.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\llm_fencing.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
@@ -673,6 +678,7 @@ Source: "estimator\ui\help\guides\measure_and_approve_on_the_plans.md"; DestDir:
 Source: "estimator\ui\help\guides\plan_quantities.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\quote_a_service_job.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\review_on_phone.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
+Source: "estimator\ui\help\guides\run_the_wiring.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\send_and_follow_up_a_quote.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\set_up_your_price_book.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\start_with_the_director.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion

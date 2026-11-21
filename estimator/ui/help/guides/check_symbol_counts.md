@@ -9,7 +9,7 @@ Symbols the plan engine counts are proposals until a person checks them. The Rev
 5. An unidentified symbol, or one counted as the wrong thing: select it, click **Relabel…**, type what it is (e.g. floor_box), tick **every identical match on this plan set** if you want, and click **Relabel…** then **Yes**.
 6. To find more of a symbol the engine missed: select one, click **Find similar…**. It says how many it found on every sheet; **Yes** adds them as "to check".
 7. A symbol the engine missed completely: open **Add a symbol the engine missed**, pick the sheet, give where it is and what it is, and click **Add…**.
-8. **open on the plan** under a picture opens it in Blueprint Review to see it in place.
+8. **open on the plan** under a picture opens it in Measure from plans (takeoff) to see it in place.
 
 Every change keeps the first result in its history ("was … , to check"). Approved, relabelled and added symbols teach your company's Symbol Library, so the next plan set from the same architect finds them by itself.
 Field staff can look at the symbols; an owner, estimator or reviewer approves them. AI agents never approve.

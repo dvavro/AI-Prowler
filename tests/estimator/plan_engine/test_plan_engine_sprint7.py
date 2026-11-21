@@ -103,6 +103,10 @@ def test_pdf_reading_and_tiles_share_one_lock(tmp_path):                        
     ("symbol", "0", "DOOR_36", "doors_windows"), ("symbol", "A-ANNO-TEXT", "NORTH", "symbols"),
     ("symbol", None, None, "symbols"), ("line", "0", None, "floor_plan"), ("polygon", None, None, "floor_plan"),
     ("line", "M-HVAC-DUCT", None, "mechanical"),
+    # 2026-11-20 (David): the designer's circuit lines and labels get their own group; a device on that layer doesn't.
+    ("line", "E-CIRCUIT", None, "circuits"), ("polyline", "E-CIRCUIT", None, "circuits"),
+    ("text", "E-CIRCUIT", None, "circuits"), ("line", "E-HOMERUN", None, "circuits"),
+    ("symbol", "E-CIRCUIT", "OUTLET", "electrical"), ("line", "E-POWR", None, "electrical"),
 ])
 def test_layer_groups(kind, layer, block, group):                                   # C2S7-E06
     assert layers.group_for(kind, layer, block) == group
@@ -113,3 +117,19 @@ def test_layers_panel_lists_what_is_there():                                    
     panel = layers.panel(objs)
     assert [(g["id"], g["count"]) for g in panel] == [("measurements", 0), ("rooms", 1), ("walls", 2)]
     assert set(layers.GROUP_IDS) >= {g["id"] for g in panel}
+
+
+@pytest.mark.parametrize("text, ok", [("KITCHEN", True), ("BEDROOM 2", True), ("AC 30A", False), ("DRYER 30A", False),
+                                      ("RANGE 50 AMP", False), ("WTR HTR 30A", False), ("240V", False)])
+def test_breaker_ratings_are_not_room_names(text, ok):                               # 2026-11-20: the "AC 30A" room
+    from estimator.plan_engine import vectors
+    assert vectors.is_room_name(text) is ok
+
+
+def test_a_room_wrapping_other_rooms_is_left_out():                                  # 2026-11-20: 6,912 sq ft "room"
+    from estimator.plan_engine import vectors
+    sq = lambda x0, y0, x1, y1: [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    kitchen, living = {"label": "KITCHEN", "points": sq(0, 0, 10, 10)}, {"label": "LIVING", "points": sq(10, 0, 20, 10)}
+    border = {"label": "AC 30A", "points": sq(-5, -5, 30, 30)}
+    assert vectors.drop_enclosing([kitchen, living, border]) == [kitchen, living]
+    assert vectors.drop_enclosing([border]) == [border]                              # a drawing that is one room

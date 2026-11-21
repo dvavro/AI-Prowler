@@ -197,7 +197,7 @@ def test_upload_kinds_revisions_and_roles(db, tmp_path, monkeypatch):  # S21-U03
     assert photo["file_type"] == "image"
     if "PIL" in sys.modules:
         assert "DPI" in photo["warnings"][0]
-    rev = store.upload(db, CTX, est["id"], str(dwg), supersedes_plan_set_id=first["plan_set_id"], confirm=True)
+    rev = store.upload(db, CTX, est["id"], str(dwg), supersedes_plan_set_id=first["plan_set_id"], keep_old=True, confirm=True)
     assert rev["revision"] == 2 and "converter" in rev["warnings"][0]
     with pytest.raises(PermissionDenied):
         store.upload(db, FIELD, est["id"], str(_pdf(tmp_path)), confirm=True)
@@ -205,7 +205,7 @@ def test_upload_kinds_revisions_and_roles(db, tmp_path, monkeypatch):  # S21-U03
         store.load_plan_set(db, OTHER, first["plan_set_id"])                   # another company can't see it
     other = _estimate(db)
     with pytest.raises(InvalidInput):
-        store.upload(db, CTX, other["id"], str(_pdf(tmp_path, "x.pdf")), supersedes_plan_set_id=first["plan_set_id"],
+        store.upload(db, CTX, other["id"], str(_pdf(tmp_path, "x.pdf")), supersedes_plan_set_id=first["plan_set_id"], keep_old=True,
                      confirm=True)
     assert store.list_plan_sets(db, CTX, est["id"])["count"] == 3
 

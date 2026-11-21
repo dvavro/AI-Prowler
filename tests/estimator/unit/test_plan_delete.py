@@ -183,7 +183,7 @@ def test_delete_plan_set_asks_first_and_warns_about_approved(db, seeded):
     assert "deleting removes them" in exc.value.message
     assert "smith plans.pdf" in exc.value.message
     changes = exc.value.details["changes"]
-    assert "Plan set %d (smith plans.pdf)" % seeded["plan_set_id"] in changes
+    assert "Plan set #1 (smith plans.pdf)" in changes                 # the project's number, not the global id
     assert "2 sheets" in changes
     assert "3 viewports" in changes
     assert "3 drawing objects" in changes
@@ -197,7 +197,7 @@ def test_delete_plan_set_asks_first_and_warns_about_approved(db, seeded):
     assert "1 AI-send log entry unlinked (the privacy record stays; the crop files are deleted)" in changes
     assert "1 revision report unlinked from this plan set" in changes
     assert "1 agent run unlinked from this plan set" in changes
-    assert "1 takeoff task no longer lists these sheets" in changes
+    assert "1 measuring task no longer lists these sheets" in changes
     assert "1 assembly record unlinked from the deleted measurements" in changes
     assert "1 plan set no longer replaces this one" in changes
     assert "Files: the uploaded file, 2 sheet images, viewer tiles, 1 AI crop." in changes
@@ -228,7 +228,7 @@ def test_delete_sheet_asks_first_and_warns_about_approved(db, seeded):
     assert "1 symbol detection" in changes
     assert "2 reviews of the deleted measurements and schedules" in changes
     assert "1 symbol example no longer names a deleted sheet" in changes
-    assert "1 takeoff task no longer lists these sheets" in changes
+    assert "1 measuring task no longer lists these sheets" in changes
     assert "1 assembly record unlinked from the deleted measurements" in changes
     assert "1 AI-send log entry unlinked (the privacy record stays; the crop files are deleted)" in changes
     assert "Files: the sheet image, its tiles, 1 AI crop." in changes

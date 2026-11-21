@@ -222,3 +222,22 @@ def test_pdf_with_real_browser(db, monkeypatch):  # S4-B17
     e = _approved(db)
     b = bids.generate(db, CTX, e["id"], customer=JANE)
     assert b["pdf_path"] and open(b["pdf_path"], "rb").read(4) == b"%PDF"
+
+
+def test_wait_for_pdf_sees_a_late_file(tmp_path):  # S4-B18 (2026-11-19: Edge's print lands ~0.5s after its launcher exits)
+    import threading
+    import time
+
+    pdf = tmp_path / "late.pdf"
+
+    def write_late():
+        time.sleep(0.5)
+        pdf.write_bytes(b"%PDF-1.4 late")
+
+    threading.Thread(target=write_late, daemon=True).start()
+    assert render._wait_for_pdf(pdf, 5.0)
+    assert pdf.read_bytes()[:4] == b"%PDF"
+
+
+def test_wait_for_pdf_gives_up_on_a_missing_file(tmp_path):  # S4-B19
+    assert not render._wait_for_pdf(tmp_path / "never.pdf", 0.5)

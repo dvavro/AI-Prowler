@@ -4,7 +4,7 @@
 Projects is where every estimate starts: one project per job, with its plans, estimate and history in one place.
 
 1. **Create project**: type the job name (customer and address work well, e.g. Miller – 123 Main St), then click **Create project**. The project page opens.
-2. Upload the plans on the project page — a PDF, a photo, or a DXF/DWG — then read them in Blueprint Review.
+2. Upload the plans on the project page — a PDF, a photo, or a DXF/DWG — then read them in Measure from plans (takeoff).
 3. **Filter by status** (draft, approved, sent, won, lost) or type a few letters of the customer or address in **Filter by name or #**.
 4. Click a project to open it: its trades, plans, estimate and history.
 5. **⚡ Quick estimate** starts a service quote without a project — it shows on the Jobs board instead.

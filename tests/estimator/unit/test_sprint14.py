@@ -262,7 +262,7 @@ def test_director_asks_for_trades(db):  # S14-D02
     r = engine.next_step(db, CTX, r["job"]["id"], trades="concrete, roofing", registry=REG)
     assert r["job"]["stage"] == "takeoff" and [x["module_id"] for x in r["next_step"]["tasks"]] == ["concrete", "roofing"]
     q = engine.start(db, CTX, "pressure wash my driveway", registry=REG)
-    with pytest.raises(InvalidInput, match="plan takeoff"):
+    with pytest.raises(InvalidInput, match="measure-from-plans"):
         engine.next_step(db, CTX, q["job"]["id"], trades=["roofing"], registry=REG)
 
 
@@ -332,8 +332,8 @@ def test_briefing_and_watcher_see_takeoffs(db):  # S14-W01
     from datetime import date, datetime, timedelta
     from estimator.director import briefing, watch
     r = engine.start(db, CTX, "bid the roofing plans", has_plans=True, registry=REG)
-    assert "plan takeoff(s) in progress" in briefing.briefing(db, CTX)["text"]
+    assert "measure-from-plans job(s) in progress" in briefing.briefing(db, CTX)["text"]
     d = date.today() + timedelta(days=2)
     out = watch.tick(db, CTX, datetime(d.year, d.month, d.day, 6).astimezone())
     msgs = [n["message"] for n in out["new_notices"] if n["kind"] == "review_reminder"]
-    assert msgs and "trade takeoffs" in msgs[0] and str(r["job"]["id"]) in msgs[0]
+    assert msgs and "trade measurements" in msgs[0] and str(r["job"]["id"]) in msgs[0]

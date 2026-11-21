@@ -33,13 +33,18 @@ _ADD = re.compile(r"^/estimates/(\d+)/measurements$")
 _PROPOSE = re.compile(r"^/estimates/(\d+)/measurements/propose$")
 _ONE = re.compile(r"^/measurements/(\d+)$")
 _ACT = re.compile(r"^/measurements/(\d+)/(edit|reject|suggest)$")
+# 2026-11-20 (David): Audit & clean up - double counts, counts from before the plans were read again, counts waiting,
+# rejected items; the person ticks the fixes (or accepts them all) and they're applied in one go.
+_AUDIT = re.compile(r"^/estimates/(\d+)/audit$")
+_AUDIT_APPLY = re.compile(r"^/estimates/(\d+)/audit/apply$")
 MAX_TEXT = 200
 MAX_IDS = 5000
 
 
 def handles(sub: str) -> bool:
     return (sub == "/takeoffs" or sub.startswith("/measurements/") or bool(_TAKEOFF.match(sub))
-            or bool(_ADD.match(sub)) or bool(_PROPOSE.match(sub)))
+            or bool(_ADD.match(sub)) or bool(_PROPOSE.match(sub)) or bool(_AUDIT.match(sub))
+            or bool(_AUDIT_APPLY.match(sub)))
 
 
 def _text(b: dict, key: str) -> str | None:
@@ -98,7 +103,7 @@ def route(m: str, sub: str, req, ctx, conn):
     from estimator.takeoff import measurements as ms
 
     if not nav.can_open(ctx.role, "takeoffs"):
-        raise _refuse("your role can't open takeoffs", 403, "permission_denied")
+        raise _refuse("your role can't open the Measure screen", 403, "permission_denied")
     can_measure = ctx.role in ms.PROPOSE_ROLES
     can_approve = ctx.role in ms.APPROVE_ROLES and not ctx.agent
     can_correct = ctx.role in ms.PROPOSE_ROLES + ("reviewer",)
@@ -216,6 +221,21 @@ def route(m: str, sub: str, req, ctx, conn):
             conn, ctx, ids, estimate_id=_int_opt(b.get("estimate_id")), module_id=_text(b, "module_id") or None,
             above_confidence=None if above in (None, "") else str(above),
             accept_suggestion=b.get("accept_suggestion") is True, confirm=b.get("confirm") is True))
+
+    mm = _AUDIT.match(sub)
+    if mm and m == "GET":
+        from estimator.takeoff import audit
+        return _ok(**{k: v for k, v in audit.audit(conn, ctx, int(mm.group(1))).items() if k != "ok"},
+                   can_apply=can_approve)
+    mm = _AUDIT_APPLY.match(sub)
+    if mm and m == "POST":
+        from estimator.takeoff import audit
+        b = _body(req)
+        ids = b.get("finding_ids")
+        if not isinstance(ids, list) or not ids or len(ids) > MAX_IDS \
+                or not all(isinstance(i, str) and 0 < len(i) <= 60 for i in ids):
+            raise _refuse("finding_ids must be a list of the audit's finding ids")
+        return _ask(lambda: audit.apply(conn, ctx, int(mm.group(1)), ids, confirm=b.get("confirm") is True))
 
     mm = _ONE.match(sub)
     if mm and m == "GET":

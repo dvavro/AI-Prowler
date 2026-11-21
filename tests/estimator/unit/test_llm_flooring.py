@@ -179,6 +179,14 @@ def test_parse_flooring_reading_rejects_bad_rooms(bad):
         lf.parse_flooring_reading(_reading(4, rooms=bad), 4)
 
 
+def test_parse_flooring_reading_rejects_bad_room_dimension():
+    """A bad dimension fails the parse, so the AI Log never shows a successful parse
+    for a run that then fails with no measurements."""
+    with pytest.raises(lt.LlmTakeoffError, match="width"):
+        lf.parse_flooring_reading(_reading(4, rooms=[{"name": "Living room", "width_ft": "big",
+                                                     "length_ft": "18'-0\""}]), 4)
+
+
 def test_parse_flooring_classification():
     assert lf.parse_flooring_classification('{"flooring_sheet_id": 4, "notes": "rooms"}', [4, 5]) == (4, "rooms")
     assert lf.parse_flooring_classification('{"flooring_sheet_id": null, "notes": "none"}', [4, 5])[0] is None
@@ -203,7 +211,9 @@ def test_quantities_from_reading_rooms_maths():
 
 
 def test_quantities_from_reading_rejects_an_unparseable_dimension():
-    bad = _parsed(4, rooms=[{"name": "Bedroom", "width_ft": "12'-0\"", "length_ft": "fourteen feet"}])
+    # the parse rejects a bad dimension now, so the bad reading is built by hand
+    bad = _parsed(4)
+    bad["rooms"] = [{"name": "Bedroom", "width_ft": "12'-0\"", "length_ft": "fourteen feet"}]
     with pytest.raises(lt.LlmTakeoffError, match="Bedroom"):
         lf.quantities_from_reading(bad)
 
@@ -338,7 +348,7 @@ def test_run_llm_flooring_off_makes_no_call(db, fake, plans):
     rid = _run(db, plans)
     with pytest.raises(lt.LlmTakeoffError) as exc:
         lf.run_llm_flooring(db, CTX, autorun_api._load_run(db, CTX, rid))
-    assert "LLM takeoff is off" in str(exc.value) and "read the Flooring plan" in str(exc.value)
+    assert "AI measuring is off" in str(exc.value) and "read the Flooring plan" in str(exc.value)
     assert fake.calls == []
 
 

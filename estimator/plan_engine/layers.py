@@ -17,6 +17,9 @@ GROUPS = (
     ("rooms", "Rooms", "#2b8a3e"),
     ("walls", "Walls", "#1c7ed6"),
     ("doors_windows", "Doors & windows", "#7048e8"),
+    # 2026-11-20 (David): the designer's circuit / home-run lines and their labels (E-CIRCUIT ...) apart from the
+    # devices, in their own colour, so they can be hidden while the outlets and switches stay.
+    ("circuits", "Circuit lines", "#c92a2a"),
     ("electrical", "Electrical", "#f08c00"),
     ("plumbing", "Plumbing", "#0c8599"),
     ("mechanical", "Mechanical", "#c2255c"),
@@ -41,8 +44,15 @@ _BY_NAME = (
 _KIND = {"wall": "walls", "room": "rooms", "opening": "doors_windows", "dimension": "dimensions", "text": "text"}
 
 
+# The designer's circuit / home-run layers (E-CIRCUIT, E-CKT, E-HOMERUN, E-WIRING...). Also used by the plan reader
+# (their text never names a room) and the wiring check (their lines say which devices share a circuit).
+CIRCUIT_LAYER = re.compile(r"CIRC|CKT|HOME.?RUN|E-WIRE|WIRING", re.I)
+
+
 def group_for(kind: str, layer: str | None = None, block_name: str | None = None) -> str:
     """The panel group of one drawing object."""
+    if kind != "symbol" and layer and CIRCUIT_LAYER.search(layer):
+        return "circuits"                         # circuit lines and their labels; a device symbol stays Electrical
     if kind in _KIND:
         return _KIND[kind]
     names = " ".join(n for n in (layer, block_name) if n)

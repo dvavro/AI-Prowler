@@ -152,10 +152,11 @@ def guard(conn, ctx: RequestContext, ps: dict) -> dict:
         return {"where": "processing_pc",
                 "why": f"{pages or 'an unknown number of'} sheet(s) is more than the server's limit of "
                        f"{s['small_max_sheets']}"}
-    busy = conn.execute("SELECT id FROM plan_sets WHERE company_id = ? AND status = 'processing' AND id != ?",
-                        (ctx.company_id, ps["id"])).fetchone()
+    busy = conn.execute("SELECT id, company_id, estimate_id, original_name FROM plan_sets WHERE company_id = ?"
+                        " AND status = 'processing' AND id != ?", (ctx.company_id, ps["id"])).fetchone()
     if busy:
-        return {"where": "processing_pc", "why": f"the server is already reading plan set {busy[0]} (one at a time)"}
+        return {"where": "processing_pc", "why": f"the server is already reading plan set "
+                f"{store.plan_set_label(conn, dict(busy))} ({busy['original_name']}) (one at a time)"}
     return {"where": "here", "small": True, "pages": pages}
 
 
@@ -185,7 +186,7 @@ def enqueue(conn, ctx: RequestContext, ps: dict, why: str = "") -> dict:
     online = [p for p in _pcs() if p["online"]]
     if not online:
         from estimator.director.watch import _notice
-        _notice(conn, ctx, "plans", f"no_pc:{ps['id']}", f"📐 Plan set {ps['id']} ({ps['original_name']}) is waiting "
+        _notice(conn, ctx, "plans", f"no_pc:{ps['id']}", f"📐 Plan set {store.plan_set_label(conn, ps)} ({ps['original_name']}) is waiting "
                 f"for a processing PC, and none is online. Open AI-Prowler on an estimator's PC and say \"pick up "
                 f"plan jobs\".", estimate_id=ps["estimate_id"])
     return {"queued_for": preferred, "pcs_online": len(online)}
@@ -296,7 +297,7 @@ def receive(conn, ctx: RequestContext, bundle: dict) -> dict:
         raise PermissionDenied("that result belongs to another company")
     ps = store.load_plan_set(conn, ctx, int(bundle.get("plan_set_id") or 0))
     if ps["queue_state"] != "waiting":
-        raise InvalidInput(f"plan set {ps['id']} isn't waiting for a processing PC (it's {ps['queue_state'] or 'not queued'})",
+        raise InvalidInput(f"plan set {store.plan_set_label(conn, ps)} isn't waiting for a processing PC (it's {ps['queue_state'] or 'not queued'})",
                            plan_set_id=ps["id"])
     if bundle.get("sha256") != ps["sha256"]:
         raise InvalidInput("the published result was made from a different file than this plan set",
@@ -341,7 +342,7 @@ def receive(conn, ctx: RequestContext, bundle: dict) -> dict:
                      {"plan_set_id": ps["id"], "from_pc": pc, "sheets": saved["sheets"], "objects": saved["objects"],
                       "measurements": len(made), "skipped": len(skipped)})
         from estimator.director.watch import _notice
-        _notice(conn, ctx, "plans", f"published:{ps['id']}", f"📐 Plan set {ps['id']} ({ps['original_name']}) was read "
+        _notice(conn, ctx, "plans", f"published:{ps['id']}", f"📐 Plan set {store.plan_set_label(conn, ps)} ({ps['original_name']}) was read "
                 f"on {pc}: {saved['sheets']} sheet(s), {saved['objects']} object(s), {len(made)} proposed "
                 f"measurement(s). It's ready to review.", estimate_id=ps["estimate_id"])
     shutil.rmtree(_dirs()["jobs"] / _key(ctx.company_id, ps["id"]), ignore_errors=True)
@@ -467,10 +468,10 @@ def publish(conn, ctx: RequestContext, plan_set_id: int, confirm: bool = False) 
     store._role(ctx, store.EDIT_ROLES, "publish plans")
     ps = store.load_plan_set(conn, ctx, int(plan_set_id))
     if not ps.get("server_job"):
-        raise InvalidInput(f"plan set {ps['id']} isn't a server plan job (pick one up with plan_processing_queue "
+        raise InvalidInput(f"plan set {store.plan_set_label(conn, ps)} isn't a server plan job (pick one up with plan_processing_queue "
                            "claim=true)", plan_set_id=ps["id"])
     if ps["status"] != "processed":
-        raise InvalidInput(f"plan set {ps['id']} hasn't been read yet (it's {ps['status']}); run plan_process first",
+        raise InvalidInput(f"plan set {store.plan_set_label(conn, ps)} hasn't been read yet (it's {ps['status']}); run plan_process first",
                            plan_set_id=ps["id"])
     job_dir = _dirs()["jobs"] / ps["server_job"]
     job = _read_json(job_dir / "job.json")
@@ -492,7 +493,7 @@ def publish(conn, ctx: RequestContext, plan_set_id: int, confirm: bool = False) 
                         "objects": [list(r) for r in refs]})
     n_obj = sum(len(s["objects"]) for s in results["sheets"])
     if not confirm:
-        raise ConfirmationRequired(f"Publish plan set {ps['id']} ({ps['original_name']}) to the server: "
+        raise ConfirmationRequired(f"Publish plan set {store.plan_set_label(conn, ps)} ({ps['original_name']}) to the server: "
                                    f"{len(results['sheets'])} sheet(s), {n_obj} object(s), {len(images)} sheet image(s), "
                                    f"{len(pms)} proposed measurement(s)? Call again with confirm=true.",
                                    sheets=len(results["sheets"]), objects=n_obj, measurements=len(pms))

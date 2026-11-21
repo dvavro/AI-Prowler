@@ -130,7 +130,7 @@ def answers_from_measurements(conn, ctx, est: dict, module_id: str, registry=Non
     from estimator.takeoff import measurements as ms
     approved = ms.approved_answers(conn, ctx, est["id"], module_id, registry).get(module_id, {})
     if not approved:
-        raise InvalidInput("there are no approved measurements for this trade yet; approve some in Blueprint Review",
+        raise InvalidInput("there are no approved measurements for this trade yet; approve some in Measure",
                            module_id=module_id)
     sec = next((s for s in est["sections"] if s["module_id"] == module_id), None)
     current = dict((sec or {}).get("answers") or {})

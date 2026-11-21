@@ -169,6 +169,17 @@ def test_parse_framing_reading_rejects_bad_rooms(rooms, match):
         lf.parse_framing_reading(_reading(4, rooms=rooms), 4)
 
 
+@pytest.mark.parametrize("rooms,match", [
+    ([{"name": "Living", "width_ft": "wide", "length_ft": "15'-0\""}], "width"),
+    ([{"name": "Living", "width_ft": "20'-0\"", "length_ft": "long"}], "length"),
+])
+def test_parse_framing_reading_rejects_an_unparseable_dimension(rooms, match):
+    """A bad dimension fails the parse, so the AI Log never shows a successful parse
+    for a run that then fails with no measurements."""
+    with pytest.raises(lt.LlmTakeoffError, match=match):
+        lf.parse_framing_reading(_reading(4, rooms=rooms), 4)
+
+
 def test_parse_framing_reading_wrong_sheet_id_uses_the_shown_sheet():
     got = lf.parse_framing_reading(_reading(9), 4)
     assert got["framing_sheet_id"] == 4
@@ -202,8 +213,11 @@ def test_quantities_from_reading_works_out_the_floor_area():
 ])
 def test_quantities_from_reading_rejects_an_unparseable_dimension(rooms, match):
     """A dimension that isn't a length fails loudly, naming the side - never guessed at."""
+    # the parse rejects a bad dimension now, so the bad reading is built by hand
+    reading = _parsed(4)
+    reading["rooms"] = rooms
     with pytest.raises(lt.LlmTakeoffError, match=match):
-        lf.quantities_from_reading(_parsed(4, rooms=rooms))
+        lf.quantities_from_reading(reading)
 
 
 # ------------------------------------------------------------------ the measurements
@@ -335,7 +349,7 @@ def test_run_llm_framing_off_makes_no_call(db, fake, plans):
     rid = _run(db, plans)
     with pytest.raises(lt.LlmTakeoffError) as exc:
         lf.run_llm_framing(db, CTX, autorun_api._load_run(db, CTX, rid))
-    assert "LLM takeoff is off" in str(exc.value) and "read the Framing plan" in str(exc.value)
+    assert "AI measuring is off" in str(exc.value) and "read the Framing plan" in str(exc.value)
     assert fake.calls == []
 
 

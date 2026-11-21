@@ -240,13 +240,13 @@ def test_trade_takeoff_settings_live_in_the_tab(root, db_home, switch, wizard): 
     assert tab.trade_auto_vars["framing"].get() is False
     tab.trade_conf_vars["framing"].set("90")
     tab.trade_auto_vars["framing"].set(True)
-    _find(tab.sections["trades"], "💾 Save takeoff settings").invoke()
+    _find(tab.sections["trades"], "💾 Save agent settings").invoke()
     got = {t["module_id"]: t for t in model.trades()}
     assert got["framing"]["confidence_threshold"] == 90 and got["framing"]["auto_advance"] is True
     assert got["roofing"]["confidence_threshold"] == 85 and got["roofing"]["changed"] is False     # untouched
     assert any("sure enough at 90%" in t for t in _texts(tab.sections["trades"]))
     tab.trade_conf_vars["roofing"].set("abc")
-    _find(tab.sections["trades"], "💾 Save takeoff settings").invoke()
+    _find(tab.sections["trades"], "💾 Save agent settings").invoke()
     assert any("whole number from 0 to 100" in t for t in _texts(tab.sections["trades"]))
     assert {t["module_id"]: t for t in model.trades()}["roofing"]["confidence_threshold"] == 85
 
@@ -691,5 +691,6 @@ def test_agents_flow_colours_each_step_by_its_mode():  # S16-G21
     assert steps["plan_reader"]["word"] == "needs plans"                          # on, but waits for the Plan Engine
     lit = {s["id"] for s in pic["states"] if s["lit"]}
     assert lit == {"Takeoff", "Review"}                                          # Plans isn't lit: it can't run yet
-    assert "AI takeoff" in pic["summary"] and "Reviewer" in pic["summary"]
+    assert next(s for s in pic["states"] if s["id"] == "Takeoff")["label"] == "Measure"  # the column reads Measure
+    assert "AI measuring" in pic["summary"] and "Reviewer" in pic["summary"]
     assert "complex step" in steps["llm_takeoff"]["help"] and "internal step" in steps["reviewer"]["help"]

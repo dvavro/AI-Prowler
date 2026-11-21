@@ -79,7 +79,7 @@ def _obj(value, name: str) -> dict:
 
 
 def est_list_modules(category: str = "") -> str:
-    """List the Estimator's trade and service modules (id, name, category, quick-estimate or plan takeoff).
+    """List the Estimator's trade and service modules (id, name, category, quick-estimate or measuring from plans).
 
     category: optional filter, "service" or "construction". Trades the company switched off (AI-Prowler's 🏗 Estimator
     tab → Trades) aren't listed: the company doesn't quote them; they're named under switched_off.
@@ -254,7 +254,7 @@ def est_director_start(request: str, customer_id: str = "", address: str = "", m
     """START HERE for any new estimate or quote. The Estimating Director takes a plain-language request
     ("customer wants their driveway pressure washed", "bid the roof on the Smith house", "pour a 400 sq ft patio"),
     picks the lane (quick quote for services; standard estimate for one construction trade from measurements;
-    full plan takeoff with has_plans=true, where the Estimate Runner makes one takeoff task per trade), creates the
+    full measure from plans with has_plans=true, where the Estimate Runner makes one measuring task per trade), creates the
     estimate and job, and returns next_step:
     what to ask, what to say and which tool to call next. Pass any answers you already have.
     customer: optional {name, email, phone, address, city, state, zip} — needed later to send the quote.
@@ -276,8 +276,10 @@ def est_director_next(job_id: int, answers: dict | str | None = None, module_id:
                       reviewed: bool = False, scenarios: bool = False, choose_scenario: str = "",
                       scenario_module: str = "", checklist_done: bool = False,
                       trades: list | str | None = None, confirm: bool = False, ready: bool = False,
-                      without_scope: bool = False) -> str:
+                      without_scope: bool = False, skip_audit: bool = False) -> str:
     """Continue a Director job with what it asked for:
+    (ready=true runs the measurement audit first; if counts are priced twice or out of step with the drawing it stops
+    and says so - send skip_audit=true with ready=true only when the user chose to move on anyway.)
     answers / module_id; approve=true at the approval checkpoint (only when the user clearly said yes;
     confirm_sample_prices=true only if they knowingly accept sample prices); customer={name, email, ...};
     send=true (optionally send_to) to email the quote; outcome='won' or 'lost' when the customer answers;
@@ -291,7 +293,7 @@ def est_director_next(job_id: int, answers: dict | str | None = None, module_id:
     approve=true). scenarios=true prices good/better/best options (they go on the bid); choose_scenario=<id> switches
     the quote to that option (scenario_module when several trades have options). checklist_done=true when the
     person confirms the company's approval checklist. trades=["framing", "drywall", ...] says which trades are in a
-    plan takeoff job (full_takeoff lane). ready=true on a project job (project lane: every project gets one) when the
+    measure-from-plans job (full_takeoff lane). ready=true on a project job (project lane: every project gets one) when the
     person says the estimate they built on the screens is complete: the Director then checks, approves and quotes it.
     without_scope=true makes the quote without waiting for the Bid Writer's scope and Included / Not included lists
     (only when the user says so). Returns the next step.
@@ -307,7 +309,8 @@ def est_director_next(job_id: int, answers: dict | str | None = None, module_id:
                                   reviewed=bool(reviewed), scenarios=bool(scenarios),
                                   choose_scenario=choose_scenario or None, scenario_module=scenario_module or None,
                                   checklist_done=bool(checklist_done), trades=_list(trades, "trades"),
-                                  confirm=bool(confirm), ready=bool(ready), without_scope=bool(without_scope))
+                                  confirm=bool(confirm), ready=bool(ready), without_scope=bool(without_scope),
+                                  skip_audit=bool(skip_audit))
     return _run(go)
 
 
@@ -675,14 +678,14 @@ def est_create_revision(estimate_id: int, change_summary: str) -> str:
 # ---------------------------------------------------------------- Estimate Runner and Agent Manager
 
 def runner_start(estimate_id: int, trades: list | str) -> str:
-    """Start a multi-trade takeoff run on an estimate: one task per trade (e.g. ["framing", "drywall", "roofing"]).
+    """Start a multi-trade measure run on an estimate: one task per trade (e.g. ["framing", "drywall", "roofing"]).
     Drywall, painting and insulation wait for framing. Trades switched off in AI-Prowler's Estimator tab are skipped. A Director plan
     job starts its own run, so use this for estimates outside the Director."""
     return _run(lambda c: runner.start_run(c, _ctx(), int(estimate_id), _list(trades, "trades")))
 
 
 def runner_status(run_id: int = 0, estimate_id: int = 0) -> str:
-    """A takeoff run's state and every trade task: queued (waiting on another trade), running (measure and submit),
+    """A measure run's state and every trade task: queued (waiting on another trade), running (measure and submit),
     needs_review (a person approves), completed, blocked or failed, with what to do next for each."""
     return _run(lambda c: runner.run_status(c, _ctx(), run_id=int(run_id) or None,
                                             estimate_id=int(estimate_id) or None))
@@ -720,14 +723,14 @@ def runner_retry_task(task_id: int) -> str:
 
 
 def est_project_status(estimate_id: int) -> str:
-    """Project dashboard: total, each trade's subtotal and biggest lines, the takeoff run's tasks, and the Director
+    """Project dashboard: total, each trade's subtotal and biggest lines, the measure run's tasks, and the Director
     job's stage. Changes nothing."""
     return _run(lambda c: runner.project_status(c, _ctx(), int(estimate_id)))
 
 
 def agent_config_get(module_id: str = "") -> str:
     """Trade-agent settings (Agent Manager): for each construction trade, enabled, confidence_threshold (0-100),
-    auto_advance (approve confident takeoffs without a person, off by default), sheet_rules (which plan sheets it
+    auto_advance (approve confident measurements without a person, off by default), sheet_rules (which plan sheets it
     reads) and defaults (answers the company always uses). module_id for one trade."""
     def go(c):
         if module_id:
@@ -837,7 +840,8 @@ def plan_upload(estimate_id: int, file_path: str, supersedes_plan_set_id: int = 
                 design_firm: str = "") -> str:
     """Attach a plan file on this PC (full path; PDF, PNG, JPG, TIFF, DXF or DWG, up to 300 MB) to an estimate. The file
     is checked first (real file type, not empty, not password-protected, not already on the estimate) and copied into
-    the Estimator's folder. For a revised set, give the plan set it replaces (it keeps that set's design firm).
+    the Estimator's folder. For a revised set, give the plan set it replaces (it keeps that set's design firm): the old
+    plan set is then REMOVED with its sheets and all its measurements, so measure the new plans again from scratch.
     design_firm: the architect or engineer who drew it, if known. Asks first (confirm=true)."""
     return _run(lambda c: plans.upload(c, _ctx(), int(estimate_id), file_path, int(supersedes_plan_set_id) or None,
                                        bool(confirm), design_firm=design_firm or None))
@@ -950,7 +954,7 @@ def symbol_detections_list(plan_set_id: int = 0, estimate_id: int = 0, item_type
     counts by item type, sheet and room. Filter by item_type (e.g. duplex_receptacle_gfci), sheet, room name,
     status (proposed/approved/rejected), min_confidence (0-1) or needs_review (true/false). Each detection says
     where it is, which legend entry or library it came from and each technology's score (legend, vision, ocr, cad).
-    Counts are proposals until a person approves them in Blueprint Review."""
+    Counts are proposals until a person approves them in Measure from plans (takeoff)."""
     def go(c):
         from estimator.symbols import service as symbol_service
         nr = None if needs_review in ("", None) else str(needs_review).strip().lower() in ("1", "true", "yes")

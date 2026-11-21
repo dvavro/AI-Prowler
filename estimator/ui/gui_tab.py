@@ -352,15 +352,15 @@ class EstimatorTab:
 
     def _trades_section(self):
         """🏗 Trades - the master setting (2026-11-17, David: set once, here only). A trade that's off isn't quoted: no
-        AI takeoff, the Director leaves it out, and the web app hides it from the trade pickers, the Price Book and
-        the symbol screens (estimates that already have it keep working). Each trade's takeoff agent - how sure it
+        AI measuring, the Director leaves it out, and the web app hides it from the trade pickers, the Price Book and
+        the symbol screens (estimates that already have it keep working). Each trade's measuring agent - how sure it
         must be, and whether it approves by itself - is set here too; the web app's Agents screen only shows them."""
         ttk = self.ttk
         box = self._box("🏗 Trades", "trades")
         self._note(box, "The trades and services you quote. One that's off isn't offered anywhere in the Estimator web "
-                        "app (trade pickers, quick estimate, Price Book, plan symbols), the AI takeoff doesn't measure it "
+                        "app (trade pickers, quick estimate, Price Book, plan symbols), the AI doesn't measure it "
                         "and the Director leaves it out; estimates that already have it keep working. Sure enough at: how "
-                        "sure a trade's AI takeoff must be before its quantities can go through; Approve by itself lets "
+                        "sure the AI's measuring for a trade must be before its quantities can go through; Approve by itself lets "
                         "those go through without a person (leave it off until you trust that trade).", GREY, 8)
         grid = ttk.Frame(box)
         grid.pack(fill="x", pady=(6, 0))
@@ -406,7 +406,7 @@ class EstimatorTab:
             self._say(msg, (True, " ".join(said)))
         b = ttk.Frame(box)
         b.pack(fill="x", pady=(6, 0))
-        ttk.Button(b, text="💾 Save takeoff settings", command=save_agents).pack(side="left")
+        ttk.Button(b, text="💾 Save agent settings", command=save_agents).pack(side="left")
         svc = ttk.Frame(box)
         svc.pack(fill="x", pady=(10, 0))
         ttk.Label(svc, text="Services (quick quotes, no plans needed)", font=("Arial", 9, "bold")).pack(anchor="w")
@@ -521,7 +521,7 @@ class EstimatorTab:
                 dga._tooltip(cb, "\n\n".join(af.MODE_HELP.values()))
                 dga._tooltip(mb, "\"" + af.GROUP_DEFAULT + "\" follows the top of the 🏢 Small Business tab: complex "
                                  "steps and customer messages get the stronger model, internal steps the cheaper one. "
-                                 "Pick a model to set it for this agent only - e.g. Claude Opus 5.5 for AI takeoff, "
+                                 "Pick a model to set it for this agent only - e.g. Claude Opus 5.5 for AI measuring, "
                                  "which reads plans and calibrates.")
 
         brow = ttk.Frame(left)
@@ -767,13 +767,13 @@ class EstimatorTab:
                    command=lambda: _open_folder(model.web_app_access()["url"])).pack(side="left", padx=(0, 8))
         ttk.Label(prow, text=access["url"], font=("Courier New", 9)).pack(side="left")
         self._note(pc, "Best for working at your desk: the big screen, mouse and keyboard make it the place for CAD "
-                       "and PDF plan viewing, zooming into sheets, calibrating, measuring takeoffs in Blueprint Review "
+                       "and PDF plan viewing, zooming into sheets, calibrating, measuring from plans "
                        "and building estimates. It runs on this PC (localhost), so it is fast and needs no Remote "
                        "Access.", GREY, 8)
         self.phone_url = self._link_row(
             box, "📱 Estimator — Mobile URL for phones", model.phone_link, "← send to phones",
-            "AI-Prowler Estimator", "Open this link on your phone to use the Estimator (plans, takeoffs and estimates):",
-            "Estimator — scan with your phone", "Opens the AI-Prowler Estimator (plans, takeoffs, estimates and bids).")
+            "AI-Prowler Estimator", "Open this link on your phone to use the Estimator (plans, measurements and estimates):",
+            "Estimator — scan with your phone", "Opens the AI-Prowler Estimator (plans, measurements, estimates and bids).")
         self.jobs_url = self._link_row(
             box, "🧰 Jobs App — Mobile URL for Job Updates (its Estimates screen opens the Estimator too)",
             model.jobs_link, "← send to crew phones", "AI-Prowler Jobs App",
@@ -847,7 +847,7 @@ class EstimatorTab:
         import threading
         tk, ttk = self.tk, self.ttk
         box = self._box("📤 Send a project to the server", "sync")
-        self._note(box, "Do the estimating here, then send the project — plans, takeoff, estimate and quote — to the "
+        self._note(box, "Do the estimating here, then send the project — plans, measurements, estimate and quote — to the "
                         "company server, so the crew can see the plans and the quote in the server's Estimator and "
                         "Jobs app. Sending the same project again updates the server copy; if someone changed it on "
                         "the server since, it is kept and your send is saved next to it.", "#444")

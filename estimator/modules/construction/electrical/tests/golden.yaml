@@ -1,18 +1,79 @@
 # Golden cases: sample prices, no markups. Totals in cents.
+# 2026-11-20 (David): devices and fixtures are separate labor lines (device_labor / fixture_labor - the hours are the
+# same as before, split in two); branch breakers are AFCI by default ($45); small parts $1.50 per device on new and old
+# work; fixtures the owner supplies are $0 'other' lines (not on the Bill of Materials).
 - name: New work, 10 outlets, 4 switches, 6 lights
   answers: {outlets: 10, switches: 4, lights: 6}
-  # labor 10 x 0.5 + 4 x 0.5 + 6 x 0.75 = 11.5 hr x $90; wire 20 x 25 = 500 lf x 1.15 x $0.55 = $316.25
-  # breakers ceil(20 / 10) = 2
-  expected_lines: {device_labor: 103500, outlets: 4000, switches: 1600, boxes_plastic: 6000, wire: 31625, breakers: 7000,
-                   permit: 20000}
-  expected_total_cents: 173725
+  # labor 10 x 0.5 + 4 x 0.5 = 7 hr x $90 (devices) + 6 x 0.75 = 4.5 hr x $90 (fixtures); wire 20 x 25 = 500 lf x 1.15 x
+  # $0.55 = $316.25; AFCI breakers ceil(20 / 10) = 2 x $45; small parts 20 x $1.50
+  # 2026-11-20: device boxes 14 x $3; each light gets a fixture-rated box, 6 x $6
+  expected_lines: {device_labor: 63000, fixture_labor: 40500, outlets: 4000, switches: 1600, lights: 0, boxes_plastic: 4200,
+                   fixture_boxes: 3600, wire: 31625, breakers_afci: 9000, small_parts: 3000, permit: 20000}
+  expected_total_cents: 180525
 - name: Old work, 2 fans, 2 GFCIs, 1 dedicated circuit, 40 ft runs
   answers: {work: remodel, fans: 2, gfci: 2, appliance_circuits: 1, avg_run_ft: 40}
-  # devices (2 x 0.75 + 2 x 1.5) x 1.6 = 7.2 hr; circuit 3 x 1.6 = 4.8 hr
+  # devices 2 x 0.75 x 1.6 = 2.4 hr; fans 2 x 1.5 x 1.6 = 4.8 hr; circuit 3 x 1.6 = 4.8 hr; the fan units are the owner's
   # backward compat: an old-style appliance_circuits answer still prices, as a 30 Amp circuit (heavy wire + 2-pole breaker)
-  expected_lines: {device_labor: 64800, circuit_labor: 43200, gfci: 4400, fan_boxes: 3000, boxes_plastic: 600, wire: 10120,
-                   heavy_wire: 11500, breakers: 3500, breakers_2pole: 7000, permit: 20000}
-  expected_total_cents: 168120
+  expected_lines: {device_labor: 21600, fixture_labor: 43200, circuit_labor: 43200, gfci: 4400, fan_units: 0, fan_boxes: 3000,
+                   boxes_plastic: 600, wire: 10120, heavy_wire: 11500, breakers_afci: 4500, breakers_2pole: 7000,
+                   small_parts: 600, permit: 20000}
+  expected_total_cents: 169720
+- name: New work, 4 bath exhaust fans
+  answers: {exhaust_fans: 4}
+  # 2026-11-19: labor 4 x 1.0 = 4 hr x $90; wire 4 x 25 = 100 lf x 1.15 x $0.55 = $63.25; breakers ceil(4 / 10) = 1
+  # (no boxes: an exhaust fan has its own housing; the fan unit is the customer's)
+  expected_lines: {fixture_labor: 36000, wire: 6325, breakers_afci: 4500, small_parts: 600, permit: 20000}
+  expected_total_cents: 67425
+- name: Switches by type, each its own line to order
+  answers: {switches: 10, switches_3way: 4, switches_4way: 1, dimmers: 2, occupancy_switches: 1}
+  # 2026-11-19: labor 10 x 0.5 + (4 + 1 + 1) x 0.75 + 2 x 0.5 = 10.5 hr x $90; parts $4 / $8 / $15 / $20 / $35 each
+  # boxes 18 x $3; wire 18 x 25 = 450 lf x 1.15 x $0.55 = $284.63 (rounded half-up); breakers ceil(18 / 10) = 2
+  expected_lines: {device_labor: 94500, switches: 4000, switches_3way: 3200, switches_4way: 1500, dimmers: 4000,
+                   occupancy_switches: 3500, boxes_plastic: 5400, wire: 28463, breakers_afci: 9000, small_parts: 2700,
+                   permit: 20000}
+  expected_total_cents: 176263
+- name: Outlets by type, each its own line to order
+  answers: {usb_outlets: 2, quad_outlets: 2, floor_boxes: 1, wp_outlets: 2}
+  # 2026-11-19: labor 2 x 0.5 + 2 x 0.75 + 1 x 1.5 + 2 x 1.0 = 6 hr x $90; parts $25 / $10 / $45 / $34 each
+  # boxes 6 x $3 (a floor box is its own box); wire 7 x 25 = 175 lf x 1.15 x $0.55 = $110.69; breakers ceil(7 / 10) = 1
+  expected_lines: {device_labor: 54000, usb_outlets: 5000, quad_outlets: 2000, floor_boxes: 4500, wp_outlets: 6800,
+                   boxes_plastic: 1800, wire: 11069, breakers_afci: 4500, small_parts: 1050, permit: 20000}
+  expected_total_cents: 110719
+- name: Lights by type, supplied by the owner - we hang and wire them
+  answers: {lights: 15, recessed_lights: 4, wall_lights: 6, pendant_lights: 2, undercabinet_lights: 3, exterior_lights: 2,
+            exit_emergency_lights: 1}
+  # labor (15 + 4 + 6 + 3) x 0.75 + (2 + 2 + 1) x 1.0 = 26 hr x $90; the fixtures are the owner's ($0 lines on the quote,
+  # "supplied by the owner"); boxes 33 x $3; wire 33 x 25 = 825 lf x 1.15 x $0.55 = $521.81; AFCI breakers 4
+  expected_lines: {fixture_labor: 234000, lights: 0, recessed_lights: 0, wall_lights: 0, pendant_lights: 0,
+                   undercabinet_lights: 0, exterior_lights: 0, exit_emergency_lights: 0, boxes_plastic: 900,
+                   fixture_boxes: 15600, recessed_housings: 5600, wire: 52181, breakers_afci: 18000, small_parts: 4950,
+                   permit: 20000}
+  # 2026-11-20: boxes we charge for even when the owner supplies the fixtures - undercabinet 3 x $3 (device box),
+  # fixture-rated boxes (15 + 6 + 2 + 2 + 1) x $6, recessed housings 4 x $14
+  expected_total_cents: 351231
+- name: Lights and fans we supply - priced and on the Bill of Materials
+  answers: {lights: 2, recessed_lights: 4, fans: 1, fixtures: us}
+  # labor (2 + 4) x 0.75 + 1 x 1.5 = 6 hr x $90; fixtures 2 x $45 + 4 x $25 + fan $150; fan box $15; boxes 6 x $3
+  # (a fan box is its own); wire 7 x 25 x 1.15 x $0.55 = $110.69; 1 AFCI breaker; small parts 7 x $1.50
+  expected_lines: {fixture_labor: 54000, lights_us: 9000, recessed_lights_us: 10000, fan_units_us: 15000, fan_boxes: 1500,
+                   fixture_boxes: 1200, wire: 11069, breakers_afci: 4500, small_parts: 1050, permit: 20000}
+  # 2026-11-20: 2 fixture-rated boxes x $6; the recessed housings come with the recessed lights we supply
+  expected_total_cents: 127319
+- name: New build main panel - panel and meter base to order, 12 hr to set it
+  answers: {main_panels: 1}
+  expected_lines: {main_panel: 45000, meter_base: 15000, panel_labor: 108000, permit: 20000}
+  expected_total_cents: 188000
+- name: Branch circuits from the panel schedule, dual-function breakers, range and dryer receptacles
+  answers: {outlets: 30, branch_circuits: 8, breaker_type: dual, range_receptacles: 1, dryer_receptacles: 1}
+  # 8 dual-function breakers x $55 (not ceil(30 / 10) = 3); receptacles $25 + $20; small parts 32 x $1.50
+  expected_lines: {device_labor: 135000, outlets: 12000, boxes_plastic: 9000, wire: 47438, breakers_dual: 44000,
+                   range_receptacles: 2500, dryer_receptacles: 2000, small_parts: 4800, permit: 20000}
+  expected_total_cents: 276738
+- name: Standard breakers when chosen
+  answers: {outlets: 10, breaker_type: standard}
+  expected_lines: {device_labor: 45000, outlets: 4000, boxes_plastic: 3000, wire: 15813, breakers: 3500, small_parts: 1500,
+                   permit: 20000}
+  expected_total_cents: 92813
 - name: 200 A panel upgrade
   answers: {panel: upgrade}
   expected_lines: {panel_upgrade: 350000, permit: 20000}
@@ -23,37 +84,38 @@
 - name: 220 V, 10 outlets, 4 switches, 6 lights
   answers: {voltage: "220", outlets: 10, switches: 4, lights: 6}
   # 220 V: 12/3 wire at $0.85 (500 lf x 1.15 = $488.75) and 2-pole branch breakers at $70
-  expected_lines: {device_labor: 103500, outlets: 4000, switches: 1600, boxes_plastic: 6000, wire_220: 48875,
-                   breakers_2pole: 14000, permit: 20000}
-  expected_total_cents: 197975
+  expected_lines: {device_labor: 63000, fixture_labor: 40500, outlets: 4000, switches: 1600, lights: 0, boxes_plastic: 4200,
+                   fixture_boxes: 3600, wire_220: 48875, breakers_2pole: 14000, small_parts: 3000, permit: 20000}
+  expected_total_cents: 202775
 - name: 220 V 3-phase, 10 outlets, 4 switches, 6 lights
   answers: {voltage: "220_3ph", outlets: 10, switches: 4, lights: 6}
-  # 3-phase: labor 11.5 hr x 1.25 = 14.375 hr; 3-phase wire $1.20; 3-pole breakers $105
-  expected_lines: {device_labor: 129375, outlets: 4000, switches: 1600, boxes_plastic: 6000, wire_3ph: 69000,
-                   breakers_3pole: 21000, permit: 20000}
-  expected_total_cents: 250975
+  # 3-phase: labor x 1.25 (7 hr -> 8.75, 4.5 hr -> 5.625); 3-phase wire $1.20; 3-pole breakers $105
+  expected_lines: {device_labor: 78750, fixture_labor: 50625, outlets: 4000, switches: 1600, lights: 0, boxes_plastic: 4200,
+                   fixture_boxes: 3600, wire_3ph: 69000, breakers_3pole: 21000, small_parts: 3000, permit: 20000}
+  expected_total_cents: 255775
 - name: Two 15 Amp dedicated circuits, 40 ft runs
   answers: {circuits_15a: 2, avg_run_ft: 40}
-  # 15 Amp circuits run on 12/2 wire ($0.55) with single-pole breakers: 2 x 40 ft x 1.15 = 92 lf
-  expected_lines: {circuit_labor: 54000, wire_15a: 5060, breakers: 7000, permit: 20000}
-  expected_total_cents: 86060
+  # 15 Amp circuits run on 12/2 wire ($0.55) with single-pole (AFCI) breakers: 2 x 40 ft x 1.15 = 92 lf
+  expected_lines: {circuit_labor: 54000, wire_15a: 5060, breakers_afci: 9000, permit: 20000}
+  expected_total_cents: 88060
 - name: One 15 Amp and one 30 Amp circuit, 30 ft runs
   answers: {circuits_15a: 1, appliance_circuits: 1, avg_run_ft: 30}
   # 15 Amp: 34.5 lf x $0.55 = $18.98; 30 Amp: 34.5 lf x $2.50 = $86.25; one breaker of each kind
-  expected_lines: {circuit_labor: 54000, wire_15a: 1898, heavy_wire: 8625, breakers: 3500, breakers_2pole: 7000,
+  expected_lines: {circuit_labor: 54000, wire_15a: 1898, heavy_wire: 8625, breakers_afci: 4500, breakers_2pole: 7000,
                    permit: 20000}
-  expected_total_cents: 95023
+  expected_total_cents: 96023
 - name: Metal boxes, 10 outlets
   answers: {outlets: 10, box_material: metal}
   # metal boxes $6 each vs plastic $3: 10 x $6 = $60
-  expected_lines: {device_labor: 45000, outlets: 4000, boxes_metal: 6000, wire: 15813, breakers: 3500, permit: 20000}
-  expected_total_cents: 94313
+  expected_lines: {device_labor: 45000, outlets: 4000, boxes_metal: 6000, wire: 15813, breakers_afci: 4500, small_parts: 1500,
+                   permit: 20000}
+  expected_total_cents: 96813
 - name: 2 outlets plus a 100 ft underground run
   answers: {outlets: 2, underground_ft: 100}
   # underground: 100 ft x 1.05 x $4.50 = $472.50
-  expected_lines: {device_labor: 9000, outlets: 800, boxes_plastic: 600, wire: 3163, breakers: 3500,
+  expected_lines: {device_labor: 9000, outlets: 800, boxes_plastic: 600, wire: 3163, breakers_afci: 4500, small_parts: 300,
                    underground_wire: 47250, permit: 20000}
-  expected_total_cents: 84313
+  expected_total_cents: 85613
 - name: 100 Amp subpanel
   answers: {panel: subpanel}
   expected_lines: {subpanel_100a: 90000, permit: 20000}

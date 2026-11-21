@@ -1003,6 +1003,17 @@ CREATE INDEX ix_bom_ordered_estimate ON bom_ordered (company_id, estimate_id);
 ALTER TABLE inspection_reviews ADD COLUMN module_id TEXT NOT NULL DEFAULT 'electrical';
 CREATE INDEX ix_inspection_reviews_trade ON inspection_reviews (company_id, estimate_id, module_id, id)
 """),
+    # 2026-11-19 (David): an AI Auto Run rerun recalculates the trade on the sheet from scratch; whether the items a
+    # person already approved are kept (and not proposed again) is the person's choice, per run. 1 = keep them.
+    (30, "AI Auto Run keeps approved items (choice per run)", """
+ALTER TABLE auto_runs ADD COLUMN keep_approved INTEGER NOT NULL DEFAULT 1 CHECK (keep_approved IN (0, 1))
+"""),
+    # 2026-11-21 (David: show the AI's streaming progress with the waiting message, "this helps the user see what's
+    # going on"): while AI Auto Run reads a plan, the runner keeps the AI's latest sentence and how much has come back
+    # here ({phase, thought, answer_chars, thinking_chars, at}); cleared when the run ends.
+    (31, "AI Auto Run shows the AI's live progress", """
+ALTER TABLE auto_runs ADD COLUMN live_json TEXT
+"""),
 ]
 
 

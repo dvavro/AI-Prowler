@@ -147,7 +147,7 @@ def test_prompt_carries_answers_lines_jurisdiction_edition_and_reference(db, ele
         {"zip": "32168", "city": "New Smyrna Beach", "state": "Florida", "state_abbr": "FL",
          "verified": True},
         code_edition("FL", "electrical", ON_DATE), "electrical")
-    assert "Outlets: 10" in user and "GFCI outlets: 0" in user       # the electrical answers
+    assert "Outlets (standard duplex): 10" in user and "GFCI outlets: 0" in user       # the electrical answers
     assert "Outlets and plates" in user                               # the line items
     assert "New Smyrna Beach, Florida (FL)" in user                   # the jurisdiction
     assert "2020 NEC under FBC 8th Edition" in user                  # the NEC edition
@@ -386,6 +386,21 @@ def test_run_review_with_an_unusable_answer_logs_the_failure(db, elec, fake):
     assert ir.latest_review(db, "default", elec["id"]) is None      # no partial review stored
     row = db.execute("SELECT ok, error FROM ai_log").fetchone()
     assert row["ok"] == 0 and "JSON" in row["error"]
+
+
+def test_a_cut_off_answer_still_counts_what_it_cost(db, elec, fake):
+    """2026-11-20 (David: "the AI couldn't answer: ... cut off at the 1500-token limit (0 characters came back)"):
+    the tokens of a cut-off answer are paid for, so the AI Log and the daily budget count them."""
+    class Cut(RuntimeError):
+        usage = {"input": 3000, "output": 32000}
+    _on(db)
+    fake.replies["claude_api"] = [Cut("the AI's answer was cut off at the 32000-token limit (0 characters came back)")]
+    with pytest.raises(ir.InspectionReviewError, match="cut off"):
+        ir.run_review(db, CTX, elec["id"], on_date=ON_DATE)
+    row = db.execute("SELECT ok, input_tokens, output_tokens, cost_micros FROM ai_log").fetchone()
+    assert row["ok"] == 0 and (row["input_tokens"], row["output_tokens"]) == (3000, 32000) and row["cost_micros"] > 0
+    spent = db.execute("SELECT SUM(cost_micros) FROM agent_usage").fetchone()[0]
+    assert spent == row["cost_micros"]                               # the budget meter sees it too
 
 
 def test_inspector_setting(db, fake):

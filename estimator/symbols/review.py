@@ -350,16 +350,38 @@ def crop_png(conn, ctx: RequestContext, detection_id: int, data_dir: Path) -> Pa
     d = load_detections(conn, ctx, [detection_id])[0]
     out_dir = Path(data_dir) / "symbol_crops"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"{ctx.company_id}_{d['sheet_id']}_{d['id']}.png"
+    out = out_dir / f"{ctx.company_id}_{d['sheet_id']}_{d['id']}_v2.png"      # v2: the window below (2026-11-20)
     if out.is_file():
         return out
     if not d["image_path"] or not Path(d["image_path"]).is_file():
         raise NotFound("this sheet has no picture", detection_id=detection_id)
-    x0, y0, x1, y1 = _box(d, pad=0.12)
+    x0, y0, x1, y1 = _crop_window(d)
     with Image.open(d["image_path"]) as src:
         k = src.size[0] / float(d["width"])
         crop = src.crop((max(0, int(x0 * k)), max(0, int(y0 * k)), min(src.size[0], int(x1 * k)),
                          min(src.size[1], int(y1 * k)))).convert("RGB")
-    crop.thumbnail((160, 160))
+    # Small crops are scaled up smoothly here, not blown up into blocks by the browser.
+    if max(crop.size) < THUMB_PX:
+        f = THUMB_PX / max(crop.size)
+        crop = crop.resize((max(1, round(crop.size[0] * f)), max(1, round(crop.size[1] * f))), Image.LANCZOS)
+    crop.thumbnail((THUMB_PX, THUMB_PX))
     crop.save(out, "PNG")
     return out
+
+
+THUMB_PX = 160
+
+
+def _crop_window(d: dict) -> list[float]:
+    """2026-11-20 (David: "the thumbnail views are too expanded, we need to see the symbol correctly"): a CAD symbol
+    has no box of its own, only its insertion point, and a fixed 0.2-unit window round it was a few inches of a plan
+    drawn in feet - a sliver of the symbol, blown up. The window is a share of the sheet instead (about 1/80 of its
+    larger side each way: ~1.4 ft on a 110 ft house plan, ~0.45 in on a 36 in PDF sheet), so the whole symbol and a
+    little of what's round it show. A detection with its own box keeps the box, padded."""
+    loc = json.loads(d["location_json"])
+    if loc.get("bbox"):
+        return _box(d, pad=0.12)
+    x, y = _point(d)
+    side = max(float(d.get("width") or 0), float(d.get("height") or 0))
+    half = max(0.2, side / 80.0)
+    return [x - half, y - half, x + half, y + half]

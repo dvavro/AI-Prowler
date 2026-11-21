@@ -66,11 +66,14 @@ def parse_hvac_reading(text: str, sheet_id: int) -> dict:
     none - never null), the rooms the AI read printed dimensions for (an empty list
     when the sheet shows none), the evidence for each quantity, confidence 0-1 (or
     None), notes. Any defect rejects the whole answer - a count the AI hedged on is
-    no count at all. The mechanical sheet is the one that was shown, whatever id the
-    AI wrote down."""
+    no count at all, and a dimension it hedged on is no dimension at all. The
+    mechanical sheet is the one that was shown, whatever id the AI wrote down."""
     reading = lq.parse_counts(text, sheet_id, COUNT_IDS, "hvac_sheet_id")
     obj = lt._parse_json_object(text)
     reading["rooms"] = lq.parse_rooms(obj.get("rooms"), "rooms")
+    for r in reading["rooms"]:      # the dimensions must parse now - a bad one rejects the whole answer
+        lq.dimension_inches(r["width_ft"], f"room {r['name'] or '?'} width")
+        lq.dimension_inches(r["length_ft"], f"room {r['name'] or '?'} length")
     reading["evidence"] = lq.parse_evidence(obj, ALL_IDS)
     return reading
 

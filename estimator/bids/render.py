@@ -12,6 +12,8 @@ import html
 import os
 import shutil
 import subprocess
+import tempfile
+import time
 from pathlib import Path
 
 from estimator.core.units.money import format_cents
@@ -201,8 +203,36 @@ def bid_text(bid: dict, company: dict, customer: dict) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def write_pdf(html_path: Path, pdf_path: Path, timeout: int = 60) -> str | None:
-    """Print the HTML to PDF with a headless browser. Returns None on success, or a reason it couldn't."""
+def _wait_for_pdf(pdf_path: Path, wait: float) -> bool:
+    """Wait up to `wait` seconds for the PDF to appear and stop growing.
+
+    The browser's launcher process can exit before the print lands: Edge hands the
+    print to a detached process that writes the PDF ~0.5s after the waited-on process
+    exits (2026-11-19: launcher 0.04s, PDF at 0.44-0.54s, profile released at ~1s),
+    so checking once right after subprocess.run returns sees no file. A size that
+    holds across two checks means the write finished.
+    """
+    deadline = time.monotonic() + wait
+    last_size = -1
+    while True:
+        try:
+            size = pdf_path.stat().st_size
+        except OSError:
+            size = 0
+        if size > 0 and size == last_size:
+            return True
+        last_size = size
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+
+
+def write_pdf(html_path: Path, pdf_path: Path, timeout: int = 60, settle: float = 10.0) -> str | None:
+    """Print the HTML to PDF with a headless browser. Returns None on success, or a reason it couldn't.
+
+    `settle` is how long to wait after each browser attempt for the PDF to land (see _wait_for_pdf);
+    10s is ~20x the ~0.5s a detached Edge print takes, with room for a loaded machine.
+    """
     browser = find_browser()
     if not browser:
         return "no browser found to make the PDF (the HTML bid is ready)"
@@ -213,16 +243,18 @@ def write_pdf(html_path: Path, pdf_path: Path, timeout: int = 60) -> str | None:
         subprocess.run(base + target, capture_output=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return f"PDF step failed: {exc}"
-    if not pdf_path.exists() or pdf_path.stat().st_size == 0:
-        # A second try with a throwaway profile: a headless Edge can hand the job to an Edge window that's already open
-        # and quit without printing (always when one runs as administrator and the other doesn't).
-        import tempfile
-        with tempfile.TemporaryDirectory(prefix="estimator_pdf_") as profile:
-            try:
-                subprocess.run(base + ["--no-default-browser-check", f"--user-data-dir={profile}"] + target,
-                               capture_output=True, timeout=timeout, check=False)
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                return f"PDF step failed: {exc}"
-    if not pdf_path.exists() or pdf_path.stat().st_size == 0:
-        return "the browser didn't produce a PDF (the HTML bid is ready)"
-    return None
+    if _wait_for_pdf(pdf_path, settle):
+        return None
+    # A second try with a throwaway profile: a headless Edge can hand the job to an Edge window that's already open
+    # and quit without printing (always when one runs as administrator and the other doesn't).
+    # ignore_cleanup_errors: the detached print process can still hold files in the profile (Crashpad) when the
+    # block exits, and a leftover dir in %TEMP% is harmless — the cleanup must never fail the bid.
+    with tempfile.TemporaryDirectory(prefix="estimator_pdf_", ignore_cleanup_errors=True) as profile:
+        try:
+            subprocess.run(base + ["--no-default-browser-check", f"--user-data-dir={profile}"] + target,
+                           capture_output=True, timeout=timeout, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return f"PDF step failed: {exc}"
+        if _wait_for_pdf(pdf_path, settle):
+            return None
+    return "the browser didn't produce a PDF (the HTML bid is ready)"

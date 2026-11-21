@@ -83,7 +83,7 @@ def _load_task(conn, ctx, task_id: int) -> dict:
     row = conn.execute("SELECT * FROM takeoff_tasks WHERE id = ? AND company_id = ?",
                        (int(task_id), ctx.company_id)).fetchone()
     if row is None:
-        raise NotFound(f"takeoff task {task_id} not found", task_id=task_id)
+        raise NotFound(f"measuring task {task_id} not found", task_id=task_id)
     return _task(row)
 
 
@@ -144,7 +144,7 @@ def start_run(conn, ctx: RequestContext, estimate_id: int, trades, *, job_id: in
               plan_set_id: int | None = None, registry=None) -> dict:
     """Start a takeoff run: one task per trade. Trades the owner switched off in AI-Prowler's 🏗 Estimator tab are skipped."""
     if ctx.role not in START_ROLES:
-        raise PermissionDenied(f"role '{ctx.role}' can't start a takeoff run", role=ctx.role)
+        raise PermissionDenied(f"role '{ctx.role}' can't start a measure run", role=ctx.role)
     reg = _registry(registry)
     est = service.get_estimate(conn, ctx, int(estimate_id))
     if est["status"] not in service.EDITABLE_STATUSES:
@@ -176,7 +176,7 @@ def start_run(conn, ctx: RequestContext, estimate_id: int, trades, *, job_id: in
 def add_trades(conn, ctx: RequestContext, run_id: int, trades, registry=None) -> dict:
     """Add trades to a run (it reopens if it had finished). Trades already in the run are left alone."""
     if ctx.role not in START_ROLES:
-        raise PermissionDenied(f"role '{ctx.role}' can't change a takeoff run", role=ctx.role)
+        raise PermissionDenied(f"role '{ctx.role}' can't change a measure run", role=ctx.role)
     reg = _registry(registry)
     run = _load_run(conn, ctx, run_id)
     if run["state"] == "cancelled":
@@ -263,7 +263,7 @@ def submit_takeoff(conn, ctx: RequestContext, task_id: int, answers: dict | None
     With both, approved measurements win over the plans' numbers for the same question (a person checked them), and
     answers given here win over both. The task still waits for a person's review unless auto-advance is on."""
     if ctx.role not in SUBMIT_ROLES:
-        raise PermissionDenied(f"role '{ctx.role}' can't submit takeoffs", role=ctx.role)
+        raise PermissionDenied(f"role '{ctx.role}' can't submit measurements", role=ctx.role)
     reg = _registry(registry)
     task = _load_task(conn, ctx, task_id)
     plan_notes: list[str] = []
@@ -364,7 +364,7 @@ def review_task(conn, ctx: RequestContext, task_id: int, *, approve: bool = Fals
                 note: str | None = None, registry=None) -> dict:
     """Approve the submitted quantities (optionally with corrections in answers), or send them back with a note."""
     if ctx.role not in REVIEW_ROLES:
-        raise PermissionDenied(f"role '{ctx.role}' can't review takeoffs", role=ctx.role)
+        raise PermissionDenied(f"role '{ctx.role}' can't review measurements", role=ctx.role)
     reg = _registry(registry)
     task = _load_task(conn, ctx, task_id)
     if task["state"] != "needs_review":
@@ -375,7 +375,7 @@ def review_task(conn, ctx: RequestContext, task_id: int, *, approve: bool = Fals
     if approve:
         return _approve(conn, ctx, task["id"], {**task["proposed"], **(answers or {})}, reg, reviewer=ctx.actor)
     if not (note or "").strip():
-        raise InvalidInput("to send a takeoff back, say what to fix (note), or approve=true to accept it",
+        raise InvalidInput("to send measurements back, say what to fix (note), or approve=true to accept them",
                            field="note")
     with service.transaction(conn):
         _set_task(conn, task["id"], state="running", note=note.strip()[:500], reviewed_by=ctx.actor)
@@ -388,7 +388,7 @@ def review_task(conn, ctx: RequestContext, task_id: int, *, approve: bool = Fals
 def retry_task(conn, ctx: RequestContext, task_id: int, registry=None) -> dict:
     """Try a failed or blocked trade again (trades waiting on it are unblocked too)."""
     if ctx.role not in START_ROLES:
-        raise PermissionDenied(f"role '{ctx.role}' can't retry takeoffs", role=ctx.role)
+        raise PermissionDenied(f"role '{ctx.role}' can't retry measuring tasks", role=ctx.role)
     reg = _registry(registry)
     task = _load_task(conn, ctx, task_id)
     if task["state"] not in ("failed", "blocked"):
@@ -434,7 +434,7 @@ def run_status(conn, ctx: RequestContext, *, run_id: int | None = None, estimate
         service.get_estimate(conn, ctx, int(estimate_id))     # company scoping
         run = latest_run(conn, ctx, estimate_id=int(estimate_id))
         if run is None:
-            raise NotFound(f"estimate {estimate_id} has no takeoff run", estimate_id=estimate_id)
+            raise NotFound(f"estimate {estimate_id} has no measure run", estimate_id=estimate_id)
     else:
         run = _load_run(conn, ctx, run_id)
     tasks = [_public(t) for t in _tasks(conn, run["id"])]

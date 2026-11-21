@@ -253,9 +253,10 @@ def create_measurements(conn, ctx: RequestContext, run: dict, reading: dict, qua
     now = lt._now()
     values = quantities["values"]
     with service.transaction(conn):
+        kept = lt.replace_earlier_proposals(conn, ctx, run, module_id, sheet_id)   # a rerun replaces, never adds
         for feeds, label, _plural, kind, unit in spec["questions"]:
             qty = values.get(feeds)
-            if qty is None:
+            if qty is None or feeds in kept:     # kept: already approved, and the run keeps approved items
                 continue
             try:
                 if Decimal(str(qty)) <= 0:
@@ -304,11 +305,11 @@ def run_llm_quantities(conn, ctx: RequestContext, run: dict, spec: dict, on_step
 
     cfg = roles.get_role(conn, ctx.company_id, lt.ROLE)
     if cfg["provider"] not in providers.API_PROVIDERS:
-        raise lt.LlmTakeoffError(f"LLM takeoff is off - turn it on in \U0001f916 AI agents (Setup) to let the AI"
+        raise lt.LlmTakeoffError(f"AI measuring is off - turn it on in \U0001f916 AI agents (Setup) to let the AI"
                                  f" read the {label} plan")
     ok_budget, why = roles.budget_left(conn, ctx.company_id)
     if not ok_budget:
-        raise lt.LlmTakeoffError(f"LLM takeoff can't run: {why}")
+        raise lt.LlmTakeoffError(f"AI measuring can't run: {why}")
     sheet = conn.execute("SELECT * FROM sheets WHERE id = ? AND company_id = ?",
                          (int(run["sheet_id"]), ctx.company_id)).fetchone()
     if sheet is None:
@@ -337,7 +338,7 @@ def run_llm_quantities(conn, ctx: RequestContext, run: dict, spec: dict, on_step
     else:
         shown = ranked[:lt.CLASSIFY_MAX_SHEETS]
         preps = [lt._prepare_image(conn, person_ctx, s["id"],
-                                   f"LLM takeoff: find {spec['sheet_phrase']}", cfg["provider"]) for s in shown]
+                                   f"AI measuring: find {spec['sheet_phrase']}", cfg["provider"]) for s in shown]
         images = [lt._image_payload(Path(p["file_path"]), lt.CLASSIFY_MAX_PX) for p in preps]
         refs = [lt._image_ref(p, lt.CLASSIFY_MAX_PX) for p in preps]
         listed = "\n".join(f"{i + 1}. {lt._sheet_label(s)}" for i, s in enumerate(shown))
@@ -348,7 +349,7 @@ def run_llm_quantities(conn, ctx: RequestContext, run: dict, spec: dict, on_step
                                         " sheet's id, or null if none of these sheets shows"
                                         f" {spec['sheet_phrase'].replace('the ', 'a ', 1)}>," 
                                         " \"notes\": \"one line saying why\"}. If you cannot tell, return null - never guess.",
-                                      images, purpose=f"LLM takeoff: find {spec['sheet_phrase']}",
+                                      images, purpose=f"AI measuring: find {spec['sheet_phrase']}",
                                       images_refs=refs, step="classify")
         try:
             found_id, notes = parse_classification(text, [s["id"] for s in shown], sheet_key)
@@ -364,12 +365,12 @@ def run_llm_quantities(conn, ctx: RequestContext, run: dict, spec: dict, on_step
 
     step("reading the plan with the AI")
     prep = lt._prepare_image(conn, person_ctx, trade_sheet["id"],
-                             f"LLM takeoff: read {spec['sheet_phrase']}", cfg["provider"])
+                             f"AI measuring: read {spec['sheet_phrase']}", cfg["provider"])
     path = Path(prep["file_path"])
     text, provider, model, log_id = lt._call(
         conn, ctx, cfg, run, spec["read_system"], spec["read_prompt"](trade_sheet),
         [lt._image_payload(path)],
-        purpose=f"LLM takeoff: read {spec['sheet_phrase']}", images_refs=[lt._image_ref(prep)])
+        purpose=f"AI measuring: read {spec['sheet_phrase']}", images_refs=[lt._image_ref(prep)])
     try:
         reading = spec["parse_reading"](text, trade_sheet["id"])
     except lt.LlmTakeoffError as exc:

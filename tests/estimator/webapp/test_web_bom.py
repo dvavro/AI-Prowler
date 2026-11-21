@@ -33,9 +33,10 @@ def test_get_bom_shape(call, elec):
     assert out["ok"] and [b["module_id"] for b in out["bom"]] == ["electrical"]
     entry = out["bom"][0]
     assert entry["section_id"] == _section_id(elec, "electrical")
-    assert [i["item_key"] for i in entry["items"]] == ["el_outlet_ea", "el_switch_ea",
-                                                       "el_box_plastic_ea", "el_wire_lf",
-                                                       "el_breaker_ea"]
+    # 2026-11-20: the owner supplies the light fixtures by default (not on the list); AFCI breakers; small parts.
+    assert [i["item_key"] for i in entry["items"]] == ["el_outlet_ea", "el_switch_ea", "el_fixture_box_ea",
+                                                       "el_box_plastic_ea", "el_wire_lf", "el_breaker_afci_ea",
+                                                       "el_small_parts_ea"]
     wire = _item(entry["items"], "el_wire_lf")
     assert wire["quantity"] == "500" and wire["order_quantity"] == "575.00"
     assert wire["unit"] == "lf" and wire["unit_cost_cents"] > 0 and wire["ordered"] is False
@@ -110,5 +111,7 @@ def test_estimates_page_has_the_bom_markers():
     js = (router.WEB_DIR / "estimates.js").read_text(encoding="utf-8")
     for needed in ("bomBlock", "Bill of Materials (", "Qty to order", "Copy list", "Download CSV",
                    "bom-copy-", "bom-csv-", "bom-table-", "data-bom-item", "data-bom-ordered",
-                   "/bom/ordered", "navigator.clipboard.writeText", "Bill of materials copied"):
+                   "/bom/ordered", "navigator.clipboard.writeText", "Bill of materials copied",
+                   # 2026-11-20 (David: "there is no total"): on the table, the summary, the copy and the CSV
+                   "bom-total-", "Total materials", "tfoot", "totalRow", "not priced"):
         assert needed in js, needed

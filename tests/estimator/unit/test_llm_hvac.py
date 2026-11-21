@@ -180,6 +180,14 @@ def test_parse_hvac_reading_rejects_bad_rooms(bad):
         lh.parse_hvac_reading(_reading(4, rooms=bad), 4)
 
 
+def test_parse_hvac_reading_rejects_bad_room_dimension():
+    """A bad dimension fails the parse, so the AI Log never shows a successful parse
+    for a run that then fails with no measurements."""
+    with pytest.raises(lt.LlmTakeoffError, match="width"):
+        lh.parse_hvac_reading(_reading(4, rooms=[{"name": "Living room", "width_ft": "big",
+                                                  "length_ft": "18'-0\""}]), 4)
+
+
 def test_parse_hvac_classification():
     assert lh.parse_hvac_classification('{"hvac_sheet_id": 4, "notes": "ducts"}', [4, 5]) == (4, "ducts")
     assert lh.parse_hvac_classification('{"hvac_sheet_id": null, "notes": "none"}', [4, 5])[0] is None
@@ -202,7 +210,9 @@ def test_quantities_from_reading_rooms_maths():
 
 
 def test_quantities_from_reading_rejects_an_unparseable_dimension():
-    bad = _parsed(4, rooms=[{"name": "Living room", "width_ft": "14.5", "length_ft": "18'-0\""}])
+    # the parse rejects a bad dimension now, so the bad reading is built by hand
+    bad = _parsed(4)
+    bad["rooms"] = [{"name": "Living room", "width_ft": "14.5", "length_ft": "18'-0\""}]
     with pytest.raises(lt.LlmTakeoffError, match="Living room"):
         lh.quantities_from_reading(bad)
 
@@ -337,7 +347,7 @@ def test_run_llm_hvac_off_makes_no_call(db, fake, plans):
     rid = _run(db, plans)
     with pytest.raises(lt.LlmTakeoffError) as exc:
         lh.run_llm_hvac(db, CTX, autorun_api._load_run(db, CTX, rid))
-    assert "LLM takeoff is off" in str(exc.value) and "read the HVAC plan" in str(exc.value)
+    assert "AI measuring is off" in str(exc.value) and "read the HVAC plan" in str(exc.value)
     assert fake.calls == []
 
 

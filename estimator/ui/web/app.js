@@ -52,6 +52,14 @@ function when(iso) {
 
 function words(s) { return String(s || "").replace(/_/g, " "); }
 
+// Display words for ids that still say "takeoff" server-side (a Director stage or lane, a runner
+// history action, a run error): the ids stay as they are, the UI reads "measure".
+const TAKEOFF_WORDS = { takeoff: "measure", full_takeoff: "measure from plans",
+  takeoff_failed: "measure failed", takeoff_submitted: "measure submitted",
+  takeoff_approved: "measure approved", takeoff_sent_back: "measure sent back",
+  takeoff_retried: "measure retried" };
+function idWords(s) { return TAKEOFF_WORDS[s] || words(s); }
+
 function mb(bytes) { return (Number(bytes || 0) / (1024 * 1024)).toFixed(1) + " MB"; }
 
 let toastTimer = null;
@@ -99,7 +107,17 @@ async function api(method, path, body) {
     throw new ApiError(401, data);
   }
   if (!r.ok || (data && data.ok === false)) throw new ApiError(r.status, data);
+  // Something on the project changed here (approved, measured, priced…): the Director panel looks again (2026-11-21).
+  // Its own look (/director) doesn't count, or it would keep looking at itself.
+  if (method !== "GET" && !/\/director$/.test(path)) projectChanged(null);
   return data;
+}
+
+// 2026-11-21 (David: "my director list did not follow me, so the user gets lost"): every page of a project tells the
+// Director panels on screen that something changed - this page's own actions (api) and other people's or agents'
+// (live updates) - and each panel looks again, at most once a burst.
+function projectChanged(estimateId) {
+  window.dispatchEvent(new CustomEvent("estimator:changed", { detail: { estimate_id: estimateId } }));
 }
 
 // Sprint 13: a picture from the API. Inside the Jobs app the Estimator is signed in by that app's token (no cookie),
@@ -219,10 +237,9 @@ function route() {
   const main = $("main");
   main.replaceChildren(el("p", { class: "muted" }, "Loading…"));
   const render = state.page ? (m => PAGES[state.page](m, state.pageArg)) : (SCREENS[screen.id] || renderComing);
-  Promise.resolve(render(main, screen)).then(() => {
-    // Sprint 18: a tour auto-starts on first open (tour.js). Guarded so a failed tour.js never breaks routing.
-    if (typeof maybeStartTour === "function") { const p = maybeStartTour(); if (p && p.catch) p.catch(() => {}); }
-  }).catch(e => {
+  // 2026-11-21: tours no longer start on their own after a screen renders — the Director guides the work, and
+  // "🎓 Show me this screen" (helpLink) starts a screen's tour when the user asks.
+  Promise.resolve(render(main, screen)).catch(e => {
     if (e.status === 401) return;
     main.replaceChildren(el("h2", {}, state.page ? "Estimator" : screen.label), errorBox(e),
       el("p", {}, el("a", { href: "#/dashboard" }, "Back to the dashboard")));
@@ -346,8 +363,8 @@ function estimateTable(rows) {
   return el("table", { class: "list clickable" },
     el("thead", {}, el("tr", {}, el("th", {}, "#"), el("th", {}, "Project"), el("th", {}, "Status"),
       el("th", {}, "Total"), el("th", {}, "Updated"))),
-    el("tbody", {}, rows.map(r => el("tr", { "data-id": r.id, onclick: () => go("#/projects/" + r.id) },
-      el("td", {}, r.id),
+    el("tbody", {}, rows.map((r, i) => el("tr", { "data-id": r.id, onclick: () => go("#/projects/" + r.id) },
+      el("td", {}, i + 1),   // # is the row position in the displayed list, not the estimate id (2026-11-19)
       el("td", {}, el("a", { href: "#/projects/" + r.id }, r.title || "(untitled)"), r.practice ? " 🎓" : ""),
       el("td", {}, el("span", { class: "status" }, words(r.status))),
       el("td", { class: "money" }, r.total_cents === undefined && !see ? "—" : money(r.total_cents)),
@@ -379,7 +396,7 @@ async function renderProject(main, id) {
   const go2 = el("p", { class: "row" });
   if (canOpen("estimates")) go2.append(el("a", { class: "button", id: "project-estimate", href: "#/estimates/" + est.id }, "🧮 Open the estimate"));
   if (canOpen("takeoffs") && p.plan_sets.length) {
-    go2.append(el("a", { class: "button", id: "project-review", href: "#/takeoffs/" + est.id }, "📏 Blueprint Review — measure and approve"));
+    go2.append(el("a", { class: "button", id: "project-review", href: "#/takeoffs/" + est.id }, "📏 Measure from plans (takeoff)"));
   }
   if (go2.childNodes.length) parts.push(go2);
 
@@ -398,16 +415,17 @@ async function renderProject(main, id) {
   parts.push(tradeHead, trades);
   if (st.summary) parts.push(el("p", { class: "muted" }, st.summary));
   if (st.run) {
-    parts.push(el("h3", {}, "Takeoff run"), el("table", { class: "list" },
+    parts.push(el("h3", {}, "Measure run"), el("table", { class: "list" },
       el("thead", {}, el("tr", {}, el("th", {}, "Trade"), el("th", {}, "State"), el("th", {}, "Next"))),
       el("tbody", {}, st.run.tasks.map(t => el("tr", {}, el("td", {}, t.module_id),
         el("td", {}, el("span", { class: "status" }, words(t.state))), el("td", {}, t.next || ""))))));
   }
-  if (st.job) parts.push(el("p", { class: "muted" }, "Director: " + words(st.job.lane) + " lane, " + words(st.job.stage) +
+  if (st.job) parts.push(el("p", { class: "muted" }, "Director: " + idWords(st.job.lane) + " lane, " + idWords(st.job.stage) +
     (st.job.waiting_on ? " — waiting on " + st.job.waiting_on : "")));
 
   // Plans: list + upload (Documents)
-  parts.push(el("h3", {}, "Plans and documents"), planTable(p.plan_sets));
+  const planMsg = el("div", { id: "plan-remove-message", role: "status" });
+  parts.push(el("h3", {}, "Plans and documents"), planTable(p.plan_sets, planMsg, p.can_edit), planMsg);
   if (p.can_upload) parts.push(uploadBox(est.id, p.plan_sets));
 
   // History
@@ -418,7 +436,7 @@ async function renderProject(main, id) {
     try {
       const ev = await api("GET", "/estimates/" + est.id + "/events");
       hist.append(el("ul", { class: "plain" }, ev.events.slice().reverse().map(e =>
-        el("li", {}, when(e.at) + " — " + words(e.action || "change") + " by " + (e.actor || "?") +
+        el("li", {}, when(e.at) + " — " + idWords(e.action || "change") + " by " + (e.actor || "?") +
           (e.on_behalf_of ? " for " + e.on_behalf_of : "")))));
     } catch (e) { hist.append(errorBox(e)); }
   });
@@ -557,40 +575,82 @@ function tile(value, label, cls) {
     el("div", { class: "lbl" }, label));
 }
 
-function planTable(rows) {
+// Removing a plan set asks first and lists everything that goes with it (the same question
+// the plan-set page asks); once it is gone the page re-renders without it. The Plans list
+// rows navigate on click, so that button stops the click reaching the row.
+function planSetDelCell(ps, msg, canEdit, stopNav) {
+  if (!canEdit || ps.status === "processing") return el("td", {});
+  const del = el("button", { class: "button small danger", type: "button", "data-remove-plan-set": ps.id,
+    "aria-label": "Remove plan set " + ps.file, title: "Remove this plan set and everything from it" }, "🗑️");
+  del.addEventListener("click", ev => {
+    if (stopNav) ev.stopPropagation();          // the row itself opens the plan set
+    askConfirm(msg, del, "/plan-sets/" + ps.id + "/remove", {},
+      done => { toast(done.summary || "Plan set removed."); route(); }, "plan-remove");
+  });
+  return el("td", {}, del);
+}
+
+function planTable(rows, msg, canEdit) {
   if (!rows.length) return el("div", { class: "card empty", id: "plans-empty" }, "No plans yet — upload a PDF, DXF or photo to start.");
   return el("table", { class: "list", id: "plans" },
     el("thead", {}, el("tr", {}, el("th", {}, "#"), el("th", {}, "File"), el("th", {}, "Type"), el("th", {}, "Rev"),
-      el("th", {}, "Status"), el("th", {}, "Sheets"), el("th", {}, "Uploaded"))),
+      el("th", {}, "Status"), el("th", {}, "Sheets"), el("th", {}, "Uploaded"), el("th", {}, ""))),
     el("tbody", {}, rows.map(r => el("tr", {},
-      el("td", {}, r.id),
+      el("td", {}, r.number ?? r.id),
       el("td", {}, canOpen("plans") ? el("a", { href: "#/plan-sets/" + r.id }, r.file) : r.file,
         r.warnings && r.warnings.length ? el("div", { class: "muted small" }, "⚠ " + r.warnings.join(" · ")) : null),
       el("td", {}, String(r.file_type || "").toUpperCase()),
       el("td", {}, r.revision),
       el("td", {}, el("span", { class: "status" }, words(r.status)), r.error ? el("div", { class: "error small" }, r.error) : null),
       el("td", {}, r.sheets || "—"),
-      el("td", {}, when(r.created_at) + " · " + (r.uploaded_by || ""))))));
+      el("td", {}, when(r.created_at) + " · " + (r.uploaded_by || "")), planSetDelCell(r, msg, canEdit, false)))));
 }
 
+const UPLOAD_PICK = {};      // estimate id -> the plan set picked in "This is" (kept while the page redraws)
 function uploadBox(estimateId, planSets) {
   const file = el("input", { type: "file", id: "plan-file", accept: PLAN_TYPES.join(",") });
   const replaces = el("select", { id: "plan-replaces", "aria-label": "Replaces" },
     el("option", { value: "" }, "New plan set"),
-    planSets.map(ps => el("option", { value: ps.id }, "Revised set — replaces #" + ps.id + " " + ps.file)));
+    planSets.map(ps => el("option", { value: ps.id }, "New revision of #" + (ps.number ?? ps.id) + " " + ps.file + " (removes the old one)")));
   const send = el("button", { class: "primary", type: "submit", id: "plan-upload" }, "📖 Upload and read");
   const bar = el("progress", { id: "plan-progress", max: 100, value: 0, hidden: true });
   const msg = el("div", { id: "plan-message", role: "status" });
+  // 2026-11-20 (David): the project keeps its own copy of every plan file, so a plan set picked in "This is" can be
+  // read again from that copy - no file to find and choose again.
+  const reread = el("button", { class: "button", type: "button", id: "plan-reread", hidden: true });
+  const picked = () => planSets.find(ps => String(ps.id) === replaces.value);
+  const syncReread = () => {
+    const ps = picked();
+    reread.hidden = !ps || ps.status === "processing";
+    if (ps) reread.textContent = "📖 Read #" + (ps.number ?? ps.id) + " again (same file)";
+  };
+  // The page redraws on live updates: keep what was picked in "This is" for this project.
+  const kept = UPLOAD_PICK[estimateId];
+  if (kept && planSets.some(ps => String(ps.id) === kept)) replaces.value = kept;
+  syncReread();
+  replaces.addEventListener("change", () => { UPLOAD_PICK[estimateId] = replaces.value; msg.replaceChildren(); syncReread(); });
+  reread.addEventListener("click", () => {
+    const ps = picked();
+    if (ps) askThen(msg, reread, "/plan-sets/" + ps.id + "/process", {},
+      () => "Reading " + ps.file + " again in the background…", "plan-reread");
+  });
   const box = el("form", { class: "card section", id: "upload-box" },
     el("strong", {}, "Upload plans"),
-    el("p", { class: "muted" }, "PDF, PNG, JPG, TIFF, DXF or DWG, up to 300 MB. One click: the file is checked, added to the project and read. It only stops to ask if the check finds a problem."),
-    el("div", { class: "row" }, el("label", {}, "File", file), planSets.length ? el("label", {}, "This is", replaces) : null, send),
+    el("p", { class: "muted" }, "PDF, PNG, JPG, TIFF, DXF or DWG, up to 300 MB. One click: the file is checked, added to the project and read. It only stops to ask if the check finds a problem. To read plans already in the project again, pick them in “This is” and press Read again — no new file needed."),
+    planSets.length ? el("p", { class: "muted" }, "Got updated plans? Choose the file, pick “New revision of …” in “This is”, and upload. The old plans and everything measured on them are removed, so measure the new plans from scratch (AI Auto Run, ⚡ Run wiring), approve, then click 🔄 Update from the plans on the estimate.") : null,
+    el("div", { class: "row" }, el("label", {}, "File", file), planSets.length ? el("label", {}, "This is", replaces) : null, send, reread),
     bar, msg);
   box.addEventListener("submit", async ev => {
     ev.preventDefault();
     const f = file.files && file.files[0];
     msg.replaceChildren();
-    if (!f) { msg.append(el("p", { class: "error" }, "Choose a file first.")); return; }
+    if (!f) {
+      const ps = picked();
+      msg.append(el("p", { class: "error" }, ps
+        ? "Choose the revised file to upload — or press “Read #" + (ps.number ?? ps.id) + " again” to read the saved " + ps.file + " again."
+        : "Choose a file first."));
+      return;
+    }
     const ext = (f.name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
     if (!PLAN_TYPES.includes(ext)) { msg.append(el("p", { class: "error" }, (ext || "That file") + " can't be used; plans can be PDF, PNG, JPG, TIFF, DXF or DWG.")); return; }
     if (f.size > MAX_PLAN_BYTES) { msg.append(el("p", { class: "error" }, f.name + " is " + mb(f.size) + "; the limit is 300 MB.")); return; }
@@ -658,12 +718,13 @@ function uploadPriceList(f) {
 async function attachAndRead(msg, estimateId, staged, replaces) {
   const r = await api("POST", "/estimates/" + estimateId + "/plans/attach",
     { stage_id: staged.stage_id, supersedes_plan_set_id: replaces || null });
+  const no = "#" + (r.number ?? r.plan_set_id);     // the project's own numbering, as the table shows it
   try {
     await api("POST", "/plan-sets/" + r.plan_set_id + "/process", { confirm: true });
-    toast("Added " + r.file + " as plan set " + r.plan_set_id + " — reading it now");
+    toast("Added " + r.file + " as plan set " + no + " — reading it now");
   } catch (e) {
     if (e.status === 401) return r;
-    toast("Added " + r.file + " as plan set " + r.plan_set_id + ", but reading didn't start");
+    toast("Added " + r.file + " as plan set " + no + ", but reading didn't start");
   }
   return r;
 }
@@ -671,14 +732,16 @@ async function attachAndRead(msg, estimateId, staged, replaces) {
 function showConfirm(msg, estimateId, staged, replaces, done) {
   const d = staged.details || {};
   const finish = () => { state.busy = false; done(); };
-  if (!(d.warnings && d.warnings.length)) {
+  // A new revision removes the old plans and their measurements (2026-11-21, David), so that always asks first.
+  if (!(d.warnings && d.warnings.length) && !d.replaces) {
     // Nothing to ask about: attach and read without a second click.
     attachAndRead(msg, estimateId, staged, replaces)
       .then(() => { finish(); route(); })
       .catch(e => { finish(); if (e.status !== 401) msg.replaceChildren(errorBox(e)); });
     return;
   }
-  const yes = el("button", { class: "primary", type: "button", id: "plan-attach" }, "Add and read it anyway");
+  const yes = el("button", { class: "primary", type: "button", id: "plan-attach" },
+    d.replaces ? "Replace the old plans and read the new ones" : "Add and read it anyway");
   const no = el("button", { class: "button", type: "button", id: "plan-cancel" }, "Cancel");
   yes.addEventListener("click", async () => {
     yes.disabled = no.disabled = true;
@@ -1305,42 +1368,61 @@ const DISCIPLINE_ICON = { architectural: "🏠", structural: "🧱", plumbing: "
 
 async function renderPlans(main, screen) {
   const r = await api("GET", "/plans");
+  const msg = el("div", { id: "plan-remove-message", role: "status" });
   const parts = [el("div", { class: "page-head" }, el("h2", {}, screen.label), helpLink("plans")),
-    el("p", { class: "muted" }, "Plan sets on your projects. Upload plans from a project's page; open a set to read it and check its sheets and scales.")];
+    el("p", { class: "muted" }, "Plan sets on your projects. Upload plans from a project's page; open a set to read it and check its sheets and scales."),
+    msg];
   if (!r.engine.installed) parts.push(el("p", { class: "note warn" }, "The plan engine isn't installed on this PC, so plans can be uploaded but not read yet."));
   if (!r.plan_sets.length) {
     parts.push(el("div", { class: "card empty", id: "plans-empty" }, "No plans yet — open a project and upload a PDF, DXF or photo."));
   } else {
     parts.push(el("table", { class: "list clickable", id: "plan-sets" },
       el("thead", {}, el("tr", {}, el("th", {}, "Project"), el("th", {}, "File"), el("th", {}, "Rev"), el("th", {}, "Status"),
-        el("th", {}, "Sheets"), el("th", {}, "Uploaded"))),
+        el("th", {}, "Sheets"), el("th", {}, "Uploaded"), el("th", {}, ""))),
       el("tbody", {}, r.plan_sets.map(p => el("tr", { "data-id": p.id, onclick: () => go("#/plan-sets/" + p.id) },
         el("td", {}, el("a", { href: "#/projects/" + p.estimate_id, onclick: ev => ev.stopPropagation() }, p.estimate_title)),
         el("td", {}, el("a", { href: "#/plan-sets/" + p.id }, p.file)),
         el("td", {}, p.revision),
         el("td", {}, el("span", { class: "status" }, words(p.status))),
         el("td", {}, p.sheets || "—"),
-        el("td", {}, when(p.created_at)))))));
+        el("td", {}, when(p.created_at)), planSetDelCell(p, msg, r.can_edit, true))))));
   }
   main.replaceChildren(...parts);
 }
 
 // Per-trade sheet activation: the trade the plan-set sheet list shows takeoff switches for.
-// Concrete first — it is the trade with the takeoff agent — and it stays put while the page is open.
-let planTradeId = "concrete";
+// Nothing picked yet: the first load defaults to the estimate's first trade (then the first
+// sheet's discipline, then the first takeoff trade), and the pick stays put while the page is
+// open. "all" is the All-trades view: one switch per sheet for every takeoff trade at once.
+let planTradeId = null;
 let planPoll = null;
 async function renderPlanSet(main, id) {
   clearTimeout(planPoll);
-  const [r, mods] = await Promise.all([api("GET", "/plan-sets/" + id + "?module_id=" + encodeURIComponent(planTradeId)),
-    api("GET", "/modules")]);
+  let [r, mods] = await Promise.all([api("GET", "/plan-sets/" + id +
+    (planTradeId ? "?module_id=" + encodeURIComponent(planTradeId) : "")), api("GET", "/modules")]);
   const tradeMods = (mods.modules || []).filter(m => m.path === "plan_takeoff" || m.path === "both");
-  const trade = tradeMods.find(m => m.id === planTradeId) || tradeMods[0];
-  const tradeId = trade ? trade.id : planTradeId, tradeName = trade ? trade.name : words(planTradeId);
+  if (planTradeId && planTradeId !== "all" && !tradeMods.some(m => m.id === planTradeId)) planTradeId = null;
+  if (!planTradeId) {
+    // First load, nothing picked yet: the first fetch had no trade, so default to the
+    // estimate's first trade (then the first sheet's discipline, then the first takeoff
+    // trade) and fetch again with that trade for the toggle states. One extra call, only
+    // on the first load — the no-trade GET deliberately carries no trade state (ST-A02).
+    const estTrades = (r.estimate.modules || []).filter(t => tradeMods.some(m => m.id === t));
+    const disc = (r.sheets[0] || {}).discipline;
+    planTradeId = estTrades[0] || (tradeMods.some(m => m.id === disc) ? disc : null)
+      || (tradeMods.some(m => m.id === "concrete") ? "concrete" : (tradeMods[0] ? tradeMods[0].id : "concrete"));
+    r = await api("GET", "/plan-sets/" + id + "?module_id=" + encodeURIComponent(planTradeId));
+  }
+  const allTrades = planTradeId === "all";
+  const trade = allTrades ? null : (tradeMods.find(m => m.id === planTradeId) || tradeMods[0]);
+  const tradeId = allTrades ? "all" : (trade ? trade.id : planTradeId),
+    tradeName = allTrades ? "all trades" : (trade ? trade.name : words(planTradeId));
   const ps = r.plan_set;
   const msg = el("div", { id: "plan-message", role: "status" });
   const parts = [el("p", {}, el("a", { href: "#/projects/" + r.estimate.id }, "← " + r.estimate.title)),
     el("div", { class: "page-head" }, el("h2", {}, "📐 " + ps.file + (ps.revision > 1 ? " (revision " + ps.revision + ")" : "")), helpLink("plans")),
     el("p", { class: "muted", id: "plan-say" }, ps.say)];
+  if (!r.estimate.practice) parts.splice(2, 0, directorGuide(r.estimate.id));     // the Director comes along (2026-11-21)
   if (ps.status === "failed") parts.push(el("p", { class: "error" }, ps.error || "Reading failed."));
   if (r.can_edit && ps.status !== "processing") {
     if (!r.engine.installed) {
@@ -1381,28 +1463,66 @@ async function renderPlanSet(main, id) {
     // Per-trade sheet activation: pick the trade, then switch sheets on or off for its takeoff.
     // A sheet switched off is skipped by that trade's agent — it stays openable and measurable by hand.
     const pickTrade = el("select", { id: "plan-trade", "aria-label": "Trade" },
-      tradeMods.map(m => el("option", { value: m.id, selected: m.id === tradeId }, m.name)));
+      [el("option", { value: "all", selected: tradeId === "all" }, "All trades"),
+        ...tradeMods.map(m => el("option", { value: m.id, selected: m.id === tradeId }, m.name))]);
     pickTrade.addEventListener("change", () => { planTradeId = pickTrade.value; route(); });
     parts.push(el("div", { class: "row filters", id: "plan-trade-row" },
-      el("label", {}, "Takeoff for ", pickTrade),
-      el("span", { class: "muted small" }, "Sheets switched off are skipped by the " + tradeName + " takeoff — you can still open and measure them by hand.")));
+      el("label", {}, "Measure for ", pickTrade),
+      el("span", { class: "muted small" }, allTrades
+        ? "Sheets switched off are skipped when measuring — you can still open and measure them by hand."
+        : "Sheets switched off are skipped when measuring for " + tradeName + " — you can still open and measure them by hand.")));
     const toggleCell = s => {
-      const on = s.active_for_trade !== false;
-      if (!r.can_edit) return el("td", {}, on ? "" : el("span", { class: "status sample" }, "off for " + tradeName));
-      const off = el("span", { class: "status sample", hidden: on }, " off");
-      const box = el("input", { type: "checkbox", class: "sheet-trade-toggle", "data-sheet": s.id, checked: on,
-        "aria-label": "Use this sheet for " + tradeName,
-        title: on ? "This sheet counts for " + tradeName : "Switched off for " + tradeName + " — the agent skips it" });
+      // All trades: on = active for every takeoff trade, off = inactive for all, mixed = in
+      // between (a trade with no row counts as active — no row means active, sheet_trades.py).
+      // cur is the state before the click; the toggle updates it, so a second click reads fresh.
+      const byTrade = allTrades ? (s.active_by_trade || {}) : null;
+      const actives = allTrades ? tradeMods.map(m => byTrade[m.id] !== false) : null;
+      const cur = allTrades
+        ? { on: actives.length > 0 && actives.every(Boolean),
+            off: actives.length > 0 && actives.every(a => !a),
+            mixed: actives.length > 0 && actives.some(Boolean) && actives.some(a => !a) }
+        : { on: s.active_for_trade !== false, off: s.active_for_trade === false, mixed: false };
+      if (!r.can_edit) {
+        if (allTrades) return el("td", {}, cur.off ? el("span", { class: "status sample" }, "off for all trades")
+          : cur.mixed ? el("span", { class: "status sample" }, "off for some trades") : "");
+        return el("td", {}, cur.on ? "" : el("span", { class: "status sample" }, "off for " + tradeName));
+      }
+      const offCount = allTrades ? actives.filter(a => !a).length : 0;
+      const off = el("span", { class: "status sample", hidden: !cur.off }, " off");
+      const box = el("input", { type: "checkbox", class: "sheet-trade-toggle", "data-sheet": s.id, checked: cur.on,
+        "aria-label": allTrades ? "Use this sheet for all trades when measuring" : "Use this sheet for " + tradeName,
+        title: allTrades
+          ? (cur.on ? "This sheet counts for every trade"
+            : cur.off ? "Switched off for every trade — the agents skip it when measuring"
+            : "Switched off for " + offCount + " of " + actives.length + " trades — click to switch it off for every trade")
+          : (cur.on ? "This sheet counts for " + tradeName
+            : "Switched off for " + tradeName + " — the agent skips it") });
+      box.indeterminate = cur.mixed;
       box.addEventListener("click", ev => ev.stopPropagation());
       box.addEventListener("change", async () => {
-        const want = box.checked;
+        // All trades: a click on an on or mixed sheet switches it off for every trade (the
+        // reference-sheet use case); a click on an off sheet switches it back on for every
+        // trade. (A mixed checkbox reports checked after the click, so the target comes
+        // from the state before the click, not box.checked.)
+        const want = allTrades ? cur.off : box.checked;
         box.disabled = true;
         try {
-          await api("POST", "/sheets/" + s.id + "/trade-active", { module_id: tradeId, active: want });
+          if (allTrades) {
+            await Promise.all(tradeMods.map(m =>
+              api("POST", "/sheets/" + s.id + "/trade-active", { module_id: m.id, active: want })));
+          } else {
+            await api("POST", "/sheets/" + s.id + "/trade-active", { module_id: tradeId, active: want });
+          }
+          cur.on = want; cur.off = !want; cur.mixed = false;
+          box.checked = want; box.indeterminate = false;
           off.hidden = want;
-          box.title = want ? "This sheet counts for " + tradeName : "Switched off for " + tradeName + " — the agent skips it";
-          toast(want ? "Sheet switched on for " + tradeName + "." : "Sheet switched off for " + tradeName + " — the takeoff agent will skip it.");
-        } catch (e) { box.checked = !want; toast(e.message); }
+          box.title = allTrades
+            ? (want ? "This sheet counts for every trade" : "Switched off for every trade — the agents skip it when measuring")
+            : (want ? "This sheet counts for " + tradeName : "Switched off for " + tradeName + " — the agent skips it");
+          toast(allTrades
+            ? (want ? "Sheet switched on for all trades." : "Sheet switched off for all trades — the agents will skip it when measuring.")
+            : (want ? "Sheet switched on for " + tradeName + "." : "Sheet switched off for " + tradeName + " — the agent will skip it when measuring."));
+        } catch (e) { box.checked = cur.on; box.indeterminate = cur.mixed; toast(e.message); }
         box.disabled = false;
       });
       return el("td", {}, box, off);
@@ -1422,7 +1542,7 @@ async function renderPlanSet(main, id) {
     };
     parts.push(el("table", { class: "list clickable", id: "sheets" },
       el("thead", {}, el("tr", {}, el("th", {}, "Page"), el("th", {}, "Sheet"), el("th", {}, "Title"), el("th", {}, "Discipline"),
-        el("th", {}, "Scales"), el("th", {}, "Rev"), el("th", {}, "Takeoff"), el("th", {}, ""))),
+        el("th", {}, "Scales"), el("th", {}, "Rev"), el("th", {}, "Measure"), el("th", {}, ""))),
       el("tbody", {}, r.sheets.map(s => el("tr", { "data-id": s.id, onclick: () => go("#/sheets/" + s.id) },
         el("td", {}, s.page_no),
         el("td", {}, el("a", { href: "#/sheets/" + s.id }, s.sheet_no || "page " + s.page_no)),
@@ -1491,7 +1611,7 @@ function symbolCounts(y) {
     ...sheets.map(sh => el("td", {}, String(sh.by_type[t.item_type || "unknown"] || "")))));
   return el("div", { class: "card section", id: "plan-symbols" },
     el("h3", {}, "Symbols found from the legend"),
-    el("p", { class: "muted small" }, y.count + " symbol(s). These are proposals: approve them in Blueprint Review before they're priced."),
+    el("p", { class: "muted small" }, y.count + " symbol(s). These are proposals: approve them in Measure from plans (takeoff) before they're priced."),
     el("table", { class: "list symbol-counts" }, el("thead", {}, head), el("tbody", {}, rows)));
 }
 
@@ -1590,7 +1710,7 @@ async function renderSheet(main, id) {
   const parts = [...head];
   if (canOpen("takeoffs")) {
     parts.push(el("p", {}, el("a", { class: "button", id: "sheet-review", href: "#/takeoffs/" + r.plan_set.estimate_id + "?sheet=" + s.id },
-      "📏 Measure and approve in Blueprint Review")));
+      "📏 Measure from plans (takeoff)")));
   }
   if (r.found && r.found.length) parts.push(foundSummary(r.found));
   if (s.has_image) {
@@ -1906,14 +2026,20 @@ function startCalibration(v, s, stage, img, msg) {
 function helpLink(screenId) {
   // Sprint 18: "?" opens the help panel (guides for this screen + Replay tour) without leaving
   // the screen. If tour.js failed to load, fall back to the full Help screen.
-  return el("button", { class: "button help-link", type: "button", id: "help-link", title: "How-to guides for this screen",
+  const help = el("button", { class: "button help-link", type: "button", id: "help-link", title: "How-to guides for this screen",
     "aria-label": "Help for this screen",
     onclick: () => { if (typeof openHelpPanel === "function") openHelpPanel(screenId); else go("#/help?screen=" + screenId); } }, "❓ Help");   // 2026-11-12: a word, not just "?"
+  // 2026-11-21: tours only start when asked. "Show me this screen" walks through this screen's controls
+  // (tour.js); left out if tour.js didn't load.
+  if (typeof showMeThisScreen !== "function") return help;
+  const show = el("button", { class: "link-btn show-me-link", type: "button", id: "show-me-link",
+    title: "A short walkthrough of this screen's controls", onclick: () => showMeThisScreen(screenId) }, "🎓 Show me this screen");
+  return el("span", { class: "help-links" }, show, help);
 }
 
 // ------------------------------------------------------------------ Jobs board (Sprint 4, quick lane)
 const LANES = [["needs_triage", "Needs a decision"], ["project", "Projects"], ["quick_quote", "Quick quotes"],
-               ["standard_estimate", "Standard estimates"], ["full_takeoff", "Plan takeoffs"]];
+               ["standard_estimate", "Standard estimates"], ["full_takeoff", "Measure from plans"]];
 const WAITING = { user: "you", approver: "an approver", staff: "office staff", customer: "the customer", feature: "a later feature" };
 
 async function renderJobs(main) {
@@ -1952,7 +2078,7 @@ async function renderJobs(main) {
       el("tbody", {}, rows.map(r => el("tr", { "data-id": r.id, onclick: () => go("#/jobs/" + r.id) },
         el("td", {}, r.id),
         el("td", {}, el("a", { href: "#/jobs/" + r.id }, r.request_text || words(r.module_id) || "Job " + r.id)),
-        el("td", {}, el("span", { class: "status" }, words(r.stage)), r.state === "done" ? " ✓" : "",
+        el("td", {}, el("span", { class: "status" }, idWords(r.stage)), r.state === "done" ? " ✓" : "",
           r.progress && r.progress.step ? el("div", { class: "muted small" }, "step " + r.progress.step.number + " of " + r.progress.step.of +
             (r.progress.step.next && r.state !== "done" ? " · then " + r.progress.step.next : "")) : null),
         el("td", {}, r.state === "done" ? "—" : (WAITING[r.waiting_on] || words(r.waiting_on) || "—")),
@@ -1998,7 +2124,7 @@ async function renderJob(main, id) {
   const est = j.estimate_detail;
   const parts = [el("p", {}, el("a", { href: "#/jobs" }, "← Jobs board")),
     el("div", { class: "page-head" }, el("h2", {}, j.job.request_text || ("Job " + j.job.id)), helpLink("jobs")),
-    el("p", { class: "muted" }, words(j.job.lane || "needs triage") + " · step: " + words(j.job.stage) +
+    el("p", { class: "muted" }, idWords(j.job.lane || "needs triage") + " · step: " + idWords(j.job.stage) +
       (est ? " · estimate #" + est.id + " (" + words(est.status) + ")" : ""))];
   if (est && est.totals) parts.push(el("div", { class: "big-money", id: "job-total" }, money(est.totals.total_cents)));
   const box = el("div", { class: "card section", id: "job-next" });
@@ -2016,7 +2142,7 @@ async function renderJob(main, id) {
   parts.push(links);
   if (j.steps && j.steps.length) {
     parts.push(el("details", { class: "card section", id: "job-steps" }, el("summary", {}, "What's been done (" + j.steps.length + ")"),
-      el("ul", { class: "checklist" }, j.steps.map(s => el("li", {}, words(s.stage) + " — " + words(s.state) +
+      el("ul", { class: "checklist" }, j.steps.map(s => el("li", {}, idWords(s.stage) + " — " + words(s.state) +
         (s.input_summary ? ": " + s.input_summary : "") + " (" + (s.actor || "") + ", " + when(s.started_at) + ")")))));
   }
   main.replaceChildren(...parts);
@@ -2027,7 +2153,7 @@ function nextStepBox(box, j, ns, notes) {
   const kids = [el("strong", {}, done ? "Finished" : "Next step")];
   for (const n of notes || []) kids.push(el("p", { class: "note warn" }, n));
   if (ns.say) kids.push(el("p", { id: "job-say" }, ns.say));
-  if (ns.error) kids.push(el("p", { class: "error" }, "The last step didn't work (" + words(ns.error) + ")."));
+    if (ns.error) kids.push(el("p", { class: "error" }, "The last step didn't work (" + idWords(ns.error) + ")."));
   const msg = el("div", { id: "job-message", role: "status" });
   if (!done) kids.push(...nextControls(j, ns, msg));
   kids.push(msg);
@@ -2223,7 +2349,7 @@ async function step(j, body, msg, confirmed) {
       return;
     }
     state.busy = false;
-    if (j.after) await j.after(r.notes || []);           // the Director panel on a project or estimate page
+    if (j.after) await j.after(r.notes || [], r);        // the Director panel on a project or estimate page
     else await renderJobKeepNotes(j.job.id, r.notes || []);
   } catch (e) {
     state.busy = false;
@@ -2246,7 +2372,44 @@ function directorPanel(eid) {
   const card = el("div", { class: "card section director-panel", id: "director-panel" },
     el("p", { class: "muted" }, "🧭 Director: looking at where this project stands…"));
   loadDirectorPanel(card, eid, []);
+  followChanges(card, eid);
   return card;
+}
+
+// The panel looks again when the project changes, while it's on screen (a page that's gone drops its listener).
+function followChanges(card, eid) {
+  let timer = null;
+  const on = ev => {
+    if (!card.isConnected) { if (card.dataset.seen) window.removeEventListener("estimator:changed", on); return; }
+    card.dataset.seen = "1";
+    const id = ev.detail && ev.detail.estimate_id;
+    if (id && String(id) !== String(eid)) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => { if (card.isConnected) loadDirectorPanel(card, eid, []); }, 1200);
+  };
+  window.addEventListener("estimator:changed", on);
+  setTimeout(() => { if (card.isConnected) card.dataset.seen = "1"; }, 0);
+}
+
+// The Director on the working pages - Measure, a plan set, Reviews (2026-11-21, David: "we want the director to guide
+// the user all the way through the full estimate and approval process as a master guide"). The same panel as on the
+// project page, folded into one line that says the next step; open it for the checklist and the buttons. Open or
+// folded is remembered while the app is open.
+let DIRECTOR_OPEN = true;
+function directorGuide(eid) {
+  const panel = directorPanel(eid);
+  panel.classList.remove("card", "section");
+  const box = el("details", { class: "card section director-guide", id: "director-guide", open: DIRECTOR_OPEN },
+    el("summary", {}, el("strong", {}, "🧭 Director"), el("span", { class: "muted", id: "director-guide-next" }, " — next step")),
+    panel);
+  box.addEventListener("toggle", () => { DIRECTOR_OPEN = box.open; });
+  // The folded line shows the next step itself, so it guides even when folded.
+  new MutationObserver(() => {
+    const say = panel.querySelector("#director-say");
+    const line = box.querySelector("#director-guide-next");
+    if (line) line.textContent = say ? " — " + say.textContent : " — next step";
+  }).observe(panel, { childList: true, subtree: true });
+  return box;
 }
 
 // "Which trades does this project need?" (2026-11-14, David): tick one or more; they're all priced and sent in one
@@ -2288,7 +2451,10 @@ function updateTradesTile(ns) {
     ? "trades (" + priced.length + " priced)" : "trades";
 }
 
-async function loadDirectorPanel(card, eid, notes) {
+async function loadDirectorPanel(card, eid, notes, last) {
+  // last: the answer to the step just taken. The panel is redrawn from a fresh look at the job, which no longer knows
+  // that "the estimate is ready" was just stopped by the measurement audit - so that comes from the step's answer.
+  const auditStopped = !!(last && last.next_step && last.next_step.audit_blocked);
   let d;
   try { d = await api("POST", "/estimates/" + eid + "/director", {}); }
   catch (e) {
@@ -2297,16 +2463,37 @@ async function loadDirectorPanel(card, eid, notes) {
     return;
   }
   if (!d.job) { card.replaceChildren(el("strong", {}, "🧭 Director"), el("p", { class: "muted" }, "This project is finished.")); return; }
-  const j = { ...d, after: n => loadDirectorPanel(card, eid, n) };
+  const j = { ...d, after: (n, r) => loadDirectorPanel(card, eid, n, r) };
   const ns = d.next_step || {};
   updateTradesTile(ns);
   const done = d.job.state === "done" || d.job.state === "cancelled";
   const kids = [el("div", { class: "page-head" }, el("strong", {}, "🧭 Director — " + (done ? "finished" : "next step")),
     el("a", { href: "#/jobs/" + d.job.id, id: "director-job-link", class: "small" }, "Job " + d.job.id + " · all steps →"))];
   for (const n of notes || []) kids.push(el("p", { class: "note warn" }, n));
-  if (ns.say) kids.push(el("p", { id: "director-say" }, el("strong", {}, ns.say)));
+  // The plans were measured again after approval (2026-11-21): that comes first - approve the new counts, then
+  // update the prices (which reopens the estimate; the next approval checks only what changed).
+  const pc = d.plans_changed;
+  const msgPc = el("div", { id: "director-plans-message" });
+  if (pc) {
+    const box = el("div", { class: "note warn", id: "director-plans-changed" });
+    if (pc.waiting) {
+      box.append(el("p", { id: "director-say" }, el("strong", {}, "The plans were measured again: approve the " + pc.waiting +
+        " new measurement(s) first. ")), el("a", { class: "button", href: "#/takeoffs/" + eid, id: "director-plans-approve" },
+        "📏 Approve them in Measure"));
+    } else {
+      const upd = el("button", { class: "primary", type: "button", id: "director-plans-update" }, "🔄 Update from the plans…");
+      upd.addEventListener("click", () => askThen(msgPc, upd, "/estimates/" + eid + "/update-from-plans", { rev: pc.rev },
+        r => "Updated from the plans — approve the estimate again (only what changed)", "director-update"));
+      box.append(el("p", { id: "director-say" }, el("strong", {}, "The approved measurements changed (" + pc.trades.join(", ") +
+        "). Update the prices: the estimate goes back to draft, then you approve it again and a new quote is made.")),
+        el("div", { class: "row" }, upd));
+    }
+    kids.push(box, msgPc);
+  }
+  if (ns.say && !pc) kids.push(el("p", { id: "director-say" }, el("strong", {}, ns.say)));
+  else if (ns.say) kids.push(el("p", { class: "muted small" }, "After that: " + ns.say));
   if (ns.why) kids.push(el("p", { class: "muted small", id: "director-why" }, "Why: " + ns.why + "."));
-  if (ns.error) kids.push(el("p", { class: "error" }, "The last step didn't work (" + words(ns.error) + ")."));
+    if (ns.error) kids.push(el("p", { class: "error" }, "The last step didn't work (" + idWords(ns.error) + ")."));
   if (Array.isArray(ns.todo) && ns.todo.length) {
     kids.push(el("ul", { class: "checklist", id: "director-todo" }, ns.todo.map(t => el("li", { "data-key": t.key, class: t.done ? "done" : "" },
       (t.done ? "✅ " : "⬜ ") , t.link && !t.done ? el("a", { href: t.link }, t.text) : t.text))));
@@ -2349,7 +2536,22 @@ async function loadDirectorPanel(card, eid, notes) {
                                  title: ns.ready_ok ? null : "Price something on the estimate first" },
       "✓ The estimate is ready — check it and get it approved");
     ready.addEventListener("click", () => step(j, { ready: true }, msg));
-    kids.push(el("div", { class: "row" }, ready));
+    const row = el("div", { class: "row" }, ready);
+    // 2026-11-20 (David): the Director runs the measurement audit - any time from here, and as the last check when
+    // the estimate is said to be ready (it stops on counts priced twice or out of step with the drawing).
+    const au = ns.audit || {};
+    if (au.can_run) {
+      row.append(el("a", { class: "button", id: "director-audit", href: au.link,
+        title: "Find counts priced twice, old counts and counts the drawing disagrees with — and fix them in one click" },
+        "🧹 Audit & clean up" + (au.problems ? " (" + au.problems + ")" : "")));
+    }
+    if ((ns.audit_blocked || auditStopped) && au.problems) {
+      const anyway = el("button", { class: "button", type: "button", id: "director-skip-audit",
+        title: "Move on without fixing what the audit found (it's noted on the job)" }, "Move on anyway");
+      anyway.addEventListener("click", () => step(j, { ready: true, skip_audit: true }, msg));
+      row.append(anyway);
+    }
+    kids.push(row);
   } else if (!done) {
     kids.push(...nextControls(j, ns, msg));
   }
@@ -2502,22 +2704,27 @@ async function renderHelp(main, screen) {
   const form = el("form", { class: "row filters" }, el("label", {}, "Search", find), el("button", { class: "button", type: "submit" }, "Search"));
   form.addEventListener("submit", ev => { ev.preventDefault(); location.hash = "#/help?" + new URLSearchParams({ q: find.value.trim() }); });
   const parts = [el("h2", {}, screen.label), el("p", { class: "muted" }, "Step-by-step guides. You can also ask your AI — e.g. \"how do I send a quote?\""), form];
-  if (forScreen) parts.push(el("p", {}, "Guides for the " + words(forScreen) + " screen · ", el("a", { href: "#/help" }, "all guides")));
+  if (forScreen) {
+      // The screen's own menu label, not its id: the label is what the left menu shows.
+      const forLabel = (state.me.menu.find(s => s.id === forScreen) || {}).label || words(forScreen);
+      parts.push(el("p", {}, "Guides for the " + forLabel + " screen · ", el("a", { href: "#/help" }, "all guides")));
+    }
   parts.push(r.guides.length
     ? el("ul", { class: "guides", id: "help-list" }, r.guides.map(g => el("li", {}, el("a", { href: "#/help/" + g.id }, g.title),
         g.steps ? el("span", { class: "muted small" }, " · " + g.steps + " steps") : null)))
     : el("div", { class: "card empty" }, "No guide matches that yet. Try fewer words, or ask your AI."));
   if (typeof TOUR_IDS !== "undefined" && typeof tourReplayBtn === "function") {
-    // Sprint 18: replay any guided tour, with its done/skipped state.
-    const prog = typeof tourLoadProgress === "function" ? await tourLoadProgress() : {};
+    // Sprint 18: replay any guided tour. 2026-11-21, David: tours only run when asked, so there's nothing to track -
+    // no done / skipped any more.
     parts.push(el("h3", {}, "Guided tours"));
     parts.push(el("p", { class: "muted" }, "A short walkthrough of each screen, pointing at the real controls. "
-      + "A tour runs the first time you open its screen; replay any of them here."));
+      + "They only start when you ask: run any of them here, or click 🎓 Show me this screen on the screen itself."));
     parts.push(el("ul", { class: "guides", id: "help-tours" }, TOUR_IDS.map(id =>
       el("li", {}, TOUR_BY_ID[id] ? TOUR_BY_ID[id].title : id,
-        prog[id] === "completed" ? el("span", { class: "muted small" }, " - done") : null,
-        prog[id] === "skipped" ? el("span", { class: "muted small" }, " - skipped") : null,
-        " ", tourReplayBtn(id)))));
+        " ", tourReplayBtn(id),
+        // 2026-11-21: a page tour needs that page open (a particular project, sheet, estimate…)
+        typeof TOUR_OPEN_FIRST !== "undefined" && TOUR_OPEN_FIRST[id] && !TOUR_HOME[id]
+          ? el("span", { class: "muted small" }, " open " + TOUR_OPEN_FIRST[id] + " first") : null))));
   }
   main.replaceChildren(...parts);
 }
@@ -2571,6 +2778,7 @@ function setLive(cls, title) { const l = $("live"); l.className = "live " + cls;
 let refreshTimer = null;
 function onChange(ev) {
   state.cursor = ev.id;
+  if (!/director|job_/.test(ev.action || "")) projectChanged(ev.estimate_id || null);
   if (ev.actor && state.me && ev.actor !== state.me.user_id) {
     toast("Updated by " + ev.actor + (ev.estimate_id ? " (estimate " + ev.estimate_id + ")" : ""));
   }

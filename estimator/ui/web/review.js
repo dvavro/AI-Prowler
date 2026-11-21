@@ -23,13 +23,13 @@ const TOOLS = [
   ["length", "📏", "Length", "Click along the line; double-click (or Enter) to finish."],
   ["area", "⬠", "Area", "Click the corners; click the first point, double-click or press Enter to finish."],
   ["rect", "▭", "Rectangle", "Click two opposite corners."],
-  ["count", "✚", "Count", "Click each item; press Enter or Finish when done."],
+  // 2026-11-18 (David): no Count tool — it counted badly and took view room; 🤖 AI Auto Run counts now.
   ["calibrate", "📐", "Calibrate", "Click both ends of a distance you know, then type its real length."],
   ["symbol", "✳", "Add symbol", "Click a symbol the plan engine missed, then say what it is."],
 ];
 const RV = { estimateId: null, data: null, sheetId: null, sheet: null, viewports: [], tiles: null, objects: [],
              inactiveTrades: [], groups: [], byId: new Map(), selected: new Set(), measurementId: null,
-             tool: "select", draft: [], draftTool: null, view: {}, viewer: null };
+             tool: "select", draft: [], draftTool: null, view: {}, viewer: null, sheetGen: 0 };
 
 function svg(tag, attrs) {
   const n = document.createElementNS(SVG_NS, tag);
@@ -95,7 +95,9 @@ async function renderReview(main, estimateId) {
     d.sheets.find(s => sheetOn(s) && s.objects) || d.sheets.find(sheetOn) || d.sheets.find(s => s.objects) || d.sheets[0];
   const head = [el("p", {}, el("a", { href: "#/projects/" + estimateId }, "← " + d.estimate.title), " · ",
       el("a", { id: "bp-quantities", href: "#/quantities/" + estimateId }, "📐 Plan quantities")),
-    el("div", { class: "page-head" }, el("h2", {}, "📏 Blueprint Review"), helpLink("takeoffs"))];
+    el("div", { class: "page-head" }, el("h2", {}, "📏 Measure from plans (takeoff)"), helpLink("takeoffs"))];
+  // The Director comes along to Measure (2026-11-21, David: "my director list did not follow me").
+  if (!d.estimate.practice && typeof directorGuide === "function") head.push(directorGuide(estimateId));
   const msg = el("div", { id: "review-message", role: "status" });
   if (!d.sheets.length) {
     main.replaceChildren(...head, el("div", { class: "card empty", id: "review-no-sheets" },
@@ -119,21 +121,28 @@ async function renderReview(main, estimateId) {
   prev.addEventListener("click", () => step(-1));
   next.addEventListener("click", () => step(1));
   const viewerBox = el("div", { class: "bp-viewer", id: "bp-viewer", tabindex: "0", "aria-label": "Blueprint" });
-  const stepsTab = tabButton("steps", "Takeoff steps");
+  const stepsTab = tabButton("steps", "Measure steps");
   stepsTab.hidden = true;      // only shows when a run has a calc or quantities to show (drawStepsPanel)
   const side = el("div", { class: "bp-side" },
     el("div", { class: "bp-tabs", role: "tablist" },
-      tabButton("list", "Measurements"), tabButton("symbols", "Symbols"), tabButton("lines", "Lines"), tabButton("layers", "Layers"),
+      tabButton("list", "Measurements"), tabButton("guide", "To measure"), tabButton("symbols", "Symbols"),
+      tabButton("lines", "Lines"), tabButton("layers", "Layers"),
       tabButton("detail", "Detail"), stepsTab),
-    el("div", { class: "bp-pane", id: "bp-pane-list" }), el("div", { class: "bp-pane", id: "bp-pane-symbols", hidden: true }),
+    el("div", { class: "bp-pane", id: "bp-pane-list" }),
+    el("div", { class: "bp-pane", id: "bp-pane-guide", hidden: true }),
+    el("div", { class: "bp-pane", id: "bp-pane-symbols", hidden: true }),
     el("div", { class: "bp-pane", id: "bp-pane-lines", hidden: true }),
     el("div", { class: "bp-pane", id: "bp-pane-layers", hidden: true }), el("div", { class: "bp-pane", id: "bp-pane-detail", hidden: true }),
     el("div", { class: "bp-pane", id: "bp-pane-steps", hidden: true }));
+  // 2026-11-18 (David): the tools sit with the drawing, not at the top of the page — the sheet
+  // picker stays up top, and the help line + toolbar render immediately above the split.
+  // Full screen is unaffected: it fullscreens #bp-viewer only, and the toolbar was outside it before.
   main.replaceChildren(...head,
-    el("div", { class: "row bp-bar" }, prev, sheetPick, next, toolPalette(msg), viewButtons()),
+    el("div", { class: "row bp-bar" }, prev, sheetPick, next, viewButtons()),
+    el("div", { id: "bp-readout-slot" }), el("div", { id: "bp-notes" }),
+    msg, el("div", { id: "bp-auto-slot" }),
     el("p", { class: "muted small", id: "bp-tool-help" }, TOOLS.find(t => t[0] === RV.tool)[3]),
-    el("div", { id: "bp-guide-slot" }), el("div", { id: "bp-readout-slot" }), el("div", { id: "bp-notes" }),
-    msg, el("div", { id: "bp-auto-slot" }), el("div", { class: "bp-split" }, viewerBox, side));
+    toolPalette(msg), el("div", { class: "bp-split" }, viewerBox, side));
   RV.viewer = new Viewer(viewerBox, msg);
   $("bp-pane-list").replaceChildren(measurementPanel(msg));
   $("bp-pane-detail").replaceChildren(detailEmpty());      // the Detail tab is never blank without explanation
@@ -145,13 +154,23 @@ async function renderReview(main, estimateId) {
     else msg.replaceChildren(el("p", { class: "note warn", id: "bp-symbol-missing" }, "That symbol isn't on this sheet any more (the plans may have been read again)."));
   } else if (RV.lineId) { showTab("lines"); RV.viewer.zoomToSelection(true); }
   else if (RV.measurementId) showDetail(RV.measurementId, msg, true);
+  // 2026-11-20 (David): ?audit=1 (from the Director's checklist) opens Audit & clean up straight away.
+  if (q.get("audit") && d.can_approve) openAudit();
 }
 
 // ------------------------------------------------------------------ Sprint 11: symbols on this sheet
 // Counts by type (taken-out ones aren't counted); click a type to highlight every one of them on the plan, step
 // through them one at a time, or open them in Reviews to approve, take out or relabel.
 function sheetSymbols() { return RV.objects.filter(o => o.symbol); }
-function symbolKey(o) { return o.symbol.item_type || "unknown"; }
+// The legend's sample of the highlighted symbols (2026-11-20, David: "light up the legend symbol with a different
+// color so the user can check the symbol quickly"). On a CAD sheet the legend draws one of each with the same block
+// as the plan, and the plan reader leaves the legend's samples uncounted (no symbol record): so a plain block with the
+// same block name as a highlighted symbol is its legend sample. Shown, never counted or clickable onto the count.
+function legendRefs(objs) {
+  const names = new Set((objs || []).filter(o => o.symbol && o.block_name).map(o => o.block_name));
+  return names.size ? (RV.objects || []).filter(o => !o.symbol && o.block_name && names.has(o.block_name)) : [];
+}
+function symbolKey(o) { return o.symbol ? o.symbol.item_type || "unknown" : "label"; }   // a plan label (30A circuits)
 
 function drawSymbolsPanel(msg) {
   const pane = $("bp-pane-symbols");
@@ -194,20 +213,36 @@ function drawSymbolsPanel(msg) {
 }
 
 function highlightSymbols(objs, key) {
+  // A symbol-type click isn't a count-row click: the Measure steps row loses its "on" state
+  // (the count-row click sets RV.countStep again after calling this).
+  RV.countStep = null; markCountRows();
   RV.symbolType = key;
   RV.symbolList = objs;
   RV.symbolPos = objs.length === 1 ? 0 : -1;           // -1: all of them at once
   RV.measurementId = null; RV.lineId = null;
   const dp = $("bp-pane-detail"); if (dp) dp.replaceChildren(detailEmpty());   // no selection any more
   RV.selected = new Set(objs.map(o => o.id));
-  // A symbol in a hidden layer is shown while it's highlighted (the layer setting itself isn't changed).
+  // A symbol in a hidden layer is shown while it's highlighted (the layer setting itself isn't changed), and the
+  // layer is hidden again when the highlight goes (2026-11-19: it used to stay shown).
+  rehideRevealed();
   for (const o of objs) {
     const g = RV.viewer.overlay.querySelector('[data-group="' + o.group + '"]');
-    if (g) g.classList.remove("hidden");
+    if (g && g.classList.contains("hidden")) { g.classList.remove("hidden"); RV.revealed.add(o.group); }
   }
   drawMeasurements();
   RV.viewer.zoomToSelection(true);
   drawSymbolsPanel($("review-message"));
+}
+
+// Hide again the layers a highlight showed, if they're still switched off in the Layers tab.
+function rehideRevealed() {
+  if (!RV.revealed) RV.revealed = new Set();
+  const hidden = layerPrefs().hidden;
+  for (const id of RV.revealed) {
+    const g = RV.viewer && RV.viewer.overlay.querySelector('[data-group="' + id + '"]');
+    if (g && hidden.includes(id)) g.classList.add("hidden");
+  }
+  RV.revealed.clear();
 }
 
 function stepSymbol(dir) {
@@ -230,6 +265,11 @@ function showSymbolPos() {
   if (RV.symbolPos < 0) { where.textContent = list.length + " highlighted"; one.replaceChildren(); return; }
   const o = list[RV.symbolPos], s = o.symbol;
   where.textContent = (RV.symbolPos + 1) + " of " + list.length;
+  if (!s) {   // a plan label (e.g. "RANGE 30A"), not a symbol: nothing to check in Reviews
+    one.replaceChildren(el("div", { class: "card section", id: "bp-symbol-detail" }, el("strong", {}, o.label || "Plan label"),
+      el("div", { class: "small muted" }, "a label on the plan")));
+    return;
+  }
   one.replaceChildren(el("div", { class: "card section", id: "bp-symbol-detail", "data-detection": s.detection_id },
     el("strong", {}, s.label || (s.item_type ? words(s.item_type) : "Unidentified symbol")),
     el("div", { class: "small" }, el("span", { class: "status" }, words(s.status === "proposed" ? "to check" : s.status === "rejected" ? "taken out" : s.status)),
@@ -319,13 +359,13 @@ function tabButton(id, label) {
 }
 function showTab(id) {
   for (const t of document.querySelectorAll(".bp-tab")) t.classList.toggle("active", t.dataset.tab === id);
-  for (const p of ["list", "symbols", "lines", "layers", "detail", "steps"]) { const n = $("bp-pane-" + p); if (n) n.hidden = p !== id; }
+  for (const p of ["list", "guide", "symbols", "lines", "layers", "detail", "steps"]) { const n = $("bp-pane-" + p); if (n) n.hidden = p !== id; }
 }
 
 function toolPalette(msg) {
   const box = el("div", { class: "bp-tools", role: "toolbar", "aria-label": "Tools", id: "bp-tools" });
   for (const [id, icon, label, help] of TOOLS) {
-    if (["length", "area", "rect", "count"].includes(id) && !RV.data.can_measure) continue;
+    if (["length", "area", "rect"].includes(id) && !RV.data.can_measure) continue;
     if (id === "calibrate" && !RV.data.can_measure) continue;
     if (id === "symbol" && !RV.data.can_approve) continue;          // adding a symbol is a reviewer's decision
     const b = el("button", { class: "bp-tool" + (id === RV.tool ? " active" : ""), type: "button", "data-tool": id, title: label + " — " + help }, icon + " " + label);
@@ -343,7 +383,7 @@ function toolPalette(msg) {
       title: autoRunTitle(trade, true) },
       "🤖 AI Auto Run");
     run.addEventListener("click", () => startAutoRun());
-    box.append(run);
+    box.append(attachHoverCard(run, "bp-auto-run-help", autoRunHelp));    // what this trade's run needs (2026-11-21)
     // More than one runnable trade: a picker next to the button, so the run goes to the trade the user
     // wants — the default follows the open sheet's discipline until the user picks (drawAutoRunStatus
     // keeps the picker in step), and the choice is kept in AUTO.pickedTrade so a redraw never loses it.
@@ -355,10 +395,62 @@ function toolPalette(msg) {
       pick.addEventListener("change", () => { AUTO.pickedTrade = pick.value; drawAutoRunStatus(); });
       box.append(pick);
     }
+    // 2026-11-20 (David: "I don't see the run wiring"): just the wiring, beside AI Auto Run - routes the cable from the
+    // floor plan and the panel drawing (plain geometry, no AI tokens), the same run as the Wiring card's button.
+    if (RV.data.trades.some(t => t.module_id === "electrical")) {
+      const wire = el("button", { class: "button", type: "button", id: "bp-run-wiring",
+        title: "Run just the wiring: route the cable from the panel to every device and propose the cable sizes and " +
+               "lengths (plain geometry - no AI tokens, your counts aren't touched). Needs the electrical floor plan and " +
+               "the panel drawing as DXF files. Settings and device moves: the ⚡ Wiring card in the To measure tab." },
+        "⚡ Run wiring");
+      wire.addEventListener("click", () => openWiringOptions(wire));   // 2026-11-21: how the cable runs, first
+      box.append(attachHoverCard(wire, "bp-run-wiring-help", wiringHelp));
+    }
+    // 2026-11-19 (David): a rerun recalculates the trade; whether the items already approved stay (not proposed
+    // again - saves the review time) or everything starts over from scratch is the user's choice. Kept between visits.
+    const keep = el("input", { type: "checkbox", id: "bp-auto-keep", checked: keepApproved() ? "" : null });
+    keep.addEventListener("change", () => setKeepApproved(keep.checked));
+    box.append(el("label", { class: "small", for: "bp-auto-keep", id: "bp-auto-keep-label",
+      title: "Ticked: a rerun (AI Auto Run or ⚡ Run wiring) keeps what you already approved and only proposes the rest; " +
+             "when the rerun measures an approved item differently, the new value waits as a suggested change for you to accept. " +
+             "Unticked: a rerun starts the trade over from scratch — approved AI results on the sheet are replaced too " +
+             "(what you drew or typed is never touched)." },
+      keep, " Keep approved items on rerun"));             // 2026-11-21 (David): say when it applies
+  }
+  // 2026-11-20 (David): one button finds what needs a person - counts priced twice, counts from before the plans were
+  // read again, counts waiting, counts the drawing disagrees with, rejected items - and fixes them in one go.
+  if (RV.data.can_approve) {
+    const audit = el("button", { class: "button", type: "button", id: "bp-audit-open",
+      title: "Find counts priced twice, counts from before the plans were read again, counts waiting for review and rejected items — and fix them all at once" },
+      "🧹 Audit & clean up");
+    audit.addEventListener("click", () => openAudit());
+    box.append(audit);
   }
   return box;
 }
+// Keep approved items on an AI Auto Run / Wiring rerun (default yes), remembered in this browser.
+const KEEP_APPROVED_STORE = "est_auto_keep_approved";
+function keepApproved() {
+  try { return localStorage.getItem(KEEP_APPROVED_STORE) !== "0"; } catch (e) { return true; }
+}
+function setKeepApproved(on) {
+  try { localStorage.setItem(KEEP_APPROVED_STORE, on ? "1" : "0"); } catch (e) { /* storage off: this visit only */ }
+  RV.keepApproved = !!on;
+}
+function keepApprovedNow() {
+  const box = $("bp-auto-keep");
+  return box ? box.checked : (RV.keepApproved !== undefined ? RV.keepApproved : keepApproved());
+}
+// A CAD drawing (DXF/DWG) is drawn at real size in real units, so it has no scale to set.
+function isCadSheet() { return !!(RV.sheet && RV.sheet.units && RV.sheet.units !== "paper_in"); }
+const CAD_NO_SCALE = "This drawing is a CAD file at real size, so it doesn't need calibrating — measure with 📏 Length, " +
+  "⬠ Area or ▭ Rectangle and the lengths are already real.";
+
 function setTool(id, msg) {
+  if (id === "calibrate" && isCadSheet()) {      // say so now, not after both points are clicked (2026-11-19)
+    if (msg) msg.replaceChildren(el("p", { class: "note", id: "bp-cad-no-scale" }, CAD_NO_SCALE));
+    return;
+  }
   RV.tool = id;
   RV.adjust = null;      // picking a tool by hand ends "draw an area to add / take away" (startAdjust sets it after this)
   RV.placing = null;     // ...and "click the footer section's corner" (startPlaceSection sets it after this)
@@ -371,7 +463,7 @@ function setTool(id, msg) {
   if ($("bp-tool-help")) $("bp-tool-help").textContent = (t ? t[3] : "") +
     (RV.draft.length ? " Your unfinished " + words(RV.draftTool || id) + " is kept — switch back to it to keep drawing, or press Finish." : "");
   if (RV.viewer) RV.viewer.box.classList.toggle("drawing", !["select", "pan"].includes(id));
-  if (msg && ["length", "area", "rect", "count", "calibrate"].includes(id)) msg.replaceChildren();
+  if (msg && ["length", "area", "rect", "calibrate"].includes(id)) msg.replaceChildren();
 }
 function viewButtons() {
   const mk = (id, text, title, fn) => { const b = el("button", { class: "button", type: "button", id, title }, text); b.addEventListener("click", fn); return b; };
@@ -423,21 +515,32 @@ window.addEventListener("hashchange", () => {
 });
 
 async function openSheet(sheetId, msg) {
+  // 2026-11-19: two opens can overlap (a fast picker change while a load is in flight) — the
+  // last response to land used to win, so the tiles came from one sheet and the objects from
+  // the other. Each open takes a generation; a stale response is abandoned whole, so RV.*
+  // always agrees with the newest open.
+  const gen = ++RV.sheetGen;
   RV.sheetId = sheetId;
   RV.selected = new Set();
   RV.draft = []; RV.draftTool = null;   // a half-drawn line belongs to its sheet
   RV.adjust = null; RV.placing = null;  // ...and so do an area being drawn to add / take away and a section being placed
-  RV.symbolList = []; RV.symbolPos = -1; RV.symbolType = null;      // the Symbols tab starts again on each sheet
+  RV.symbolList = []; RV.symbolPos = -1; RV.symbolType = null; RV.countStep = null;   // the Symbols tab starts again on each sheet
+  RV.review = null;                     // a review card's highlighted symbols belong to its sheet
+  RV.revealed = new Set();             // the new sheet's layers are drawn from the Layers settings
   const [s, o] = await Promise.all([api("GET", "/sheets/" + sheetId), api("GET", "/sheets/" + sheetId + "/objects")]);
+  if (gen !== RV.sheetGen) return;   // a newer open started while this one was in flight — abandon it
   RV.sheet = s.sheet; RV.viewports = s.viewports; RV.tiles = s.tiles;
   RV.inactiveTrades = s.inactive_trades || [];      // trades this sheet is switched off for (Plans screen)
   RV.objects = o.objects; RV.groups = o.layers;
   RV.byId = new Map(o.objects.map(x => [x.id, x]));
+  if (isCadSheet() && RV.tool === "calibrate") setTool("select", null);   // no Calibrate on a CAD drawing
   const sel = $("bp-selection");
   if (sel) sel.remove();
   const warn = [];
   if (o.count > o.returned) warn.push("Showing the first " + o.returned + " of " + o.count + " things found on this sheet.");
-  if (s.viewports.some(v => !v.measurable && !v.is_nts)) warn.push("Part of this sheet has no scale yet — set it with 📐 Calibrate or on the Plans screen before measuring there.");
+  // A CAD drawing is at real size: it never needs a scale (2026-11-19, David: the note sent him to 📐 Calibrate, which
+  // then refused). Only a paper sheet (PDF, scan, photo) can have a view with no scale.
+  if (!isCadSheet() && s.viewports.some(v => !v.measurable && !v.is_nts)) warn.push("Part of this sheet has no scale yet — set it with 📐 Calibrate or on the Plans screen before measuring there.");
   $("bp-notes").replaceChildren(...(warn.length ? [el("p", { class: "note warn", id: "bp-sheet-note" }, warn.join(" "))] : []));
   RV.viewer.load();
   drawLayersPanel();
@@ -682,7 +785,7 @@ class Viewer {
     let [ux, uy] = this.toSheet(ev.clientX, ev.clientY);
     this.snapped = null;
     const last = RV.draft[RV.draft.length - 1];
-    if (ev.shiftKey && last && (RV.draftTool || RV.tool) !== "count") {
+    if (ev.shiftKey && last) {
       if (Math.abs(ux - last[0]) >= Math.abs(uy - last[1])) uy = last[1]; else ux = last[0];
     }
     if (!ev.altKey) {
@@ -717,7 +820,7 @@ class Viewer {
     g = svg("g", { id: "bp-draft" });
     if (ring) g.append(ring);
     const tool = RV.draftTool || RV.tool;
-    const pts = cursor && tool !== "count" ? RV.draft.concat([cursor]) : RV.draft.slice();
+    const pts = cursor ? RV.draft.concat([cursor]) : RV.draft.slice();
     const shape = draftShape(pts);
     if (shape.type === "point") {
       for (const p of shape.points) g.append(svg("polyline", { points: p + " " + p, class: "bp-dot draft" }));
@@ -791,8 +894,8 @@ function drawOverlay(root) {
     node.classList.toggle("locked", prefs.locked.includes(g.id));
     byGroup.set(g.id, node);
   }
-  const order = ["floor_plan", "rooms", "walls", "doors_windows", "furniture", "plumbing", "electrical", "mechanical",
-                 "symbols", "dimensions", "text"];
+  const order = ["floor_plan", "rooms", "walls", "doors_windows", "furniture", "plumbing", "circuits", "electrical",
+                 "mechanical", "symbols", "dimensions", "text"];
   for (const o of RV.objects) {
     const g = byGroup.get(o.group);
     if (!g || !o.geometry) continue;
@@ -860,7 +963,7 @@ function drawMeasurements() {
   const g = $("bp-measurements");
   if (!g) return;
   g.replaceChildren();
-  for (const o of g.ownerSVGElement.querySelectorAll("[data-oid].in-m, [data-oid].sel")) o.classList.remove("in-m", "sel");
+  for (const o of g.ownerSVGElement.querySelectorAll("[data-oid].in-m, [data-oid].sel, [data-oid].legend-ref")) o.classList.remove("in-m", "sel", "legend-ref");
   const cur = currentMeasurement();
   const lineIds = new Set(RV.lineId ? lineMeasurements(RV.lineId).map(m => m.id) : []);
   for (const m of sheetMeasurements()) {
@@ -888,11 +991,24 @@ function drawMeasurements() {
     const n = g.ownerSVGElement.querySelector('[data-oid="' + id + '"]');
     if (n) n.classList.add("sel");
   }
+  // A set of symbols highlighted (count row / Symbols-tab type): the rest of the plan fades back (2026-11-19).
+  const symIds = new Set((RV.symbolList || []).map(o => o.id));
+  // ... and the legend's sample of the same symbol lights up blue, to compare them at a glance (2026-11-20, David).
+  for (const o of legendRefs(RV.symbolList)) {
+    const n = g.ownerSVGElement.querySelector('[data-oid="' + o.id + '"]');
+    if (n) n.classList.add("legend-ref");
+  }
+  g.ownerSVGElement.classList.toggle("bp-focus", RV.selected.size > 0 && [...RV.selected].every(id => symIds.has(id)));
   drawHighlight(false);
+  drawWiringRoutes();
 }
 
 // ------------------------------------------------------------------ selecting on the plan
 function pickAt(target, shift, msg) {
+  if (reviewPick(target)) return;          // a review card is open: symbol clicks change its count (2026-11-19)
+  // 2026-11-20: a click on a wiring route shows only that circuit (again: all of them) - not the room under it.
+  const wire = target.closest ? target.closest("#bp-wiring-routes [data-circuit]") : null;
+  if (wire) { pickCircuit(wire.getAttribute("data-circuit")); return; }
   const mNode = target.closest ? target.closest("[data-mid]") : null;
   if (mNode) { showDetail(+mNode.getAttribute("data-mid"), msg, false); return; }
   const node = target.closest ? target.closest("[data-oid]") : null;
@@ -954,7 +1070,7 @@ function addDraftPoint(p, msg) {
   const tool = RV.tool;
   if (!RV.draft.length) RV.draftTool = tool;   // the line keeps the tool it was started with
   const last = RV.draft[RV.draft.length - 1];
-  if (last && tool !== "count" && Math.hypot(p[0] - last[0], p[1] - last[1]) < 3 / RV.viewer.z) return;   // a double-click's 2nd click
+  if (last && Math.hypot(p[0] - last[0], p[1] - last[1]) < 3 / RV.viewer.z) return;   // a double-click's 2nd click
   if (tool === "area" && RV.draft.length >= 3) {
     const f = RV.draft[0], tol = 8 / RV.viewer.z;
     if (Math.hypot(p[0] - f[0], p[1] - f[1]) < tol) { finishDraft(msg); return; }
@@ -971,7 +1087,6 @@ function draftShape(pts) {
     return { type: "polygon", points: [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]] };
   }
   if (tool === "area" && pts.length >= 3) return { type: "polygon", points: pts };
-  if (tool === "count") return { type: "point", points: pts };
   return { type: pts.length === 2 ? "line" : "polyline", points: pts };
 }
 
@@ -995,7 +1110,6 @@ function previewText(shape) {
     const [a, b] = shape.points;
     return num(Math.hypot(b[0] - a[0], b[1] - a[1]), 3) + (RV.sheet.units === "paper_in" ? "″ on the paper" : " " + RV.sheet.units);
   }
-  if (shape.type === "point") return shape.points.length + " counted";
   const f = feetPerUnit(viewportAt(shape.points[0]));
   if (!f) return "this part of the sheet has no scale yet";
   if (shape.type === "polygon") {
@@ -1027,7 +1141,7 @@ function draftReadout(text) {
 
 function finishDraft(msg) {
   const tool = RV.draftTool || RV.tool;
-  const need = { length: 2, area: 3, rect: 2, count: 1, calibrate: 2 }[tool];
+  const need = { length: 2, area: 3, rect: 2, calibrate: 2 }[tool];
   if (!need || RV.draft.length < need) return;
   const shape = draftShape(RV.draft);
   RV.draft = []; RV.draftTool = null;
@@ -1041,7 +1155,7 @@ function finishDraft(msg) {
       " — set it with 📐 Calibrate (or on the Plans screen) first, then measure again."));
     return;
   }
-  saveForm(msg, { geometry: shape, viewportId: vp.id, kind: { length: "length", area: "area", rect: "area", count: "count" }[tool],
+  saveForm(msg, { geometry: shape, viewportId: vp.id, kind: { length: "length", area: "area", rect: "area" }[tool],
     room: roomFor({ kind: "point", geometry: { points: [shape.points[0]] } }) });
 }
 
@@ -1144,7 +1258,7 @@ function saveForm(msg, what) {
 
 // Ask the server's question, then repeat with confirm=true. Unlike askThen, it keeps the viewer where it is and
 // only reloads the measurements (or the sheet, after a new scale).
-async function reviewAsk(msg, btn, path, body, doneText, prefix, reloadSheet) {
+async function reviewAsk(msg, btn, path, body, doneText, prefix, reloadSheet, skipDetail) {
   btn.disabled = true;
   msg.replaceChildren();
   const done = async r => {
@@ -1153,6 +1267,7 @@ async function reviewAsk(msg, btn, path, body, doneText, prefix, reloadSheet) {
     RV.selected.clear();
     await refreshData();
     if (reloadSheet) await openSheet(RV.sheetId, $("review-message"));
+    if (skipDetail) return;      // the caller stays where it is (the count table refreshes in place)
     // A new or changed measurement opens in the detail panel; after an approve (which returns only ids) the one
     // being looked at is shown again with its new state.
     const mid = r.measurement ? r.measurement.id : RV.measurementId;
@@ -1192,7 +1307,8 @@ async function refreshData() {
 // ask-first like every other change). The backend owns the runs; this page only starts, watches and corrects
 // them. Every call here fails soft: with no backend yet (or no candidates) the page just shows nothing extra.
 const AUTO_POLL_MS = 2000;                  // poll the run every 2 s
-const AUTO_TIMEOUT_MS = 10 * 60 * 1000;     // give up after 10 minutes
+const AUTO_TIMEOUT_MS = 10 * 60 * 1000;     // give up after 10 minutes with no news from the run
+const AUTO_MAX_MS = 60 * 60 * 1000;         // and after an hour in all
 const AGENT = "concrete-agent";             // proposed_by of the agent's measurements
 const LLM_AGENT = "llm-takeoff";            // proposed_by of the LLM fallback's measurements
 const AUTO = { runId: null, estimateId: null, sheetId: null, viewportId: null, timer: null, startedAt: 0,
@@ -1234,7 +1350,10 @@ function selectedAutoRunTrade() {
 // The button's hover text names the trade it will actually run — never one trade's description while
 // running another. Concrete and electrical keep their exact wording from 2026-11-15 / 2026-11-18.
 const AUTO_RUN_BLURBS = {
-  concrete: "measure the concrete", electrical: "count the outlets, switches, lights and circuits",
+  // 2026-11-20 (David: the hover said nothing about wiring): Electrical's run also routes the wiring.
+  concrete: "measure the concrete",
+  electrical: "count the outlets, switches, lights and circuits, then route the wiring from the panel (cable sizes and " +
+    "lengths — needs the floor plan as a DXF file; the panel drawing's schedule is used when there is one; ⚡ Run wiring does just the wiring)",
   plumbing: "count the fixtures", hvac: "read the conditioned area and count the registers, returns and thermostats",
   flooring: "read the floor areas and count the stairs and transitions", roofing: "read the roof area, edges and ridge",
   framing: "count the openings, trusses and corners and read the floor area", windows_doors: "count the windows and doors",
@@ -1242,6 +1361,97 @@ const AUTO_RUN_BLURBS = {
   drywall: "read the ceiling area and the openings", siding: "read the wall areas and count the corners and openings",
   fencing: "read the fence length and count the gates", landscaping: "read the landscaped areas and count the shrubs, trees and zones",
   painting: "read the ceiling and exterior areas and count the doors" };
+// 2026-11-21 (David): a hover card on 🤖 AI Auto Run and ⚡ Run wiring saying what each trade's run needs from the plans,
+// with recommendations - focused on the trade the button will run. needs: what has to be there; tips: what makes it
+// read well. Every trade's run also needs the sheet switched ON for the trade (Plans screen) and the AI turned on.
+const AUTO_RUN_NEEDS = {
+  concrete: { needs: ["The foundation / slab plan, switched on for Concrete", "The slab's overall dimensions written on the plan (e.g. 40'-0\" × 30'-0\")",
+    "The footing detail or section with the footer size (e.g. 12\" × 20\") and the slab thickness"],
+    tips: ["A CAD (DXF) file lets the drawing agent trace the slab outline itself", "Rebar sizes written on the detail (#4 @ 12\" O.C.) are read too",
+      "Switch off sheets that aren't the foundation so the run doesn't pick the wrong one"] },
+  electrical: { needs: ["The electrical floor plan (outlets, switches, lights), switched on for Electrical",
+    "A legend for the symbols — it's how lights, fans and outlet types are told apart"],
+    tips: ["Switch the panel drawing / wiring diagram OFF for Electrical — it's read by ⚡ Run wiring, not counted",
+      "Room names on the plan (KITCHEN, BATH, GARAGE) put devices on the right circuits",
+      "Upload as CAD (DXF) so ⚡ Run wiring can route the cable (a PDF is counted, but not wired)",
+      "Label 240 V appliances (RANGE 50A, DRYER 30A) — each gets its own circuit"] },
+  plumbing: { needs: ["The plumbing plan (or the floor plan with the fixtures drawn), switched on for Plumbing", "A fixture legend or schedule"],
+    tips: ["A plumbing fixture schedule (P-1 WC, P-2 LAV…) makes the counts exact", "The water heater and hose bibbs drawn on the plan are counted too"] },
+  hvac: { needs: ["The mechanical (HVAC) plan with supply registers, returns and thermostats, switched on for HVAC",
+    "The conditioned floor area — written on the plan, or the floor plan's dimensions"],
+    tips: ["Equipment labels (tonnage, AHU, condenser) help size the system", "A register / diffuser schedule makes the counts exact"] },
+  flooring: { needs: ["The floor plan with room names and dimensions (or a finish schedule), switched on for Flooring"],
+    tips: ["A room finish schedule (carpet / tile / LVP by room) lets each area get its own material", "Stairs and thresholds drawn on the plan are counted"] },
+  roofing: { needs: ["The roof plan with its outline, pitch (e.g. 6/12) and ridge / hip / valley lines, switched on for Roofing"],
+    tips: ["Written overall dimensions or a scale make the area exact", "Elevations help confirm the pitch when the roof plan doesn't say"] },
+  framing: { needs: ["The floor plan with dimensions, door and window openings, switched on for Framing"],
+    tips: ["A truss / joist layout sheet makes the truss count exact", "Wall height noted on the sections (8', 9') gives the stud length"] },
+  windows_doors: { needs: ["The floor plan with door and window tags, switched on for Windows & Doors"],
+    tips: ["Door and window schedules (sizes, types) make each item exact", "Elevations help when a window isn't tagged on the plan"] },
+  insulation: { needs: ["The floor plan with dimensions (attic and wall areas), switched on for Insulation"],
+    tips: ["Wall sections with R-values (R-13 walls, R-38 attic) set the material", "Ceiling heights on the sections give the wall area"] },
+  demolition: { needs: ["The demolition plan (walls and fixtures to remove, usually dashed), switched on for Demolition"],
+    tips: ["A demo legend or notes (REMOVE EXISTING…) make the scope clear", "Dimensions or a scale make the areas exact"] },
+  drywall: { needs: ["The floor plan with room dimensions, door and window openings, switched on for Drywall"],
+    tips: ["Ceiling heights on the sections or a room schedule give the wall area", "Wet areas marked (bath, laundry) get moisture-resistant board"] },
+  siding: { needs: ["The exterior elevations (all four sides), switched on for Siding"],
+    tips: ["Written heights and widths make the wall areas exact", "Material callouts (lap, board & batten) on the elevations set the siding type"] },
+  fencing: { needs: ["The site plan with the fence line and gates, switched on for Fencing"],
+    tips: ["Written lengths along the fence line (or a scale) make the footage exact", "A fence detail gives the height and type"] },
+  landscaping: { needs: ["The landscape plan (planting areas, trees, shrubs, irrigation zones), switched on for Landscaping"],
+    tips: ["A plant schedule with quantities makes the counts exact", "Sod / mulch areas outlined and labelled are measured separately"] },
+  painting: { needs: ["The floor plan with dimensions and the exterior elevations, switched on for Painting"],
+    tips: ["A room finish schedule says which walls and ceilings get paint", "Ceiling heights on the sections give the wall area"] } };
+const WIRING_NEEDS = {
+  needs: ["The electrical floor plan as a CAD (DXF) file — devices drawn as symbols (blocks), with the panel symbol drawn where the panel is",
+    "Each floor's title on the plan (GROUND FLOOR, SECOND FLOOR) so runs between floors go up the riser"],
+  tips: ["Upload the panel drawing (DXF with a panel schedule: CIRCUIT / DESCRIPTION / AMPS / POLES / WIRE) to use the designer's circuits and wire sizes",
+    "No panel schedule? It lays the circuits out the usual residential way (lighting by floor, two kitchen counter circuits, each bath, laundry and garage on its own 20 A) — check them",
+    "Room names and 240 V appliance labels (RANGE 50A, DRYER 30A) on the plan put devices on the right circuits",
+    "Clicking ⚡ Run wiring opens the wiring options first: foundation (a basement house runs from the basement ceiling; nothing goes in a slab), outlets through the studs, ceiling height — save them as your defaults",
+    "Plain geometry — no AI tokens, and your device counts aren't touched"] };
+
+// The hover card itself: shows on hover and on keyboard focus, next to its button. content() is called each time it
+// opens, so it always describes the trade the button will run right now.
+function attachHoverCard(btn, id, content) {
+  const card = el("div", { class: "hovercard", id, role: "tooltip" });
+  const wrap = el("span", { class: "hovercard-wrap" });
+  btn.removeAttribute("title");
+  btn.setAttribute("aria-describedby", id);
+  const fill = () => card.replaceChildren(...content());
+  wrap.addEventListener("mouseenter", fill);
+  wrap.addEventListener("focusin", fill);
+  fill();
+  wrap.append(btn, card);
+  return wrap;
+}
+
+function needsCard(title, intro, warn, needs, tips) {
+  return [el("strong", {}, title), warn ? el("p", { class: "hovercard-warn" }, "⚠ " + warn) : null,
+    intro ? el("p", {}, intro) : null,
+    el("div", { class: "hovercard-h" }, "What it needs"), el("ul", {}, needs.map(n => el("li", {}, n))),
+    tips && tips.length ? el("div", { class: "hovercard-h" }, "For the best result") : null,
+    tips && tips.length ? el("ul", {}, tips.map(n => el("li", {}, n))) : null].filter(Boolean);
+}
+
+function autoRunHelp() {
+  const trade = AUTO.status === "running" && AUTO.moduleId ? AUTO.moduleId : selectedAutoRunTrade();
+  if (!trade) return needsCard("🤖 AI Auto Run", null, "Add a construction trade to this project first.",
+    ["A construction trade on the project (Concrete, Electrical, Roofing…)", "The plans uploaded and read on the project page"], []);
+  const anyOn = ((RV.data && RV.data.sheets) || []).some(s => !(s.inactive_trades || []).includes(trade));
+  const n = AUTO_RUN_NEEDS[trade] || { needs: ["The plan sheet for " + tradeName(trade) + ", switched on for it"], tips: [] };
+  return needsCard("🤖 AI Auto Run — " + tradeName(trade),
+    "It will " + (AUTO_RUN_BLURBS[trade] || "read the quantities") + ", then you review and approve what it proposes.",
+    anyOn ? null : "Every sheet is switched off for " + tradeName(trade) + " — switch the right sheet on from the Plans screen.",
+    n.needs.concat(["AI measuring turned on with an API key (AI-Prowler's 🏗 Estimator tab → 🤖 AI agents)"]), n.tips);
+}
+
+function wiringHelp() {
+  return needsCard("⚡ Run wiring — Electrical",
+    "Routes the cable from the panel to every device, sizes it, and proposes the cable lengths and breaker counts.",
+    null, WIRING_NEEDS.needs, WIRING_NEEDS.tips);
+}
+
 function autoRunTitle(trade, anyOn) {
   if (!trade) return "Add a construction trade to this project first — AI Auto Run measures the quantities on the plans for that trade.";
   const name = tradeName(trade);
@@ -1307,6 +1517,12 @@ function agentSourceText(m) {
   return "🤖 " + from + (n ? " — " + n + " drawing object(s)" : "");
 }
 
+// Display words for a measurement's proposed_by: the stored ids stay as they are, the Detail
+// table shows what a person would call them ("llm-takeoff" is the AI measuring; a typed or drawn
+// measurement already carries the person's name).
+const PROPOSED_BY_WORDS = { "llm-takeoff": "AI measuring", "concrete-agent": "Concrete agent" };
+function proposedByWords(v) { return PROPOSED_BY_WORDS[v] || v || "—"; }
+
 // Show exactly which lines the agent used: select its drawing objects and zoom to them. With no objects (the
 // agent drew the outline itself) the zoom falls to the measurement's own shape — zoomToSelection already
 // includes the current measurement's geometry.
@@ -1368,7 +1584,8 @@ function drawAutoRunStatus() {
   const anyOn = trade && ((RV.data && RV.data.sheets) || []).some(s => !(s.inactive_trades || []).includes(trade));
   if (runBtn) {
     runBtn.disabled = !trade || AUTO.status === "running" || !anyOn;
-    runBtn.title = autoRunTitle(trade, anyOn);
+    runBtn.dataset.runs = autoRunTitle(trade, anyOn);         // what a click runs (the hover card says it in full)
+    if (!runBtn.closest(".hovercard-wrap")) runBtn.title = runBtn.dataset.runs;
   }
   const picker = $("bp-auto-trade");
   if (picker) {
@@ -1398,8 +1615,6 @@ function drawAutoRunStatus() {
     parts.push(el("p", { class: "note", id: "bp-auto-status", role: "status" }, n
       ? "AI Auto Run finished: " + n + " proposed measurement(s)" + src + " — review and approve them below."
       : "AI Auto Run finished: no measurements proposed on this sheet."));
-    const res = autoResultsBox(AUTO.results);
-    if (res) parts.push(res);
     // The AI (API key) reads the dimensions written on the plan and the app does the maths: no scale, no
     // calibration - say so instead of naming a scale it never used (2026-11-13, David).
     if (AUTO.source === "llm") parts.push(el("p", { class: "muted small", id: "bp-auto-scale" },
@@ -1416,7 +1631,7 @@ function drawAutoRunStatus() {
       "AI Auto Run failed — " + (AUTO.error || "unknown error")));
   } else if (runHere && AUTO.status === "timeout") {
     parts.push(el("p", { class: "error", id: "bp-auto-status", role: "alert" },
-      "AI Auto Run timed out after 10 minutes — try re-running it."));
+      "AI Auto Run stopped answering (no news for 10 minutes) — try re-running it."));
   }
   const vp = autoRunViewport();
   if (vp && trade === "concrete" && AUTO.candidates.has(vp.id)) {
@@ -1425,8 +1640,8 @@ function drawAutoRunStatus() {
     const llm = AUTO.llmTakeoff.get(vp.id);
     if (!list.length && llm && llm.enabled) {
       text = llm.ready
-        ? "Agent found no slab outline on this sheet — the AI will read the plan instead when you run it (LLM takeoff is on)."
-        : "Agent found no slab outline on this sheet — LLM takeoff is on, but the AI isn't ready (no API key saved?) — check AI-Prowler's 🏗 Estimator tab → 🤖 AI agents.";
+        ? "Agent found no slab outline on this sheet — the AI will read the plan instead when you run it (AI measuring is on)."
+        : "Agent found no slab outline on this sheet — AI measuring is on, but the AI isn't ready (no API key saved?) — check AI-Prowler's 🏗 Estimator tab → 🤖 AI agents.";
     }
     if (list.length) {
       const big = list.reduce((a, b) => parseFloat(b.area_sqft || 0) > parseFloat(a.area_sqft || 0) ? b : a, list[0]);
@@ -1437,8 +1652,8 @@ function drawAutoRunStatus() {
     // desktop: AI-Prowler's 🏗 Estimator tab → 🤖 AI agents, with the other agents' settings (2026-11-13).
     if (!list.length && llm && !llm.enabled) {
       parts.push(el("p", { class: "muted small", id: "bp-auto-candidates" },
-        "Agent found no slab outline on this sheet — the AI didn't run because LLM takeoff is off. ",
-        "Turn it on in AI-Prowler's 🏗 Estimator tab → 🤖 AI agents (AI takeoff → Suggest) to let the AI read the plan, or measure it manually."));
+        "Agent found no slab outline on this sheet — the AI didn't run because AI measuring is off. ",
+        "Turn it on in AI-Prowler's 🏗 Estimator tab → 🤖 AI agents (AI measuring → Suggest) to let the AI read the plan, or measure it manually."));
     } else {
       parts.push(el("p", { class: "muted small", id: "bp-auto-candidates" }, text));
     }
@@ -1447,10 +1662,12 @@ function drawAutoRunStatus() {
   const runKnownHere = !!(AUTO.runId && AUTO.sheetId === RV.sheetId);
   // AI Log: what the AI was given and what it returned for this run (nothing there means the AI never ran).
   if (runKnownHere) parts.push(el("p", { class: "muted small", id: "bp-auto-ai-log" },
-    el("a", { href: "#/agents/ai-log?auto_run_id=" + AUTO.runId }, "📋 AI Log — what the AI was given and what it returned for this run")));
+    el("a", { href: "#/agents/ai-log?auto_run_id=" + AUTO.runId, target: "_blank", rel: "noopener", id: "bp-auto-ai-log",
+      title: "Opens in a new tab — this screen stays where it is" },
+      "📋 AI Log — what the AI was given and what it returned for this run ↗")));
   if (AUTO.status !== "running" && (runKnownHere || agentHere) && RV.data.can_measure) parts.push(rerunButton());
   slot.replaceChildren(...parts);
-  drawStepsPanel();      // the calc lives in the Takeoff steps tab, beside the drawing
+  drawStepsPanel();      // the calc lives in the Measure steps tab, beside the drawing
 }
 
 // "Please wait" while AI Auto Run works (2026-11-15, David): a spinner, the steps it goes through with the current one
@@ -1491,34 +1708,32 @@ function autoRunningBanner() {
     el("div", { class: "bp-spinner", "aria-hidden": "true" }),
     el("div", {},
       el("strong", {}, "🤖 AI Auto Run is working — please wait"),
-      el("div", { class: "muted small" }, "This usually takes 1–2 minutes. You don't need to click again; the results show here when it's done. ",
+      el("div", { class: "muted small" }, "This usually takes 1–2 minutes (a busy plan can take 10 or more). You don't need to click again; the results show here when it's done. ",
         "Running for ", el("span", { id: "bp-auto-elapsed" }, secs + " s"), "."),
-      el("ol", { id: "bp-auto-steps" }, items)));
+      el("ol", { id: "bp-auto-steps" }, items),
+      autoLiveLine(AUTO.live)));
 }
 
-// AI Auto Run measurements (2026-11-15, David): what the run measured, one row each, and the concrete it adds up to,
-// with every step of the volume worked out (formula = result) so a person can check it by hand. The server does the
-// maths (GET /auto-run/<id> results); nothing here is approved until a person approves it below.
-function autoResultsBox(r) {
-  if (!r || !(r.lines || []).length) return null;
-  const rows = r.lines.map(x => el("tr", { "data-measurement": x.id },
-    el("td", {}, x.label || x.feeds, x.how ? el("div", { class: "muted small" }, x.how) : null),
-    el("td", { class: "num" }, num(x.qty) + " " + (x.unit || "")),
-    el("td", {}, el("span", { class: "status" + (x.status === "approved" ? "" : " sample") }, words(x.status)))));
-  const parts = [el("strong", {}, "🤖 AI Auto Run measurements"),
-    el("table", { class: "list" }, el("thead", {}, el("tr", {}, el("th", {}, "What"), el("th", {}, "Quantity"), el("th", {}, "Status"))),
-      el("tbody", {}, rows))];
-  parts.push(el("p", { class: "muted small" }, AUTO.moduleId === "electrical"
-    ? "Approve the counts below, then price Electrical from them (voltage, box material and panel stay as answered)."
-    : AUTO.moduleId === "concrete"
-    ? "Approve the measurements below, then price Concrete from them (the thickness can be changed there)."
-    : "Approve the measurements below, then price " + tradeName(AUTO.moduleId) + " from them (your answers stay as answered)."));
-  return el("div", { class: "card section", id: "bp-auto-results" }, ...parts);
+// What the AI is doing right now, while its answer streams in (2026-11-21, David: "show only its latest sentence,
+// trimmed, plus the progress counts ... for all trades"). The runner updates it every couple of seconds.
+function autoLiveLine(live) {
+  if (!live) return null;
+  const k = n => n >= 1000 ? (Math.round(n / 100) / 10) + "k" : String(n || 0);
+  const counts = [];
+  if (live.thinking_chars) counts.push(k(live.thinking_chars) + " characters of thinking");
+  if (live.answer_chars) counts.push(k(live.answer_chars) + " characters of the answer");
+  const writing = live.phase === "writing";
+  return el("div", { class: "bp-auto-live", id: "bp-auto-live" },
+    el("div", { id: "bp-auto-live-text" }, writing
+      ? "✍️ The AI is writing its answer" + (live.item ? " — latest: " + live.item : "")
+      : "💭 " + (live.thought ? live.thought : "The AI is thinking it through…")),
+    counts.length ? el("div", { class: "muted small", id: "bp-auto-live-counts" }, counts.join(" · ")) : null);
 }
 
-// The concrete calc, in the "Takeoff steps" tab (2026-11-18, David): the volume and every step of it, the
+// The concrete calc, in the "Measure steps" tab (2026-11-18, David): the volume and every step of it, the
 // footer's check and correction, and the areas added or taken away — beside the drawing, so clicking a step
-// shows it on the plan without scrolling up and down. The measurements table stays above the drawing.
+// shows it on the plan without scrolling up and down. The measurements themselves are approved in the
+// Measurements tab (the old results table above the drawing was removed 2026-11-18: it duplicated this tab).
 function concreteStepsBox(c) {
   const parts = [];
   parts.push(el("div", { id: "bp-auto-volume" },
@@ -1538,18 +1753,200 @@ function concreteStepsBox(c) {
   return parts;
 }
 
-// The electrical counts, in the "Takeoff steps" tab (2026-11-18): one row per device the AI counted, with the
-// evidence it counted from. Counts have no geometry, so there is no click-to-highlight here.
+// Which classified symbols each count question counts (the plan engine's symbol library,
+// estimator/plan_engine/symbol_library.py FEEDS, inverted). Clicking a count row highlights
+// those symbols on the drawing, the way the Symbols tab highlights a type. A question with no
+// entry here has no symbols behind it — circuits are wires, not symbols, and windows/doors
+// can't be told apart by size from the symbol alone — so its row isn't clickable. A sheet
+// whose symbols are unclassified (item_type null or "unknown", e.g. the US plan's 'CE' blocks)
+// matches nothing either: the click does nothing, quietly.
+const COUNT_SYMBOLS = {
+  electrical: {
+    outlets: ["duplex_receptacle"],             // 2026-11-19: each outlet type is its own count
+    usb_outlets: ["duplex_receptacle_usb"],
+    quad_outlets: ["quad_receptacle"],
+    floor_boxes: ["floor_box"],
+    wp_outlets: ["duplex_receptacle_wp"],
+    gfci: ["duplex_receptacle_gfci"],
+    switches: ["switch"],                      // 2026-11-19: each switch type is its own count
+    switches_3way: ["switch_3way"],
+    switches_4way: ["switch_4way"],
+    dimmers: ["switch_dimmer"],
+    occupancy_switches: ["switch_occupancy"],
+    lights: ["light_fixture"],                   // 2026-11-20: each light type is its own count
+    recessed_lights: ["light_recessed"],
+    wall_lights: ["light_wall"],
+    pendant_lights: ["light_pendant"],
+    undercabinet_lights: ["light_undercabinet"],
+    exterior_lights: ["light_exterior"],
+    exit_emergency_lights: ["exit_sign", "emergency_light"],
+    fans: ["ceiling_fan"],
+    exhaust_fans: ["exhaust_fan"],
+    smoke_detectors: ["smoke_detector", "smoke_co_detector"],   // 2026-11-20: counted too
+    main_panels: ["panel"],
+    appliance_circuits: ["receptacle_240v", "receptacle_dedicated", "ev_charger"],
+    range_receptacles: ["range_receptacle"],     // 2026-11-20: drawn on the revised plan, so they light up too
+    dryer_receptacles: ["dryer_receptacle"],
+    disconnects: ["disconnect"],
+    low_voltage: ["data_outlet", "phone_outlet", "tv_outlet", "speaker"],
+  },
+  plumbing: {
+    toilets: ["water_closet", "urinal"],
+    sinks: ["lavatory", "sink"],
+    kitchen_sinks: ["kitchen_sink", "bar_sink", "laundry_sink", "mop_sink"],
+    showers: ["shower", "tub", "tub_shower"],
+    dishwashers: ["dishwasher"],
+    washers: ["washer_box"],
+    hose_bibs: ["hose_bibb"],
+  },
+  hvac: {
+    registers: ["supply_diffuser", "linear_diffuser", "floor_register"],
+    returns: ["return_grille"],
+    thermostats: ["thermostat"],
+    zones: ["mini_split_head"],
+  },
+  landscaping: {
+    trees: ["tree", "palm"],
+    shrubs: ["shrub"],
+    drip_zones: ["drip_valve"],
+    sprinkler_zones: ["irrigation_valve"],
+  },
+};
+
+// The classified symbols on this sheet behind a count question (module + feeds): the ones still
+// counted (rejected ones are taken out), or all of them when every one was rejected — the same
+// rule the Symbols tab uses. [] when the question has no mapping or the sheet has no such symbols.
+function countSymbols(moduleId, feeds) {
+  const types = (COUNT_SYMBOLS[moduleId] || {})[feeds];
+  if (!types) return [];
+  const want = new Set(types);
+  const all = sheetSymbols().filter(o => want.has(symbolKey(o)));
+  const counted = all.filter(o => o.symbol.status !== "rejected");
+  const syms = counted.length ? counted : all;
+  // 2026-11-19 (David): a 30 Amp circuit is often only a label on the plan ("RANGE 30A", "DRYER 30A", "AC 30A"),
+  // with no symbol; those labels are what the AI counts, so the row highlights them.
+  const rx = (COUNT_LABELS[moduleId] || {})[feeds];
+  const labels = rx ? RV.objects.filter(o => !o.symbol && o.kind === "text" && rx.test(o.label || "")) : [];
+  return syms.concat(labels);
+}
+
+// Count questions whose items can be plain text labels on the plan rather than symbols.
+const COUNT_LABELS = {
+  electrical: { appliance_circuits: /\b(?:30|40|50|60)\s?A(?:MP)?\b/i },
+};
+
+// Click a count row: highlight the symbols it counted on the drawing (click again to clear),
+// like clicking a formula row. The row shows "on" while its symbols are highlighted.
+function toggleCountHighlight(moduleId, feeds) {
+  RV.review = null;                        // a To measure highlight replaces an open review card
+  if (RV.countStep === feeds) {
+    RV.countStep = null;
+    RV.symbolType = null; RV.symbolList = []; RV.symbolPos = -1;
+    RV.selected = new Set();
+    rehideRevealed();
+    drawMeasurements();
+    drawSymbolsPanel($("review-message"));
+    markCountRows();
+    return;
+  }
+  const objs = countSymbols(moduleId, feeds);
+  if (!objs.length) return;   // no classified symbols for it on this sheet — nothing to show
+  highlightSymbols(objs, symbolKey(objs[0]));
+  RV.countStep = feeds;
+  markCountRows();
+}
+
+function markCountRows() {
+  for (const tr of document.querySelectorAll("#bp-auto-count-table tr[data-feeds], #bp-auto-quantities-table tr[data-feeds], #bp-pane-guide li[data-feeds]"))
+    tr.classList.toggle("on", !!RV.countStep && tr.dataset.feeds === RV.countStep);
+}
+
+// The measurement behind a count row: the proposed one feeding that question, or the approved
+// one when it's already approved (a rejected one doesn't count). Null for a zero-count row —
+// the run proposes no measurement for a count of 0.
+function countMeasurement(moduleId, feeds) {
+  const ms = RV.data.takeoff.measurements.filter(m => m.module_id === moduleId && m.feeds === feeds && m.status !== "rejected");
+  return ms.find(m => m.status === "proposed") || ms[0] || null;
+}
+
+// The Count cell: an editable number input (a whole number, 0–1000 — the manifest's max for a
+// count) so a wrong AI count is corrected by hand here. It shows the measurement's qty when one
+// exists — a hand correction, which is what gets priced — else the run's count. Without the
+// right to change a measurement, it's just the number.
+function countInput(moduleId, x) {
+  const m = countMeasurement(moduleId, x.feeds);
+  const shown = m ? parseFloat(m.qty) : parseFloat(x.qty) || 0;
+  if (!(RV.data.can_correct || RV.data.can_measure)) return num(shown, 0);
+  const inp = el("input", { type: "number", class: "bp-count-in", min: "0", max: "1000", step: "1",
+    value: String(shown), "data-feeds": x.feeds, "data-mid": m ? m.id : "",
+    "aria-label": "Count for " + (x.label || words(x.feeds)),
+    title: "Correct the count by hand (whole number, 0–1000)" });
+  const commit = () => {
+    const v = inp.value.trim() === "" ? NaN : Number(inp.value);
+    if (!Number.isInteger(v) || v < 0 || v > 1000) {
+      inp.value = String(shown);
+      toast("A count is a whole number from 0 to 1000.");
+      return;
+    }
+    if (v === shown) return;
+    saveCount(moduleId, x, m, v, inp);
+  };
+  inp.addEventListener("change", commit);
+  inp.addEventListener("click", ev => ev.stopPropagation());   // clicking to edit mustn't highlight the row
+  inp.addEventListener("keydown", ev => {
+    if (ev.key === "Enter" || ev.key === " ") ev.stopPropagation();   // the row's keys, not the input's
+    if (ev.key === "Enter") { ev.preventDefault(); inp.blur(); }      // Enter commits, like leaving the box
+  });
+  return inp;
+}
+
+// Correct a count by hand: edit the measurement behind the row, or create one when the row had
+// none (a zero count). Editing to 0 keeps the measurement at 0 — the server only refuses
+// negatives, and 0 prices as nothing. Asks first, like every other change; the table, the guide
+// badges and the Measurements list all refresh from the save (reviewAsk reloads the data).
+function saveCount(moduleId, x, m, v, inp) {
+  const msg = $("bp-count-message") || $("review-message");
+  if (m) {
+    reviewAsk(msg, inp, "/measurements/" + m.id + "/edit", { qty: String(v) },
+      () => "Count corrected to " + v, "bp-count", false, true);
+  } else {
+    // A typed measurement, not the propose endpoint: propose measures drawing objects
+    // (object_ids are required), and a zero-count row has no objects to measure.
+    reviewAsk(msg, inp, "/estimates/" + RV.estimateId + "/measurements",
+      { module_id: moduleId, feeds: x.feeds, qty: String(v), unit: "ea", kind: "count",
+        label: x.label || words(x.feeds) },
+      () => "Count saved: " + v, "bp-count", false, true);
+  }
+}
+
+// The electrical counts, in the "Measure steps" tab (2026-11-18): one row per device the AI counted, with the
+// evidence it counted from. Click a row to highlight the symbols it counted on the drawing (where the sheet's
+// symbols are classified — see COUNT_SYMBOLS); the Count column is editable, so a wrong AI count is corrected
+// by hand here instead of with the old Count tool.
 function electricalStepsBox(c) {
-  const rows = (c.counts || []).map(x => el("tr", { "data-feeds": x.feeds },
-    el("td", {}, x.label || words(x.feeds)),
-    el("td", { class: "num" }, num(x.qty, 0)),
-    el("td", { class: "muted small" }, x.evidence || "")));
+  const rows = (c.counts || []).map(x => {
+    const objs = countSymbols("electrical", x.feeds);
+    const on = RV.countStep === x.feeds;
+    const tr = el("tr", { "data-feeds": x.feeds,
+        class: (objs.length ? "bp-step-link" : "") + (on ? " on" : ""),
+        tabindex: objs.length ? "0" : null,
+        title: objs.length ? "Show these on the drawing" : null },
+      el("td", {}, objs.length ? el("span", { class: "bp-step-eye", "aria-hidden": "true" }, "🔍 ") : null, x.label || words(x.feeds)),
+      el("td", { class: "num" }, countInput("electrical", x)),
+      el("td", { class: "muted small" }, x.evidence || ""));
+    if (objs.length) {
+      const go = () => toggleCountHighlight("electrical", x.feeds);
+      tr.addEventListener("click", go);
+      tr.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+    }
+    return tr;
+  });
   const parts = [el("div", { id: "bp-auto-counts" },
     el("p", {}, el("strong", {}, "Device counts")),
     el("table", { class: "list", id: "bp-auto-count-table" },
       el("thead", {}, el("tr", {}, el("th", {}, "Device"), el("th", {}, "Count"), el("th", {}, "Evidence"))),
-      el("tbody", {}, rows)))];
+      el("tbody", {}, rows)),
+    el("div", { id: "bp-count-message", role: "status" }))];
   const conf = c.confidence;
   const confText = conf === undefined || conf === null || conf === "" ? ""
     : "Confidence: " + (typeof conf === "number" ? pct(conf) : conf) + ". ";
@@ -1557,15 +1954,29 @@ function electricalStepsBox(c) {
   return parts;
 }
 
-// The quantity trades' results, in the "Takeoff steps" tab (2026-11-18): one generic table for all 13 —
+// The quantity trades' results, in the "Measure steps" tab (2026-11-18): one generic table for all 13 —
 // one row per quantity the AI read, with the amount, the unit, and the evidence it read it from. Counts,
-// areas and lengths all come through the same shape (the run's results.quantities); quantities have no
-// geometry, so there is no click-to-highlight here.
+// areas and lengths all come through the same shape (the run's results.quantities). A count row whose
+// question has classified symbols behind it (plumbing fixtures, HVAC registers, landscape trees — see
+// COUNT_SYMBOLS) clicks to highlight them on the drawing; areas and lengths have no symbols to show.
 function quantitiesStepsBox(q) {
-  const rows = (q.items || []).map(x => el("tr", { "data-feeds": x.feeds },
-    el("td", {}, x.label || words(x.feeds)),
-    el("td", { class: "num" }, num(x.qty, x.unit === "ea" ? 0 : 2) + (x.unit ? " " + x.unit : "")),
-    el("td", { class: "muted small" }, x.evidence || "")));
+  const rows = (q.items || []).map(x => {
+    const objs = countSymbols(AUTO.moduleId, x.feeds);
+    const on = RV.countStep === x.feeds;
+    const tr = el("tr", { "data-feeds": x.feeds,
+        class: (objs.length ? "bp-step-link" : "") + (on ? " on" : ""),
+        tabindex: objs.length ? "0" : null,
+        title: objs.length ? "Show these on the drawing" : null },
+      el("td", {}, objs.length ? el("span", { class: "bp-step-eye", "aria-hidden": "true" }, "🔍 ") : null, x.label || words(x.feeds)),
+      el("td", { class: "num" }, num(x.qty, x.unit === "ea" ? 0 : 2) + (x.unit ? " " + x.unit : "")),
+      el("td", { class: "muted small" }, x.evidence || ""));
+    if (objs.length) {
+      const go = () => toggleCountHighlight(AUTO.moduleId, x.feeds);
+      tr.addEventListener("click", go);
+      tr.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+    }
+    return tr;
+  });
   const parts = [el("div", { id: "bp-auto-quantities" },
     el("p", {}, el("strong", {}, (q.label ? q.label + " quantities" : "Quantities"))),
     el("table", { class: "list", id: "bp-auto-quantities-table" },
@@ -1578,13 +1989,15 @@ function quantitiesStepsBox(q) {
   return parts;
 }
 
-// The "Takeoff steps" tab shows only when this sheet has a finished run with a concrete calc, electrical
-// counts, or a quantity trade's quantities — the same condition the results box above the drawing uses.
-// If the calc goes away while the tab is showing (a re-run started), fall back to Measurements so the user
-// isn't left on a tab with no button.
+// The "Measure steps" tab shows only when this sheet has a finished run with a concrete calc, electrical
+// counts, or a quantity trade's quantities. For an electrical run it reads "AI Count steps" — the tab
+// holds counts, not calc steps — and the label follows the run whenever the status redraws (a new run,
+// or the trade picker moving). If the calc goes away while the tab is showing (a re-run started), fall
+// back to Measurements so the user isn't left on a tab with no button.
 function drawStepsPanel() {
   const pane = $("bp-pane-steps"), tab = $("bp-tab-steps");
   if (!pane || !tab) return;
+  tab.textContent = AUTO.results && AUTO.results.electrical ? "AI Count steps" : "Measure steps";
   const show = !!(AUTO.status === "done" && AUTO.sheetId === RV.sheetId && AUTO.results
     && (AUTO.results.concrete || AUTO.results.electrical || AUTO.results.quantities));
   tab.hidden = !show;
@@ -1596,6 +2009,7 @@ function drawStepsPanel() {
   pane.replaceChildren(...(AUTO.results.electrical ? electricalStepsBox(AUTO.results.electrical)
     : AUTO.results.quantities ? quantitiesStepsBox(AUTO.results.quantities)
     : concreteStepsBox(AUTO.results.concrete)));
+  markCountRows();
 }
 
 // The AI's own check of its footer reading against the plan (2026-11-15, David: "is it possible that some AI checking
@@ -1847,7 +2261,9 @@ async function startDetailCalibrate(c) {
 async function startPlaceSection(c) {
   await goToDetail(c);
   RV.draft = []; RV.draftTool = null;
-  setTool("count", $("review-message"));
+  // Any drawing tool works here: RV.placing intercepts the click before a draft starts
+  // (addDraftPoint) — length is the plainest single-click tool. (Was the Count tool, removed 2026-11-18.)
+  setTool("length", $("review-message"));
   RV.placing = { c };
   if ($("bp-tool-help")) $("bp-tool-help").textContent = "Click the footer's bottom outside corner on the detail — where the " +
     "outside face meets the bottom of the footer (it snaps to the drawing's corners; hold Alt to place it freely). Esc cancels.";
@@ -1987,6 +2403,7 @@ function trackAutoRun(runId, vp) {
   stopAutoPoll();
   AUTO.runId = runId;
   AUTO.estimateId = RV.estimateId;
+  AUTO.live = null; AUTO.lastNews = 0; AUTO.lastUpdated = null;    // a new run starts with no AI progress (2026-11-21)
   AUTO.sheetId = RV.sheetId;
   AUTO.viewportId = vp ? vp.id : null;
   AUTO.status = "running";
@@ -2004,7 +2421,11 @@ function pollAutoRun() {
   AUTO.timer = setTimeout(async () => {
     AUTO.timer = null;
     if (!$("bp-auto-slot") || !$("bp-auto-slot").isConnected) return;   // left the review page
-    if (Date.now() - AUTO.startedAt > AUTO_TIMEOUT_MS) { AUTO.status = "timeout"; drawAutoRunStatus(); return; }
+    // 2026-11-21: the run streams the AI's progress, so it only "times out" when it has gone quiet for 10 minutes
+    // (or after an hour in all) - a busy plan can take the AI longer than 10 minutes while it's still working.
+    if (Date.now() - (AUTO.lastNews || AUTO.startedAt) > AUTO_TIMEOUT_MS || Date.now() - AUTO.startedAt > AUTO_MAX_MS) {
+      AUTO.status = "timeout"; drawAutoRunStatus(); return;
+    }
     const runId = AUTO.runId;
     let r;
     try { r = await api("GET", "/auto-run/" + runId); }
@@ -2015,6 +2436,8 @@ function pollAutoRun() {
     }
     if (AUTO.runId !== runId) return;                                    // a newer run took over meanwhile
     const run = r.run || {};
+    if (run.updated_at && run.updated_at !== AUTO.lastUpdated) { AUTO.lastUpdated = run.updated_at; AUTO.lastNews = Date.now(); }
+    AUTO.live = run.live || null;                       // the AI's latest sentence and progress (2026-11-21)
     AUTO.step = run.step || "";
     AUTO.source = run.source || "geometry";
     if (run.module_id) AUTO.moduleId = run.module_id;
@@ -2038,7 +2461,12 @@ function pollAutoRun() {
       const elec = AUTO.results && AUTO.results.electrical;
       const extra = AUTO.results && AUTO.results.concrete ? " — about " + num(AUTO.results.concrete.total_cuyd) + " cu yd of concrete"
         : elec ? " — " + (elec.counts || []).reduce((a, c) => a + (parseFloat(c.qty) || 0), 0) + " devices counted" : "";
-      toast(n ? "AI Auto Run finished: " + n + " proposed measurement(s)" + src + extra + " to review." : "AI Auto Run finished: nothing proposed.");
+      // Electrical's run also routes the wiring (2026-11-19): say what it did, or why it didn't.
+      const wired = elec && elec.wiring;
+      const wiring = wired ? (wired.ran ? " ⚡ Wiring: " + wired.summary + "." : " ⚡ " + wired.why + ".") : "";
+      toast(n ? "AI Auto Run finished: " + n + " proposed measurement(s)" + src + extra + " to review." + wiring
+              : "AI Auto Run finished: nothing proposed." + wiring);
+      if (wired) { RV.wiringFor = null; RV.showWiringNext = !!wired.ran; }   // the Wiring card reloads with the new run, routes on
       drawAutoRunStatus();
       await refreshData();
     } else if (run.status === "failed") {
@@ -2075,7 +2503,7 @@ async function startAutoRun() {
   if (slot && slot.scrollIntoView) slot.scrollIntoView({ block: "nearest", behavior: "smooth" });
   try {
     const r = await api("POST", "/auto-run", { estimate_id: RV.estimateId, sheet_id: here ? RV.sheetId : null,
-                                               module_id: trade });
+                                               module_id: trade, keep_approved: keepApprovedNow() });
     if (!r.run_id) throw new Error("AI Auto Run didn't start (no run id)");
     trackAutoRun(r.run_id, null);
   } catch (e) {
@@ -2117,7 +2545,7 @@ async function rerunAutoRun(btn) {
     return;
   }
   try {
-    const r = await api("POST", "/auto-run/" + id + "/rerun", {});
+    const r = await api("POST", "/auto-run/" + id + "/rerun", { keep_approved: keepApprovedNow() });
     if (!r.run_id) throw new Error("the agent didn't re-run (no run id)");
     trackAutoRun(r.run_id, autoRunViewport());
   } catch (e) {
@@ -2195,7 +2623,10 @@ function refreshList(msg) {
   if (RV.data.can_approve && t.counts.proposed) parts.push(bulkApprove(msg));
   if (!rows.length) {
     parts.push(el("div", { class: "card empty", id: "bp-list-empty" }, t.measurements.length ? "Nothing matches." :
-      RV.data.can_measure ? "No measurements yet. Pick a tool (📏 Length, ⬠ Area…) and draw on the plan, or click rooms and walls and make a measurement from them." :
+      // 2026-11-21 (David): measuring by hand is too much work - AI Auto Run (and the wiring run) measure the plans.
+      RV.data.can_measure ? "No measurements yet. Click 🤖 AI Auto Run — it reads the plans and measures and counts everything for you" +
+        ((RV.data.trades || []).some(x => x.module_id === "electrical") ? ", then ⚡ Run wiring for the cable runs" : "") +
+        ". Then approve what it found. (Missed something? The drawing tools — 📏 Length, ⬠ Area — are there for the odd extra.)" :
         "No measurements yet."));
   } else if (LIST_FILTER.queue) {
     parts.push(el("ul", { class: "bp-rows", id: "bp-rows" }, rows.map(m => measurementRow(m, msg))));
@@ -2229,7 +2660,7 @@ function refreshList(msg) {
 }
 
 // ------------------------------------------------------------------ guided takeoff: what to measure, with which tool
-// A persistent panel above the plan (not a one-off tour): for every measurement-backed question
+// A persistent tab beside the drawing (not a one-off tour): for every measurement-backed question
 // of each trade on this project, the quantity, the tool that measures it, and why — plus whether
 // it is measured yet. David's first live takeoff (NSB shed slab) had no such list: he used
 // Rectangle on the footing, which gives an area, not the linear feet the footing is priced by.
@@ -2238,7 +2669,8 @@ function refreshList(msg) {
 const GUIDE_TOOLS = {
   area: { tool: "rect", label: "▭ Rectangle or ⬠ Area" },
   length: { tool: "length", label: "📏 Length" },
-  count: { tool: "count", label: "✚ Count" },
+  count: { tool: null, label: "🤖 AI Auto Run" },   // 2026-11-18: no Count tool — AI Auto Run is the only way to count
+  wiring: { tool: null, label: "⚡ Wiring" },        // cable sizes/lengths: the Wiring stage (AI Auto Run, Electrical)
 };
 // Why this quantity needs that tool. The concrete lines are the ones David tripped over;
 // everything else falls back to the unit: sqft is priced by the square foot, lf by the foot.
@@ -2247,7 +2679,9 @@ const GUIDE_WHY = {
   "concrete.perimeter_lf": "forms are the boards around the slab edge that hold wet concrete in place, priced per foot — if left at 0 the app guesses a square slab's perimeter, badly wrong for a long narrow slab",
   "concrete.footing_lf": "the thickened edge under the slab's rim — its length sets the digging, forms, and rebar, priced by the linear foot; click all four corners AND back to the start to close the loop",
 };
+function isWireQuestion(q) { return /^wire_\d+_\d+_ft$/.test(q.id); }
 function guideToolFor(q) {
+  if (isWireQuestion(q)) return "wiring";   // cable is routed by the Wiring stage, not clicked along (2026-11-19)
   const u = (q.unit || "").toLowerCase();
   if (/sq|sf/.test(u)) return "area";
   if (/lf|ft|feet/.test(u)) return "length";
@@ -2257,9 +2691,10 @@ function guideWhyFor(mod, q) {
   const key = mod + "." + q.id;
   if (GUIDE_WHY[key]) return GUIDE_WHY[key];
   const kind = guideToolFor(q);
+  if (kind === "wiring") return "routed from the panel to every device by 🤖 AI Auto Run (or ⚡ Run wiring below) — needs the floor plan and the panel drawing as DXF files";
   if (kind === "area") return "priced by the square foot — Rectangle for a straight-sided shape, Area for an odd one";
   if (kind === "length") return "priced by the linear foot — click along it";
-  return "priced each — click every one";
+  return "priced each — 🤖 AI Auto Run counts them from the plan";
 }
 // [state, text]: approved (from approved_answers, already in the question's unit), to review
 // (a proposed measurement feeds it), or not yet measured.
@@ -2285,6 +2720,7 @@ function guideStatusFor(mod, q) {
 // it has real feet. Uses the viewport state the sheet already carries — no new
 // endpoint. NTS views cannot be calibrated, so they do not count.
 function guideCalibration() {
+  if (isCadSheet()) return ["approved", "✓ CAD drawing at real size — no scale needed"];
   const views = (RV.viewports || []).filter(v => !v.is_nts);
   if (!views.length) return ["missing", "not to scale — nothing to calibrate"];
   if (views.some(v => !v.measurable)) return ["missing", "not calibrated — calibrate before measuring"];
@@ -2310,6 +2746,7 @@ function autoCalText(c) {
 }
 
 function autoCalibrationBox() {
+  if (isCadSheet()) return null;       // nothing to calibrate on a CAD drawing
   const views = RV.viewports || [];
   const rows = [];
   for (const v of views) {
@@ -2320,7 +2757,7 @@ function autoCalibrationBox() {
     if (!v.measurable && RV.data.can_measure) {
       const b = el("button", { class: "button", type: "button", "data-autocal": String(v.id),
         title: "Reads the dimensions written on the plan and sets the scale from them. Uses the drawing's own lines first; "
-          + "the AI (your API key) only when AI takeoff is on. If none are found, it says you need to calibrate by hand." },
+          + "the AI (your API key) only when AI measuring is on. If none are found, it says you need to calibrate by hand." },
         "🤖 Auto-calibrate " + name);
       b.addEventListener("click", () => runAutoCalibrate(v, b, false));
       line.append(b);
@@ -2355,12 +2792,12 @@ async function runAutoCalibrate(v, button, confirm) {
 }
 
 function drawTakeoffGuide() {
-  const slot = $("bp-guide-slot");
+  const slot = $("bp-pane-guide");
   if (!slot || !RV.data) return;
   const trades = RV.data.trades || [];
-  const head = el("summary", {}, "📋 What to measure — and which tool");
+  const head = el("h3", {}, "📋 What to measure — and which tool");
   if (!trades.length) {
-    slot.replaceChildren(el("details", { class: "card section", id: "bp-guide", open: true }, head,
+    slot.replaceChildren(el("div", { id: "bp-guide" }, head,
       el("p", { class: "muted small" }, "No trade on this project needs a measurement yet.")));
     return;
   }
@@ -2373,7 +2810,7 @@ function drawTakeoffGuide() {
       el("span", { class: "muted small" }, "the plan is a picture — until the scale is set, nothing you measure has real feet")),
     el("span", { class: "bp-row-qty" }, "📐 Calibrate"),
     el("span", { class: "status" + (calState === "approved" ? "" : " sample") }, calText));
-  if (RV.data.can_measure) {
+  if (RV.data.can_measure && !isCadSheet()) {
     const pickCal = () => setTool("calibrate", $("review-message"));
     calRow.addEventListener("click", pickCal);
     calRow.addEventListener("keydown", ev => { if (ev.key === "Enter") pickCal(); });
@@ -2391,23 +2828,643 @@ function drawTakeoffGuide() {
     const rows = tr.questions.map(q => {
       const kind = guideToolFor(q), tool = GUIDE_TOOLS[kind];
       const [state, text] = guideStatusFor(tr.module_id, q);
-      const li = el("li", { class: "bp-row", "data-module": tr.module_id, "data-question": q.id,
-        tabindex: RV.data.can_measure ? "0" : null,
-        title: RV.data.can_measure ? "Use the " + tool.label + " tool" : null },
-        el("span", { class: "bp-row-name" }, q.label, el("br", {}),
+      // A count row has no tool to pick (AI Auto Run counts) — instead it highlights the
+      // symbols it counts on the drawing, the way the Measure steps rows do (same rule:
+      // only when the sheet has classified symbols behind the question).
+      const pickable = !!(RV.data.can_measure && tool.tool);
+      const symbols = kind === "count" ? countSymbols(tr.module_id, q.id) : [];
+      const wiringRow = kind === "wiring";
+      const clickable = pickable || symbols.length > 0 || wiringRow;
+      const li = el("li", { class: "bp-row" + (symbols.length || wiringRow ? " bp-step-link" : "") + (RV.countStep === q.id ? " on" : ""), "data-module": tr.module_id, "data-question": q.id, "data-feeds": kind === "count" || wiringRow ? q.id : null,
+        tabindex: clickable ? "0" : null,
+        title: pickable ? "Use the " + tool.label + " tool"
+          : symbols.length ? "Show these on the drawing"
+          : wiringRow ? "Go to the ⚡ Wiring card (routes, cable totals, Run wiring)"
+          : !tool.tool ? "Run 🤖 AI Auto Run (above the drawing) to count these" : null },
+        el("span", { class: "bp-row-name" },
+          symbols.length ? el("span", { class: "bp-step-eye", "aria-hidden": "true" }, "🔍 ") : null, q.label, el("br", {}),
           el("span", { class: "muted small" }, guideWhyFor(tr.module_id, q))),
         el("span", { class: "bp-row-qty" }, tool.label),
         el("span", { class: "status" + (state === "approved" ? "" : " sample") }, text));
-      if (RV.data.can_measure) {
+      if (pickable) {
         const pick = () => setTool(tool.tool, $("review-message"));
         li.addEventListener("click", pick);
         li.addEventListener("keydown", ev => { if (ev.key === "Enter") pick(); });
       }
+      else if (wiringRow) {
+        const go = () => { const w = $("bp-wiring"); if (w && w.scrollIntoView) w.scrollIntoView({ block: "start", behavior: "smooth" }); };
+        li.addEventListener("click", go);
+        li.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); go(); } });
+      }
+      else if (symbols.length) {
+        const go = () => toggleCountHighlight(tr.module_id, q.id);
+        li.addEventListener("click", go);
+        li.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); go(); } });
+      }
       return li;
     });
     parts.push(el("ul", { class: "bp-rows", id: "bp-guide-" + tr.module_id }, rows));
+    // Electrical's second measuring stage: the Wiring run (cable sizes and lengths from the panel to every device).
+    if (tr.module_id === "electrical") parts.push(el("div", { class: "card section", id: "bp-wiring" }));
   }
-  slot.replaceChildren(el("details", { class: "card section", id: "bp-guide", open: true }, ...parts));
+  slot.replaceChildren(el("div", { id: "bp-guide" }, ...parts));
+  drawWiring();
+}
+
+// ------------------------------------------------------------------ Wiring run (2026-11-19, David)
+// The second Electrical measuring stage. The project's two CAD drawings — the electrical floor plan and the panel
+// drawing (the one with the panel schedule) — give every device, room and circuit; the run routes each circuit from the
+// panel through the ceiling (or the walls), sizes the cable from the schedule, and proposes one cable measurement per
+// size for a person to approve (approved cable replaces the 'average run per device' wire guess on the estimate). The
+// routes can be shown on the plan, a device moved to another circuit (then run again), and the wiring DXF downloaded.
+const WIRE_COLORS = ["#1c7ed6", "#e8590c", "#2b8a3e", "#ae3ec9", "#f08c00", "#0c8599", "#c2255c", "#5c940d",
+                     "#3b5bdb", "#d9480f", "#087f5b", "#862e9c"];
+function wireColor(i) { return WIRE_COLORS[i % WIRE_COLORS.length]; }
+function wireDevice(a) { return words(a.item_type || "device") + (a.room ? " · " + a.room : ""); }
+
+function wiringReset(w) {
+  RV.wiring = w;
+  const run = w && w.run;
+  RV.wiringMoves = { ...((run && run.overrides) || {}) };
+  const s = (run && run.settings) || {};
+  RV.wiringForm = { route: { ...(s.route || {}) }, ceiling_ft: s.ceiling_ft ?? "", floor_framing_ft: s.floor_framing_ft ?? "" };
+}
+
+async function drawWiring() {
+  if (!$("bp-wiring") || !RV.estimateId) return;
+  if (RV.wiringFor !== RV.estimateId) {
+    RV.wiringFor = RV.estimateId;
+    // 2026-11-21 (David: "after hitting run wiring ... nothing shows up in the cad window"): a reload right after a
+    // wiring run (⚡ Run wiring, AI Auto Run) keeps the routes showing; opening the screen starts with them hidden.
+    RV.wiring = null; RV.wiringPick = null; RV.showWiring = !!RV.showWiringNext; RV.showWiringNext = false;
+    renderWiring();
+    try { wiringReset(await api("GET", "/wiring/" + RV.estimateId)); }
+    catch (e) { if (e.status === 401) return; RV.wiring = { error: e }; }
+  }
+  renderWiring();
+  drawWiringRoutes();
+}
+
+function renderWiring() {
+  const box = $("bp-wiring");
+  if (!box) return;
+  const w = RV.wiring;
+  const head = el("h4", {}, "⚡ Wiring — cable from the panel to every device");
+  if (!w) { box.replaceChildren(head, el("p", { class: "muted small" }, "Loading…")); return; }
+  if (w.error) { box.replaceChildren(head, errorBox(w.error)); return; }
+  const run = w.run, src = w.sources || {};
+  const parts = [head, el("p", { class: "muted small" },
+    "Second measuring stage: reads the floor plan and the panel drawing, routes every circuit from the panel the way you set in " +
+    "the wiring options (foundation, outlets through the studs, lights through the ceiling — never in a slab), and sizes the cable " +
+    "from the panel schedule. Plain geometry — no AI tokens.")];
+  const srcLine = (label, s, missing) => [label + ": ", s ? el("strong", {}, s.name) : el("span", { class: "warn" }, missing)];
+  parts.push(el("p", { class: "small", id: "bp-wiring-sources" },
+    ...srcLine("Floor plan", src.plan, "none yet — upload the electrical floor plan as a DXF (CAD) file on the Plans screen"), el("br", {}),
+    // 2026-11-21: with no panel drawing the run lays the circuits out itself (typical residential layout).
+    ...srcLine("Panel drawing", src.panel, "none — the circuits will be laid out the usual residential way (upload the panel drawing with its schedule to use the designer's circuits)")));
+  if (run && run.circuits_from === "laid_out") parts.push(el("p", { class: "note warn", id: "bp-wiring-laid-out" },
+    "No panel schedule: AI-Prowler laid out these circuits the usual residential way (lighting by floor on 15 A, kitchen counter on two 20 A " +
+    "small-appliance circuits, each bathroom, laundry and garage on its own 20 A, the range, dryer and other appliances on their own 240 V circuits). " +
+    "Good for estimating — check them against the electrician's layout."));
+  if (w.can_run) parts.push(wiringSettings(run, src));
+  parts.push(el("div", { id: "bp-wiring-msg" }));
+  if (run) parts.push(...wiringResults(run, w.can_run));
+  box.replaceChildren(...parts);
+}
+
+// The Wiring card's run controls (2026-11-21, David: "can we have the user decide/set wire running options before the
+// run wiring"): how the last run was routed, and ⚡ Run wiring - which opens the routing options first.
+function wiringSettings(run, src) {
+  const ready = !!src.plan;                    // the panel drawing is optional (2026-11-21)
+  const btn = el("button", { class: "primary", type: "button", id: "bp-wiring-run", disabled: ready ? null : "" },
+    run ? "⚡ Run wiring again…" : "⚡ Run wiring…");
+  btn.addEventListener("click", () => openWiringOptions(btn));
+  const how = run && run.routing ? el("p", { class: "small", id: "bp-wiring-routing" }, "Routed: " + run.routing + ".") : null;
+  return el("div", {}, how, el("div", { class: "row" }, btn));
+}
+
+// ---- the routing options box (2026-11-21, David: "Don't run any electrical through cement slabs, all get routed from
+// basement ceiling" / "I like the user setting defaults for routing wires"). Opens before every ⚡ Run wiring, filled
+// in with this project's last run (or the user's saved defaults); each option says what electricians usually do.
+const WIRE_OPTIONS = [
+  // 2026-11-21 (David: "explain what these routing options are in the drop-down box and how it affects routing"):
+  // each choice is [value, short label, what it does to the routing] - the "what it does" shows under the box for the
+  // choice picked, so the user sees the effect before running.
+  { key: "foundation", label: "Foundation", tip: "What the ground floor sits on — it decides where the cable from the panel travels.",
+    choices: [
+      ["basement", "Basement", "Cable leaves the panel, runs along the basement ceiling (under the ground floor), then comes up through the floor into the walls. Ground-floor outlets too far apart to chain are fed from below."],
+      ["crawlspace", "Crawlspace", "Like a basement: cable runs along the floor joists in the crawlspace and comes up into the walls. The panel stays where it's drawn."],
+      ["slab", "Slab on grade", "No cable ever goes in the concrete. Ground-floor runs come down from the ceiling (or attic) into the walls — usually more cable than a basement."]] },
+  { key: "panel_in_basement", label: "The panel is in the basement (under where it's drawn)", check: true, when: f => f.foundation === "basement",
+    tip: "Usual in a basement house. Untick if the panel hangs on a ground-floor wall." },
+  { key: "basement_ceiling_ft", label: "Basement ceiling height (ft)", step: "0.5", when: f => f.foundation === "basement" },
+  { key: "outlets_via", label: "Outlets wired", tip: "How the cable gets from one outlet to the next. (Lights always go through the ceiling, with the switches dropped down from them.)",
+    choices: [
+      ["walls", "Through the studs", "Outlet to outlet through holes drilled in the studs at outlet height — the shortest way, and what most electricians do. When the next outlet is farther than the distance below (past a door, round a corner), the cable goes the floor's feed way instead: down through the floor framing, or up through the ceiling on a slab."],
+      ["below", "From below", "Each outlet is fed from the floor framing underneath (basement ceiling or crawlspace): down out of the box, along the joists, up into the next box. Not on a slab floor — it uses the ceiling there instead."],
+      ["above", "From the ceiling", "Each outlet is fed from the ceiling: up the wall from the box, across the ceiling, back down to the next. The most cable — for walls you can't drill along, like block walls or finished walls."]] },
+  { key: "wall_max_ft", label: "Longest outlet-to-outlet run through the studs (ft)", step: "1", when: f => f.outlets_via === "walls",
+    tip: "Outlets farther apart than this aren't chained through the studs — the cable goes the floor's feed way (down and under, or up and over) to reach the next one." },
+  { key: "upper_feed", label: "Upper floors fed from", tip: "How cable reaches the second floor and above. It always goes up a chase (a hollow wall) from the panel first.",
+    choices: [
+      ["below", "Floor framing under them", "From the chase, cable runs across in the floor joists between the floors, then up into the upstairs walls. Usual for a two-storey house."],
+      ["above", "The attic", "The chase goes all the way up to the attic; cable runs across the attic and drops down into the walls of the top floor. Usual when the floor between the storeys is closed off."]] },
+  { key: "ceiling_ft", label: "Ceiling height (ft)", step: "0.5" },
+  { key: "floor_framing_ft", label: "Floor framing between floors (ft)", step: "0.25" },
+  { key: "receptacle_in", label: "Outlet box height (in)", step: "1", tip: "Typical 12–18\"." },
+  { key: "switch_in", label: "Switch box height (in)", step: "1", tip: "Typical 48\"." },
+  { key: "counter_in", label: "Counter outlet height (in)", step: "1", tip: "Kitchen and bath GFCI outlets over the counter, typical 42–44\"." },
+  { key: "wall_detour", label: "Extra on runs through the studs (%)", pct1: true, step: "5", tip: "Round corners and openings — 10–25%." },
+  { key: "makeup_ft_per_end", label: "Spare wire per cable end at a box (ft)", step: "0.5", tip: "Code wants at least 6\"; most leave 8–12\"." },
+  { key: "panel_makeup_ft", label: "Spare wire inside the panel (ft)", step: "0.5" },
+  { key: "waste", label: "Waste on the order (%)", pct: true, step: "1", tip: "10–15% is usual." },
+];
+
+function wireOptValue(o, v) {                  // stored value -> what the box shows
+  if (o.pct) return v == null ? "" : String(Math.round(v * 100));
+  if (o.pct1) return v == null ? "" : String(Math.round((v - 1) * 100));
+  return v == null ? "" : String(v);
+}
+function wireOptStore(o, s) {                   // what the box shows -> stored value
+  if (s === "" || s == null) return null;
+  const n = parseFloat(s);
+  if (o.pct) return n / 100;
+  if (o.pct1) return 1 + n / 100;
+  return n;
+}
+
+function closeWiringOptions() { const p = $("bp-wiring-options"); if (p) p.remove(); }
+
+async function openWiringOptions(btn) {
+  closeWiringOptions();
+  let w;
+  try { w = await api("GET", "/wiring/" + RV.estimateId); }
+  catch (e) { if (e.status !== 401) toast("Couldn't open the wiring options — " + (e.message || "error")); return; }
+  if (!w.can_run) {
+    const src = w.sources || {};
+    toast("The wiring can't run yet: " + (src.plan ? "only owners and estimators can run it."
+      : "upload the electrical floor plan as a DXF (CAD) file on the Plans screen (the panel drawing is used when there is one)."));
+    return;
+  }
+  const opts = w.options || { current: {}, saved: {}, builtin: {} };
+  const f = { ...opts.current, route: { ...(opts.current.route || {}) } };
+  const panel = el("div", { class: "card bp-audit bp-wire-options", id: "bp-wiring-options", role: "dialog", "aria-label": "Wiring options" });
+  for (const ev of ["pointerdown", "mousedown", "wheel"]) panel.addEventListener(ev, e => e.stopPropagation());
+  const close = el("button", { class: "button", type: "button", id: "bp-wiring-options-close", "aria-label": "Close" }, "✕");
+  close.addEventListener("click", closeWiringOptions);
+  const body = el("div", { id: "bp-wiring-options-body" });
+  const draw = () => {
+    const rows = [];
+    for (const o of WIRE_OPTIONS) {
+      if (o.when && !o.when(f)) continue;
+      const id = "bp-wire-" + o.key;
+      let input;
+      if (o.check) {
+        input = el("input", { type: "checkbox", id, checked: f[o.key] ? "" : null });
+        input.addEventListener("change", () => { f[o.key] = input.checked; });
+        rows.push(el("div", { class: "bp-wire-opt" }, el("label", { for: id }, input, " " + o.label),
+          o.tip ? el("div", { class: "muted small" }, o.tip) : null));
+        continue;
+      }
+      if (o.choices) {
+        input = el("select", { id }, o.choices.map(([v, t]) => el("option", {
+          value: v, disabled: o.key === "outlets_via" && v === "below" && f.foundation === "slab" ? "" : null },
+          t + (o.key === "outlets_via" && v === "below" && f.foundation === "slab" ? " (not on a slab)" : ""))));
+        input.value = f[o.key];
+        input.addEventListener("change", () => {
+          f[o.key] = input.value;
+          if (f.foundation === "slab" && f.outlets_via === "below") f.outlets_via = "walls";   // never in the slab
+          draw();
+        });
+        // What the picked choice does to the routing, under the box (the general tip comes after it).
+        const picked = o.choices.find(c => c[0] === f[o.key]);
+        rows.push(el("div", { class: "bp-wire-opt" }, el("label", { for: id }, o.label), input,
+          picked && picked[2] ? el("div", { class: "small bp-wire-choice-help", id: id + "-help" },
+            el("strong", {}, picked[1] + ": "), picked[2]) : null,
+          o.tip ? el("div", { class: "muted small" }, o.tip) : null));
+        continue;
+      } else {
+        input = el("input", { type: "number", id, step: o.step || "any", value: wireOptValue(o, f[o.key]) });
+        input.addEventListener("input", () => { f[o.key] = wireOptStore(o, input.value); });
+      }
+      rows.push(el("div", { class: "bp-wire-opt" }, el("label", { for: id }, o.label), input,
+        o.tip ? el("div", { class: "muted small" }, o.tip) : null));
+    }
+    // A floor forced one way for this project only (rare: an open ceiling, a finished basement with no access).
+    const floors = (RV.wiring && RV.wiring.run && RV.wiring.run.floors) || [];
+    if (floors.length) {
+      const force = floors.map(fl => {
+        const sel = el("select", { id: "bp-wire-route-" + fl.index, "data-floor": String(fl.index) },
+          el("option", { value: "" }, "As above"), el("option", { value: "ceiling" }, "Everything through the ceiling"),
+          el("option", { value: "walls" }, "Everything through the walls"));
+        sel.value = f.route[String(fl.index)] || "";
+        sel.addEventListener("change", () => { if (sel.value) f.route[String(fl.index)] = sel.value; else delete f.route[String(fl.index)]; });
+        return el("div", { class: "bp-wire-opt" }, el("label", { for: sel.id }, fl.name + " — this project only"), sel);
+      });
+      rows.push(el("details", { class: "small", id: "bp-wire-force" }, el("summary", {}, "Force a floor one way (this project only)"), ...force));
+    }
+    body.replaceChildren(...rows);
+  };
+  draw();
+  const save = el("input", { type: "checkbox", id: "bp-wiring-save-default" });
+  const mine = el("button", { class: "button small", type: "button", id: "bp-wiring-options-mine" },
+    Object.keys(opts.saved || {}).length ? "Back to my defaults" : "Back to the built-in defaults");
+  mine.addEventListener("click", () => {
+    Object.assign(f, opts.builtin, opts.saved || {});
+    f.route = {};
+    draw();
+  });
+  const run = el("button", { class: "primary", type: "button", id: "bp-wiring-options-run" }, "⚡ Run wiring");
+  const out = el("div", { id: "bp-wiring-options-out" });
+  run.addEventListener("click", async () => {
+    const settings = {};
+    for (const o of WIRE_OPTIONS) if (f[o.key] !== null && f[o.key] !== undefined && f[o.key] !== "") settings[o.key] = f[o.key];
+    settings.route = { ...f.route };
+    try {
+      if (save.checked) await api("POST", "/wiring/defaults", { settings });
+    } catch (e) { if (e.status !== 401) out.replaceChildren(errorBox(e)); return; }
+    closeWiringOptions();
+    await doRunWiring(btn, settings, (RV.wiring && RV.wiring.run && RV.wiring.run.overrides) || RV.wiringMoves || {}, save.checked);
+  });
+  panel.append(
+    el("div", { class: "bp-audit-head" }, el("strong", {}, "⚡ Wiring options — how the cable runs"), close),
+    el("p", { class: "muted small" }, "Started from " + (opts.from || "the built-in defaults") +
+      ". The run measures every cable this way; change anything, then Run."),
+    body, out,
+    el("div", { class: "row bp-audit-foot" }, run, el("label", { for: save.id, class: "small" }, save, " Save as my defaults"), mine));
+  document.body.append(panel);
+}
+
+// Run it with these settings, keep its routes on the plan (on the floor plan's sheet) and show the result.
+async function doRunWiring(btn, settings, overrides, saved) {
+  const was = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "⚡ Routing…"; }
+  try {
+    const r = await api("POST", "/wiring/" + RV.estimateId, { settings, overrides: overrides || {}, keep_approved: keepApprovedNow() });
+    wiringReset({ ...(RV.wiring || {}), run: r.run });
+    RV.wiringFor = RV.estimateId;
+    RV.showWiring = true;
+    RV.wiringPick = null; RV.wiringSize = null; RV.wiringLit = null; RV.wiringMark = null;
+    const n = (r.run.measurement_ids || []).length;
+    const sug = (r.run.suggested_ids || []).length;       // approved items the new run measured differently
+    toast("Wiring done" + (saved ? " (and saved as your defaults)" : "") + " — " +
+      (n ? n + " item(s) waiting for approval; click a cable in the list to light up its circuits" : "") +
+      (sug ? (n ? "; " : "") + sug + " approved item(s) changed — ✓ Accept the new lengths in the ⚡ Wiring card" : "") +
+      (!n && !sug ? "nothing changed (the approved cable already matches)" : "") + ".");
+    const planSheet = r.run.sources && r.run.sources.plan && r.run.sources.plan.sheet_id;
+    if (planSheet && planSheet !== RV.sheetId) await auditGoToSheet(planSheet, $("review-message"));
+    await refreshData();
+    renderWiring();
+    drawWiringRoutes();
+    if ($("bp-audit")) await openAudit();
+  } catch (e) {
+    if (e.status === 401) return;
+    const m = $("bp-wiring-msg");
+    if (m) m.replaceChildren(errorBox(e)); else toast("The wiring run didn't work — " + (e.message || "unknown error"));
+  } finally {
+    if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = was; }
+  }
+}
+
+// A rerun from the Wiring card (device moves): the last run's routing, no options box.
+async function runWiring(btn, overrides) {
+  const settings = { ...((RV.wiring && RV.wiring.run && RV.wiring.run.settings) || {}) };
+  const msg = $("bp-wiring-msg");
+  if (msg) msg.replaceChildren();
+  const was = btn.textContent;
+  btn.disabled = true; btn.textContent = "Routing…";
+  try {
+    const r = await api("POST", "/wiring/" + RV.estimateId, { settings, overrides: overrides || RV.wiringMoves || {},
+                                                              keep_approved: keepApprovedNow() });
+    wiringReset({ ...RV.wiring, run: r.run });
+    RV.showWiring = true;
+    const n = r.run.bom.length;
+    const sug = (r.run.suggested_ids || []).length;
+    toast("Wiring done — " + n + " cable size" + (n === 1 ? "" : "s") + " routed; " +
+      (sug ? sug + " approved item(s) changed — accept the new lengths below" : "approve the cable below to price it"));
+    await refreshData();          // the proposals show in the list; the guide (and this panel) redraws
+  } catch (e) {
+    const m = $("bp-wiring-msg");
+    if (e.status !== 401 && m) m.replaceChildren(errorBox(e));
+  } finally { btn.disabled = false; btn.textContent = was; }
+}
+
+function wiringResults(run, canRun) {
+  const out = [];
+  const devices = run.circuits.reduce((a, c) => a + c.devices, 0);
+  out.push(el("p", { class: "small", id: "bp-wiring-summary" }, "Last run " + new Date(run.ran_at).toLocaleString() + " · " +
+    run.circuits.length + " circuits · " + devices + " devices" + (run.unassigned.length ? " · " + run.unassigned.length + " not on a circuit" : "")));
+
+  // Cable for the Bill of Materials
+  const bom = el("table", { id: "bp-wiring-bom" }, el("tr", {}, el("th", {}, "Cable"), el("th", { class: "n" }, "Routed ft"),
+    el("th", { class: "n" }, "Order ft (+waste)"), el("th", { class: "n" }, "250 ft rolls")));
+  for (const b of run.bom) bom.append(el("tr", {}, el("td", {}, b.cable), el("td", { class: "n" }, num(b.measured_ft)),
+    el("td", { class: "n" }, num(b.order_ft)), el("td", { class: "n" }, String(b.rolls))));
+  out.push(bom);
+
+  // Its measurements: approve to price them; after a rerun, approved ones carry the new length as a suggestion.
+  // 2026-11-21: plus the approved ones the rerun measured differently (kept, with the new value suggested).
+  const ours = new Set([...(run.measurement_ids || []), ...(run.suggested_ids || [])]);
+  const mine = ((RV.data && RV.data.takeoff.measurements) || []).filter(m => ours.has(m.id));
+  const waiting = mine.filter(m => m.status === "proposed");
+  const suggested = mine.filter(m => m.status === "approved" && m.suggested_qty !== null && m.suggested_qty !== undefined);
+  const approved = mine.filter(m => m.status === "approved");
+  const act = el("div", { id: "bp-wiring-approve" });
+  const counts = waiting.filter(m => m.kind === "count").length;
+  const what = counts ? " (cable lengths plus the breaker and range/dryer receptacle counts)" : "";
+  const note = waiting.length ? waiting.length + " wiring measurement" + (waiting.length === 1 ? "" : "s") + what + " waiting for approval — once approved they price the estimate and the BOM in place of the average-run wire guess."
+    : suggested.length ? "The rerun changed " + suggested.length + " approved wiring measurement" + (suggested.length === 1 ? "" : "s") + " — accept the new values to use them."
+    : approved.length ? "✓ Cable approved — the cable, breakers and receptacles from the wiring price the estimate and the BOM." : "";
+  if (note) out.push(el("p", { class: "small" + (approved.length && !waiting.length && !suggested.length ? "" : " note"), id: "bp-wiring-state" }, note));
+  if (canRun && waiting.length) {
+    const b = el("button", { class: "primary", type: "button", id: "bp-wiring-approve-btn" }, counts ? "✓ Approve the cable and counts…" : "✓ Approve the cable…");
+    b.addEventListener("click", () => reviewAsk(act, b, "/measurements/approve", { measurement_ids: waiting.map(m => m.id) },
+      x => x.done.length + " wiring measurement(s) approved", "bp-wiring-approve", false, true));
+    out.push(el("div", { class: "row" }, b), act);
+  } else if (canRun && suggested.length) {
+    const b = el("button", { class: "primary", type: "button", id: "bp-wiring-accept-btn" }, "Accept the new lengths…");
+    b.addEventListener("click", () => reviewAsk(act, b, "/measurements/approve", { measurement_ids: suggested.map(m => m.id), accept_suggestion: true },
+      x => x.done.length + " cable length(s) updated", "bp-wiring-accept", false, true));
+    out.push(el("div", { class: "row" }, b), act);
+  }
+
+  // Show on the plan + download
+  const show = el("input", { type: "checkbox", id: "bp-wiring-show", checked: RV.showWiring ? "" : null });
+  show.addEventListener("change", () => { RV.showWiring = show.checked; drawWiringRoutes(); });
+  const onSheet = run.sources && run.sources.plan && run.sources.plan.sheet_id === RV.sheetId;
+  const dl = el("button", { class: "button", type: "button", id: "bp-wiring-dxf" }, "⬇ Wiring drawing (DXF)");
+  dl.addEventListener("click", () => downloadWiringDxf(dl, "dxf"));
+  // 2026-11-20 (David: "make a wiring schematic diagram that shows wires, and save it as a DXF")
+  const sch = run.schematic ? el("button", { class: "button", type: "button", id: "bp-wiring-schematic",
+    title: "The panel, its breakers and every circuit's conductors (black, red, white, ground) out to its devices - a DXF" },
+    "⬇ Wiring schematic (DXF)") : null;
+  if (sch) sch.addEventListener("click", () => downloadWiringDxf(sch, "schematic"));
+  out.push(el("div", { class: "row" }, el("label", { for: "bp-wiring-show" }, show, " Show the routes on the plan"), dl, sch));
+  if (!onSheet && run.sources && run.sources.plan) {
+    out.push(el("p", { class: "muted small" }, "The routes are drawn on the floor plan's sheet (" + run.sources.plan.name + ") — open it to see them."));
+  }
+
+  // Circuits: click one to pick it on the plan and move its devices
+  const flags = run.circuits.flatMap(c => c.flags.map(f => c.id + ": " + f));
+  const ct = el("table", { id: "bp-wiring-circuits" }, el("tr", {}, el("th", {}, "Circuit"), el("th", {}, "Cable"),
+    el("th", { class: "n" }, "Devices"), el("th", { class: "n" }, "Feet")));
+  run.circuits.forEach((c, i) => {
+    const swatch = el("span", { class: "bp-wire-swatch" });
+    swatch.style.backgroundColor = wireColor(i);       // set from script: the page's CSP refuses inline style attributes
+    const tr = el("tr", { class: "bp-wire-row" + (RV.wiringPick === c.id ? " on" : ""), "data-circuit": c.id, tabindex: "0",
+      title: "Show this circuit on the plan and move its devices" },
+      el("td", {}, swatch, c.id + " — " + c.description + (c.flags.length ? " ⚠" : "")),
+      el("td", {}, c.wire + (c.travelers_ft ? " (+3-way)" : "")),
+      el("td", { class: "n" }, String(c.devices)), el("td", { class: "n" }, num(c.total_ft)));
+    const pick = () => { RV.wiringPick = RV.wiringPick === c.id ? null : c.id; RV.wiringSize = null; RV.showWiring = true; renderWiring(); drawWiringRoutes(); };
+    tr.addEventListener("click", pick);
+    tr.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(); } });
+    ct.append(tr);
+  });
+  out.push(el("h4", {}, "Circuits"), ct);
+  if (flags.length) out.push(el("ul", { class: "small warn", id: "bp-wiring-flags" }, flags.map(f => el("li", {}, "⚠ " + f))));
+  out.push(...drawingCheck(run, canRun));
+
+  // Moving devices between circuits (and putting the unassigned ones on one)
+  const picked = run.circuits.find(c => c.id === RV.wiringPick);
+  const moves = RV.wiringMoves || {};
+  const circuitSelect = (a, current) => {
+    const sel = el("select", { "data-device": a.device, "aria-label": "Circuit for " + wireDevice(a), disabled: canRun ? null : "" },
+      current ? null : el("option", { value: "" }, "— pick a circuit —"),
+      run.circuits.map(c2 => el("option", { value: c2.id }, c2.id + " — " + c2.description)));
+    sel.value = moves[a.device] || current || "";
+    sel.addEventListener("change", () => {
+      if (sel.value) moves[a.device] = sel.value; else delete moves[a.device];
+      RV.wiringMoves = moves;
+      renderWiring();
+    });
+    return sel;
+  };
+  if (picked) {
+    out.push(el("h4", {}, picked.id + " — devices"), el("ul", { class: "bp-rows", id: "bp-wiring-devices" },
+      picked.assigned.map(a => el("li", { class: "bp-row" }, el("span", { class: "bp-row-name" }, wireDevice(a), el("br", {}),
+        el("span", { class: "muted small" }, a.why || "")), circuitSelect(a, picked.id)))));
+  }
+  if (run.unassigned.length) {
+    out.push(el("h4", {}, "Not on a circuit"), el("ul", { class: "bp-rows", id: "bp-wiring-unassigned" },
+      run.unassigned.map(a => el("li", { class: "bp-row" }, el("span", { class: "bp-row-name" }, wireDevice(a)), circuitSelect(a, null)))));
+  }
+  const changed = JSON.stringify(moves) !== JSON.stringify(run.overrides || {});
+  if (canRun && changed) {
+    const n = Object.keys(moves).filter(k => moves[k] !== (run.overrides || {})[k]).length;
+    const b = el("button", { class: "primary", type: "button", id: "bp-wiring-rerun" }, "⚡ Run again with " + n + " device move(s)");
+    b.addEventListener("click", () => runWiring(b, moves));
+    out.push(el("div", { class: "row" }, b));
+  }
+  if (canRun && Object.keys(run.overrides || {}).length) {
+    const b = el("button", { class: "button", type: "button", id: "bp-wiring-clear-moves" }, "Undo all device moves and run again");
+    b.addEventListener("click", () => { RV.wiringMoves = {}; runWiring(b, {}); });
+    out.push(el("div", { class: "row" }, b));
+  }
+  return out;
+}
+
+// 2026-11-20 (David): the run checked against the circuit lines the designer drew on the plan (E-CIRCUIT). Each
+// difference: a "Show" (the device on the drawing) and a one-click "Move to C-4" that runs the wiring again.
+function drawingCheck(run, canRun) {
+  const ck = run.drawing_check;
+  if (!ck || !ck.lines) return [];
+  const diffs = ck.differ || [];
+  const head = "🔎 Checked against the circuit lines on the drawing: " + ck.matched + " of " + (ck.matched + diffs.length)
+    + " circuit(s) agree" + (diffs.length ? " — " + diffs.length + " to check" : " ✓");
+  const parts = [el("p", { class: "small" + (diffs.length ? " note" : ""), id: "bp-wiring-check" }, head)];
+  const rows = diffs.map(d => {
+    const li = el("li", { class: "bp-row", "data-device": d.device || "" });
+    if (d.what === "device") {
+      const all = run.circuits.flatMap(c => c.assigned);
+      const a = all.find(x => x.device === d.device) || { item_type: d.item_type, room: d.room };
+      li.append(el("span", { class: "bp-row-name" }, wireDevice(a), el("br", {}),
+        el("span", { class: "muted small" }, "drawing: " + d.circuit + " · wiring run: " + (d.run_circuit || "none"))));
+      if (canRun) {
+        const mv = el("button", { class: "button small bp-wiring-check-move", type: "button" }, "Move to " + d.circuit);
+        mv.addEventListener("click", () => {
+          RV.wiringMoves = { ...(RV.wiringMoves || {}), [d.device]: d.circuit };
+          runWiring(mv, RV.wiringMoves);
+        });
+        li.append(mv);
+      }
+      // Where the device is on the sheet: the overlay lists each circuit's devices (sheet coordinates) in the same
+      // order as the circuit's assigned devices.
+      const rc = run.circuits.find(c => c.id === d.run_circuit);
+      const oc = rc && run.overlay && run.overlay.circuits.find(c => c.id === rc.id);
+      const at = oc ? oc.devices[rc.assigned.findIndex(x => x.device === d.device)] : null;
+      if (at) {
+        const show = el("button", { class: "button small bp-wiring-check-show", type: "button" }, "Show");
+        show.addEventListener("click", async () => {
+          const sheet = run.sources && run.sources.plan && run.sources.plan.sheet_id;
+          if (typeof auditGoToSheet === "function") await auditGoToSheet(sheet, $("review-message"));
+          RV.wiringPick = d.run_circuit; RV.wiringSize = null; RV.showWiring = true;
+          renderWiring(); drawWiringRoutes();
+          if (RV.viewer) RV.viewer.zoomToBox([at[0] - 6, at[1] - 6, at[0] + 6, at[1] + 6]);
+        });
+        li.append(show);
+      }
+    } else {
+      li.append(el("span", { class: "bp-row-name" }, d.circuit + ": the drawing runs it up the riser; the wiring run keeps it downstairs"));
+    }
+    return li;
+  });
+  if (rows.length) parts.push(el("ul", { class: "bp-rows", id: "bp-wiring-check-list" }, rows));
+  if ((ck.not_drawn || []).length) parts.push(el("p", { class: "small muted" }, "No circuit line on the drawing for: " + ck.not_drawn.join(", ") + "."));
+  if ((ck.not_in_schedule || []).length) parts.push(el("p", { class: "small warn" }, "⚠ On the drawing but not in the panel schedule: " + ck.not_in_schedule.join(", ") + "."));
+  return parts;
+}
+
+function drawWiringRoutes() {
+  const old = $("bp-wiring-routes");
+  if (old) old.remove();
+  const oldKey = $("bp-wiring-key");
+  if (oldKey) oldKey.remove();
+  const meas = $("bp-measurements");
+  const run = RV.wiring && RV.wiring.run;
+  if (!meas || !RV.showWiring || !run || !run.overlay || !run.sources || !run.sources.plan
+      || run.sources.plan.sheet_id !== RV.sheetId) return;
+  // A picked circuit stands out; or (2026-11-20, the audit's "Show on drawing" for a cable size) every circuit of
+  // that cable size does.
+  // ... or (2026-11-20, Show on drawing for the breakers / range / dryer receptacles) the circuits behind that mark.
+  const lit = !RV.wiringPick && RV.wiringLit && RV.wiringLit.length ? new Set(RV.wiringLit) : null;
+  const bySize = !RV.wiringPick && (lit ? true : RV.wiringSize && run.overlay.circuits.some(c => c.wire === RV.wiringSize));
+  const g = svg("g", { id: "bp-wiring-routes", class: RV.wiringPick || bySize ? "picked" : "" });
+  const info = new Map((run.circuits || []).map(c => [c.id, c]));
+  run.overlay.circuits.forEach((c, i) => {
+    const col = wireColor(i);
+    const on = RV.wiringPick ? RV.wiringPick === c.id : bySize && (lit ? lit.has(c.id) : c.wire === RV.wiringSize);
+    const cg = svg("g", { class: "bp-wire-c" + (on ? " on" : ""), "data-circuit": c.id });
+    // 2026-11-20 (David: "I can't hover over a line and see what wire size it is, what breaker it's on and what it
+    // powers"): each circuit says so on hover; a wide invisible line under each wire makes it easy to point at.
+    const t = svg("title", {});
+    t.textContent = circuitText(c, info.get(c.id)) + "\nClick: show only this circuit";
+    cg.append(t);
+    for (const line of c.lines) {
+      if (line.length < 2) continue;
+      const pts = line.map(p => p.join(",")).join(" ");
+      cg.append(svg("polyline", { points: pts, class: "bp-wire-hit" }), svg("polyline", { points: pts, class: "bp-wire", stroke: col }));
+    }
+    for (const p of c.devices) cg.append(svg("polyline", { points: p.join(",") + " " + p.join(","), class: "bp-wire-dev", stroke: col }));
+    g.append(cg);
+  });
+  g.append(...wiringAddedMarks(run));
+  meas.parentNode.insertBefore(g, meas);      // over the plan, under the measurements
+  drawWiringKey(run, info, bySize);
+}
+
+// 2026-11-20 (David: "3 of these items don't have symbols, can they be added to the drawing"): what the wiring run
+// prices that the designer drew no symbol for - a receptacle mark at the range and the dryer, the branch breaker count
+// at the panel. Drawn with the routes (and on the wiring DXF), never into the designer's plan. Sized to the drawing.
+const ADDED_LETTER = { range_receptacle: "R", dryer_receptacle: "D", branch_breakers: "B" };
+function wiringAddedMarks(run) {
+  const added = (run.overlay && run.overlay.added) || [];
+  if (!added.length) return [];
+  const pts = run.overlay.circuits.flatMap(c => [...c.lines.flat(), ...c.devices]).concat(added.map(a => a.at));
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const r = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) / 90 || 1;
+  return added.map(a => {
+    const on = RV.wiringMark ? RV.wiringMark === a.feeds : true;
+    const m = svg("g", { class: "bp-wire-added" + (RV.wiringMark === a.feeds ? " on" : on ? "" : " off"),
+      "data-added": a.kind, "data-feeds": a.feeds });
+    const t = svg("title", {});
+    t.textContent = a.label + "\nAdded by the wiring run - the designer's drawing has no symbol for this.";
+    m.append(t);
+    const [x, y] = a.at;
+    m.append(a.kind === "branch_breakers"
+      ? svg("rect", { x: x - r, y: y - r, width: 2 * r, height: 2 * r, class: "bp-wire-added-mark" })
+      : svg("circle", { cx: x, cy: y, r: r, class: "bp-wire-added-mark" }));
+    const letter = svg("text", { x: x, y: y + r * 0.4, "font-size": r * 1.2, class: "bp-wire-added-letter" });
+    letter.textContent = ADDED_LETTER[a.kind] || "+";
+    const label = svg("text", { x: x + r * 1.4, y: y + r * 0.4, "font-size": r * 0.9, class: "bp-wire-added-label" });
+    label.textContent = a.label;
+    m.append(letter, label);
+    return m;
+  });
+}
+
+// "C-1 · Living / Dining receptacles · 20 A breaker (120 V) · 12/2 cable · 13 devices · 322.9 ft"
+function circuitText(c, full) {
+  const f = full || {};
+  const amps = f.amps ? f.amps + " A" + (f.poles === 2 ? " 2-pole breaker (240 V)" : " breaker") : "";
+  return [c.id, f.description, amps, c.wire + " cable" + (f.travelers_ft ? " (+ 3-way travelers)" : ""),
+          f.devices != null ? f.devices + " device" + (f.devices === 1 ? "" : "s") : "",
+          f.total_ft != null ? num(f.total_ft) + " ft" : ""].filter(Boolean).join(" · ") +
+         (f.flags && f.flags.length ? "\n⚠ " + f.flags.join("; ") : "");
+}
+
+// 2026-11-20 (David: "there is no color code saying red is one circuit, yellow is another"): a colour key on the
+// drawing - one row per circuit, with its colour, breaker, cable and what it powers. Click a row to show only that
+// circuit (click again for all of them). With a cable size picked (the audit's Show on drawing), its circuits lead.
+function drawWiringKey(run, info, bySize) {
+  const old = $("bp-wiring-key");
+  if (old) old.remove();
+  const box = RV.viewer && RV.viewer.box;
+  if (!box) return;
+  const key = el("div", { class: "bp-wiring-key", id: "bp-wiring-key", role: "list", "aria-label": "Wiring colour key" });
+  for (const ev of ["pointerdown", "mousedown", "wheel", "click"]) key.addEventListener(ev, e => e.stopPropagation());
+  const close = el("button", { class: "button small", type: "button", id: "bp-wiring-key-hide", title: "Hide the wiring routes" }, "✕");
+  close.addEventListener("click", () => { RV.showWiring = false; wiringClearFocus(); renderWiring(); drawWiringRoutes(); });
+  const lit = !RV.wiringPick && RV.wiringLit && RV.wiringLit.length ? new Set(RV.wiringLit) : null;
+  const MARK_HEAD = { branch_circuits: "Branch breakers", range_receptacles: "Range receptacle", dryer_receptacles: "Dryer receptacle" };
+  const head = lit ? "⚡ " + (MARK_HEAD[RV.wiringMark] || (RV.wiringSize ? RV.wiringSize + " cable" : "Circuits")) + " — " + lit.size + " circuit" + (lit.size === 1 ? "" : "s")
+    : bySize ? "⚡ " + RV.wiringSize + " circuits" : RV.wiringPick ? "⚡ Circuit " + RV.wiringPick : "⚡ Wiring — " + run.overlay.circuits.length + " circuits";
+  key.append(el("div", { class: "bp-wiring-key-head" }, el("strong", {}, head), close));
+  run.overlay.circuits.forEach((c, i) => {
+    const f = info.get(c.id) || {};
+    const on = RV.wiringPick ? RV.wiringPick === c.id : !bySize || (lit ? lit.has(c.id) : c.wire === RV.wiringSize);
+    const row = el("div", { class: "bp-wiring-key-row" + (on ? "" : " off") + (RV.wiringPick === c.id ? " picked" : ""),
+      role: "listitem", tabindex: "0", "data-circuit": c.id, title: circuitText(c, f) },
+      el("span", { class: "bp-wire-swatch", "data-color": String(i) }),
+      el("span", {}, el("strong", {}, c.id), " " + (f.amps ? f.amps + "A " : "") + c.wire + (f.description ? " · " + f.description : "")
+        + (f.flags && f.flags.length ? " ⚠" : "")));
+    row.querySelector(".bp-wire-swatch").style.background = wireColor(i);
+    const pick = () => pickCircuit(c.id);
+    row.addEventListener("click", pick);
+    row.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+    key.append(row);
+  });
+  if (RV.wiringPick || bySize) {
+    const all = el("button", { class: "button small", type: "button", id: "bp-wiring-key-all" }, "Show all circuits");
+    all.addEventListener("click", () => { wiringClearFocus(); renderWiring(); drawWiringRoutes(); });
+    key.append(all);
+  }
+  box.append(key);
+}
+
+// Nothing picked: every circuit and mark at full strength.
+function wiringClearFocus() { RV.wiringPick = null; RV.wiringSize = null; RV.wiringLit = null; RV.wiringMark = null; }
+
+function pickCircuit(id) {
+  RV.wiringPick = RV.wiringPick === id ? null : id;
+  RV.wiringSize = null; RV.wiringLit = null; RV.wiringMark = null; RV.showWiring = true;
+  renderWiring(); drawWiringRoutes();
+}
+
+// A download that also works inside the Jobs app, where the Estimator is signed in by a token (no cookie).
+// what: "dxf" (the wiring drawing) or "schematic" (2026-11-20: panel, breakers and each circuit's conductors)
+async function downloadWiringDxf(btn, what) {
+  btn.disabled = true;
+  try {
+    const opts = { credentials: "same-origin", headers: {} };
+    if (APP_TOKEN) opts.headers["Authorization"] = "Bearer " + APP_TOKEN;
+    const r = await fetch(API + "/wiring/" + RV.estimateId + "/" + (what || "dxf"), opts);
+    if (!r.ok) {
+      let data = null;
+      try { data = await r.json(); } catch (e) { data = null; }
+      throw new ApiError(r.status, data);
+    }
+    const name = ((r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/) || [])[1] || "wiring.dxf";
+    const url = URL.createObjectURL(await r.blob());
+    const a = el("a", { href: url, download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) {
+    const m = $("bp-wiring-msg");
+    if (m) m.replaceChildren(errorBox(e));
+  } finally { btn.disabled = false; }
 }
 
 function totalsText(ms) {
@@ -2417,12 +3474,25 @@ function totalsText(ms) {
   return s || "nothing yet";
 }
 
+// 2026-11-20 (David: "why AI counted 18 but the highlighted shows 12"): AI Auto Run's and the wiring run's
+// measurements sit on a sheet; one with no sheet is from before the plans were read again (its sheet went). Such an
+// approved count is replaced when the new count for the same question is approved (the server retires it then).
+const WIRING_AGENT = "wiring-takeoff";
+const SHEET_AGENTS = ["llm-takeoff", WIRING_AGENT];
+function isFromOldPlans(m) { return !m.sheet_id && SHEET_AGENTS.includes(m.proposed_by); }
+function oldApproved(m) {
+  if (!m.sheet_id || !m.feeds) return [];
+  return RV.data.takeoff.measurements.filter(x => x.id !== m.id && x.status === "approved" && isFromOldPlans(x)
+    && x.module_id === m.module_id && x.feeds === m.feeds);
+}
+
 function measurementRow(m, msg) {
-  const flags = [m.locked ? "🔒" : "", m.suggested_qty !== null && m.suggested_qty !== undefined ? "✎ suggestion" : "", m.needs_remeasure ? "⚠ re-measure" : ""].filter(Boolean).join(" ");
+  const flags = [m.locked ? "🔒" : "", m.suggested_qty !== null && m.suggested_qty !== undefined ? "✎ suggestion" : "", m.needs_remeasure ? "⚠ re-measure" : "",
+    m.status !== "rejected" && isFromOldPlans(m) ? "⚠ from before the plans were read again" : ""].filter(Boolean).join(" ");
   const agent = m.proposed_by === AGENT || m.proposed_by === LLM_AGENT;
   const llm = m.proposed_by === LLM_AGENT;
   const li = el("li", { class: "bp-row " + m.status + (RV.measurementId === m.id ? " active" : ""), "data-mid": m.id, tabindex: "0" },
-    el("span", { class: "bp-row-name" }, agent ? el("span", { class: "bp-agent", title: llm ? "Read from the plan by the AI (LLM takeoff)" : "Proposed by the Concrete agent" }, "🤖 ") : null, measurementName(m)),
+    el("span", { class: "bp-row-name" }, agent ? el("span", { class: "bp-agent", title: llm ? "Read from the plan by the AI" : "Proposed by the Concrete agent" }, "🤖 ") : null, measurementName(m)),
     el("span", { class: "bp-row-qty" }, num(m.qty) + " " + m.unit),
     el("span", { class: "status " + (m.status === "approved" ? "" : "sample") }, m.status === "proposed" ? "to review" : words(m.status)),
     el("span", { class: "muted small" }, pct(m.confidence) + " · " + words(m.method) + (flags ? " · " + flags : "") + (agent ? " · " + agentSourceText(m) : "")));
@@ -2431,10 +3501,248 @@ function measurementRow(m, msg) {
     show.addEventListener("click", ev => { ev.stopPropagation(); showAgentOutline(m); });
     li.append(show);
   }
-  const open = () => showDetail(m.id, msg, true);
+  // 2026-11-19 (David): one click reviews it right here - its symbols light up on the drawing and the review card
+  // opens under the row (no jump to the Detail tab). Click the row again to close it.
+  const open = () => openReview(m, msg);
   li.addEventListener("click", open);
-  li.addEventListener("keydown", ev => { if (ev.key === "Enter") open(); });
+  li.addEventListener("keydown", ev => { if (ev.key === "Enter" && ev.target === li) open(); });
+  if (RV.review && RV.review.mid === m.id) {
+    li.classList.add("reviewing");
+    li.append(reviewCard(m, msg));
+  }
   return li;
+}
+
+// ------------------------------------------------------------------ inline review (2026-11-19, David)
+// "The approval should consist of the drawing with highlighted symbols the user can count and reference to the
+// Measurements tab's item selected to the right-hand side." One click on a measurement:
+//   - its symbols light up on the drawing (the same symbols the To measure tab highlights), the rest fades;
+//   - a review card opens under the row: what the AI counted and why, the count to approve with − / +, and the
+//     number highlighted on the drawing;
+//   - clicking a symbol on the drawing while the card is open takes it off the count or adds it (the count follows);
+//   - ✓ Approve saves the count (changed first if it was changed) and moves on to the next one to review;
+//   - the AI Log opens in a new browser tab, so this screen stays where it is.
+const REVIEW_KINDS_COUNTED = new Set(["count"]);
+function isCountMeasurement(m) { return REVIEW_KINDS_COUNTED.has(m.kind) || m.unit === "ea"; }
+
+async function openReview(m, msg) {
+  if (RV.review && RV.review.mid === m.id) { closeReview(); return; }
+  if (m.sheet_id && m.sheet_id !== RV.sheetId && $("review-sheet") && RV.data.sheets.some(s => s.id === m.sheet_id)) {
+    $("review-sheet").value = m.sheet_id;
+    await openSheet(m.sheet_id, msg);
+  }
+  // 2026-11-21 (David: "selecting each wiring estimate, I expected the wiring color code to popup and highlight the
+  // wire routing"): a wiring run's cable has no symbols - its circuits light up on the floor plan with the colour key,
+  // the other circuits faded; a breaker / range / dryer count lights up the run's mark and the circuits behind it.
+  const wireSize = m.proposed_by === WIRING_AGENT && /^wire_(\d+)_(\d+)_ft$/.exec(m.feeds || "");
+  const wireMark = m.proposed_by === WIRING_AGENT && WIRING_MARK_FEEDS.includes(m.feeds);
+  if (wireSize || wireMark) {
+    RV.review = { mid: m.id, objs: new Map(), count: parseFloat(m.qty || 0) || 0, aiQty: parseFloat(m.qty || 0) || 0 };
+    const lit = wireSize ? await auditShowWiring(wireSize[1] + "/" + wireSize[2], msg)
+                         : await auditShowWiring(null, msg, m.feeds);
+    // The measurement says which circuits its cable is (a range's 10/2 on the schedule is priced as 10/3): light those.
+    const mine = wireSize && m.calc && Array.isArray(m.calc.circuits) ? m.calc.circuits : [];
+    if (mine.length && RV.wiring && RV.wiring.run && RV.wiring.run.overlay) {
+      RV.wiringLit = mine;
+      renderWiring(); drawWiringRoutes();
+    }
+    if (wireSize || lit) {
+      RV.symbolType = null; RV.symbolList = []; RV.selected = new Set(); rehideRevealed();
+      RV.countStep = null; markCountRows();
+      RV.measurementId = m.id;
+      drawMeasurements();
+      showTab("list");
+      refreshList(msg);
+      return;
+    }
+  }
+  const objs = isCountMeasurement(m) && m.feeds ? countSymbols(m.module_id, m.feeds) : [];
+  const qty = parseFloat(m.qty || 0) || 0;
+  // 2026-11-20 (David): the count to approve starts at what's lit up on the drawing (the AI's own number is shown
+  // above it); an approved count stays as it was approved until the user changes it.
+  const start = objs.length && m.status !== "approved" ? objs.length : qty;
+  RV.review = { mid: m.id, objs: new Map(objs.map(o => [o.id, o])), count: start, aiQty: qty };
+  if (objs.length) highlightSymbols(objs, symbolKey(objs[0]));      // lights them up and zooms to them
+  else {
+    RV.symbolType = null; RV.symbolList = []; RV.selected = new Set(); rehideRevealed();
+  }
+  RV.countStep = null; markCountRows();
+  RV.measurementId = m.id;
+  drawMeasurements();
+  if (!objs.length && m.geometry && m.sheet_id === RV.sheetId) RV.viewer.zoomToSelection();
+  showTab("list");
+  refreshList(msg);
+  const row = document.querySelector('#bp-rows li[data-mid="' + m.id + '"]');
+  if (row && row.scrollIntoView) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function closeReview(quiet) {
+  RV.review = null;
+  if (RV.wiringSize || RV.wiringLit) { wiringClearFocus(); renderWiring(); drawWiringRoutes(); }   // every circuit again
+  RV.symbolType = null; RV.symbolList = []; RV.symbolPos = -1;
+  RV.selected = new Set();
+  RV.measurementId = null;
+  rehideRevealed();
+  drawMeasurements();
+  if (!quiet) refreshList($("review-message"));
+}
+
+// A click on the drawing while a review card is open: a symbol (or a counted plan label) goes on or off the count.
+// Every other click is ignored, so a stray click can't lose the highlight. True when the click was handled.
+function reviewPick(target) {
+  const R = RV.review;
+  if (!R) return false;
+  const node = target.closest ? target.closest("[data-oid]") : null;
+  const o = node && RV.byId.get(+node.getAttribute("data-oid"));
+  if (!o || !(o.symbol || o.kind === "text")) return true;
+  if (R.objs.has(o.id)) { R.objs.delete(o.id); R.count = Math.max(0, (parseFloat(R.count) || 0) - 1); }
+  else { R.objs.set(o.id, o); R.count = (parseFloat(R.count) || 0) + 1; }
+  RV.symbolList = [...R.objs.values()];
+  RV.selected = new Set(R.objs.keys());
+  drawMeasurements();
+  refreshList($("review-message"));
+  return true;
+}
+
+function reviewCard(m, msg) {
+  const R = RV.review, d = RV.data, calc = m.calc || {};
+  const counted = isCountMeasurement(m);
+  const unit = m.unit || "";
+  const card = el("div", { class: "card section bp-review", id: "bp-review" });
+  card.addEventListener("click", ev => ev.stopPropagation());         // clicks in the card never toggle the row
+  card.addEventListener("keydown", ev => ev.stopPropagation());
+  const lines = [];
+  if (m.proposed_by === LLM_AGENT || m.proposed_by === AGENT) {
+    lines.push(el("div", { class: "small" }, el("strong", {}, "AI: " + num(R.aiQty) + " " + unit),
+      calc.how ? el("span", { class: "muted" }, " — " + calc.how) : null));
+  }
+  if (counted) {
+    lines.push(el("div", { class: "small", id: "bp-review-onplan" }, R.objs.size
+      ? [el("strong", {}, R.objs.size + " highlighted on the drawing"), " — click a symbol on the drawing to take it off the count or add one.",
+         legendRefs([...R.objs.values()]).length
+           ? el("span", { id: "bp-review-legend" }, " ", el("span", { class: "bp-legend-key" }, "Blue"), " is the legend's symbol, to compare (not counted).")
+           : null]
+      : "Nothing for this on this sheet to highlight — count it on the plan and set the number with − / +."));
+  }
+  const qty = el("input", { id: "bp-review-qty", class: "bp-review-qty", value: String(R.count), inputmode: "decimal",
+    maxlength: 20, "aria-label": "Quantity to approve" });
+  qty.addEventListener("input", () => { R.count = qty.value; refreshButtons(); });
+  qty.addEventListener("keydown", ev => { if (ev.key === "Enter") approve.click(); });
+  const step = delta => () => {
+    R.count = Math.max(0, (parseFloat(R.count) || 0) + delta);
+    qty.value = String(R.count);
+    refreshButtons();
+  };
+  const minus = el("button", { class: "button", type: "button", id: "bp-review-minus", "aria-label": "One less" }, "−");
+  const plus = el("button", { class: "button", type: "button", id: "bp-review-plus", "aria-label": "One more" }, "+");
+  minus.addEventListener("click", step(-1));
+  plus.addEventListener("click", step(1));
+  const qtyRow = el("div", { class: "row bp-review-count" }, counted ? minus : null, qty, counted ? plus : null,
+    el("span", {}, unit));
+  // Shown whenever the count isn't what's lit up on the drawing (after − / + or typing too), to put it back.
+  let use = null;
+  if (counted && R.objs.size) {
+    use = el("button", { class: "button", type: "button", id: "bp-review-use-highlighted" },
+      "Use the " + R.objs.size + " highlighted");
+    use.addEventListener("click", () => { R.count = R.objs.size; qty.value = String(R.count); refreshButtons(); });
+    qtyRow.append(use);
+  }
+  const out = el("div", { id: "bp-review-out" });
+  const approve = el("button", { class: "primary", type: "button", id: "bp-review-approve" });
+  approve.addEventListener("click", () => reviewSave(m, approve, out, msg));
+  const actions = el("div", { class: "row" });
+  // 2026-11-20 (David): the user can always change their mind - approve a rejected one again, change or reject an
+  // approved one. Only agents are kept off approved and rejected measurements (the server checks that).
+  const olds = m.status === "approved" ? [] : oldApproved(m);
+  if (olds.length) {
+    lines.push(el("div", { class: "small warn", id: "bp-review-replaces" }, el("strong", {}, "Replaces "),
+      olds.map(o => num(o.qty) + " " + o.unit).join(", ") + " approved before the plans were read again — approving this one takes that one off the estimate, so it isn't priced twice."));
+  } else if (m.status === "approved" && isFromOldPlans(m)) {
+    lines.push(el("div", { class: "small warn", id: "bp-review-replaces" }, el("strong", {}, "From before the plans were read again"),
+      " — its symbols can't be shown. Approve the new count for this item (it replaces this one), or reject this one if a newer one is already approved."));
+  }
+  if (m.status === "rejected") {
+    lines.push(el("div", { class: "small", id: "bp-review-state" }, el("strong", {}, "Rejected"),
+      m.reject_reason ? " (" + m.reject_reason + ")" : "", " — not priced. Approve it to use it again."));
+  } else if (m.status === "approved") {
+    lines.push(el("div", { class: "small", id: "bp-review-state" }, el("strong", {}, "Approved"),
+      " — change the count and save it, or reject it."));
+  }
+  if (d.can_approve) actions.append(approve);
+  if (d.can_correct && m.status !== "rejected") {
+    const reject = el("button", { class: "button danger", type: "button", id: "bp-review-reject" }, "✕ Reject");
+    reject.addEventListener("click", () => reviewReject(m, reject, out, msg));
+    actions.append(reject);
+  }
+  const more = el("button", { class: "button", type: "button", id: "bp-review-detail" }, "Detail");
+  more.addEventListener("click", () => showDetail(m.id, msg, false));
+  const close = el("button", { class: "button", type: "button", id: "bp-review-close" }, "Close");
+  close.addEventListener("click", () => closeReview());
+  actions.append(more, close);
+  const links = el("div", { class: "small" });
+  if (calc.auto_run_id) {
+    links.append(el("a", { href: "#/agents/ai-log?auto_run_id=" + calc.auto_run_id, target: "_blank", rel: "noopener",
+      id: "bp-review-ai-log", title: "Opens in a new tab — this screen stays where it is" },
+      "📋 What the AI was given and returned ↗"));
+  }
+  function refreshButtons() {
+    const v = parseFloat(R.count);
+    const changed = !isNaN(v) && v !== (parseFloat(m.qty) || 0);
+    approve.textContent = m.status === "approved"
+      ? (changed ? "✓ Save " + num(v) + " " + unit : "✓ Approved")
+      : (m.status === "rejected" ? "✓ Approve again " : "✓ Approve ") + (isNaN(v) ? "" : num(v) + " " + unit);
+    approve.disabled = m.status === "approved" && !changed;
+    if (use) use.hidden = (parseFloat(R.count) || 0) === R.objs.size;
+  }
+  refreshButtons();
+  card.append(...lines, qtyRow, actions, out, links);
+  return card;
+}
+
+// The next measurement to review after this one: on this sheet first, in list order.
+function nextToReview(afterId) {
+  const ms = RV.data.takeoff.measurements.filter(x => x.status === "proposed" && x.id !== afterId);
+  return ms.find(x => x.sheet_id === RV.sheetId) || ms[0] || null;
+}
+
+async function reviewSave(m, btn, out, msg) {
+  const R = RV.review;
+  const v = String(R.count).trim().replace(/,/g, "");
+  if (v === "" || isNaN(Number(v)) || Number(v) < 0) { out.replaceChildren(el("p", { class: "error" }, "Give a number (0 or more).")); return; }
+  btn.disabled = true;
+  out.replaceChildren();
+  try {
+    // The click is the confirmation: change the count first if it was changed, then approve - one step for the user.
+    if (Number(v) !== (parseFloat(m.qty) || 0)) await api("POST", "/measurements/" + m.id + "/edit", { qty: v, confirm: true });
+    const approving = m.status === "proposed" || m.status === "rejected";
+    const done = approving ? await api("POST", "/measurements/approve", { measurement_ids: [m.id], confirm: true }) : null;
+    const replaced = done && done.replaced && done.replaced.length ? " (replaces the count from before the plans were read again)" : "";
+    toast(measurementName(m) + ": " + num(v) + " " + (m.unit || "") + (approving ? " approved" : " saved") + replaced);
+    const next = nextToReview(m.id);
+    closeReview(true);
+    await refreshData();
+    const fresh = next && RV.data.takeoff.measurements.find(x => x.id === next.id && x.status === "proposed");
+    if (fresh) openReview(fresh, msg);
+  } catch (e) {
+    btn.disabled = false;
+    if (e.status !== 401) out.replaceChildren(errorBox(e));
+  }
+}
+
+async function reviewReject(m, btn, out, msg) {
+  btn.disabled = true;
+  try {
+    await api("POST", "/measurements/" + m.id + "/reject", { reason: "rejected in review", confirm: true });
+    toast(measurementName(m) + " rejected — kept in the history, never priced");
+    const next = nextToReview(m.id);
+    closeReview(true);
+    await refreshData();
+    const fresh = next && RV.data.takeoff.measurements.find(x => x.id === next.id && x.status === "proposed");
+    if (fresh) openReview(fresh, msg);
+  } catch (e) {
+    btn.disabled = false;
+    if (e.status !== 401) out.replaceChildren(errorBox(e));
+  }
 }
 
 function bulkApprove(msg) {
@@ -2497,10 +3805,11 @@ async function showDetail(id, msg, zoom) {
     ["Sheet", d.sheet ? (d.sheet.sheet_no || "page " + d.sheet.page_no) + (d.sheet.title ? " — " + d.sheet.title : "") : "—"],
     ["View and scale", d.viewport ? (d.viewport.label || "view") + " · " + (d.viewport.is_nts ? "NTS" : d.viewport.scale_note || (d.viewport.scale_ratio ? "1:" + d.viewport.scale_ratio : "no scale")) + (d.viewport.scale_method ? " (" + words(d.viewport.scale_method) + ")" : "") : c.scale_ratio ? "1:" + c.scale_ratio : "—"],
     ["Method", words(x.method)], ["Confidence", pct(x.confidence)],
-    ["Proposed by", x.proposed_by || "—"],
+    ["Proposed by", proposedByWords(x.proposed_by)],
     agentOutline ? ["Agent outline", agentOutline] : null,
     aiReading ? ["AI reading", aiReading] : null,
-    aiReading && c.auto_run_id ? ["AI Log", el("a", { href: "#/agents/ai-log?auto_run_id=" + c.auto_run_id, id: "bp-detail-ai-log" }, "What the AI was given and what it returned")] : null,
+    aiReading && c.auto_run_id ? ["AI Log", el("a", { href: "#/agents/ai-log?auto_run_id=" + c.auto_run_id, id: "bp-detail-ai-log", target: "_blank", rel: "noopener",
+      title: "Opens in a new tab — this screen stays where it is" }, "What the AI was given and what it returned ↗")] : null,
     ["Approved", x.approved_by ? x.approved_by + " · " + when(x.approved_at) : "not yet"],
   ];
   const parts = [el("h3", {}, measurementName(x)), el("table", { class: "kv", id: "bp-detail" }, rows.filter(Boolean).map(([k, v]) => el("tr", {}, el("th", {}, k), el("td", {}, v))))];
@@ -2528,8 +3837,8 @@ async function showDetail(id, msg, zoom) {
 function detailActions(x, msg, calc) {
   const d = RV.data, out = el("div", { id: "bp-act-confirm" }), row = el("div", { class: "row", id: "bp-actions" });
   const btn = (id, text, fn) => { const b = el("button", { class: id === "bp-approve-one" ? "primary" : "button", type: "button", id }, text); b.addEventListener("click", () => fn(b)); row.append(b); };
-  if (x.status === "proposed" && d.can_approve) {
-    btn("bp-approve-one", "✓ Approve…", b => reviewAsk(out, b, "/measurements/approve", { measurement_ids: [x.id] }, () => "Approved and locked", "bp-approve"));
+  if ((x.status === "proposed" || x.status === "rejected") && d.can_approve) {   // 2026-11-20: a rejected one too
+    btn("bp-approve-one", x.status === "rejected" ? "✓ Approve again…" : "✓ Approve…", b => reviewAsk(out, b, "/measurements/approve", { measurement_ids: [x.id] }, () => "Approved and locked", "bp-approve"));
   }
   if (x.proposed_by === AGENT) {
     btn("bp-show-outline", "Show outline", () => showAgentOutline(x));
@@ -2540,8 +3849,10 @@ function detailActions(x, msg, calc) {
   if (x.status === "approved" && x.suggested_qty !== null && x.suggested_qty !== undefined && d.can_approve) {
     btn("bp-accept", "Accept the suggestion…", b => reviewAsk(out, b, "/measurements/approve", { measurement_ids: [x.id], accept_suggestion: true }, () => "Suggestion accepted", "bp-accept"));
   }
-  if (x.status !== "rejected" && d.can_correct) {
+  if (d.can_correct) {
     btn("bp-edit", "Correct…", () => correctForm(x, out));
+  }
+  if (x.status !== "rejected" && d.can_correct) {
     btn("bp-reject", "Reject…", () => rejectForm(x, out));
     if (x.status === "approved") btn("bp-suggest", "Suggest a change…", () => suggestForm(x, out));
   }
@@ -2615,6 +3926,250 @@ function drawLayersPanel() {
   pane.replaceChildren(el("table", { class: "list", id: "bp-layers" },
     el("thead", {}, el("tr", {}, el("th", {}, "Layer"), el("th", {}, "Items"), el("th", {}, "Show"), el("th", {}, "Lock"))), el("tbody", {}, rows)),
     el("p", { class: "muted small" }, "CAD layers are sorted into these groups by their names (A-WALL → Walls, E-LITE → Electrical…). A locked layer can't be selected. What's shown is remembered on this browser."));
+}
+
+// ------------------------------------------------------------------ Audit & clean up (2026-11-20, David)
+// "Can we have an AI Cleanup run that fixes and removes double counted items and 'from before the plans were read
+// again' issues ... a way to remove [rejected items] ... make sure the user can mass accept all of the changes; you may
+// need a popup window when the user runs the AI Audit that the user can work with." A panel beside the drawing (the
+// drawing stays usable): what the audit found, each with its fix ticked or not, "Show on drawing" for a count, and one
+// button that applies every ticked fix. The server (estimator/takeoff/audit.py) audits again before applying.
+async function openAudit() {
+  let panel = $("bp-audit");
+  if (!panel) {
+    panel = el("div", { class: "card bp-audit", id: "bp-audit", role: "dialog", "aria-label": "Audit and clean up" });
+    (document.querySelector("main") || document.body).append(panel);   // leaving the screen takes it away too
+  }
+  panel.replaceChildren(el("p", { class: "muted" }, "🧹 Auditing the measurements…"));
+  try {
+    renderAudit(panel, await api("GET", "/estimates/" + RV.estimateId + "/audit"));
+  } catch (e) {
+    if (e.status !== 401) panel.replaceChildren(auditHead(panel), errorBox(e));
+  }
+}
+
+// "⚡ Run wiring" on the toolbar and the audit's "⚡ Run wiring now": the same run as the Wiring card's button, with
+// the last run's settings and device moves and the "Keep approved items" choice. Old cable from before the plans were
+// read again is proposed again; if the audit window is open it audits again, so the new cable shows as waiting.
+async function quickRunWiring(btn) {
+  const was = btn.textContent;
+  btn.disabled = true; btn.textContent = "⚡ Routing…";
+  try {
+    const w = await api("GET", "/wiring/" + RV.estimateId);
+    if (!w.can_run) {
+      const src = w.sources || {};
+      toast("The wiring can't run yet: " + (src.plan ? "only owners and estimators can run it."
+        : "upload the electrical floor plan as a DXF (CAD) file on the Plans screen (the panel drawing is used when there is one)."));
+      return;
+    }
+    const run = w.run;
+    const r = await api("POST", "/wiring/" + RV.estimateId, { settings: (run && run.settings) || {},
+      overrides: (run && run.overrides) || {}, keep_approved: keepApprovedNow() });
+    // 2026-11-21 (David: "nothing shows up in the cad window"): the new run is the screen's run now, its routes on.
+    wiringReset({ ...w, run: r.run });
+    RV.wiringFor = RV.estimateId;
+    RV.showWiring = true;
+    RV.wiringPick = null; RV.wiringSize = null; RV.wiringLit = null; RV.wiringMark = null;
+    const n = (r.run.measurement_ids || []).length;
+    const sug = (r.run.suggested_ids || []).length;
+    toast("Wiring done — " + (n ? n + " cable size(s) waiting for approval; click one in the list to light up its circuits" :
+      sug ? sug + " approved item(s) changed — ✓ Accept the new lengths in the ⚡ Wiring card" :
+      "nothing changed (the approved cable already matches)") +
+      (n ? ($("bp-audit") ? "." : " (🧹 Audit & clean up approves them in one click).") : "."));
+    // The routes are drawn on the floor plan the wiring was routed on: go there (from the panel drawing, say).
+    const planSheet = r.run.sources && r.run.sources.plan && r.run.sources.plan.sheet_id;
+    if (planSheet && planSheet !== RV.sheetId) await auditGoToSheet(planSheet, $("review-message"));
+    await refreshData();
+    renderWiring();
+    drawWiringRoutes();
+    if ($("bp-audit")) await openAudit();
+  } catch (e) {
+    if (e.status === 401) return;
+    const out = $("bp-audit-out");
+    if (out) out.replaceChildren(errorBox(e));
+    else toast("The wiring run didn't work — " + (e.message || "unknown error"));
+  } finally {
+    if (btn.isConnected) { btn.disabled = false; btn.textContent = was; }
+  }
+}
+const auditRunWiring = quickRunWiring;
+
+function closeAudit() {
+  const panel = $("bp-audit");
+  if (panel) panel.remove();
+}
+
+function auditHead(panel) {
+  const close = el("button", { class: "button", type: "button", id: "bp-audit-close", "aria-label": "Close" }, "✕");
+  close.addEventListener("click", closeAudit);
+  return el("div", { class: "bp-audit-head" }, el("strong", {}, "🧹 Audit & clean up"), close);
+}
+
+const AUDIT_GROUPS = [
+  ["double_counted", "Priced twice"], ["replace_old", "New counts to replace old ones"],
+  ["drawing_differs", "Approved counts the drawing disagrees with"], ["waiting", "Waiting for review"],
+  ["rerun", "Needs a run done again"], ["rejected", "Rejected items"],
+];
+
+function renderAudit(panel, r) {
+  const out = el("div", { id: "bp-audit-out", role: "status" });
+  const boxes = [];
+  const apply = el("button", { class: "primary", type: "button", id: "bp-audit-apply" });
+  const refresh = () => {
+    const n = boxes.filter(b => b.checked).length;
+    apply.textContent = "✓ Apply " + n + " fix" + (n === 1 ? "" : "es");
+    apply.disabled = !n || !r.can_apply;
+  };
+  const parts = [auditHead(panel), el("p", { class: "small", id: "bp-audit-summary" }, r.summary)];
+  if (!r.findings.length) {
+    panel.replaceChildren(...parts, el("p", { class: "small" }, "✅ All clean."));
+    return;
+  }
+  const all = el("button", { class: "button small", type: "button", id: "bp-audit-all" }, "Tick all");
+  const none = el("button", { class: "button small", type: "button", id: "bp-audit-none" }, "Untick all");
+  all.addEventListener("click", () => { boxes.forEach(b => { b.checked = true; }); refresh(); });
+  none.addEventListener("click", () => { boxes.forEach(b => { b.checked = false; }); refresh(); });
+  parts.push(el("div", { class: "row" }, all, none));
+  const list = el("div", { class: "bp-audit-list", id: "bp-audit-list" });
+  for (const [kind, heading] of AUDIT_GROUPS) {
+    const fs = r.findings.filter(f => f.kind === kind);
+    if (!fs.length) continue;
+    list.append(el("div", { class: "bp-audit-group" }, heading));
+    for (const f of fs) {
+      const item = el("div", { class: "bp-audit-item " + kind, "data-fid": f.id });
+      let tick = null;
+      if (f.can_fix) {
+        tick = el("input", { type: "checkbox", "data-fid": f.id, checked: f.selected ? "" : null,
+          "aria-label": f.title });
+        tick.addEventListener("change", refresh);
+        boxes.push(tick);
+      }
+      // Cable shows its wiring routes on the floor plan, sheet or not (old cable from before a re-read has none).
+      const show = f.feeds && (f.sheet_id || /^wire_/.test(f.feeds))
+        ? el("a", { href: "#", class: "small bp-audit-show" }, "Show on drawing") : null;
+      if (show) show.addEventListener("click", ev => { ev.preventDefault(); auditShow(f); });
+      // 2026-11-20 (David): old cable needs the wiring run again - offer it right here (no AI Auto Run needed).
+      let runIt = null;
+      if (f.rerun === "wiring" && r.can_apply) {
+        runIt = el("button", { class: "button small bp-audit-run-wiring", type: "button" }, "⚡ Run wiring now");
+        runIt.addEventListener("click", () => auditRunWiring(runIt));
+      }
+      item.append(el("label", { class: "bp-audit-title" }, tick, " ", el("strong", {}, f.title)),
+        el("div", { class: "small muted" }, f.detail),
+        el("div", { class: "small" }, f.can_fix ? "Fix: " + f.fix : "👉 " + (f.advice || "")),
+        ...[runIt, show].filter(Boolean));          // append() writes a missing one as the word "null"
+      list.append(item);
+    }
+  }
+  parts.push(list);
+  apply.addEventListener("click", () => applyAudit(panel, boxes.filter(b => b.checked).map(b => b.dataset.fid), apply, out));
+  const again = el("button", { class: "button", type: "button", id: "bp-audit-again" }, "Audit again");
+  again.addEventListener("click", () => openAudit());
+  parts.push(el("div", { class: "row bp-audit-foot" }, apply, again), out);
+  if (!r.can_apply) parts.push(el("p", { class: "small muted" }, "Your role can look, but only someone who approves measurements can apply the fixes."));
+  panel.replaceChildren(...parts);
+  refresh();
+}
+
+// Light up the count's symbols on the drawing (switching to its sheet first) while the panel stays open.
+async function auditShow(f) {
+  const msg = $("review-message");
+  // 2026-11-20 (David: "show on drawing for the wiring shows nothing"): cable has no symbols - show the wiring routes
+  // on the floor plan the wiring was routed on, the circuits of that cable size standing out.
+  const size = /^wire_(\d+)_(\d+)_ft$/.exec(f.feeds || "");
+  if (size) return auditShowWiring(size[1] + "/" + size[2], msg);
+  // 2026-11-20 (David: "3 of these items don't have symbols"): the breakers and the range/dryer receptacles have no
+  // symbol on the designer's drawing - show the wiring run's marks for them, and the circuits behind them.
+  // When a revised drawing has the real symbol, the wiring run marks nothing: light up the symbol instead.
+  if (WIRING_MARK_FEEDS.includes(f.feeds) && await auditShowWiring(null, msg, f.feeds)) return;
+  await auditGoToSheet(f.sheet_id, msg);
+  const objs = countSymbols(f.module_id, f.feeds);
+  if (objs.length) { highlightSymbols(objs, symbolKey(objs[0])); auditKeepDrawingVisible(); }
+  else toast("Nothing for this on the drawing to light up.");
+}
+
+const WIRING_MARK_FEEDS = ["branch_circuits", "range_receptacles", "dryer_receptacles"];
+
+async function auditShowWiring(size, msg, mark) {
+  try {
+    if (!RV.wiring || RV.wiringFor !== RV.estimateId || RV.wiring.error) {
+      wiringReset(await api("GET", "/wiring/" + RV.estimateId));
+      RV.wiringFor = RV.estimateId;
+    }
+  } catch (e) { if (e.status !== 401) toast("Couldn't load the wiring routes — " + (e.message || "error")); return; }
+  const run = RV.wiring && RV.wiring.run;
+  const sheet = run && run.sources && run.sources.plan && run.sources.plan.sheet_id;
+  if (!run || !run.overlay || !sheet) {
+    toast("No wiring routes to show yet — click ⚡ Run wiring first.");
+    return;
+  }
+  await auditGoToSheet(sheet, msg);
+  RV.showWiring = true; RV.wiringPick = null; RV.wiringSize = size; RV.wiringLit = null; RV.wiringMark = null;
+  const name = (RV.sheet && (RV.sheet.title || RV.sheet.name)) || "the floor plan";
+  if (mark) {
+    const marks = (run.overlay.added || []).filter(a => a.feeds === mark);
+    if (!marks.length) return false;           // the drawing has its own symbol for it (or no run marked it)
+    RV.wiringMark = mark; RV.wiringLit = marks.flatMap(a => a.circuits || []);
+    renderWiring();
+    drawWiringRoutes();
+    const xs = marks.map(a => a.at[0]), ys = marks.map(a => a.at[1]);
+    const all = run.overlay.circuits.flatMap(c => [...c.lines.flat(), ...c.devices]);
+    const pad = Math.max(Math.max(...all.map(p => p[0])) - Math.min(...all.map(p => p[0])),
+                         Math.max(...all.map(p => p[1])) - Math.min(...all.map(p => p[1]))) / 6 || 10;
+    if (RV.viewer) RV.viewer.zoomToBox([Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad]);
+    auditKeepDrawingVisible();
+    toast("On " + name + ": " + marks.map(a => a.label).join("; ") + " — marked by the wiring run (the designer drew no symbol for it).");
+    return true;
+  }
+  renderWiring();
+  drawWiringRoutes();
+  // Zoom to the circuits of this size (all the routes when it is only the 3-way travelers).
+  const lit = run.overlay.circuits.filter(c => c.wire === size);
+  const pts = (lit.length ? lit : run.overlay.circuits).flatMap(c => [...c.lines.flat(), ...c.devices]);
+  if (pts.length && RV.viewer) {
+    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    RV.viewer.zoomToBox([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+  }
+  auditKeepDrawingVisible();
+  toast(lit.length ? "On " + name + ": the " + lit.length + " circuit(s) wired in " + size + " are lit up (the others are faded)."
+                   : "On " + name + ": the wiring routes (" + size + " is the 3-way travelers, inside the 3-way circuits).");
+}
+
+// 2026-11-20 (David: "the click should switch to the sheet or plan that needs review and light it up"): always go to
+// the sheet - whichever sheet is open - before lighting anything up.
+async function auditGoToSheet(sheet, msg) {
+  if (!sheet || sheet === RV.sheetId || !RV.data.sheets.some(s => s.id === sheet)) return;
+  if ($("review-sheet")) $("review-sheet").value = sheet;
+  await openSheet(sheet, msg);
+}
+
+// The drawing on screen, and what's lit not hidden under the audit window (it sits over the drawing's right side).
+function auditKeepDrawingVisible() {
+  const v = RV.viewer;
+  if (!v || !v.box) return;
+  v.box.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  const panel = $("bp-audit");
+  if (!panel) return;
+  const r = v.box.getBoundingClientRect(), p = panel.getBoundingClientRect();
+  const covered = Math.max(0, r.right - Math.max(p.left, r.left));
+  if (covered > 0 && covered < r.width) { v.tx -= covered / 2; v.render(); }
+}
+
+async function applyAudit(panel, ids, btn, out) {
+  btn.disabled = true;
+  out.replaceChildren(el("p", { class: "muted small" }, "Applying…"));
+  try {
+    const done = await api("POST", "/estimates/" + RV.estimateId + "/audit/apply", { finding_ids: ids, confirm: true });
+    toast(done.summary);
+    await refreshData();
+    const r = await api("GET", "/estimates/" + RV.estimateId + "/audit");
+    renderAudit(panel, r);
+    const o = $("bp-audit-out");
+    if (o) o.replaceChildren(el("p", { class: "small ok", id: "bp-audit-done" }, "✓ " + done.summary));
+  } catch (e) {
+    btn.disabled = false;
+    if (e.status !== 401) out.replaceChildren(errorBox(e));
+  }
 }
 
 window.addEventListener("resize", () => { if (RV.viewer && RV.viewer.box.isConnected) RV.viewer.render(); });

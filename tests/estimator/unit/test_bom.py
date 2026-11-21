@@ -18,6 +18,12 @@ CTX = personal_context()
 ELEC = {"outlets": 10, "switches": 4, "lights": 6}
 # 10 outlets + 4 switches + 6 lights at 25 ft a run: 500 lf of wire at 15% waste,
 # 20 boxes, 2 breakers. Labor and the permit are not materials, so they stay out.
+# 2026-11-20 (David): the light fixtures are the owner's by default (labor only, not on the list), the breakers are
+# AFCI by default, and the small parts (wire nuts, staples, clamps) are on the list - one set a box.
+# 2026-11-20 (David: "we have to charge something for the light fixture install boxes"): each light has a fixture-rated
+# box on the list; the device boxes are for outlets and switches only.
+KEYS = ["el_outlet_ea", "el_switch_ea", "el_fixture_box_ea", "el_box_plastic_ea", "el_wire_lf", "el_breaker_afci_ea",
+        "el_small_parts_ea"]
 
 
 @pytest.fixture
@@ -38,24 +44,40 @@ def _item(items, item_key):
 
 def test_bom_lists_material_lines_only(db, elec):
     items = bom.bom_for_section(db, "default", _section(elec, "electrical")["id"])
-    assert [i["item_key"] for i in items] == ["el_outlet_ea", "el_switch_ea", "el_box_plastic_ea",
-                                              "el_wire_lf", "el_breaker_ea"]
-    assert [i["quantity"] for i in items] == ["10", "4", "20", "500", "2"]
-    assert [i["order_quantity"] for i in items] == ["10", "4", "20", "575.00", "2"]
-    assert [i["unit"] for i in items] == ["ea", "ea", "ea", "lf", "ea"]
+    assert [i["item_key"] for i in items] == KEYS
+    assert [i["quantity"] for i in items] == ["10", "4", "6", "14", "500", "2", "20"]
+    assert [i["order_quantity"] for i in items] == ["10", "4", "6", "14", "575.00", "2", "20"]
+    assert [i["unit"] for i in items] == ["ea", "ea", "ea", "ea", "lf", "ea", "ea"]
     for i in items:
         assert i["price_key"] == i["item_key"] and i["ordered"] is False
         assert i["supplier"] is None                    # sample prices carry no supplier
-        assert i["unit_cost_cents"] > 0 and len(i["line_ids"]) == 1
+        assert i["unit_cost_cents"] > 0                 # every item on the list is priced
+        assert len(i["line_ids"]) == 1
+
+
+def test_fixtures_we_supply_are_on_the_list(db):                                    # 2026-11-20
+    """David: fixtures the owner supplies take labor to hang and wire; when we supply them they're on the list too."""
+    e = service.create_estimate(db, CTX, "We buy the fixtures")
+    e = quick.answer(db, CTX, e["id"], "electrical", {**ELEC, "fans": 2, "fixtures": "us"}, e["rev"])
+    sec = _section(e, "electrical")
+    items = bom.bom_for_section(db, "default", sec["id"])
+    assert _item(items, "el_light_ceiling_ea")["quantity"] == "6" and _item(items, "el_fan_unit_ea")["quantity"] == "2"
+    hang = next(ln for ln in sec["lines"] if ln["calc"]["rule"] == "fixture_labor")
+    assert float(hang["quantity"]) == 6 * 0.75 + 2 * 1.5                              # the same labor either way
+    owner = service.create_estimate(db, CTX, "Owner buys the fixtures")
+    owner = quick.answer(db, CTX, owner["id"], "electrical", {**ELEC, "fans": 2}, owner["rev"])
+    sec = _section(owner, "electrical")
+    assert float(next(ln for ln in sec["lines"] if ln["calc"]["rule"] == "fixture_labor")["quantity"]) == 7.5
+    keys = [i["item_key"] for i in bom.bom_for_section(db, "default", sec["id"])]
+    assert "el_light_ceiling_ea" not in keys and "el_fan_unit_ea" not in keys
+    assert any("supplied by the owner" in ln["description"] for ln in sec["lines"])
 
 
 def test_bom_for_estimate_lists_construction_sections_only(db, elec):
     out = bom.bom_for_estimate(db, "default", elec["id"])
     assert [b["module_id"] for b in out] == ["electrical"]
     assert out[0]["section_id"] == _section(elec, "electrical")["id"]
-    assert [i["item_key"] for i in out[0]["items"]] == ["el_outlet_ea", "el_switch_ea",
-                                                        "el_box_plastic_ea", "el_wire_lf",
-                                                        "el_breaker_ea"]
+    assert [i["item_key"] for i in out[0]["items"]] == KEYS
 
 
 def test_bom_for_estimate_includes_empty_construction_sections(db):
@@ -167,6 +189,32 @@ def test_bom_includes_the_subpanel_now_it_is_a_material(db):
     assert sub["quantity"] == "1" and sub["order_quantity"] == "1" and sub["unit"] == "ea"
 
 
+def test_smoke_detectors_and_the_main_panel_are_priced(db):                       # 2026-11-20
+    """David: "the panel and the 2 smoke detectors on the plan aren't part of any count" - fix it. Smoke detectors are
+    their own BOM line with labor, a box and wire each; a new build's main panel is priced once, never as well as a
+    Panel work 'Upgrade' (that line already is the panel and service)."""
+    e = service.create_estimate(db, CTX, "Smoke and panel job")
+    e = quick.answer(db, CTX, e["id"], "electrical", {**ELEC, "smoke_detectors": 2, "main_panels": 1}, e["rev"])
+    sec = _section(e, "electrical")
+    items = bom.bom_for_section(db, "default", sec["id"])
+    smoke = _item(items, "el_smoke_detector_ea")
+    assert smoke["quantity"] == "2" and smoke["unit_cost_cents"] > 0
+    assert _item(items, "el_box_plastic_ea")["quantity"] == "16"                # 14 devices + 2 detectors
+    assert _item(items, "el_fixture_box_ea")["quantity"] == "6"                 # one fixture-rated box a light
+    # 2026-11-20 (David: "there is no panel" in the BOM): the panel and meter base are parts on the list, with the
+    # hours to set them as their own labor line.
+    assert _item(items, "el_main_panel_ea")["quantity"] == "1" and _item(items, "el_meter_base_ea")["quantity"] == "1"
+    rules = {ln["calc"]["rule"]: ln for ln in sec["lines"]}
+    assert float(rules["panel_labor"]["quantity"]) == 12
+    assert float(rules["device_labor"]["quantity"]) == 10 * 0.5 + 4 * 0.5 + 2 * 0.75   # 0.75 hr a detector
+    assert float(rules["fixture_labor"]["quantity"]) == 6 * 0.75                         # the lights: their own line
+    # With Panel work "Upgrade", the upgrade line is the panel: the main panel isn't priced again.
+    e2 = service.create_estimate(db, CTX, "Upgrade job")
+    e2 = quick.answer(db, CTX, e2["id"], "electrical", {**ELEC, "main_panels": 1, "panel": "upgrade"}, e2["rev"])
+    keys = [ln["price_key"] for ln in _section(e2, "electrical")["lines"]]
+    assert "el_panel_upgrade_ea" in keys and "el_main_panel_ea" not in keys
+
+
 # ------------------------------------------------------------------ ordered flags
 
 def test_set_ordered_toggles_on_and_off(db, elec):
@@ -215,7 +263,5 @@ def test_est_bom_tool_returns_the_same_lists(db, elec):
     out = json.loads(t.est_bom(elec["id"]))
     assert out["ok"] and out["estimate_id"] == elec["id"]
     assert [b["module_id"] for b in out["bom"]] == ["electrical"]
-    assert [i["item_key"] for i in out["bom"][0]["items"]] == ["el_outlet_ea", "el_switch_ea",
-                                                               "el_box_plastic_ea", "el_wire_lf",
-                                                               "el_breaker_ea"]
+    assert [i["item_key"] for i in out["bom"][0]["items"]] == KEYS
     assert json.loads(t.est_bom(99999))["error"] == "not_found"

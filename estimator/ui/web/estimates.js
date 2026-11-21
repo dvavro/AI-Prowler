@@ -92,7 +92,7 @@ async function renderEstimate(main, id) {
   // The Inspector's code review lives inside each trade's section now (sectionBlock).
   if (!est.sections.length && !tradesWithoutLines.length) {
     const next = d.can_edit
-      ? ["Measure the plans in ", el("a", { href: "#/takeoffs/" + est.id }, "Blueprint Review"), " and Recalculate, or add a line below."]
+      ? ["Open ", el("a", { href: "#/takeoffs/" + est.id }, "Measure from plans (takeoff)"), ", measure the plans and Recalculate, or add a line below."]
       : ["Ask an estimator to price it."];
     parts.push(el("div", { class: "card empty", id: "estimate-empty" }, "No trades priced yet. ", ...next));
   }
@@ -108,7 +108,18 @@ async function renderEstimate(main, id) {
 function estimateActions(d, msg) {
   const est = d.estimate, row = el("div", { class: "row", id: "estimate-actions" });
   const out = el("div", { id: "estimate-results" });
-  if (d.can_review) row.append(el("a", { class: "button", id: "estimate-review", href: "#/takeoffs/" + est.id }, "📏 Blueprint Review"));
+  // One button for "the plans changed, update the estimate" (2026-11-20, David: "add a button to update the estimate,
+  // I can't figure out how to update the estimate with rev2 items/changes"). Shown when any trade differs from its
+  // approved measurements; on an approved or sent estimate it reopens it first (the server asks, saying so).
+  const stale = ((d.links || {}).trades || []).filter(t => t.can_use_measurements);
+  const updAsk = el("div", { id: "update-plans-ask" });
+  if (stale.length && (d.can_edit || d.can_reopen)) {
+    const upd = el("button", { class: "primary", type: "button", id: "estimate-update-plans" }, "🔄 Update from the plans…");
+    upd.addEventListener("click", () => askThen(updAsk, upd, "/estimates/" + est.id + "/update-from-plans", { rev: est.rev },
+      r => "Updated from the plans: " + (r.updated || []).map(t => t.name).join(", ") + " · total " + money((r.totals || {}).total_cents || 0), "update-plans"));
+    row.append(upd);
+  }
+  if (d.can_review) row.append(el("a", { class: "button", id: "estimate-review", href: "#/takeoffs/" + est.id }, "📏 Measure from plans (takeoff)"));
   if (d.can_edit) {
     const calc = el("button", { class: "button", type: "button", id: "estimate-calc" }, "Recalculate");
     calc.addEventListener("click", async () => {
@@ -185,7 +196,7 @@ function estimateActions(d, msg) {
     });
     row.append(rev);
   }
-  return el("div", { class: "section" }, row, out);
+  return el("div", { class: "section" }, row, updAsk, out);
 }
 
 function sectionBlock(d, sec, tr, lineLinks, meas, focusLine, msg, book) {
@@ -419,6 +430,12 @@ function bomBlock(d, sec, msg) {
       el("td", {}, box));
   });
   const csvCell = v => { const s = String(v === null || v === undefined ? "" : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  // The total material cost: every priced item; unpriced ones are counted so the total isn't read as complete.
+  const costs = items.map(costOf);
+  const total = costs.reduce((a, c) => a + (c === null ? 0 : c), 0);
+  const unpriced = costs.filter(c => c === null).length;
+  const totalNote = unpriced ? " (" + unpriced + " item" + (unpriced === 1 ? "" : "s") + " not priced)" : "";
+  const totalRow = see ? [["Total" + totalNote, "", "", "", "", (total / 100).toFixed(2)]] : [];
   const csv = [["Item", "Qty to order", "Unit", "Supplier", "Unit cost", "Cost"]]
     .concat(items.map(item => {
       const cost = costOf(item);
@@ -426,11 +443,13 @@ function bomBlock(d, sec, msg) {
         item.unit_cost_cents === undefined || item.unit_cost_cents === null ? "" : (item.unit_cost_cents / 100).toFixed(2),
         cost === null ? "" : (cost / 100).toFixed(2)];
     }))
+    .concat(totalRow)
     .map(r => r.map(csvCell).join(",")).join("\r\n");
   const copy = el("button", { class: "button", type: "button", id: "bom-copy-" + sec.module_id }, "Copy list");
   copy.addEventListener("click", async () => {
     const text = items.map(item => item.order_quantity + " " + item.unit + " \u2014 " + item.description).join("\n");
-    try { await navigator.clipboard.writeText(text); toast("Bill of materials copied"); }
+    const withTotal = see ? text + String.fromCharCode(10) + "Total: " + money(total) + totalNote : text;
+    try { await navigator.clipboard.writeText(withTotal); toast("Bill of materials copied"); }
     catch (e) { msg.replaceChildren(errorBox(e)); }
   });
   const download = el("button", { class: "button", type: "button", id: "bom-csv-" + sec.module_id }, "Download CSV");
@@ -441,12 +460,16 @@ function bomBlock(d, sec, msg) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
   return el("details", { class: "bom", id: "bom-" + sec.module_id },
-    el("summary", {}, "Bill of Materials (" + items.length + (items.length === 1 ? " item)" : " items)")),
+    el("summary", {}, "Bill of Materials (" + items.length + (items.length === 1 ? " item" : " items")
+      + (see ? " · " + money(total) : "") + ")"),
     el("div", { class: "row" }, copy, download),
     el("table", { class: "list", id: "bom-table-" + sec.module_id },
       el("thead", {}, el("tr", {}, el("th", {}, "Item"), el("th", {}, "Qty to order"), el("th", {}, "Unit"),
         el("th", {}, "Supplier"), see ? el("th", {}, "Cost") : null, el("th", {}, "Ordered"))),
-      el("tbody", {}, rows)));
+      el("tbody", {}, rows),
+      see ? el("tfoot", {}, el("tr", { id: "bom-total-" + sec.module_id },
+        el("th", {}, "Total materials" + totalNote), el("td", {}), el("td", {}), el("td", {}),
+        el("th", { class: "money" }, money(total)), el("td", {}))) : null));
 }
 
 // The Inspector's code review of one trade: run it, read the checklist, add what's missing.

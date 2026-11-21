@@ -244,7 +244,7 @@ def _measurement_effects(conn, ctx, old_ps: dict, diff: dict) -> tuple[list[dict
             sch = diff.get("schedules") or {}
             if diff["changed_sheets"] or diff.get("sheets_removed") or diff.get("sheets_added") \
                     or any(sch.get(k) for k in ("added", "removed", "changed")):
-                flag.append({"m": m, "why": ["the plans changed: run the takeoff from the plans again"],
+                flag.append({"m": m, "why": ["the plans changed: measure from the plans again"],
                              "plan_sets": True})
             else:
                 carry.append({"m": m, "ids": [], "plan_sets": True})
@@ -284,7 +284,7 @@ def compare(conn, ctx: RequestContext, new_plan_set_id: int | None = None, old_p
     new_ps = store.load_plan_set(conn, ctx, int(new_plan_set_id))
     old_id = old_plan_set_id or new_ps["supersedes_plan_set_id"]
     if not old_id:
-        raise InvalidInput(f"plan set {new_ps['id']} doesn't replace another one; give old_plan_set_id",
+        raise InvalidInput(f"plan set {store.plan_set_label(conn, new_ps)} doesn't replace another one; give old_plan_set_id",
                            field="old_plan_set_id")
     old_ps = store.load_plan_set(conn, ctx, int(old_id))
     if old_ps["id"] == new_ps["id"]:
@@ -293,7 +293,7 @@ def compare(conn, ctx: RequestContext, new_plan_set_id: int | None = None, old_p
         raise InvalidInput("both plan sets must be on the same estimate")
     for ps in (old_ps, new_ps):
         if ps["status"] != "processed":
-            raise InvalidInput(f"plan set {ps['id']} hasn't been read yet (it's {ps['status']}); process it first",
+            raise InvalidInput(f"plan set {store.plan_set_label(conn, ps)} hasn't been read yet (it's {ps['status']}); process it first",
                                plan_set_id=ps["id"])
     if ctx.mode == "server":
         n = conn.execute("SELECT COUNT(*) FROM drawing_objects o JOIN sheets s ON s.id = o.sheet_id"

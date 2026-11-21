@@ -15,4 +15,6 @@ The plan engine reads a PDF plan set: it splits it into sheets, reads each title
 - A photo has no true size: always **📏 Calibrate…** it from something you know the length of. A tilted or curled page measures less well than a scan; for bidding, ask for the PDF.
 - **Found on this sheet** lists the walls and rooms the engine found (and, for DXF drawings, symbols, notes and dimensions), with their measured totals once the view has a scale.
 - DXF drawings are read at real size, so they never need a scale. DWG files are converted to DXF when the free **ODA File Converter** (opendesign.com, Guest Files) or LibreDWG is installed on this PC; the Estimator tab's **CAD and tools** section shows whether one was found. Without one, save the drawing as DXF from your CAD program, or print to PDF.
+- Revised plans: pick **New revision of #… (removes the old one)** in **This is** when you upload. The old plans and their measurements are removed, and you measure the new ones from scratch — see "Replace plans with a new revision".
+- For Electrical, upload the floor plan as a DXF so **⚡ Run wiring** can route the cable — see "Run the wiring".
 - Owners and estimators can read plans and set scales; reviewers and field staff can look at them.

@@ -48,7 +48,7 @@ SNAP_IN = 0.05                       # snap an end to an extension line this clo
 SNAP_CROWD = 3                       # ...unless this many parallel lines are that close (hatching): no snap
 PIN_DRIFT = 0.08                     # close-up ends that change the overview's length by more than this are distrusted
 AGREE_ROUGH = 0.03                   # ...and a dimension measured on the overview must agree with the others this closely
-MANUAL_HOW = ("Calibrate it by hand: open the sheet in Blueprint Review, pick 📏 Calibrate, click both ends of a "
+MANUAL_HOW = ("Calibrate it by hand: open the sheet in Measure from plans (takeoff), pick 📏 Calibrate, click both ends of a "
               "dimension whose length is written on the plan (the longer the better) and type that length.")
 
 FIND_SYSTEM = ("You are reading a construction drawing to find its written dimensions so the drawing can be scaled. "
@@ -373,8 +373,8 @@ def auto_calibrate(conn, ctx: RequestContext, viewport_id: int, *, confirm: bool
     if not use_ai:
         return _manual(conn, ctx, vp, why_drawing + ".")
     if cfg["provider"] not in providers.API_PROVIDERS:
-        return _manual(conn, ctx, vp, why_drawing + ", and the AI can't read the plan because AI takeoff is off "
-                       "(turn it on in AI-Prowler's 🏗 Estimator tab → 🤖 AI agents: AI takeoff → Suggest).")
+        return _manual(conn, ctx, vp, why_drawing + ", and the AI can't read the plan because AI measuring is off "
+                       "(turn it on in AI-Prowler's 🏗 Estimator tab → 🤖 AI agents: AI measuring → Suggest).")
     if ctx.agent and run is None:
         return _manual(conn, ctx, vp, why_drawing + ", and an agent working on its own can't show the sheet to the AI.")
     person = replace(ctx, agent=None)

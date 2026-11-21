@@ -236,9 +236,9 @@ def test_design_firm_on_plan_sets(db, house, tmp_path):                         
     eid, ps = house["estimate_id"], house["plan_set_id"]
     assert store.load_plan_set(db, CTX, ps)["design_firm"] == "Hart Architects"
     rev2 = store.upload(db, CTX, eid, str(make_pdf(tmp_path / "rev2.pdf", [page(), page()])),
-                        supersedes_plan_set_id=ps, confirm=True)
+                        supersedes_plan_set_id=ps, keep_old=True, confirm=True)
     row = store.load_plan_set(db, CTX, rev2["plan_set_id"])
-    assert (row["design_firm"], row["design_firm_source"]) == ("Hart Architects", f"plan set {ps}")
+    assert (row["design_firm"], row["design_firm_source"]) == ("Hart Architects", "plan set #1")
     other = plain_estimate(db, "Jones")
     third = plan_set_row(db, other, tmp_path, "jones.pdf")["plan_set_id"]
     assert store.load_plan_set(db, CTX, third)["design_firm"] is None

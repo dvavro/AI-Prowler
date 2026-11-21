@@ -298,7 +298,7 @@ def test_run_llm_plumbing_off_makes_no_call(db, fake, plans):
     rid = _run(db, plans)
     with pytest.raises(lt.LlmTakeoffError) as exc:
         lp.run_llm_plumbing(db, CTX, autorun_api._load_run(db, CTX, rid))
-    assert "LLM takeoff is off" in str(exc.value) and "read the Plumbing plan" in str(exc.value)
+    assert "AI measuring is off" in str(exc.value) and "read the Plumbing plan" in str(exc.value)
     assert fake.calls == []
 
 

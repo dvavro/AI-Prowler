@@ -41,7 +41,7 @@ def revised(db):
     for mod in ("flooring", "siding"):
         from_plans.propose(db, CTX, eid, mod, confirm=True)
     takeoffs.confirm_measurements(db, CTX, [m["id"] for m in meas(db, eid).values()], confirm=True)
-    b = store.upload(db, CTX, eid, str(FIX / "smith_residence_A101_revB.pdf"), supersedes_plan_set_id=a,
+    b = store.upload(db, CTX, eid, str(FIX / "smith_residence_A101_revB.pdf"), supersedes_plan_set_id=a, keep_old=True,
                      confirm=True)["plan_set_id"]
     engine.start(db, CTX, b, confirm=True)
     return eid, a, b

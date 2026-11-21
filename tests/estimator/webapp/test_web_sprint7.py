@@ -313,8 +313,8 @@ def test_guide_starts_with_calibration_and_explains_edge_length():     # C2S7-W0
 
 def test_takeoff_steps_tab_and_detail_empty_state():                          # C2S7-W05 (2026-11-18)
     js = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
-    # The calc lives in a Takeoff steps tab beside the drawing, not above it.
-    for needed in ("bp-tab-steps", "Takeoff steps", "bp-pane-steps", "drawStepsPanel", "concreteStepsBox"):
+    # The calc lives in a Measure steps tab beside the drawing, not above it.
+    for needed in ("bp-tab-steps", "Measure steps", "bp-pane-steps", "drawStepsPanel", "concreteStepsBox"):
         assert needed in js, needed
     # The tab only shows when a finished run has a concrete calc.
     assert "AUTO.results.concrete" in js
@@ -322,7 +322,7 @@ def test_takeoff_steps_tab_and_detail_empty_state():                          # 
     assert "bp-detail-empty" in js and "Select a measurement" in js
     # Layers: the Measurements row counts the measurements on this sheet.
     assert "sheetMeasurements().length" in js
-    # The tab row fits six tabs in the same panel, and the formulas wrap in the narrow pane.
+    # The tab row fits seven tabs in the same panel, and the formulas wrap in the narrow pane.
     css = (router.WEB_DIR / "app.css").read_text(encoding="utf-8")
     assert "#bp-pane-steps #bp-auto-formulas td.formula" in css
 
@@ -342,10 +342,11 @@ def test_point_dimensions_not_drawn_as_dots():                          # C2S7-W
 def test_agent_auto_run_markers():                                              # C2S7-W04
     js = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
     for needed in (
-            # 2026-11-15: the button is "AI Auto Run" and lists its measurements and the concrete volume.
+            # 2026-11-15: the button is "AI Auto Run"; the volume is in the Measure steps tab
+            # (the above-drawing measurements table was removed 2026-11-18).
             "bp-auto-run", "AI Auto Run", "/auto-run", '"concrete"',
-            "bp-auto-slot", "bp-auto-status", "AI Auto Run finished", "timed out",
-            "bp-auto-results", "AI Auto Run measurements", "bp-auto-volume", "cu yd",
+            "bp-auto-slot", "bp-auto-status", "AI Auto Run finished", "no news for 10 minutes",
+            "bp-auto-volume", "cu yd",
             "bp-auto-rerun", "Re-run agent", "/rerun",
             "concrete-agent", "bp-agent", "Show outline",
             "Change outline", "bp-retarget", "bp-retarget-select", "/retarget",
@@ -387,11 +388,11 @@ def test_auto_run_picks_concrete_or_electrical_by_sheet():                   # C
     assert "AUTO_STEPS_BY_TRADE" in js
     assert "finding the electrical sheet" in js and "counting the devices" in js
     assert "Sending the sheet to the AI to count the devices" in js
-    # Electrical results land in the Takeoff steps tab as a device-counts table.
+    # Electrical results land in the Measure steps tab as a device-counts table.
     assert "electricalStepsBox" in js and "AUTO.results.electrical" in js
     assert "Device counts" in js and "bp-auto-counts" in js
-    # The finished-run note and the LLM scale note are per trade.
-    assert "price Electrical from them" in js
+    # The LLM scale note is per trade (the finished-run note lived in the above-drawing
+    # table, removed 2026-11-18).
     assert "counts don't need the sheet's scale" in js
     # The toast counts devices for an electrical run.
     assert "devices counted" in js
@@ -405,3 +406,41 @@ def test_guide_count_badges_show_the_total():                                 # 
     # the badge shows the total ("to review — 42 ea"), not "1 measurement(s)".
     assert '(!q.unit && m.unit === "ea")' in js
     assert "same[0].unit" in js
+
+
+def test_takeoff_ux_toolbar_counts_and_no_count_tool():                     # C2S7-W09 (2026-11-18)
+    js = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
+    css = (router.WEB_DIR / "app.css").read_text(encoding="utf-8")
+    # The toolbar sits with the drawing: it renders immediately above the split, not in the top bar.
+    assert 'toolPalette(msg), el("div", { class: "bp-split" }' in js
+    assert 'el("div", { class: "row bp-bar" }, prev, sheetPick, next, viewButtons())' in js
+    # The Count tool is gone from the toolbar and the guide; AI Auto Run is the only way to count.
+    assert '"count", "✚", "Count"' not in js
+    assert 'setTool("count"' not in js
+    assert 'count: { tool: null, label: "🤖 AI Auto Run" }' in js
+    # The above-drawing measurements table is gone; the status line, Re-run and AI Log stay.
+    assert "autoResultsBox" not in js and "bp-auto-results" not in js
+    assert "AI Auto Run finished" in js and "bp-auto-rerun" in js and "AI Log" in js
+    # The steps tab reads "AI Count steps" for an electrical run, "Measure steps" otherwise.
+    assert '"AI Count steps" : "Measure steps"' in js
+    # Count rows click to highlight their symbols, and the Count column is editable.
+    assert "COUNT_SYMBOLS" in js and "toggleCountHighlight" in js and "countSymbols" in js
+    assert "bp-count-in" in js and "bp-count-message" in js
+    assert '/measurements/" + m.id + "/edit"' in js
+    # The tab bar scrolls sideways instead of clipping the last label in the narrow panel.
+    assert ".bp-tabs" in css and "overflow-x: auto" in css
+
+
+def test_guide_lives_in_its_own_side_panel_tab():                                # C2S7-W10 (2026-11-19)
+    js = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
+    # The guide is a "To measure" tab beside the drawing, not a panel above it.
+    for needed in ('tabButton("guide", "To measure")', '"list", "guide", "symbols"',
+                   "bp-pane-guide", "drawTakeoffGuide"):
+        assert needed in js, needed
+    assert "bp-guide-slot" not in js
+    # Count rows in the guide highlight their symbols, like the steps rows.
+    assert "#bp-pane-guide li[data-feeds]" in js
+    assert "toggleCountHighlight(tr.module_id, q.id)" in js
+    css = (router.WEB_DIR / "app.css").read_text(encoding="utf-8")
+    assert "#bp-pane-guide { overflow-x: auto; }" in css
+    assert "#bp-pane-guide li.bp-step-link.on" in css

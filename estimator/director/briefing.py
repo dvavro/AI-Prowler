@@ -106,7 +106,7 @@ def briefing(conn, ctx: RequestContext, today: date | None = None, mine: bool = 
     if needs_answers:
         lines.append(f"- {len(needs_answers)} job(s) waiting for answers from the customer or you.")
     if takeoffs:
-        lines.append(f"- {len(takeoffs)} plan takeoff(s) in progress: trades to measure or quantities to approve.")
+        lines.append(f"- {len(takeoffs)} measure-from-plans job(s) in progress: trades to measure or quantities to approve.")
     if due["follow_ups"]:
         top = due["follow_ups"][0]
         lines.append(f"- {len(due['follow_ups'])} follow-up(s) due, oldest {top['number']} ({top['title']}, "

@@ -78,7 +78,7 @@ def test_strategies_list_all_fifteen_trades():                                  
             assert key in s, f"{mid} is missing {key}"
         assert s["geometric"] is False
         assert s["find_candidates"](None, "default", 1) == {"candidates": []}
-        assert "turn LLM takeoff on" in s["llm_off"]
+        assert "turn AI measuring on" in s["llm_off"]
 
 
 def test_trade_label_uses_the_manifest_name_or_the_id():                                    # AS-02
@@ -148,7 +148,7 @@ def test_run_results_electrical_shape_from_the_reader(db, plans):               
     res = autorun_api.run_results(db, CTX, autorun_api._load_run(db, CTX, run))
     assert [x["label"] for x in res["lines"]] == ["Outlets (AI)"]
     got = {c["feeds"]: c for c in res["electrical"]["counts"]}
-    assert len(got) == 8 and got["outlets"]["qty"] == 12 and got["gfci"]["qty"] == 0
+    assert len(got) == 25 and got["recessed_lights"]["qty"] == 0 and got["wp_outlets"]["qty"] == 0 and got["dimmers"]["qty"] == 0 and got["exhaust_fans"]["qty"] == 0 and got["outlets"]["qty"] == 12 and got["gfci"]["qty"] == 0
     assert got["outlets"]["evidence"] == "12 duplex receptacles"
     assert res["electrical"]["sheet_id"] == plans["e1"] and res["electrical"]["confidence"] == 0.9
 

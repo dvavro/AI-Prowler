@@ -1,15 +1,13 @@
-# Compare plan revisions
-<!-- screen: reports; words: revision, rev, compare, overlay, changed, added, removed, re-measure, cloud, delta -->
-When the architect sends a revised set (Rev A → Rev B), compare it with the one it replaces: every change is drawn over the plan, measurements on unchanged work carry over, and the rest are flagged to re-measure.
+# Replace plans with a new revision
+<!-- screen: plans; words: revision, rev, rev 2, revised plans, new plans, replace, update, compare, changed, re-measure, update from the plans -->
+When the architect sends revised plans (Rev 2), upload them as a new revision. The old plans and everything measured on them are removed, and you measure the new plans from scratch — with AI Auto Run and ⚡ Run wiring that takes a few clicks, and nothing from the old plans can be priced by mistake.
 
-1. On the project page, upload the new set as a **revision** of the old one, then open it and click **📖 Read the plans…**.
-2. When it's read, click **🔀 Compare with the plans it replaces…** (or **Reports → 🔀 Plan revisions → Compare…**). Check the summary and click **Yes**.
-3. The revision report opens. Pick a **Sheet**: green boxes are new, orange changed or moved, red outlines what was removed. Tick or untick each kind to show or hide it.
-4. Click **Show Rev A (old)** to see the old sheet with what was removed or changed on it.
-5. Open **Changes on this sheet** for the list, with any change in size (for example area 144 → 168 sq ft).
-6. Under **Measurements to re-measure**, click each one to open it in Blueprint Review and measure it again. Measurements on unchanged work were carried over to the new set and keep their approval.
+1. On the project page, under **Plans**, choose the new file and pick **New revision of #… (removes the old one)** in **This is**.
+2. Click upload. The box lists what will be removed (the old sheets, their measurements and how many were approved); click **Replace the old plans and read the new ones**.
+3. Open **Measure** and click **🤖 AI Auto Run** for each trade (and **⚡ Run wiring** for Electrical), then check and approve the new counts.
+4. The **🧭 Director** says when the plans changed. Click **🔄 Update from the plans…** (in the Director box or on the estimate) and **Yes**: every trade is priced again with the new approved measurements. An approved or sent estimate goes back to draft first — approve it again and make a new quote.
 
 ## Good to know
-- Schedule changes (door and window rows added, removed or changed) are listed at the bottom, with the revision clouds or deltas found on the new set.
-- The old set stays on file for the audit trail, and every report stays under **Reports → 🔀 Plan revisions**.
-- Owners and estimators compare; reviewers and office can open the reports.
+- Only owners and estimators can replace plans.
+- The estimate, its hand-added lines and its markups stay; only the plans and their measurements are replaced.
+- Plan revision reports made before (Rev A against Rev B drawn over the sheets) stay under **Reports → 🔀 Plan revisions**.

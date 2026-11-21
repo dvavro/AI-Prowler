@@ -165,6 +165,19 @@ def test_parse_insulation_reading_rejects_bad_wall_runs(runs, match):
         li.parse_insulation_reading(_reading(4, wall_runs=runs), 4)
 
 
+@pytest.mark.parametrize("over,match", [
+    ({"rooms": [{"name": "Living", "width_ft": "wide", "length_ft": "20'-0\""}]}, "width"),
+    ({"rooms": [{"name": "Living", "width_ft": "30'-0\"", "length_ft": "long"}]}, "length"),
+    ({"wall_runs": [{"name": "North wall", "length_ft": "long", "height_ft": "8'-0\""}]}, "length"),
+    ({"wall_runs": [{"name": "North wall", "length_ft": "40'-0\"", "height_ft": "tall"}]}, "height"),
+])
+def test_parse_insulation_reading_rejects_an_unparseable_dimension(over, match):
+    """A bad dimension fails the parse, so the AI Log never shows a successful parse
+    for a run that then fails with no measurements."""
+    with pytest.raises(lt.LlmTakeoffError, match=match):
+        li.parse_insulation_reading(_reading(4, **over), 4)
+
+
 def test_parse_insulation_reading_empty_wall_runs_says_the_plan_doesnt_dimension_the_walls():
     ev = {"attic_sqft": "Living 30 x 20", "wall_sqft": ""}
     got = li.parse_insulation_reading(_reading(4, wall_runs=[], evidence=ev), 4)
@@ -215,8 +228,11 @@ def test_quantities_from_reading_works_out_both_areas():
 ])
 def test_quantities_from_reading_rejects_an_unparseable_dimension(over, match):
     """A dimension that isn't a length fails loudly, naming the side - never guessed at."""
+    # the parse rejects a bad dimension now, so the bad reading is built by hand
+    reading = _parsed(4)
+    reading.update(over)
     with pytest.raises(lt.LlmTakeoffError, match=match):
-        li.quantities_from_reading(_parsed(4, **over))
+        li.quantities_from_reading(reading)
 
 
 # ------------------------------------------------------------------ the measurements
@@ -344,7 +360,7 @@ def test_run_llm_insulation_off_makes_no_call(db, fake, plans):
     rid = _run(db, plans)
     with pytest.raises(lt.LlmTakeoffError) as exc:
         li.run_llm_insulation(db, CTX, autorun_api._load_run(db, CTX, rid))
-    assert "LLM takeoff is off" in str(exc.value) and "read the Insulation plan" in str(exc.value)
+    assert "AI measuring is off" in str(exc.value) and "read the Insulation plan" in str(exc.value)
     assert fake.calls == []
 
 

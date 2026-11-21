@@ -74,6 +74,23 @@ def list_for_plan_set(conn, company_id: str, plan_set_id: int, module_id: str) -
     return out
 
 
+def list_all_for_plan_set(conn, company_id: str, plan_set_id: int) -> dict[int, dict[str, bool]]:
+    """Every sheet of a plan set with its active state per trade that has a row.
+
+    Only trades with a row appear — no row means active, so a missing trade is active
+    for the sheet. Used by the plan-set page's "All trades" view (on / off / mixed).
+    """
+    out: dict[int, dict[str, bool]] = {}
+    for s in conn.execute(
+            "SELECT s.id, a.module_id, a.active FROM sheets s"
+            " LEFT JOIN sheet_trade_active a ON a.company_id = s.company_id AND a.sheet_id = s.id"
+            " WHERE s.plan_set_id = ? AND s.company_id = ? ORDER BY s.page_no, a.module_id",
+            (int(plan_set_id), company_id)):
+        if s["module_id"] is not None:
+            out.setdefault(s["id"], {})[s["module_id"]] = bool(s["active"])
+    return out
+
+
 def set_active(conn, ctx: RequestContext, sheet_id: int, module_id, active: bool) -> dict:
     """Switch a sheet on or off for one trade (owner, estimator). Upserts the row."""
     _role(ctx, EDIT_ROLES, "switch sheets on or off for a trade")

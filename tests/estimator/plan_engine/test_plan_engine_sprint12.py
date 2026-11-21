@@ -223,13 +223,14 @@ def test_electrical_and_plumbing_answers_count_approved_symbols(db, tmp_path):  
     review.review(db, CTX, rec[:2], "approve", confirm=True)
     review.review(db, CTX, [d["id"] for d in dets if d["item_type"] != "duplex_receptacle"], "approve", confirm=True)
     el = trades.answers(db, CTX, "electrical", estimate_id=est["id"])
-    assert el["answers"] == {"outlets": 2} and el["waiting"] == {"outlets": 1}
-    assert any("smoke detector" in n for n in el["notes"])                   # found, but not an electrical question
-    assert trades.answers(db, CTX, "electrical", estimate_id=est["id"], include_proposed=True)["answers"] == {"outlets": 3}
+    # 2026-11-20 (David): smoke detectors are an electrical count now (they were only noted before).
+    assert el["answers"] == {"outlets": 2, "smoke_detectors": 1} and el["waiting"] == {"outlets": 1}
+    assert trades.answers(db, CTX, "electrical", estimate_id=est["id"], include_proposed=True)["answers"] == \
+        {"outlets": 3, "smoke_detectors": 1}
     pl = trades.answers(db, CTX, "plumbing", estimate_id=est["id"])
     assert pl["answers"] == {"toilets": 1, "water_heater": "tankless"} and pl["source"] == "symbols counted on the plans"
     review.review(db, CTX, rec[:1], "reject", confirm=True)                  # taken out: not counted
-    assert trades.answers(db, CTX, "electrical", estimate_id=est["id"])["answers"] == {"outlets": 1}
+    assert trades.answers(db, CTX, "electrical", estimate_id=est["id"])["answers"] == {"outlets": 1, "smoke_detectors": 1}
 
 
 def test_the_mcp_tools(db, house):                                               # C2S12-T01

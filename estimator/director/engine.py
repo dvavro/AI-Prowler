@@ -33,7 +33,7 @@ from estimator.runner import runner
 FULL_APPROVE_ROLES = ("owner", "reviewer")
 REVIEW_ROLES = ("owner", "reviewer")
 LANE_NAMES = {"quick_quote": "quick quote", "standard_estimate": "standard estimate",
-              "full_takeoff": "full plan takeoff", "project": "project"}
+              "full_takeoff": "Measure from plans", "project": "project"}
 CUSTOMER_FACING_ROLES = ("office", "field")
 
 
@@ -119,7 +119,8 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
               revise: bool = False, change_summary: str | None = None, reprice: bool = False,
               reviewed: bool = False, scenarios: bool = False, choose_scenario: str | None = None,
               scenario_module: str | None = None, checklist_done: bool = False, trades=None,
-              confirm: bool = False, ready: bool = False, without_scope: bool = False, registry=None) -> dict:
+              confirm: bool = False, ready: bool = False, without_scope: bool = False, skip_audit: bool = False,
+              registry=None) -> dict:
     """Give the Director what it asked for (answers, a module choice, the trades in a plan takeoff, an approval, a
     send, the customer's answer) and get the next step. send=true and convert=true reach outside the Estimator
     (an email to the customer; a customer, quote and job in AI-Prowler), so they ask first: without confirm=true
@@ -152,7 +153,7 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
         if isinstance(trades, str):
             trades = [t.strip() for t in trades.split(",") if t.strip()]
         if job["lane"] != "full_takeoff":
-            raise InvalidInput("trades=[...] is for plan takeoff jobs; add a trade to this job with "
+            raise InvalidInput("trades=[...] is for measure-from-plans jobs; add a trade to this job with "
                                "est_director_add_trade", lane=job["lane"])
         if not isinstance(trades, (list, tuple)) or not trades:
             raise InvalidInput("trades is a list, e.g. [\"framing\", \"drywall\"]", field="trades")
@@ -247,6 +248,7 @@ def next_step(conn, ctx: RequestContext, job_id: int, *, answers: dict | None = 
 
     inputs = {"approve": approve, "confirm_sample_prices": confirm_sample_prices, "send": send, "reviewed": reviewed,
               "checklist_done": checklist_done, "ready": ready, "without_scope": without_scope,
+              "skip_audit": skip_audit,
               "send_to": send_to, "outcome": outcome, "convert": convert, "service_date": service_date}
     out = _run(conn, ctx, job["id"], reg, inputs=inputs)
     if scenarios:
@@ -821,9 +823,9 @@ def _collect_trades(conn, ctx, job, reg, stage, notes, **_):
             have = sorted(enabled)
             _wait(conn, ctx, job, "waiting_on_user", "user", {
                 "stage": stage.id, "agent": stage.agent,
-                "say": "Which trades are in this bid? I can run takeoffs for: " + ", ".join(have) + ".",
+                "say": "Which trades are in this bid? I can measure these trades from the plans: " + ", ".join(have) + ".",
                 "ask": have, "tools": ["est_director_next(job_id, trades=[...])"],
-                "why": "the Runner makes one takeoff task per trade"}, open_questions=["trades"])
+                "why": "the Runner makes one measuring task per trade"}, open_questions=["trades"])
             return False
         job.update(module_id=found[0], trades={t: job["trades"].get(t, {}) for t in found[1:]})
         _tx(conn, lambda: jobstore.save_job(conn, ctx, job))
@@ -892,7 +894,7 @@ def _run_takeoff(conn, ctx, job, reg, stage, notes, **_):
             parts.append("Couldn't be done (retry if you can): " + ", ".join(stuck) + ".")
         _wait(conn, ctx, job, "waiting_on_user", "takeoff" if measure else "reviewer", {
             "stage": stage.id, "agent": stage.agent, "run_id": st["run"]["id"],
-            "say": f"Takeoff run {st['run']['id']} ({st['run']['progress']}% done). " + " ".join(parts),
+            "say": f"Measure run {st['run']['id']} ({st['run']['progress']}% done). " + " ".join(parts),
             "tasks": [{k: t[k] for k in ("task_id", "module_id", "state", "next")} for t in tasks],
             "tools": ["runner_submit_takeoff(task_id, answers={...})", "runner_review_task(task_id, approve=true)",
                       "runner_status(run_id)", "est_director_next(job_id)"],
@@ -1292,6 +1294,8 @@ def _project_state(conn, ctx, job, est) -> dict:
 def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
     """Say what to do next on the project, and why. Moves on only when the person says the estimate is ready."""
     ready = inputs.pop("ready", False)
+    skip_audit = inputs.pop("skip_audit", False)
+    audit_blocked = False
     est = service.get_estimate(conn, ctx, job["estimate_id"])
     if est["status"] not in service.EDITABLE_STATUSES:
         return True                                   # approved (or further) on the Estimates screen already
@@ -1326,7 +1330,8 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
         unread = [r["id"] for r in conn.execute(
             "SELECT id FROM plan_sets WHERE company_id = ? AND estimate_id = ? AND status = 'uploaded' ORDER BY id",
             (ctx.company_id, eid))]
-        sets = ", ".join(f"#{i}" for i in unread) or "the uploaded plans"
+        from estimator.drawing_model.store import plan_set_number      # the project's own numbering (#1), not the id
+        sets = ", ".join(f"#{plan_set_number(conn, ctx.company_id, eid, i)}" for i in unread) or "the uploaded plans"
         item("read", False, f"Read the plans: open plan set {sets} and click 📖 Read the plans",
              "uploaded plans aren't read until you start the reading, and the sheets have to be read before they can be measured",
              f"#/plan-sets/{unread[0]}" if unread else f"#/projects/{eid}")
@@ -1343,18 +1348,45 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
         item("symbols", False, f"Check {sym['to_check']} symbol(s) the plans reader wasn't sure of",
              "only symbols a person approved are counted", "#/reviews")
     if have_plans or tk:
+        # 2026-11-21 (David): measuring by hand is too much work - the Director sends people to AI Auto Run (and, for
+        # Electrical, ⚡ Run wiring for the cable), then to approve what they found.
         waiting = tk.get("proposed", 0)
+        wiring = "electrical" in (want or trades)
+        runs = "🤖 AI Auto Run" + (" and ⚡ Run wiring" if wiring else "")
         item("measure", (tk.get("approved") and not waiting) or (trades and not tk),
-             (f"Approve {waiting} measurement(s) in Blueprint Review" if waiting else
-              "Measure the plans in Blueprint Review" if not tk.get("approved") else
+             (f"Approve the {waiting} measurement(s) {runs} found (Measure → Measurements: Approve all, or one by one)"
+              if waiting else
+              f"Measure the plans: on Measure, click {runs}" if not tk.get("approved") else
               f"Measurements approved ({tk['approved']})"),
-             "only approved measurements are priced", f"#/takeoffs/{eid}")
+             ("AI Auto Run reads the plans and measures and counts everything for you"
+              + (", and the wiring run routes the cable from the panel" if wiring else "")
+              + "; only approved measurements are priced"), f"#/takeoffs/{eid}")
+    # 2026-11-20 (David): the measurement audit is part of the estimating stage - a step the user can run any time
+    # (its link opens Audit & clean up on the Measure screen) and the last check before the estimate moves on.
+    audit = {"count": 0}
+    if have_plans or tk:
+        from estimator.takeoff import audit as _audit
+        audit = _audit.price_problems(conn, ctx, eid)
+        item("audit", not audit["count"],
+             (f"🧹 Audit & clean up: {audit['summary']}" if audit["count"] else
+              "🧹 Measurements audited: nothing priced twice or out of step with the drawing"),
+             "a count priced twice, or one the drawing disagrees with, prices the job wrong",
+             f"#/takeoffs/{eid}?audit=1")
+    # Priced trades that don't match their approved measurements (new counts approved, new plans measured): one click
+    # on the estimate brings them in line (🔄 Update from the plans, 2026-11-20/21).
+    behind = []
+    if tk.get("approved"):
+        from estimator.api.estimate_api import plan_changes
+        behind = [t["name"] for t in plan_changes(conn, ctx, est, reg)]
     if trades:
-        item("price", True, "Trades priced: " + ", ".join(name(t) for t in trades),
-             "nothing is priced yet, so there's no total to check", f"#/estimates/{eid}")
+        item("price", not behind,
+             ("Update the prices from the approved measurements: on the estimate, click 🔄 Update from the plans ("
+              + ", ".join(behind) + ")") if behind else "Trades priced: " + ", ".join(name(t) for t in trades),
+             ("the approved measurements changed since the trades were priced" if behind else
+              "nothing is priced yet, so there's no total to check"), f"#/estimates/{eid}")
     elif tk.get("approved"):
-        item("price", False, "Price the trades from the approved measurements (on the estimate: Price it with the "
-                             "approved measurements)", "nothing is priced yet, so there's no total to check",
+        item("price", False, "Price the trades from the approved measurements: on the estimate, click 🔄 Update from "
+                             "the plans", "nothing is priced yet, so there's no total to check",
              f"#/estimates/{eid}")
     elif not want:
         item("price", False, "Price the trades: type the measurements (⚡ Add a quick estimate)",
@@ -1362,8 +1394,10 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
     # One to-do per picked trade that isn't priced yet, each with its own link.
     still = [t for t in want if t not in trades]
     for t in still:
-        item("price_" + t, False, f"Price {name(t)}: type the measurements (⚡ quick estimate)"
-             + (" or measure it in Blueprint Review" if have_plans else ""),
+        item("price_" + t, False,
+             (f"Price {name(t)}: measure it with 🤖 AI Auto Run, approve, then 🔄 Update from the plans on the estimate"
+              " (or type the measurements in a ⚡ quick estimate)") if have_plans else
+             f"Price {name(t)}: type the measurements (⚡ quick estimate)",
              f"{name(t)} is in this quote but has no price yet", f"#/quick/{eid}?module={t}")
     cust = job.get("customer") or {}
     has_customer = bool(cust.get("name") or cust.get("email") or cust.get("customer_id"))
@@ -1378,14 +1412,22 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
         elif still:
             notes.append("Not ready yet: " + ", ".join(name(t) for t in still) + " still to price (or take "
                          + ("it" if len(still) == 1 else "them") + " off this project's trades).")
+        elif audit["count"] and not skip_audit:
+            # The last check before the estimate moves on (2026-11-20, David): stop on what makes the price wrong.
+            audit_blocked = True
+            notes.append(f"Not ready yet: the measurement audit found {audit['summary']}. Open 🧹 Audit & clean up and "
+                         "apply the fixes (one click), or choose Move on anyway.")
         else:
             left = [t["text"] for t in todo if not t["done"] and t["key"] in ("read", "reading", "scale", "symbols", "measure")]
             if left:
                 notes.append("Moving on with things still open on the plans: " + "; ".join(left) + ".")
+            if audit["count"]:
+                notes.append(f"Moving on without fixing what the audit found: {audit['summary']}.")
             _tx(conn, lambda: jobstore.log_step(conn, ctx, job["id"], stage.id, stage.agent, "done",
                                                 f"estimate ready at {format_cents(total)}",
                                                 {"total_cents": total, "trades": trades,
-                                                 "hand_lines": len(st["hand_lines"])}))
+                                                 "hand_lines": len(st["hand_lines"]),
+                                                 **({"audit_skipped": audit["summary"]} if audit["count"] else {})}))
             return True
 
     first = next((t for t in todo if not t["done"] and t["key"] != "customer"), None)
@@ -1407,6 +1449,10 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
         "stage": stage.id, "agent": stage.agent, "say": say, "why": why, "todo": todo, "estimate_id": eid,
         "total_cents": total, "ready_ok": total > 0 and not still, "needs_customer": not has_customer,
         "trades_wanted": want, "trades_priced": trades, "pick_trades": not (want or trades),
+        # the measurement audit: what makes the price wrong, and whether it just stopped the estimate moving on
+        "audit": {"problems": audit["count"], "summary": audit.get("summary", ""), "link": f"#/takeoffs/{eid}?audit=1",
+                  "can_run": bool(have_plans or tk)},
+        "audit_blocked": audit_blocked,
         "tools": ["est_director_next(job_id, ready=true)", "est_director_next(job_id, customer={name, email})",
                   "est_project_status(estimate_id)"]})
     return False

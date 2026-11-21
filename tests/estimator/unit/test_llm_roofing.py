@@ -143,6 +143,18 @@ def test_parse_roofing_reading_rejects_bad_dimensions(field, bad):
         lr.parse_roofing_reading(_reading(4, **{field: bad}), 4)
 
 
+@pytest.mark.parametrize("field,bad,match", [
+    ("roof_width_ft", "40.5", "roof width"),
+    ("roof_length_ft", "fifty feet", "roof length"),
+    ("ridge_ft", "24.5", "ridge length"),
+])
+def test_parse_roofing_reading_rejects_unparseable_dimensions(field, bad, match):
+    """A bad dimension fails the parse, so the AI Log never shows a successful parse
+    for a run that then fails with no measurements."""
+    with pytest.raises(lt.LlmTakeoffError, match=match):
+        lr.parse_roofing_reading(_reading(4, **{field: bad}), 4)
+
+
 def test_parse_roofing_reading_wrong_sheet_id_uses_the_shown_sheet():
     got = lr.parse_roofing_reading(_reading(9), 4)
     assert got["roofing_sheet_id"] == 4
@@ -199,8 +211,11 @@ def test_quantities_from_reading_missing_dimensions_fail_loudly(over, missing):
     ("ridge_ft", "24.5", "ridge length"),
 ])
 def test_quantities_from_reading_rejects_unparseable_dimensions(field, bad, match):
+    # the parse rejects a bad dimension now, so the bad reading is built by hand
+    reading = _parsed(4)
+    reading[field] = bad
     with pytest.raises(lt.LlmTakeoffError, match=match):
-        lr.quantities_from_reading(_parsed(4, **{field: bad}))
+        lr.quantities_from_reading(reading)
 
 
 # ------------------------------------------------------------------ the quantity measurements
@@ -346,7 +361,7 @@ def test_run_llm_roofing_off_makes_no_call(db, fake, plans):
     rid = _run(db, plans)
     with pytest.raises(lt.LlmTakeoffError) as exc:
         lr.run_llm_roofing(db, CTX, autorun_api._load_run(db, CTX, rid))
-    assert "LLM takeoff is off" in str(exc.value) and "read the Roofing plan" in str(exc.value)
+    assert "AI measuring is off" in str(exc.value) and "read the Roofing plan" in str(exc.value)
     assert fake.calls == []
 
 

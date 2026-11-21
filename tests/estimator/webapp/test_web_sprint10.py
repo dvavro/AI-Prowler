@@ -104,7 +104,7 @@ def test_jobs_board_shows_each_plans_jobs_progress(call, plan_set, db):         
     p = row["progress"]
     assert p["plans"]["plan_sets"] == 1 and p["plans"]["processed"] == 1 and p["plans"]["sheets"] == 1
     assert p["symbols"] == {"found": len(sym), "to_check": 1, "approved": 0}
-    assert p["step"] == {"number": 3, "of": 8, "label": "Run the trade takeoffs", "next": "Price approved quantities"}
+    assert p["step"] == {"number": 3, "of": 8, "label": "Measure each trade from the plans", "next": "Price approved quantities"}
     quick = b["by_lane"]["quick_quote"][0]
     assert "plans" not in quick["progress"] and quick["progress"]["step"]["label"]
 

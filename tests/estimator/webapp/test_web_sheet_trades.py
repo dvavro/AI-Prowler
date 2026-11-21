@@ -6,12 +6,15 @@ import pytest
 
 from estimator.api import autorun_api
 from estimator.context import personal_context
+from estimator.director import engine
+from estimator.modules.registry import ModuleRegistry
 from estimator.estimating import service
 from estimator.takeoff import sheet_trades
 
 API = "/estimator-api"
 WEB = Path(__file__).resolve().parents[3] / "estimator" / "ui" / "web"
 NOW = "2026-11-12T10:00:00+00:00"
+REG = ModuleRegistry().load()
 
 
 @pytest.fixture
@@ -167,7 +170,7 @@ def test_rerun_refuses_a_deactivated_sheet(call, db, plans):                    
 def test_plan_set_detail_has_the_trade_selector_and_toggle():                               # ST-A12
     app = (WEB / "app.js").read_text(encoding="utf-8")
     for needle in ('id: "plan-trade"', "sheet-trade-toggle", "/trade-active", "active_for_trade",
-                   "Takeoff for", "planTradeId"):
+                   "Measure for", "planTradeId", "All trades", "active_by_trade", "indeterminate"):
         assert needle in app, needle
 
 
@@ -176,3 +179,68 @@ def test_blueprint_review_marks_a_deactivated_sheet():                          
     for needle in ("inactiveTrades", "inactive_trades", "bp-auto-off", "bp-guide-off-",
                    "switched off for \" + tradeName(trade)"):   # the note names any trade (2026-11-18)
         assert needle in review, needle
+
+
+# ---------------------------------------------------------------- the trade default + All trades
+
+
+def test_plan_set_response_carries_the_estimate_trades(call, db, plans):          # ST-B01
+    """The plan-set page defaults its trade to the estimate's first trade, so the response
+    carries the estimate's trades: priced sections first (in section order), then trades
+    picked but not priced yet."""
+    ctx = personal_context()
+    est = plans["est"]
+    rev = service.get_estimate(db, ctx, est)["rev"]
+    service.add_trade(db, ctx, est, "electrical", rev, REG)
+    rev = service.get_estimate(db, ctx, est)["rev"]
+    service.add_trade(db, ctx, est, "concrete", rev, REG)
+    engine.set_project_trades(db, ctx, est, ["framing", "electrical"], registry=REG)
+    got = call("GET", f"{API}/plan-sets/{plans['ps']}").json()
+    assert got["estimate"]["modules"] == ["electrical", "concrete", "framing"]
+
+
+def test_plan_set_all_trades_returns_every_trade_state(call, plans):              # ST-B02
+    got = call("GET", f"{API}/plan-sets/{plans['ps']}?module_id=all").json()
+    assert got["trade_module_id"] == "all"
+    by_id = {s["id"]: s for s in got["sheets"]}
+    assert by_id[plans["elev"]]["active_by_trade"] == {}   # no rows yet: active everywhere
+    assert by_id[plans["elev"]]["active_for_trade"] is True
+    call("POST", f"{API}/sheets/{plans['elev']}/trade-active",
+         {"module_id": "concrete", "active": False})
+    got = call("GET", f"{API}/plan-sets/{plans['ps']}?module_id=all").json()
+    by_id = {s["id"]: s for s in got["sheets"]}
+    assert by_id[plans["elev"]]["active_by_trade"] == {"concrete": False}
+    assert by_id[plans["elev"]]["active_for_trade"] is False
+    assert by_id[plans["found"]]["active_by_trade"] == {}
+
+
+def test_list_all_for_plan_set(db, plans):                                       # ST-B03
+    ctx = personal_context()
+    assert sheet_trades.list_all_for_plan_set(db, "default", plans["ps"]) == {}
+    sheet_trades.set_active(db, ctx, plans["elev"], "concrete", False)
+    sheet_trades.set_active(db, ctx, plans["elev"], "electrical", True)
+    sheet_trades.set_active(db, ctx, plans["found"], "concrete", False)
+    assert sheet_trades.list_all_for_plan_set(db, "default", plans["ps"]) == {
+        plans["elev"]: {"concrete": False, "electrical": True}, plans["found"]: {"concrete": False}}
+
+
+def test_all_trades_toggle_writes_one_row_per_trade(call, plans):                 # ST-B04
+    # The All-trades toggle writes through the existing per-trade endpoint, once per
+    # takeoff trade — the same list the page's dropdown offers.
+    trades = [m["id"] for m in call("GET", f"{API}/modules").json()["modules"]
+              if m["path"] in ("plan_takeoff", "both")]
+    assert len(trades) > 1
+    for module_id in trades:
+        r = call("POST", f"{API}/sheets/{plans['elev']}/trade-active",
+                 {"module_id": module_id, "active": False})
+        assert r.status == 200, (module_id, r.json())
+    got = call("GET", f"{API}/plan-sets/{plans['ps']}?module_id=all").json()
+    by_id = {s["id"]: s for s in got["sheets"]}
+    assert by_id[plans["elev"]]["active_by_trade"] == {t: False for t in trades}
+    assert by_id[plans["elev"]]["active_for_trade"] is False
+    for module_id in trades:
+        call("POST", f"{API}/sheets/{plans['elev']}/trade-active",
+             {"module_id": module_id, "active": True})
+    got = call("GET", f"{API}/plan-sets/{plans['ps']}?module_id=all").json()
+    by_id = {s["id"]: s for s in got["sheets"]}
+    assert by_id[plans["elev"]]["active_for_trade"] is True

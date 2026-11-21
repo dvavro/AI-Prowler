@@ -121,7 +121,7 @@ def revs(db, tmp_path):
     porch = m.propose(db, CTX, est, "roofing", o["PORCH"], kind="area", label="porch", confirm=True)["proposed"][0]["id"]
     typed = m.manual(db, CTX, est, "roofing", feeds="ridge_lf", qty="20", unit="lf", confirm=True)["measurement"]["id"]
     m.confirm_measurements(db, CTX, [keep, slab, porch], confirm=True)
-    b = store.upload(db, CTX, est, _pdf(tmp_path / "revB.pdf", 2, "B"), supersedes_plan_set_id=a,
+    b = store.upload(db, CTX, est, _pdf(tmp_path / "revB.pdf", 2, "B"), supersedes_plan_set_id=a, keep_old=True,
                      confirm=True)["plan_set_id"]
     store.save_results(db, CTX, b, PLAN("B"), "fake")
     db.commit()
@@ -174,7 +174,7 @@ def test_marks_alone_mark_a_sheet_changed(db, tmp_path):                        
     est = service.create_estimate(db, CTX, "Cloud only")["id"]
     a = store.upload(db, CTX, est, _pdf(tmp_path / "cA.pdf", 1, "A"), confirm=True)["plan_set_id"]
     store.save_results(db, CTX, a, _cloud_plan(), "fake")
-    b = store.upload(db, CTX, est, _pdf(tmp_path / "cB.pdf", 1, "B"), supersedes_plan_set_id=a,
+    b = store.upload(db, CTX, est, _pdf(tmp_path / "cB.pdf", 1, "B"), supersedes_plan_set_id=a, keep_old=True,
                      confirm=True)["plan_set_id"]
     store.save_results(db, CTX, b, _cloud_plan(), "fake")
     db.commit()

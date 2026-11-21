@@ -22,6 +22,9 @@ est_validate, est_scenarios / est_choose_scenario, est_compare_history, est_crea
    POST /estimates/<id>/inspection-review/<review_id>/apply {item_id, rev}   add a suggested item as a line
    GET  /estimates/<id>/bom                                   the bill of materials: material lines per construction trade
    POST /estimates/<id>/bom/ordered {section_id, item_key, ordered}   tick a BOM item ordered (or untick it)
+  POST /estimates/<id>/update-from-plans {rev, confirm?}           every trade re-priced with its approved measurements
+                                                                    in one go; an approved or sent estimate is reopened
+                                                                    first (asks first, saying both)
 The service layer checks every role and the estimate's state again; the page only hides what would be refused.
 """
 from __future__ import annotations
@@ -32,7 +35,7 @@ from estimator.api import nav
 
 _DETAIL = re.compile(r"^/estimates/(\d+)/(detail|validate|history)$")
 _ACTION = re.compile(r"^/estimates/(\d+)/(options|options/choose|lines|calculate|revision|reopen|change-order"
-                     r"|use-measurements)$")
+                     r"|use-measurements|update-from-plans)$")
 _LINE = re.compile(r"^/estimates/(\d+)/lines/(\d+)$")
 _BOM = re.compile(r"^/estimates/(\d+)/bom(?:/(ordered))?$")
 _INSPECTION = re.compile(r"^/estimates/(\d+)/inspection-review(?:/(\d+)/apply)?$")
@@ -73,6 +76,71 @@ def _text(b: dict, key: str, limit: int = 200) -> str | None:
 def _asked(question: str, **details):
     from estimator.api.router import _ok
     return _ok(needs_confirmation=True, question=question, **details)
+
+
+def plan_changes(conn, ctx, est: dict, reg) -> list[dict]:
+    """Each trade on the estimate whose answers differ from its approved measurements: [{module_id, name, answers,
+    changes}]. Trades with nothing approved, or already matching, are left out."""
+    from estimator.api import links
+    from estimator.errors import InvalidInput
+    out = []
+    for sec in est["sections"]:
+        mod = reg.modules.get(sec["module_id"])
+        if mod is None:
+            continue
+        try:
+            answers, changes = links.answers_from_measurements(conn, ctx, est, mod.id, reg)
+        except InvalidInput:
+            continue                                    # nothing measured for this trade
+        if changes:
+            out.append({"module_id": mod.id, "name": mod.name, "answers": answers, "changes": changes,
+                        "said": "; ".join(f"{mod.question(q).label}: {c['from'] if c['from'] is not None else 'none'}"
+                                          f" → {c['to']}" for q, c in changes.items())})
+    return out
+
+
+def _update_from_plans(conn, ctx, eid: int, b: dict, confirm: bool, see: bool):
+    """The one button for "the plans changed, update the estimate" (2026-11-20, David: "I can't figure out how to
+    update the estimate with rev2 items/changes"). Re-prices every trade from its approved measurements; an approved
+    or sent estimate is reopened first (the same reopen as ✏️ Reopen for changes, so the next approval shows only
+    what changed and a sent quote is replaced by one that says so)."""
+    from estimator.api.router import _json, redact
+    from estimator.errors import NotEditable
+    from estimator.estimating import quick, reopen, service
+    from estimator.modules import get_registry
+    if ctx.role not in service.EDIT_ROLES:
+        raise _refuse("only owners and estimators re-price trades", 403, "permission_denied")
+    rev = _rev(b)
+    reg = get_registry()
+    est = service.get_estimate(conn, ctx, eid)
+    if int(rev) != int(est["rev"]):
+        raise service.StaleRevision(f"estimate {est['id']} changed since you read it", estimate_id=est["id"],
+                                    current_rev=int(est["rev"]))
+    todo = plan_changes(conn, ctx, est, reg)
+    if not todo:
+        raise _refuse("the estimate already matches the approved measurements; approve the new counts in Measure "
+                      "(or ✓ Reviews) first if you just read new plans")
+    must_reopen = est["status"] not in service.EDITABLE_STATUSES
+    if must_reopen and not reopen.can_reopen(conn, est):
+        raise NotEditable(f"estimate {est['id']} is {est['status']}; make a new version (New version…) or a change "
+                          "order to change it", estimate_id=est["id"], status=est["status"])
+    if not confirm:
+        before = (est.get("totals") or {}).get("total_cents", 0)
+        q = ("Update the estimate from the plans? " + " ".join(f"{t['name']}: {t['said']}." for t in todo))
+        if must_reopen:
+            q += (f" It's {est['status']}, so it goes back to draft first; any quote not sent yet is voided, and a quote "
+                  "already sent is replaced by an updated one when you approve again.")
+        return _asked(q, trades=[{k: t[k] for k in ("module_id", "name", "changes")} for t in todo],
+                      reopens=must_reopen, total_cents=before)
+    if must_reopen:
+        reopen.reopen(conn, ctx, eid, rev, reason="Updated from the plans: "
+                      + "; ".join(f"{t['name']} ({t['said']})" for t in todo)[:450], confirm=True)
+    for t in todo:
+        cur = service.get_estimate(conn, ctx, eid)
+        quick.answer(conn, ctx, eid, t["module_id"], t["answers"], int(cur["rev"]), reg)
+    out = service.get_estimate(conn, ctx, eid)
+    return _json(200, {**redact(out, see), "updated": [{k: t[k] for k in ("module_id", "name", "changes")} for t in todo],
+                       "reopened": must_reopen})
 
 
 def route(m: str, sub: str, req, ctx, conn, see: bool):
@@ -271,5 +339,8 @@ def route(m: str, sub: str, req, ctx, conn, see: bool):
             return _asked(f"Price {mod.name} with the approved measurements ({said})?", changes=changes)
         out = quick.answer(conn, ctx, eid, module_id, answers, rev, reg)
         return _json(200, {**redact(out, see), "changes": changes})
+
+    if what == "update-from-plans":
+        return _update_from_plans(conn, ctx, eid, b, confirm, see)
 
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")

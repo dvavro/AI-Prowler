@@ -28,9 +28,19 @@ MAX_SYMBOLS = 20000
 MAX_DIMS = 5000
 MAX_SEGMENTS = 200000
 RENDER_PX = 4000
+_FONT_PATHS = (r"C:\Windows\Fonts\arial.ttf", r"C:\Windows\Fonts\calibri.ttf",
+               "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+_MAX_FONT_PX = 400                       # a huge title never makes a huge font
 TAG_ATTRIBS = ("TAG", "MARK", "NO", "NUMBER", "NUM", "ID", "TYPE")
 WALL_LAYER = re.compile(r"WALL", re.I)
 ROOM_LAYER = re.compile(r"ROOM|AREA|SPACE", re.I)
+# 2026-11-20 (David: on the panel drawing "the table has lines through the wording"): a schedule's row lines, a riser
+# diagram's boxes, a panel elevation's breakers, the title block and the legend frame aren't walls or rooms - read as
+# walls (rows 1.1 ft apart look like a wall's two faces) they were drawn as thick bands over every other row's text,
+# and their cells and boxes came out as "rooms" (DESCRIPTION 18 sq ft, LEGEND 115 sq ft).
+NOT_PLAN_LAYER = re.compile(r"SCHED|TABLE|RISER|BREAKER|PANEL|TITLE|BORDER|LEGEND|DIAGRAM|ONE.?LINE|TBLK|FRAME|TEXT|ANNO"
+                            # ... nor a wiring schematic's conductors (hot, neutral and ground drawn side by side)
+                            r"|HOT|NEUTRAL|GROUND|CONDUCTOR|WIRE|CIRC|DEVICE|FLAG", re.I)
 
 
 def _hidden_layers(doc) -> set[str]:
@@ -49,6 +59,43 @@ def _text_of(e) -> str:
     if t == "MTEXT":
         return e.plain_text().strip()
     return (e.dxf.text or "").strip()
+
+
+def _render_text(e, text):
+    """What the sheet image draws for one TEXT/MTEXT entity: (text, x, y, height, anchor, rotation).
+
+    (x, y) is the anchor point in CAD coords (y up): the insertion point for left-aligned text, the
+    alignment point for centred/right-aligned text. The anchor is a PIL anchor ("ls" = left-baseline,
+    "ms" = middle-baseline ...); MTEXT uses its attachment point. Rotation is carried for the record -
+    _render draws rotated text unrotated at its anchor (PIL has no rotated draw.text).
+    Returns None when the entity has no usable height.
+    """
+    t = e.dxftype()
+    try:
+        if t == "MTEXT":
+            height = float(e.dxf.char_height or 0)
+            att = int(getattr(e.dxf, "attachment_point", 1) or 1)
+            anchor = {1: "lt", 2: "mt", 3: "rt", 4: "lm", 5: "mm", 6: "rm",
+                      7: "ls", 8: "ms", 9: "rs"}.get(att, "lt")
+            p = e.dxf.insert
+        else:
+            height = float(e.dxf.height or 0)
+            halign = int(getattr(e.dxf, "halign", 0) or 0)
+            valign = int(getattr(e.dxf, "valign", 0) or 0)
+            h = {0: "l", 1: "m", 2: "r", 3: "l", 4: "m", 5: "l"}.get(halign, "l")
+            v = {0: "s", 1: "b", 2: "m", 3: "t"}.get(valign, "s")
+            anchor = h + v
+            p = e.dxf.insert
+            if halign in (1, 2):
+                ap = e.dxf.align_point
+                if ap is not None and (ap.x, ap.y) != (0.0, 0.0):
+                    p = ap               # no alignment point stored: the insertion point is the anchor
+        rotation = float(getattr(e.dxf, "rotation", 0) or 0)
+    except Exception:  # noqa: BLE001 - an odd text entity renders nothing, it never breaks the read
+        return None
+    if not height or height <= 0:
+        return None
+    return (text, float(p.x), float(p.y), height, anchor, rotation)
 
 
 def read(path: Path, work: Path | None, max_sheets: int) -> dict:
@@ -72,6 +119,7 @@ def read(path: Path, work: Path | None, max_sheets: int) -> dict:
     msp = doc.modelspace()
 
     paths, texts, inserts, dims, render_extra, hatches = [], [], [], [], [], []
+    render_texts = []                     # (text, x, y, height, anchor, rotation): what _render draws
     for e in msp:
         layer = (e.dxf.layer or "0") if e.dxf.hasattr("layer") else "0"
         if layer.upper() in hidden:
@@ -94,6 +142,9 @@ def read(path: Path, work: Path | None, max_sheets: int) -> dict:
             if text:
                 ins = e.dxf.insert
                 texts.append((text, layer, (ins.x, ins.y)))
+                rt = _render_text(e, text)
+                if rt is not None:
+                    render_texts.append(rt)
         elif t == "INSERT":
             ins = e.dxf.insert
             tags = {}
@@ -153,8 +204,9 @@ def read(path: Path, work: Path | None, max_sheets: int) -> dict:
     room_polys = []
     for t, layer, pts, closed in paths:
         tp = [tr(p) for p in pts]
+        plan_line = has_wall_layers or not NOT_PLAN_LAYER.search(layer or "")
         for a, b in zip(tp, tp[1:] + ([tp[0]] if closed else [])):
-            if len(segments) < MAX_SEGMENTS:
+            if len(segments) < MAX_SEGMENTS and plan_line:
                 segments.append((a, b))
                 if not has_wall_layers or WALL_LAYER.search(layer):
                     wall_segments.append((a, b))
@@ -185,13 +237,16 @@ def read(path: Path, work: Path | None, max_sheets: int) -> dict:
     walls = vectors.find_walls(vectors.clean_segments(wall_segments), k)
     objects += vectors.wall_objects(walls, "model", "cad")
 
-    labels = [(text, tr(p)) for text, _, p in texts if vectors.is_room_name(text)]
+    # 2026-11-20: text on a circuit layer (E-CIRCUIT "C-1", "AC 30A") labels the designer's circuits, never a room.
+    from estimator.plan_engine.layers import CIRCUIT_LAYER
+    labels = [(text, tr(p)) for text, layer, p in texts
+              if vectors.is_room_name(text) and not CIRCUIT_LAYER.search(layer or "")]
     rooms = _rooms_from_layers(room_polys, labels)
     named = {r["label"] for r in rooms}
     min_area = vectors.ROOM_MIN_SQFT * 144 / (k * k)
     found, note = vectors.find_rooms(vectors.clean_segments(segments), [lb for lb in labels if lb[0] not in named],
                                      min_area, w * h * 1.01, simplify=0.5 / k)   # a room can be the whole drawing
-    rooms += found
+    rooms += vectors.drop_enclosing(found, rooms)
     if note:
         notes.append(note)
     objects += vectors.room_objects(rooms, "model", "cad")
@@ -206,8 +261,10 @@ def read(path: Path, work: Path | None, max_sheets: int) -> dict:
 
     image_path = None
     if work is not None:
+        texts_for_render = [(text, *tr((x, y)), height, anchor, rotation)
+                            for text, x, y, height, anchor, rotation in render_texts[:MAX_TEXT]]
         image_path = _render(work, [[tr(p) for p in pts] for _, _, pts, _ in paths],
-                             [[tr(p) for p in pts] for pts in render_extra], w, h)
+                             [[tr(p) for p in pts] for pts in render_extra], w, h, texts_for_render)
     layers = [layer for _, layer, _, _ in paths]
     title = Path(path).stem.replace("_", " ")[:120]
     sheet = {"page_no": 1, "sheet_no": None, "title": title, "discipline": _discipline(layers, title),
@@ -264,8 +321,59 @@ def _discipline(layers: list[str], title: str) -> str:
     return max(counts, key=counts.get) if counts else "other"
 
 
-def _render(work: Path, shapes: list, extra: list, w: float, h: float) -> str:
-    """A plain black-on-white picture of the line work, for review and the web app."""
+def _font_for(size: int, cache: dict):
+    """A TrueType font at this pixel size, cached per size: Arial on Windows, then DejaVu, then PIL's default.
+
+    Never raises: if every font is missing, the caller passes None and draw.text falls back to its own default.
+    """
+    if size in cache:
+        return cache[size]
+    from PIL import ImageFont
+    font = None
+    for path in _FONT_PATHS:
+        try:
+            font = ImageFont.truetype(path, size)
+            break
+        except Exception:  # noqa: BLE001 - missing font: try the next one
+            continue
+    if font is None:
+        try:
+            font = ImageFont.truetype("arial.ttf", size)      # the system font search (Windows)
+        except Exception:  # noqa: BLE001 - no system Arial either
+            font = None
+    if font is None:
+        try:
+            font = ImageFont.load_default(size=size)
+        except Exception:  # noqa: BLE001 - old Pillow (no size arg) or a broken bundled font
+            try:
+                font = ImageFont.load_default()
+            except Exception:  # noqa: BLE001 - no font at all: draw.text falls back to its own default
+                font = None
+    cache[size] = font
+    return font
+
+
+def _draw_texts(draw, texts, scale: float) -> None:
+    """Draw each string at its anchor point, sized from its height in drawing units.
+
+    Rotated text is drawn unrotated at its anchor (PIL has no rotated draw.text) - the string stays
+    readable. One bad string never breaks the sheet: it is skipped and the rest still draw.
+    """
+    cache: dict = {}
+    for item in texts:
+        try:
+            text, x, y, height, anchor, _rotation = item
+            if not text or not text.strip() or not height or height <= 0:
+                continue
+            size = max(1, min(_MAX_FONT_PX, int(round(height * scale))))
+            draw.text((x * scale, y * scale), text, font=_font_for(size, cache),
+                      anchor=anchor, fill=(0, 0, 0))
+        except Exception:  # noqa: BLE001 - a bad string/position skips itself, not the sheet
+            continue
+
+
+def _render(work: Path, shapes: list, extra: list, w: float, h: float, texts: list | None = None) -> str:
+    """A plain black-on-white picture of the line work and its text, for review and the web app."""
     from PIL import Image, ImageDraw
 
     # The picture covers exactly [0, w] x [0, h] (no margin), so outlines drawn over it in drawing units line up.
@@ -276,6 +384,7 @@ def _render(work: Path, shapes: list, extra: list, w: float, h: float) -> str:
     for pts in shapes + extra:
         if len(pts) >= 2:
             draw.line([(x * scale, y * scale) for x, y in pts], fill=(0, 0, 0), width=1)
+    _draw_texts(draw, texts or [], scale)
     out = Path(work) / "sheet_001.png"
     img.save(out, "PNG", optimize=True)
     return str(out)

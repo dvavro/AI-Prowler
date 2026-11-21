@@ -365,7 +365,7 @@ def test_run_llm_takeoff_fails_when_a_dimension_cannot_be_read(db, fake, plans):
 
 def test_run_llm_takeoff_off_makes_no_call(db, fake, plans):
     rid = _run(db, plans)
-    with pytest.raises(lt.LlmTakeoffError, match="LLM takeoff is off"):
+    with pytest.raises(lt.LlmTakeoffError, match="AI measuring is off"):
         lt.run_llm_takeoff(db, CTX, autorun_api._load_run(db, CTX, rid))
     assert fake.calls == []
 
@@ -450,5 +450,5 @@ def test_runner_marks_the_run_failed_when_off(tmp_path, fake):
     from estimator.database import open_database
     conn = open_database(path)
     row = conn.execute("SELECT status, error FROM auto_runs WHERE id = ?", (seed["run"],)).fetchone()
-    assert row["status"] == "failed" and "LLM takeoff is off" in row["error"]
+    assert row["status"] == "failed" and "AI measuring is off" in row["error"]
     conn.close()

@@ -69,6 +69,32 @@ td.money { text-align: right; font-variant-numeric: tabular-nums; }
 .director-panel { border-left: 4px solid var(--accent, #2563eb); }
 .director-panel .checklist { list-style: none; padding-left: 0; }
 .director-panel .checklist li.done { color: var(--muted, #6b7280); }
+/* The Director on Measure and the plan-set page (2026-11-21): one line saying the next step; open it for the rest */
+.director-guide { border-left: 4px solid var(--accent, #2563eb); padding-top: 8px; padding-bottom: 8px; }
+.director-guide > summary { cursor: pointer; }
+.director-guide > .director-panel { border-left: 0; margin-top: 6px; }
+/* The wiring options box (2026-11-21): one option per row, its tip under it. */
+.bp-wire-options { z-index: 60; }
+.bp-wire-opt { display: grid; grid-template-columns: 1fr minmax(120px, 46%); gap: 2px 10px; align-items: center;
+               padding: .35em 0; border-bottom: 1px solid #f1f3f5; }
+.bp-wire-opt > .muted { grid-column: 1 / -1; }
+.bp-wire-choice-help { grid-column: 1 / -1; padding: 4px 8px; border-left: 3px solid var(--accent, #2563eb);
+                       background: rgba(37, 99, 235, 0.06); }
+.bp-wire-opt > label:only-child, .bp-wire-opt > label:has(input[type=checkbox]) { grid-column: 1 / -1; }
+/* Hover cards on 🤖 AI Auto Run and ⚡ Run wiring: what the trade's run needs (2026-11-21) */
+.hovercard-wrap { position: relative; display: inline-block; }
+.hovercard { display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 50; width: 380px;
+             max-width: 80vw; padding: 10px 12px; background: #fff; color: #1f2937; border: 1px solid #d1d5db;
+             border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15); font-size: 13px; line-height: 1.4;
+             text-align: left; white-space: normal; font-weight: normal; }
+.hovercard-wrap:hover .hovercard, .hovercard-wrap:focus-within .hovercard { display: block; }
+.hovercard p { margin: 6px 0; }
+.hovercard ul { margin: 2px 0 6px 18px; padding: 0; }
+.hovercard-h { margin-top: 6px; font-weight: 600; font-size: 12px; text-transform: uppercase; color: #6b7280; }
+.hovercard-warn { color: #b45309; }
+/* AI Auto Run: what the AI is doing right now, while its answer streams in (2026-11-21) */
+.bp-auto-live { margin-top: 6px; padding: 6px 10px; border-left: 3px solid var(--accent, #2563eb);
+                background: rgba(37, 99, 235, 0.06); font-style: italic; overflow-wrap: anywhere; }
 .coming-page ul { columns: 2; }
 code { background: #eef1f4; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 
@@ -113,6 +139,9 @@ body.embedded { --top-h: 44px; }
 
 /* Sprint 4: Jobs board, job page, Bids, Help */
 .help-link { min-width: 34px; text-align: center; font-weight: 600; border-radius: 6px; white-space: nowrap; }
+/* 2026-11-21: "🎓 Show me this screen" sits just left of ❓ Help */
+.help-links { display: inline-flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
+.show-me-link { white-space: nowrap; font-size: 13px; }
 .page-head .row { margin: 0; }
 #job-next .row, #bid-actions .row { margin-top: 10px; align-items: flex-end; }
 #job-choices button { text-transform: capitalize; }
@@ -174,6 +203,8 @@ input.scale-note { width: 13em; }
 .bp-bar { align-items: center; gap: 8px; margin-bottom: 4px; }
 .bp-bar select { width: auto; max-width: 340px; }
 .bp-tools, .bp-view { display: flex; gap: 4px; flex-wrap: wrap; margin: 0; }
+/* 2026-11-18: the toolbar sits on its own line immediately above the drawing (not in the top bar). */
+#bp-tools { margin: 8px 0; }
 .bp-tool { border: 1px solid var(--line); background: var(--card); border-radius: 6px; padding: 6px 10px; }
 .bp-tool.active { background: #e8f0fe; border-color: var(--brand); color: var(--brand); font-weight: 600; }
 .bp-split { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; align-items: start; }
@@ -225,10 +256,15 @@ input.scale-note { width: 13em; }
 #estimate-totals tr.total th, #estimate-totals tr.total td { font-weight: 700; font-size: 1.1em; border-top: 2px solid #ccd; }
 #since-approval ul { margin: .4em 0 .4em 1.2em; }
 /* 2026-11-16: a formula row shows what it measured on the drawing */
-#bp-auto-formulas tr.bp-step-link { cursor: pointer; }
-#bp-auto-formulas tr.bp-step-link:hover td, #bp-auto-formulas tr.bp-step-link:focus td { background: #fff5f5; }
-#bp-auto-formulas tr.bp-step-link.on td { background: #ffe3e3; }
-#bp-auto-formulas tr.bp-step-link:focus { outline: 2px solid #e03131; outline-offset: -2px; }
+/* 2026-11-18: count rows click to highlight too (electrical + quantity tables), same as formula rows. */
+#bp-auto-formulas tr.bp-step-link, #bp-auto-count-table tr.bp-step-link, #bp-auto-quantities-table tr.bp-step-link { cursor: pointer; }
+#bp-auto-formulas tr.bp-step-link:hover td, #bp-auto-formulas tr.bp-step-link:focus td,
+#bp-auto-count-table tr.bp-step-link:hover td, #bp-auto-count-table tr.bp-step-link:focus td,
+#bp-auto-quantities-table tr.bp-step-link:hover td, #bp-auto-quantities-table tr.bp-step-link:focus td { background: #fff5f5; }
+#bp-auto-formulas tr.bp-step-link.on td, #bp-auto-count-table tr.bp-step-link.on td,
+#bp-auto-quantities-table tr.bp-step-link.on td { background: #ffe3e3; }
+#bp-auto-formulas tr.bp-step-link:focus, #bp-auto-count-table tr.bp-step-link:focus,
+#bp-auto-quantities-table tr.bp-step-link:focus { outline: 2px solid #e03131; outline-offset: -2px; }
 .bp-hl { fill: none; stroke: #e03131; stroke-width: 4px; pointer-events: none; }
 polygon.bp-hl { fill: #e03131; fill-opacity: .22; }
 polygon.bp-hl.plus { stroke: #2b8a3e; fill: #2b8a3e; }
@@ -268,7 +304,67 @@ polygon.bp-hl.inslab { stroke: #868e96; fill: #868e96; fill-opacity: .25; stroke
 .bp-shape.room.in-m { fill: #d9480f; fill-opacity: .14; }
 [data-oid].sel, .bp-m.sel { stroke: #e03131 !important; stroke-width: 4px !important; }
 .bp-shape.room.sel { fill: #e03131; fill-opacity: .2; }
+/* A highlighted symbol is a bigger red dot, not a smaller one (2026-11-19, David: the 4px line width above made the
+   highlighted dots look smaller than the orange ones around them), and while a set of symbols is highlighted
+   (a count row, a Symbols-tab type) everything else on the plan fades back so the highlighted ones stand out. */
+.bp-dot.sel { stroke-width: 15px !important; }
+.bp-overlay.bp-focus [data-oid]:not(.sel):not(.legend-ref) { opacity: .2; }
+/* The legend's sample of the highlighted symbol, in blue, to compare with the red ones (2026-11-20, David). */
+[data-oid].legend-ref { stroke: #1971c2 !important; stroke-width: 4px !important; }
+.bp-dot.legend-ref { stroke-width: 15px !important; }
+.bp-legend-key { color: #1971c2; font-weight: 600; }
+/* Audit & clean up (2026-11-20): a panel at the right, over the Measurements column; the drawing stays usable. */
+.bp-audit { position: fixed; top: 80px; right: 16px; width: min(460px, 92vw); max-height: calc(100vh - 110px);
+  overflow-y: auto; z-index: 50; box-shadow: 0 8px 28px rgba(0, 0, 0, .22); padding: 14px 16px; }
+.bp-audit-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: .3em; }
+.bp-audit-group { font-weight: 600; margin: .8em 0 .3em; border-bottom: 1px solid #dee2e6; padding-bottom: .2em; }
+.bp-audit-item { padding: .45em .5em; border-radius: 6px; margin-bottom: .35em; background: #f8f9fa; }
+.bp-audit-item.double_counted { background: #fff5f5; }
+.bp-audit-item.rerun { background: #fff9db; }
+.bp-audit-title { display: block; cursor: pointer; }
+.bp-audit-foot { position: sticky; bottom: -14px; background: #fff; padding: .5em 0; gap: 8px; }
 .bp-m { fill: none; stroke: #d9480f; stroke-width: 2.5px; cursor: pointer; }
+/* Inline review (2026-11-19): the row being reviewed and its card, in the Measurements list. */
+.bp-rows li.reviewing { background: #fff4e6; outline: 2px solid #f08c00; outline-offset: -2px; }
+.bp-review { grid-column: 1 / -1; margin: .5em 0 .2em; cursor: default; }
+.bp-review .row { gap: 6px; flex-wrap: wrap; align-items: center; margin-top: .4em; }
+.bp-review-count .button { min-width: 2.4em; font-size: 1.2em; padding: 2px 8px; }
+.bp-review-qty { width: 5em; font-size: 1.15em; text-align: center; }
+/* Wiring run (2026-11-19): each circuit's route in its own colour; a picked circuit stands out, the rest fade. */
+.bp-wire { fill: none; stroke-width: 2.5px; stroke-linejoin: round; pointer-events: none; }
+.bp-wire-dev { fill: none; stroke-width: 8px; stroke-linecap: round; pointer-events: none; }
+#bp-wiring-routes.picked .bp-wire-c:not(.on) { opacity: .15; }
+/* 2026-11-20: what the wiring run added that the drawing has no symbol for (range/dryer receptacles, the breakers) */
+.bp-wire-added { pointer-events: all; cursor: help; }
+.bp-wire-added-mark { fill: #fff3bf; stroke: #e67700; stroke-width: 3px; vector-effect: non-scaling-stroke; }
+.bp-wire-added-letter { fill: #e67700; font-weight: 700; text-anchor: middle; font-family: system-ui, sans-serif; }
+.bp-wire-added-label { fill: #a61e4d; font-weight: 600; font-family: system-ui, sans-serif; paint-order: stroke;
+  stroke: #fff; stroke-width: 3px; vector-effect: non-scaling-stroke; }
+.bp-wire-added.off { opacity: .25; }
+.bp-wire-added.on .bp-wire-added-mark { fill: #ffe066; stroke: #d9480f; stroke-width: 5px; }
+/* 2026-11-20: a wide invisible line under each wire, so hovering shows the circuit and a click picks it. */
+.bp-wire-hit { fill: none; stroke: transparent; stroke-width: 12px; stroke-linejoin: round; pointer-events: stroke; cursor: pointer; }
+#bp-wiring-routes.picked .bp-wire-c:not(.on) .bp-wire-hit { pointer-events: none; }
+/* The colour key on the drawing: one row per circuit. */
+.bp-wiring-key { position: absolute; top: 8px; left: 8px; z-index: 4; max-width: 340px; max-height: calc(100% - 16px); overflow-y: auto;
+  background: rgba(255, 255, 255, .95); border: 1px solid var(--line, #ddd); border-radius: 8px; padding: 6px 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .15); font-size: .85em; }
+.bp-wiring-key-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
+.bp-wiring-key-row { display: flex; align-items: center; gap: 6px; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
+.bp-wiring-key-row:hover, .bp-wiring-key-row:focus { background: #eef4ff; outline: none; }
+.bp-wiring-key-row.picked { background: #dbe7ff; }
+.bp-wiring-key-row.off { opacity: .4; }
+.bp-wiring-key .bp-wire-swatch { display: inline-block; flex: none; width: 1.6em; height: .5em; border-radius: 2px; }
+.bp-wiring-key #bp-wiring-key-all { margin-top: 4px; }
+#bp-wiring-routes .bp-wire-c.on .bp-wire { stroke-width: 4px; }
+#bp-wiring .bp-wire-swatch { display: inline-block; width: .8em; height: .8em; border-radius: 2px; margin-right: .3em; vertical-align: -1px; }
+#bp-wiring table { width: 100%; border-collapse: collapse; font-size: .9em; }
+#bp-wiring th, #bp-wiring td { text-align: left; padding: 2px 4px; border-bottom: 1px solid var(--line, #e5e5e5); }
+#bp-wiring td.n, #bp-wiring th.n { text-align: right; }
+#bp-wiring tr.bp-wire-row { cursor: pointer; }
+#bp-wiring tr.bp-wire-row.on { background: #fff4e6; }
+#bp-wiring .bp-wire-settings { display: grid; grid-template-columns: auto auto; gap: 4px 8px; align-items: center; margin: .4em 0; }
+#bp-wiring .bp-wire-settings input { width: 5em; }
 polygon.bp-m { fill: #d9480f; fill-opacity: .12; }
 .bp-m.proposed { stroke-dasharray: 6 4; }
 .bp-m.approved { stroke: #2b8a3e; }
@@ -337,16 +433,27 @@ summary.options-tip-target { position: relative; }
               border: 1px solid #c9dafc; border-radius: 6px; }
 .bp-readout span { font-weight: 600; margin-right: auto; }
 .bp-side { background: var(--card); border: 1px solid var(--line); border-radius: 8px; max-height: 72vh; overflow-y: auto; }
-.bp-tabs { display: flex; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--card); z-index: 1; }
+/* 2026-11-18: seven tabs don't fit in the 360px panel ("Measure steps" truncated) — the tab bar
+   scrolls sideways instead of clipping the last tab's label. */
+.bp-tabs { display: flex; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--card); z-index: 1; overflow-x: auto; }
 .bp-tab { flex: 1; background: none; border: 0; padding: 8px 4px; color: var(--muted); border-bottom: 2px solid transparent; font-size: 13px; white-space: nowrap; }
 .bp-tab.active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
 .bp-pane { padding: 10px 12px; }
 .bp-pane h3 { margin-top: 4px; }
 .bp-pane h4 { margin: 10px 0 4px; font-size: 13px; color: var(--muted); }
-/* Takeoff steps tab (2026-11-18): the formulas table is narrow here, so the formula cells wrap (they are
+/* Measure steps tab (2026-11-18): the formulas table is narrow here, so the formula cells wrap (they are
    nowrap above the drawing) and the table padding tightens; the panel itself scrolls (.bp-side). */
 #bp-pane-steps #bp-auto-formulas td.formula { white-space: normal; word-break: break-word; }
 #bp-pane-steps table.list th, #bp-pane-steps table.list td { padding: 7px 6px; }
+/* 2026-11-18: the editable count in the Device counts table. */
+#bp-auto-count-table input.bp-count-in { width: 5em; }
+/* 2026-11-19: the "To measure" guide tab — the guide moved beside the drawing, so its pane
+   scrolls horizontally when a row is wider than the 360px panel (vertically it scrolls with
+   .bp-side); a count row with symbols behind it highlights like a Measure steps row. */
+#bp-pane-guide { overflow-x: auto; }
+#bp-pane-guide li.bp-step-link:hover, #bp-pane-guide li.bp-step-link:focus { background: #fff5f5; }
+#bp-pane-guide li.bp-step-link.on { background: #ffe3e3; }
+#bp-pane-guide li.bp-step-link:focus { outline: 2px solid #e03131; outline-offset: -2px; }
 .bp-trade { margin: 8px 0; }
 ul.bp-rows { list-style: none; margin: 0; padding: 0; }
 .bp-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 7px 6px; border-bottom: 1px solid var(--line);
@@ -368,7 +475,11 @@ button.danger { color: var(--bad); border-color: #f1b8bc; }
 }
 
 .toast { position: fixed; right: 16px; bottom: 16px; background: var(--ink); color: #fff; padding: 10px 14px;
-         border-radius: 6px; max-width: 360px; box-shadow: 0 4px 14px rgba(0, 0, 0, .2); }
+         border-radius: 6px; max-width: 360px; box-shadow: 0 4px 14px rgba(0, 0, 0, .2); z-index: 3500; }
+/* 2026-11-20 (David: "a black popup happens behind the audit window"): over everything, and beside the audit window
+   (not on top of its Apply button) while that is open. */
+body:has(#bp-audit) .toast { right: calc(min(460px, 92vw) + 32px); }
+@media (max-width: 700px) { body:has(#bp-audit) .toast { right: 16px; left: 16px; bottom: auto; top: 16px; max-width: none; } }
 
 /* phone and tablet */
 @media (max-width: 760px) {

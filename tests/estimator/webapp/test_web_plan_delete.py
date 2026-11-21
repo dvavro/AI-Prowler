@@ -141,3 +141,41 @@ def test_remove_refuses_roles_that_cannot_edit(call, read_plan_set, session_for)
         r = call("POST", f"{API}/sheets/{a101['id']}/remove", {"confirm": True}, headers=headers)
         assert r.status == 403 and r.json()["error"] == "permission_denied", role
     assert call("GET", f"{API}/plan-sets/{ps}").status == 200     # nothing was removed
+
+
+# ------------------------------------------------------------------ delete buttons on the list surfaces
+# (2026-11-18, David: the plan-set page had the only Remove button; the Plans list
+# and the project page's plans table had no way to delete an uploaded plan.)
+
+
+def test_list_surfaces_have_delete_buttons():                                 # C2PD-W01 (2026-11-18)
+    from estimator.api import router
+    js = (router.WEB_DIR / "app.js").read_text(encoding="utf-8")
+    # One shared per-row delete cell, used by both list surfaces.
+    assert "planSetDelCell" in js
+    assert '"data-remove-plan-set"' in js
+    # The Plans list rows navigate on click, so that button stops the click reaching the row.
+    assert "planSetDelCell(p, msg, r.can_edit, true)" in js
+    # The project table rows are not clickable, so no stopPropagation there.
+    assert "planSetDelCell(r, msg, canEdit, false)" in js
+    # Same ask-first call shape as the plan-set page's Remove button.
+    assert 'askConfirm(msg, del, "/plan-sets/" + ps.id + "/remove", {}' in js
+    assert '"plan-remove"' in js
+    # Gated on the edit roles, and hidden while a set is still being read.
+    assert 'if (!canEdit || ps.status === "processing") return el("td", {});' in js
+    # The confirm box has its own status div on each list surface (the project page's
+    # upload box already owns id "plan-message").
+    assert js.count('"plan-remove-message"') == 2
+
+
+def test_project_endpoint_returns_can_edit(call, read_plan_set, session_for):
+    est = read_plan_set["estimate_id"]
+    mine = call("GET", f"{API}/estimates/{est}/project").json()
+    assert mine["can_edit"] is True          # owner
+    assert mine["can_upload"] is True
+    office = call("GET", f"{API}/estimates/{est}/project",
+                  headers=session_for("office")).json()
+    assert office["can_edit"] is False       # office can upload but cannot remove plans
+    assert office["can_upload"] is True
+    plans = call("GET", f"{API}/plans").json()
+    assert plans["can_edit"] is True

@@ -10,7 +10,7 @@ project but not priced), and the auto-run button couldn't run. Now:
 The run itself is not started here (no real AI): POST /auto-run is answered with a finished run made in the test,
 and the page reads that run from the real server.
 (2026-11-18) With both trades on the project, the open sheet's discipline picks the trade: the
-electrical sheet counts devices, and the counts land in the Takeoff steps tab.
+electrical sheet counts devices, and the counts land in the Measure steps tab.
 (2026-11-18) The other 13 construction trades run the same way through one generic quantities table,
 and a picker next to the button chooses the trade when more than one can run.
 """
@@ -87,12 +87,13 @@ def test_E2E_review_opens_on_a_sheet_that_is_on_and_marks_the_off_ones(page, she
     assert "switched off" in off_label and off_label.startswith("⛔")
     assert on_label.startswith("✅") and "switched off" not in on_label
     # Concrete was picked for the project (not priced yet): the guide asks for its measurements.
+    page.click("#bp-tab-guide")
     guide = page.inner_text("#bp-guide")
     assert "No trade on this project needs a measurement yet" not in guide and "Concrete" in guide
     # The button is AI Auto Run, and it can run.
     btn = page.locator("#bp-auto-run")
     assert "AI Auto Run" in btn.inner_text() and btn.is_enabled()
-    # No run yet, so the Takeoff steps tab stays hidden; the Detail tab says to select a measurement.
+    # No run yet, so the Measure steps tab stays hidden; the Detail tab says to select a measurement.
     assert page.locator("#bp-tab-steps").is_hidden()
     page.click("#bp-tab-detail")
     assert "Select a measurement" in page.inner_text("#bp-detail-empty")
@@ -136,12 +137,15 @@ def test_E2E_ai_auto_run_lists_its_measurements_and_the_concrete_volume(page, db
     assert page.eval_on_selector("#review-sheet", "s => +s.value") == shed["on"]
     autorun_api.update_run(db, made[0], status="done", step="done")
     db.commit()
-    page.wait_for_selector("#bp-auto-results", timeout=20000)
+    page.wait_for_function("() => document.querySelector('#bp-auto-status') && "
+                           "document.querySelector('#bp-auto-status').innerText.includes('finished: 3 proposed')",
+                           timeout=20000)
     assert page.locator(".bp-running").count() == 0 and btn.is_enabled() and "working" not in btn.inner_text()
-    page.click("#bp-tab-steps")          # the volume and formulas live in the Takeoff steps tab now
-    box = page.inner_text("#bp-auto-results")
-    assert "AI Auto Run measurements" in box
-    assert "Slab (AI)" in box and "Footer (AI)" in box
+    assert page.locator("#bp-auto-results").count() == 0   # the above-drawing table is gone (2026-11-18)
+    # The measurements themselves are approved in the Measurements tab.
+    page.click("#bp-tab-list")
+    assert "Slab (AI)" in page.inner_text("#bp-pane-list") and "Footer (AI)" in page.inner_text("#bp-pane-list")
+    page.click("#bp-tab-steps")          # the volume and formulas live in the Measure steps tab now
     vol = page.inner_text("#bp-auto-volume")
     assert "Concrete volume: 36.24 cu yd" in vol
     # Every step's formula, to check by hand - the footer is only the part below the slab (2026-11-15).
@@ -221,7 +225,7 @@ def test_E2E_click_a_formula_to_see_it_and_draw_an_area_to_add(page, db, shed):
     page.wait_for_selector("#bp-tools")
     dismiss_tour(page)
     page.wait_for_selector("#bp-tab-steps", timeout=20000)
-    page.click("#bp-tab-steps")          # the formulas live in the Takeoff steps tab now
+    page.click("#bp-tab-steps")          # the formulas live in the Measure steps tab now
     page.wait_for_selector("#bp-auto-formulas tr.bp-step-link[data-step='Slab area']", timeout=20000)
     assert "placed on the plan's own lines" in page.inner_text("#bp-slab-fit")
     # Click "Slab area": the drawing outlines the slab in red, its corner on the plan's drawn edges.
@@ -282,7 +286,7 @@ def test_E2E_calibrate_the_detail_then_see_the_sections_parts_on_it(page, db, sh
     page.wait_for_selector("#bp-tools")
     dismiss_tour(page)
     page.wait_for_selector("#bp-tab-steps", timeout=20000)
-    page.click("#bp-tab-steps")          # the section place box lives in the Takeoff steps tab now
+    page.click("#bp-tab-steps")          # the section place box lives in the Measure steps tab now
     page.wait_for_selector("#bp-detail-noscale", timeout=20000)
     assert "don't agree on one scale" in page.inner_text("#bp-detail-noscale")
     # 📏 Calibrate the footer detail: click both ends of a 12" dimension (1 paper inch here), type 12".
@@ -372,7 +376,7 @@ def _finished_electrical_run(db, seed):
 def test_E2E_ai_auto_run_counts_devices_on_the_electrical_sheet(page, db, ehouse):
     """David's complaint (2026-11-18): on an electrical takeoff the Auto Run hover said it computes cement areas.
     With both trades on the project, the open sheet's discipline picks the trade: the structural sheet runs
-    concrete, the electrical sheet counts devices - and the counts land in the Takeoff steps tab."""
+    concrete, the electrical sheet counts devices - and the counts land in the Measure steps tab."""
     sent, made = [], []
 
     def fake_start(route):
@@ -390,12 +394,12 @@ def test_E2E_ai_auto_run_counts_devices_on_the_electrical_sheet(page, db, ehouse
     btn = page.locator("#bp-auto-run")
     # On the structural sheet the button still runs concrete.
     page.select_option("#review-sheet", str(ehouse["struct"]))
-    page.wait_for_function("() => document.querySelector('#bp-auto-run').title.includes('measure the concrete')")
-    assert "measure the concrete" in btn.get_attribute("title")
+    page.wait_for_function("() => document.querySelector('#bp-auto-run').dataset.runs.includes('measure the concrete')")
+    assert "measure the concrete" in btn.get_attribute("data-runs")
     # On the electrical sheet it counts devices instead.
     page.select_option("#review-sheet", str(ehouse["elec"]))
-    page.wait_for_function("() => document.querySelector('#bp-auto-run').title.includes('count the outlets')")
-    assert "count the outlets, switches, lights and circuits" in btn.get_attribute("title")
+    page.wait_for_function("() => document.querySelector('#bp-auto-run').dataset.runs.includes('count the outlets')")
+    assert "count the outlets, switches, lights and circuits" in btn.get_attribute("data-runs")
     assert btn.is_enabled()
     page.click("#bp-auto-run")
     # While it works: the banner shows the electrical steps, and the button can't be clicked again.
@@ -407,23 +411,24 @@ def test_E2E_ai_auto_run_counts_devices_on_the_electrical_sheet(page, db, ehouse
     assert sent and sent[0].get("sheet_id") in (ehouse["elec"], str(ehouse["elec"])) and sent[0]["module_id"] == "electrical"
     autorun_api.update_run(db, made[0], status="done", step="done")
     db.commit()
-    page.wait_for_selector("#bp-auto-results", timeout=20000)
+    page.wait_for_function("() => document.querySelector('#bp-auto-status') && "
+                           "document.querySelector('#bp-auto-status').innerText.includes('finished: 4 proposed')",
+                           timeout=20000)
     assert page.locator(".bp-running").count() == 0 and btn.is_enabled() and "working" not in btn.inner_text()
-    box = page.inner_text("#bp-auto-results")
-    assert "AI Auto Run measurements" in box
-    assert "Outlets (AI)" in box and "12 ea" in box and "Lights (AI)" in box
-    assert "price Electrical from them" in box
+    assert page.locator("#bp-auto-results").count() == 0   # the above-drawing table is gone (2026-11-18)
     assert "AI Auto Run finished: 4 proposed measurement(s)" in page.inner_text("#bp-auto-status")
-    # The counts live in the Takeoff steps tab, zeros included, with the evidence for each.
+    # The counts live in the Measure steps tab, zeros included, with the evidence for each.
     page.click("#bp-tab-steps")
     page.wait_for_selector("#bp-auto-count-table", timeout=20000)
     counts = page.inner_text("#bp-auto-counts")
     assert "Device counts" in counts
     outlets = page.inner_text("#bp-auto-count-table tr[data-feeds='outlets']")
-    assert "12" in outlets and "12 duplex receptacles on the plan" in outlets
-    fans = page.inner_text("#bp-auto-count-table tr[data-feeds='fans']")
-    assert "0" in fans
+    assert "12 duplex receptacles on the plan" in outlets
+    # The Count column is an editable input now (2026-11-18), so the count is its value, not text.
+    assert page.input_value("#bp-auto-count-table tr[data-feeds='outlets'] input.bp-count-in") == "12"
+    assert page.input_value("#bp-auto-count-table tr[data-feeds='fans'] input.bp-count-in") == "0"
     # The guide's Outlets badge shows the total, not "1 measurement(s)".
+    page.click("#bp-tab-guide")
     page.wait_for_function("() => document.querySelector('#bp-guide').innerText.includes('to review — 12 ea')")
     assert "to review — 12 ea" in page.inner_text("#bp-guide")
     # Reloading the page keeps the counts (the latest run on the sheet is loaded again, with its trade).
@@ -431,11 +436,21 @@ def test_E2E_ai_auto_run_counts_devices_on_the_electrical_sheet(page, db, ehouse
     page.wait_for_selector("#bp-tools")
     page.select_option("#review-sheet", str(ehouse["elec"]))
     page.wait_for_selector("#bp-tab-steps", timeout=20000)
-    assert "count the outlets" in btn.get_attribute("title")
+    assert "count the outlets" in btn.get_attribute("data-runs")
     page.click("#bp-tab-steps")
     page.wait_for_selector("#bp-auto-count-table", timeout=20000)
     assert "Device counts" in page.inner_text("#bp-auto-counts")
-    assert "price Electrical from them" in page.inner_text("#bp-auto-results")
+    assert page.locator("#bp-auto-results").count() == 0   # still no above-drawing table after reload
+    # 2026-11-21 (David: "Why were there no measured runs?"): the run is on the Agents page, with its trade and a link
+    # back to its Measure page.
+    page.goto(page.base + "#/agents")
+    card = page.locator(f"#auto-run-{made[0]}")
+    card.wait_for()
+    dismiss_tour(page)                                     # the Agents page's first-visit tour
+    assert "Electrical" in card.inner_text() and "✓ done" in card.inner_text()
+    assert card.get_attribute("data-trade") == "electrical"
+    card.locator("a.auto-run-measure").click()
+    page.wait_for_selector("#bp-tools")
 
 
 @pytest.fixture
@@ -512,20 +527,20 @@ def test_E2E_ai_auto_run_picks_a_quantity_trade_and_shows_its_quantities(page, d
     assert picker.locator("option").all_inner_texts() == ["Concrete", "Plumbing"]
     # On the structural sheet the picker defaults to concrete.
     page.select_option("#review-sheet", str(phouse["struct"]))
-    page.wait_for_function("() => document.querySelector('#bp-auto-run').title.includes('measure the concrete')")
+    page.wait_for_function("() => document.querySelector('#bp-auto-run').dataset.runs.includes('measure the concrete')")
     assert picker.input_value() == "concrete"
-    assert "measure the concrete" in btn.get_attribute("title")
+    assert "measure the concrete" in btn.get_attribute("data-runs")
     # On the plumbing sheet it follows the discipline - no pick made yet, so it moves on its own.
     page.select_option("#review-sheet", str(phouse["plumb"]))
-    page.wait_for_function("() => document.querySelector('#bp-auto-run').title.includes('count the fixtures')")
+    page.wait_for_function("() => document.querySelector('#bp-auto-run').dataset.runs.includes('count the fixtures')")
     assert picker.input_value() == "plumbing"
-    assert "count the fixtures" in btn.get_attribute("title")
+    assert "count the fixtures" in btn.get_attribute("data-runs")
     # Switching the picker switches the trade the button will run, and back again.
     page.select_option("#bp-auto-trade", "concrete")
-    page.wait_for_function("() => document.querySelector('#bp-auto-run').title.includes('measure the concrete')")
-    assert "measure the concrete" in btn.get_attribute("title")
+    page.wait_for_function("() => document.querySelector('#bp-auto-run').dataset.runs.includes('measure the concrete')")
+    assert "measure the concrete" in btn.get_attribute("data-runs")
     page.select_option("#bp-auto-trade", "plumbing")
-    page.wait_for_function("() => document.querySelector('#bp-auto-run').title.includes('count the fixtures')")
+    page.wait_for_function("() => document.querySelector('#bp-auto-run').dataset.runs.includes('count the fixtures')")
     assert btn.is_enabled()
     page.click("#bp-auto-run")
     # While it works: the banner shows the quantity trades' default steps, and the button can't be clicked again.
@@ -538,14 +553,13 @@ def test_E2E_ai_auto_run_picks_a_quantity_trade_and_shows_its_quantities(page, d
     assert sent and sent[0].get("sheet_id") in (phouse["plumb"], str(phouse["plumb"])) and sent[0]["module_id"] == "plumbing"
     autorun_api.update_run(db, made[0], status="done", step="done")
     db.commit()
-    page.wait_for_selector("#bp-auto-results", timeout=20000)
+    page.wait_for_function("() => document.querySelector('#bp-auto-status') && "
+                           "document.querySelector('#bp-auto-status').innerText.includes('finished: 6 proposed')",
+                           timeout=20000)
     assert page.locator(".bp-running").count() == 0 and btn.is_enabled() and "working" not in btn.inner_text()
-    box = page.inner_text("#bp-auto-results")
-    assert "AI Auto Run measurements" in box
-    assert "Toilets (AI)" in box and "2 ea" in box and "Bathroom sinks (AI)" in box
-    assert "price Plumbing from them" in box
+    assert page.locator("#bp-auto-results").count() == 0   # the above-drawing table is gone (2026-11-18)
     assert "AI Auto Run finished: 6 proposed measurement(s)" in page.inner_text("#bp-auto-status")
-    # The quantities live in the Takeoff steps tab, zeros included, with the evidence for each.
+    # The quantities live in the Measure steps tab, zeros included, with the evidence for each.
     page.click("#bp-tab-steps")
     page.wait_for_selector("#bp-auto-quantities-table", timeout=20000)
     quantities = page.inner_text("#bp-auto-quantities")
@@ -555,6 +569,7 @@ def test_E2E_ai_auto_run_picks_a_quantity_trade_and_shows_its_quantities(page, d
     bibs = page.inner_text("#bp-auto-quantities-table tr[data-feeds='hose_bibs']")
     assert "0" in bibs and "none seen" in bibs
     # The guide's Toilets badge shows the total, not "1 measurement(s)".
+    page.click("#bp-tab-guide")
     page.wait_for_function("() => document.querySelector('#bp-guide').innerText.includes('to review — 2 ea')")
     assert "to review — 2 ea" in page.inner_text("#bp-guide")
     # Reloading the page keeps the quantities (the latest run on the sheet is loaded again, with its trade).
@@ -562,8 +577,8 @@ def test_E2E_ai_auto_run_picks_a_quantity_trade_and_shows_its_quantities(page, d
     page.wait_for_selector("#bp-tools")
     page.select_option("#review-sheet", str(phouse["plumb"]))
     page.wait_for_selector("#bp-tab-steps", timeout=20000)
-    assert "count the fixtures" in btn.get_attribute("title")
+    assert "count the fixtures" in btn.get_attribute("data-runs")
     page.click("#bp-tab-steps")
     page.wait_for_selector("#bp-auto-quantities-table", timeout=20000)
     assert "Plumbing quantities" in page.inner_text("#bp-auto-quantities")
-    assert "price Plumbing from them" in page.inner_text("#bp-auto-results")
+    assert page.locator("#bp-auto-results").count() == 0   # still no above-drawing table after reload

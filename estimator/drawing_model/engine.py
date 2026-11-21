@@ -151,13 +151,16 @@ def start(conn, ctx: RequestContext, plan_set_id: int, confirm: bool = False, op
                            "read the plans yourself and give the measurements to the estimate, or use runner_start "
                            "and runner_submit_takeoff", plan_set_id=ps["id"])
     if ps["status"] == "processing":
-        raise InvalidInput(f"plan set {ps['id']} is already being read", plan_set_id=ps["id"])
+        raise InvalidInput(f"plan set {store.plan_set_label(conn, ps)} ({ps['original_name']}) is already being read",
+                           plan_set_id=ps["id"])
     if ps["status"] == "processed":
-        store._confirm(confirm, f"Plan set {ps['id']} was already read. Reading it again replaces its sheets, "
-                       "objects and schedules, including any schedule rows you corrected.", plan_set_id=ps["id"])
+        store._confirm(confirm, f"Plan set {store.plan_set_label(conn, ps)} ({ps['original_name']}) was already read. "
+                       "Reading it again replaces its sheets, objects and schedules, including any schedule rows you "
+                       "corrected; measurements waiting for review are rejected and approved ones are flagged to "
+                       "re-measure.", plan_set_id=ps["id"])
     elif not confirm:
-        store._confirm(False, f"Read plan set {ps['id']} ({ps['original_name']}) with the plan engine now?",
-                       plan_set_id=ps["id"])
+        store._confirm(False, f"Read plan set {store.plan_set_label(conn, ps)} ({ps['original_name']}) with the plan "
+                       "engine now?", plan_set_id=ps["id"])
     store.mark_processing(conn, ctx, ps["id"], eng["name"])
     if ctx.mode == "server" and ps["queue_state"] == "waiting":     # small set read here after all
         import shutil

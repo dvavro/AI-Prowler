@@ -84,6 +84,13 @@ def parse_roofing_reading(text: str, sheet_id: int) -> dict:
     width = _text("roof_width_ft")
     length = _text("roof_length_ft")
     ridge = _text("ridge_ft")
+    # the dimensions must parse now - a bad one rejects the whole answer
+    if width is not None:
+        lq.dimension_inches(width, "roof width")
+    if length is not None:
+        lq.dimension_inches(length, "roof length")
+    if ridge is not None:
+        lq.dimension_inches(ridge, "ridge length")
     ev = lq.parse_evidence(obj, ALL_IDS)
     if ridge is None and not ev["ridge_lf"]:
         ev["ridge_lf"] = NO_RIDGE_EVIDENCE

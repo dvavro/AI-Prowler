@@ -73,7 +73,7 @@ def test_reading_asks_first_then_finds_the_sheets(call, plan_set):
     assert ask["needs_confirmation"] is True and "smith plans.pdf" in ask["question"]
     assert call("GET", f"{API}/plan-sets/{ps}").json()["plan_set"]["status"] == "uploaded"     # nothing done yet
     r = _read(call, ps)
-    assert r["plan_set"]["status"] == "processed" and r["estimate"] == {"id": plan_set["estimate_id"], "title": "Smith house"}
+    assert r["plan_set"]["status"] == "processed" and r["estimate"] == {"id": plan_set["estimate_id"], "title": "Smith house", "modules": []}
     by = {s["sheet_no"]: s for s in r["sheets"]}
     assert set(by) == {"A-101", "E-101"}
     assert by["A-101"]["discipline"] == "architectural" and by["E-101"]["discipline"] == "electrical"

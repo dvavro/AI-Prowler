@@ -9543,7 +9543,7 @@ def hr_get_setup_status(ctx: "Context | None" = None) -> str:
 # switched off (Setup AI-Prowler -> Change my choices, or the Estimator tab) only the short line is given, and the
 # THIS CONNECTION footer lists its tools as off.
 _ESTIMATOR_GUIDE = (
-    "  • Estimator (quotes and estimates, from a one-tap service quote to a full plan takeoff):\n"
+    "  • Estimator (quotes and estimates, from a one-tap service quote to a full set of measurements from the plans):\n"
     "      Start with how_to_estimate(topic or question) - it gives the workflow, the agent roles and the how-to\n"
     "      guides. Money is in integer cents; every change needs the estimate's current rev (re-read after a\n"
     "      stale_revision). Anything that emails a customer, makes records in AI-Prowler or overwrites prices\n"

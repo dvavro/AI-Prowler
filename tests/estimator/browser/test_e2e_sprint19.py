@@ -41,7 +41,7 @@ def cloud_report(db, tmp_path):
     est = service.create_estimate(db, CTX, "Cloud only")["id"]
     a = store.upload(db, CTX, est, _pdf(tmp_path / "cA.pdf", 1, "A"), confirm=True)["plan_set_id"]
     store.save_results(db, CTX, a, _cloud_plan(), "fake")
-    b = store.upload(db, CTX, est, _pdf(tmp_path / "cB.pdf", 1, "B"), supersedes_plan_set_id=a,
+    b = store.upload(db, CTX, est, _pdf(tmp_path / "cB.pdf", 1, "B"), supersedes_plan_set_id=a, keep_old=True,
                      confirm=True)["plan_set_id"]
     store.save_results(db, CTX, b, _cloud_plan(), "fake")
     db.commit()

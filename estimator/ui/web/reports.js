@@ -8,7 +8,7 @@
  */
 "use strict";
 
-const REPORT_TABS = [["winloss", "🏆 Win / loss"], ["takeoff", "📏 Takeoff report"], ["revisions", "🔀 Plan revisions"],
+const REPORT_TABS = [["winloss", "🏆 Win / loss"], ["takeoff", "📏 Measurements report"], ["revisions", "🔀 Plan revisions"],
                      ["actuals", "💵 Estimate vs actual"], ["exports", "⬇ Exports"]];
 const REV_KINDS = [["added", "Added", "rev-added"], ["removed", "Removed", "rev-removed"], ["changed", "Changed", "rev-changed"],
                    ["moved", "Moved", "rev-moved"], ["marks", "Revision clouds", "rev-marks"]];
@@ -124,10 +124,10 @@ async function reportTakeoff(body, estimate) {
     tile(t.waiting, "Waiting for approval"), tile(t.remeasure, "To re-measure", t.remeasure ? "warn" : ""),
     tile(t.raster, "From scans or photos", t.raster ? "warn" : "")));
   r.notes.forEach(n => parts.push(el("p", { class: "note" }, n)));
-  parts.push(el("p", {}, el("a", { href: "#/takeoffs/" + r.estimate_id }, "📏 Open in Blueprint Review"), " · ",
+  parts.push(el("p", {}, el("a", { href: "#/takeoffs/" + r.estimate_id }, "📏 Open in Measure"), " · ",
     el("a", { href: "#/estimates/" + r.estimate_id }, "🧮 Open the estimate")));
   if (!r.trades.length) parts.push(el("div", { class: "card empty" }, "No measurements on this project yet. ",
-    el("a", { href: "#/takeoffs/" + r.estimate_id }, "Open Blueprint Review"), " and measure the plans."));
+    el("a", { href: "#/takeoffs/" + r.estimate_id }, "Open Measure"), " and measure the plans."));
   for (const tr of r.trades) {
     parts.push(el("div", { class: "card section", "data-trade": tr.module_id },
       el("h3", {}, words(tr.module_id) + " — " + tr.approved + " approved, " + tr.waiting + " waiting"),
@@ -252,7 +252,7 @@ async function renderRevision(main, id) {
   const t = r.totals || {};
   const parts = [el("p", {}, el("a", { href: "#/reports?tab=revisions&estimate=" + r.estimate_id }, "← Plan revisions"), " · ",
       el("a", { href: "#/plan-sets/" + r.new_plan_set_id }, "Rev " + r.to_rev + " plans"), " · ",
-      el("a", { href: "#/takeoffs/" + r.estimate_id }, "📏 Blueprint Review")),
+      el("a", { href: "#/takeoffs/" + r.estimate_id }, "📏 Measure")),
     el("div", { class: "page-head" }, el("h2", {}, "🔀 Rev " + r.from_rev + " → Rev " + r.to_rev), helpLink("reports")),
     el("p", { id: "rev-said" }, r.said || ""),
     el("div", { class: "grid tiles", id: "rev-tiles" }, tile(t.added || 0, "Added", "rev-added"), tile(t.removed || 0, "Removed", "rev-removed"),

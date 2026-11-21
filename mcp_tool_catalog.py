@@ -148,7 +148,7 @@ CATEGORY_ORDER: List[CategoryMeta] = [
     # panel could not show or toggle them.
     CategoryMeta(
         "estimator", "Estimator",
-        "Estimates, quotes and bids, plan takeoffs and measurements, the "
+        "Estimates, quotes and bids, measurements from plans, the "
         "price book, and the Estimating Director — the AI-Prowler Estimator "
         "and its tools. Both modes.",
     ),

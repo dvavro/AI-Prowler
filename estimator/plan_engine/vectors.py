@@ -136,6 +136,10 @@ def is_room_name(text: str) -> bool:
     words = re.findall(r"[A-Z]+", t)
     if not words or all(w in ROOM_WORDS_STOP for w in words) or any(w in ("SCALE", "PLAN", "PLANS") for w in words):
         return False
+    # 2026-11-20 (David: a 6,912 sq ft "room" called AC 30A): a breaker rating or voltage - "AC 30A", "DRYER 30A",
+    # "RANGE 50 AMP", "240V" - labels a circuit, not a room.
+    if re.search(r"\b\d{2,3}\s?(A|AMP|AMPS|V|VOLT|VOLTS)\b", t):
+        return False
     from estimator.plan_engine import symbol_library
     code = symbol_library.by_alias(t)
     if code is not None and code["trade"] in ("electrical", "mechanical"):   # a device code (GFI, WP, TV), not a
@@ -172,6 +176,29 @@ def find_rooms(segments: list[Segment], labels: list[tuple[str, tuple[float, flo
         if len(coords) >= 3:
             rooms.append({"label": re.sub(r"\s+", " ", name.strip())[:100], "points": coords})
     return rooms, None
+
+
+def drop_enclosing(found: list[dict], others: list[dict] | None = None) -> list[dict]:
+    """Leave out a found 'room' that wraps two or more other rooms - the drawing's border or a whole floor picked up
+    because a stray name (a label outside the building) sat inside it (2026-11-20, David: a 6,912 sq ft room). A
+    drawing that is one room still is one."""
+    every = found + list(others or [])
+    if len(every) < 3:
+        return found
+    try:
+        from shapely.geometry import Point, Polygon
+    except ImportError:
+        return found
+    shapes = [Polygon(r["points"]) for r in every]
+    mids = [s.representative_point() if s.is_valid and s.area > 0 else None for s in shapes]
+    keep = []
+    for i, r in enumerate(found):
+        s = shapes[i]
+        inside_it = sum(1 for j, m in enumerate(mids) if j != i and m is not None and s.is_valid and s.contains(m)
+                        and shapes[j].area < s.area)
+        if inside_it < 2:
+            keep.append(r)
+    return keep
 
 
 def wall_objects(walls: list[Wall], viewport: str | None, source: str, layer: str | None = None) -> list[dict]:

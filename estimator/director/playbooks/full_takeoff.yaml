@@ -1,15 +1,15 @@
 # Full plan takeoff lane: multi-trade jobs from a plan set.
 id: full_takeoff
-name: Full plan takeoff
+name: Measure from plans
 version: 0.2.0
 lane: full_takeoff
 available: true
 available_from: "Sprint 14"
-description: Whole-house or multi-trade jobs from a plan set; the Estimate Runner runs one takeoff task per trade, a person approves the quantities, then the job is priced, reviewed, approved and bid like a standard estimate.
+description: Whole-house or multi-trade jobs from a plan set; the Estimate Runner runs one measuring task per trade, a person approves the quantities, then the job is priced, reviewed, approved and bid like a standard estimate.
 stages:
   - {id: collect_job, agent: intake, action: collect_trades, label: "Collect job details and trades"}
   - {id: read_plans, agent: plan_reader, action: read_plans, label: "Read and classify the plans"}
-  - {id: takeoff, agent: estimate_runner, action: run_takeoff, label: "Run the trade takeoffs"}
+  - {id: takeoff, agent: estimate_runner, action: run_takeoff, label: "Measure each trade from the plans"}
   - {id: price, agent: pricer, action: price, label: "Price approved quantities"}
   - {id: review, agent: reviewer, action: review, label: "Reviewer checks", checkpoint: true}
   - {id: approve, agent: director, action: approve, label: "Approve the estimate", checkpoint: true}

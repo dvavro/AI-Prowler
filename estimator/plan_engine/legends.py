@@ -80,7 +80,7 @@ ITEM_TYPES = (
     ("ceiling_fan", "electrical", ("ceiling fan",)), ("panel", "electrical", ("panel",)),
     ("junction_box", "electrical", ("junction",)), ("light_fixture", "electrical", ("light",)),
     ("light_fixture", "electrical", ("luminaire",)), ("light_fixture", "electrical", ("fixture", "ceiling")),
-    ("thermostat", "mechanical", ("thermostat",)), ("exhaust_fan", "mechanical", ("exhaust",)),
+    ("thermostat", "mechanical", ("thermostat",)), ("exhaust_fan", "electrical", ("exhaust",)),
     ("supply_diffuser", "mechanical", ("supply",)), ("supply_diffuser", "mechanical", ("diffuser",)),
     ("return_grille", "mechanical", ("return",)), ("water_closet", "plumbing", ("water closet",)),
     ("water_closet", "plumbing", ("toilet",)), ("lavatory", "plumbing", ("lavatory",)),

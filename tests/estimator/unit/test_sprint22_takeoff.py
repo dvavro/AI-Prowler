@@ -161,7 +161,17 @@ def test_approved_is_locked_against_agents(db, roof):  # S22-C02
     row = m._load(db, CTX, mid)
     assert row["status"] == "rejected" and row["reject_reason"] == "double counted"
     with pytest.raises(NotEditable):
-        m.edit(db, CTX, mid, qty="1", confirm=True)
+        m.edit(db, AGENT, mid, qty="1", confirm=True)                              # an agent can't bring it back
+    with pytest.raises(PermissionDenied):
+        m.confirm_measurements(db, AGENT, [mid], confirm=True)
+    # 2026-11-20 (David): a person can change their mind - change the rejected one and approve it again.
+    m.edit(db, CTX, mid, qty="1285", confirm=True)
+    assert m._load(db, CTX, mid)["status"] == "rejected"
+    assert m.confirm_measurements(db, CTX, [mid], confirm=True)["done"] == [mid]
+    row = m._load(db, CTX, mid)
+    assert row["status"] == "approved" and row["locked"] and row["qty"] == "1285.00" and row["reject_reason"] is None
+    m.reject(db, CTX, mid, "changed my mind again", confirm=True)                    # and reject it again
+    assert m._load(db, CTX, mid)["status"] == "rejected"
     proposed = m.propose(db, CTX, roof["est"], "roofing", roof["o"]["EAVE"], feeds="edges_lf", confirm=True)
     with pytest.raises(InvalidInput):
         m.suggest_change(db, CTX, proposed["proposed"][0]["id"], "41", "x", confirm=True)   # not approved yet

@@ -1,10 +1,20 @@
 price_key,description,kind,unit,cost
 el_labor_hr,Electrician labor per hour (sample),labor,hr,90.00
 el_outlet_ea,Outlet and plate (sample),material,ea,4.00
-el_switch_ea,Switch and plate (sample),material,ea,4.00
+el_usb_outlet_ea,USB outlet and plate (sample),material,ea,25.00
+el_quad_outlet_ea,Quad outlet - 2 duplex and 2-gang plate (sample),material,ea,10.00
+el_floor_box_ea,Floor box with outlet and cover (sample),material,ea,45.00
+el_wp_outlet_ea,Weatherproof GFCI outlet with in-use cover (sample),material,ea,34.00
+el_switch_ea,Single-pole switch and plate (sample),material,ea,4.00
+el_switch_3way_ea,3-way switch and plate (sample),material,ea,8.00
+el_switch_4way_ea,4-way switch and plate (sample),material,ea,15.00
+el_dimmer_ea,Dimmer switch and plate (sample),material,ea,20.00
+el_occupancy_switch_ea,Occupancy sensor switch (sample),material,ea,35.00
 el_gfci_ea,GFCI outlet (sample),material,ea,22.00
 el_fan_box_ea,Fan-rated box and brace (sample),material,ea,15.00
 el_box_plastic_ea,Plastic electrical box (sample),material,ea,3.00
+el_fixture_box_ea,Light fixture box round fixture-rated with bracket (sample),material,ea,6.00
+el_recessed_housing_ea,Recessed housing new construction (sample),material,ea,14.00
 el_box_metal_ea,Metal electrical box (sample),material,ea,6.00
 el_wire_lf,12/2 wire per linear ft (sample),material,lf,0.55
 el_heavy_wire_lf,Heavy-gauge wire per linear ft for 30 Amp circuits (sample),material,lf,2.50
@@ -20,3 +30,34 @@ el_subpanel_200a_ea,200 Amp subpanel installed (sample),other,ea,1500.00
 el_panel_upgrade_ea,200 A panel upgrade installed (sample),other,ea,3500.00
 el_permit_ea,Electrical permit (sample),other,ea,200.00
 el_inspect_ea,Electrical inspection fee (sample),other,ea,100.00
+el_wire_14_2_lf,14/2 NM-B cable per linear ft (sample),material,lf,0.40
+el_wire_14_3_lf,14/3 NM-B cable per linear ft (sample),material,lf,0.60
+el_wire_10_2_lf,10/2 NM-B cable per linear ft (sample),material,lf,1.30
+el_wire_10_3_lf,10/3 NM-B cable per linear ft (sample),material,lf,1.75
+el_wire_8_3_lf,8/3 NM-B cable per linear ft (sample),material,lf,3.00
+el_wire_6_3_lf,6/3 NM-B cable per linear ft (sample),material,lf,4.50
+el_light_ceiling_ea,Ceiling light fixture we supply (sample),material,ea,45.00
+el_light_recessed_ea,Recessed LED light - can and trim or wafer (sample),material,ea,25.00
+el_light_wall_ea,Wall light / sconce we supply (sample),material,ea,60.00
+el_light_pendant_ea,Pendant light we supply (sample),material,ea,80.00
+el_light_undercabinet_ea,Under-cabinet light we supply (sample),material,ea,40.00
+el_light_exterior_ea,Exterior light we supply (sample),material,ea,50.00
+el_light_exit_emergency_ea,Exit sign / emergency light we supply (sample),material,ea,65.00
+el_smoke_detector_ea,Hardwired smoke detector with battery backup (sample),material,ea,35.00
+el_main_panel_ea,200 A main panel - load center with main breaker (sample),material,ea,450.00
+el_fan_unit_ea,Ceiling fan we supply (sample),material,ea,150.00
+el_owner_light_ceiling_ea,Ceiling light fixture supplied by the owner (no charge),other,ea,0.00
+el_owner_light_recessed_ea,Recessed light supplied by the owner (no charge),other,ea,0.00
+el_owner_light_wall_ea,Wall light supplied by the owner (no charge),other,ea,0.00
+el_owner_light_pendant_ea,Pendant light supplied by the owner (no charge),other,ea,0.00
+el_owner_light_undercabinet_ea,Under-cabinet light supplied by the owner (no charge),other,ea,0.00
+el_owner_light_exterior_ea,Exterior light supplied by the owner (no charge),other,ea,0.00
+el_owner_light_exit_emergency_ea,Exit sign / emergency light supplied by the owner (no charge),other,ea,0.00
+el_owner_fan_ea,Ceiling fan supplied by the owner (no charge),other,ea,0.00
+el_breaker_afci_ea,AFCI breaker single-pole (sample),material,ea,45.00
+el_breaker_dual_ea,Dual-function AFCI/GFCI breaker single-pole (sample),material,ea,55.00
+el_meter_base_ea,200 A meter base (sample),material,ea,150.00
+el_range_receptacle_ea,Range receptacle 240 V NEMA 14-50 (sample),material,ea,25.00
+el_dryer_receptacle_ea,Dryer receptacle 240 V NEMA 14-30 (sample),material,ea,20.00
+el_disconnect_ea,Equipment disconnect 60 A non-fused (sample),material,ea,35.00
+el_small_parts_ea,Small parts per device - wire nuts staples clamps pigtails (sample),material,ea,1.50

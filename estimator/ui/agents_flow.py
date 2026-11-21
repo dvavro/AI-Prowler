@@ -24,8 +24,8 @@ MODE_HELP = {
 # The Estimator's steps in flow order: (role, short label, which flow state it works on, group steps for the model).
 STEPS = (
     ("plan_reader", "Plan reader", "Plans"),
-    ("llm_takeoff", "AI takeoff", "Takeoff"),
-    ("takeoff", "Takeoff agents", "Takeoff"),
+    ("llm_takeoff", "AI measuring", "Takeoff"),
+    ("takeoff", "Measuring agents", "Takeoff"),
     ("inspector", "Inspector", "Estimate"),
     ("reviewer", "Reviewer", "Review"),
     ("bid_writer", "Bid writer", "Bid"),
@@ -34,7 +34,7 @@ STEPS = (
 STEP_HELP = {
     "plan_reader": "Reads and classifies plan sheets (which sheet is the foundation plan, the floor plan ...). An "
                    "internal step: the cheaper model when one is set.",
-    "llm_takeoff": "The 🤖 AI Agent button in Blueprint Review: finds the foundation sheet, calibrates the view from the "
+    "llm_takeoff": "The 🤖 AI Agent button in Measure from plans (takeoff): finds the foundation sheet, calibrates the view from the "
                    "dimensions written on the plan when it has no scale (or says a person must calibrate it, and why), "
                    "reads the slab's dimensions and the footing detail, and proposes the slab, footer and form "
                    "measurements. The app does the maths. Reading plans and calibrating are complex steps: the "
@@ -52,6 +52,7 @@ STEP_HELP = {
                  "always the stronger model.",
 }
 STATES = ("Plans", "Takeoff", "Estimate", "Review", "Bid", "Follow-up")
+STATE_LABELS = {"Takeoff": "Measure"}  # the picture's column words; the state id stays "Takeoff"
 FLOW_W, FLOW_H = 560, 250
 _SW, _SH, _AW, _AH = 80, 32, 86, 52
 _STATE_X = {s: 10 + i * 92 for i, s in enumerate(STATES)}
@@ -131,7 +132,7 @@ def flow(modes: dict, works_now: dict | None = None, runner: str = "claude_api",
     states = []
     for s in STATES:
         color = lit.get(s, "#94a3b8")
-        states.append({"id": s, "label": s, "x": _STATE_X[s], "y": _STATE_Y, "w": _SW, "h": _SH, "lit": s in lit,
+        states.append({"id": s, "label": STATE_LABELS.get(s, s), "x": _STATE_X[s], "y": _STATE_Y, "w": _SW, "h": _SH, "lit": s in lit,
                        "color": color, "tint": TINTS.get(color, "#ffffff") if s in lit else "#ffffff"})
     # The Director runs the whole job - it isn't an AI agent (no API key, no model): rules, the pricing engine and your
     # approvals, driven by your chat AI through its est_director tools. Shown as one band under the job, not a step.

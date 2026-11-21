@@ -53,8 +53,24 @@ CACHE_WRITE_X = 1.25
 CACHE_READ_X = {"claude-sonnet-5-5": 0.05}
 DEFAULT_CACHE_READ_X = 0.10
 LONG_PROMPT = {"claude-haiku-5-5": (100_000, 5.0)}
-HTTP_TIMEOUT = 120
-MAX_TOKENS = 1500
+# 2026-11-20 (David: "let's don't put limits on AI for tokens, that is done with the day limit"): the spend is capped
+# by each agent's daily budget, not by the length of one answer. Claude's API needs a max_tokens on every call, so it
+# is the model's full output room; Opus 5.5 reasons before it answers, and at 1500 an Inspection review ran out
+# before writing a word ("cut off at the 1500-token limit (0 characters came back)"). Grok and Muse are sent no
+# limit at all. A config "agent_max_tokens" can still set one.
+HTTP_TIMEOUT = 600
+MAX_TOKENS = 32000
+VISION_MAX_TOKENS = 32000
+FALLBACK_MAX_TOKENS = 8192          # if a (smaller) model refuses MAX_TOKENS, the call is sent again with this
+
+
+def _max_tokens(images) -> int:
+    try:
+        v = int(_cfg().get("agent_max_tokens") or 0)
+    except (TypeError, ValueError):
+        v = 0
+    return v if v > 0 else (VISION_MAX_TOKENS if images else MAX_TOKENS)
+
 
 HEADLESS_RULES = """
 You are running on your own (no person is watching). You get ONE item as JSON. Decide what to do
@@ -73,7 +89,12 @@ If nothing is worth doing, return {"actions": [{"action": "no_action", "why": ".
 
 
 class ProviderError(RuntimeError):
-    pass
+    """usage: the tokens the call used when it failed after the AI had worked (a cut-off answer) - they are paid
+    for, so the budget meter counts them."""
+
+    def __init__(self, message="", usage=None):
+        super().__init__(message)
+        self.usage = usage
 
 
 def _cfg() -> dict:
@@ -357,6 +378,21 @@ def ask_vision(provider: str, system: str, user: str, images, *, model: str = ""
 
 
 def _post(url, body, headers):
+    # 2026-11-21 (David: AI Auto Run on the rev2 electrical plan "timed out"): a Claude call that reasons a long time
+    # sent nothing back for 10 minutes and the read timed out (HTTP_TIMEOUT). Claude calls now stream: the answer
+    # arrives in pieces (with keep-alive pings), so the timeout only trips when the connection goes quiet, not when
+    # the AI is simply thinking. The caller still gets the same whole message back.
+    if url == CLAUDE_URL and "stream" not in body:
+        return _post_claude_stream(url, body, headers)
+    # Grok and Muse (both OpenAI-style chat completions) stream the same way (2026-11-21, David: "change Muse and grok
+    # also"). A service that won't stream (HTTP 400) is asked again the old way, all in one piece.
+    if url.endswith("/chat/completions") and "stream" not in body and "messages" in body:
+        try:
+            return _post_openai_stream(url, body, headers)
+        except ProviderError as e:
+            if "HTTP 400" not in str(e):
+                raise
+            return _post(url, {**body, "stream": False}, headers)
     import urllib.error as ue
     import urllib.request as ur
     req = ur.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
@@ -373,6 +409,206 @@ def _post(url, body, headers):
         raise ProviderError(f"request failed: {e}") from None
 
 
+# ── live progress while an answer streams in (2026-11-21, David: show it with AI Auto Run's waiting message) ──
+# Whoever wants to watch sets a callback for its own thread (set_progress); the stream readers call it every
+# PROGRESS_EVERY seconds with {phase: "thinking"|"writing", thought: the latest sentence (trimmed), thinking_chars,
+# answer_chars}. Nothing is set = nothing is reported, so other callers are untouched.
+import threading as _threading
+
+_PROGRESS = _threading.local()
+PROGRESS_EVERY = 1.5
+THOUGHT_MAX = 160
+
+
+def set_progress(callback) -> None:
+    """Report this thread's streamed answers to callback(info); None stops."""
+    _PROGRESS.fn = callback
+
+
+def latest_sentence(text: str, limit: int = THOUGHT_MAX) -> str:
+    """The last complete sentence (or line) of the AI's thinking, trimmed - what the waiting message shows."""
+    t = " ".join((text or "").split())
+    if not t:
+        return ""
+    parts = re.split(r"(?<=[.!?])\s+", t)
+    done = [p for p in parts[:-1] if len(p.strip()) > 3] if len(parts) > 1 else []
+    s = (done[-1] if done else parts[-1]).strip()
+    return s if len(s) <= limit else s[:limit - 1].rstrip() + "…"
+
+
+def latest_item(answer: str, limit: int = 80) -> str:
+    """The last finished line of the answer being written (JSON), made readable: '"outlets": 41,' -> 'outlets: 41'."""
+    lines = [ln for ln in (answer or "").splitlines()[:-1] if ln.strip()] or [ln for ln in (answer or "").splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    s = re.sub(r'["{}\[\],]', " ", lines[-1])
+    s = " ".join(s.split()).replace(" :", ":")
+    return s[:limit]
+
+
+class _Progress:
+    def __init__(self):
+        self.fn = getattr(_PROGRESS, "fn", None)
+        self.thinking, self.answer, self.last = [], [], 0.0
+
+    def add(self, thinking: str = "", answer: str = "", force: bool = False):
+        if thinking:
+            self.thinking.append(thinking)
+        if answer:
+            self.answer.append(answer)
+        if self.fn is None:
+            return
+        import time as _t
+        now = _t.monotonic()
+        if not force and now - self.last < PROGRESS_EVERY:
+            return
+        self.last = now
+        th, ans = "".join(self.thinking), "".join(self.answer)
+        info = {"phase": "writing" if ans else "thinking", "thinking_chars": len(th), "answer_chars": len(ans),
+                "thought": latest_sentence(th[-2000:]) if th else "", "item": latest_item(ans[-2000:]) if ans else ""}
+        try:
+            self.fn(info)
+        except Exception:  # noqa: BLE001 - watching must never break the call
+            pass
+
+
+def _read_claude_stream(lines) -> dict:
+    """Put a streamed Claude answer (server-sent events, one decoded line at a time) back together as the message a
+    non-streamed call returns: content blocks with their text, stop_reason, and usage."""
+    msg, event = None, None
+    prog = _Progress()
+    for raw in lines:
+        line = raw.rstrip("\r\n")
+        if line.startswith("event:"):
+            event = line[6:].strip()
+            prog.add()                                  # a ping while it thinks still shows it's working
+            continue
+        if not line.startswith("data:"):
+            continue
+        try:
+            data = json.loads(line[5:].strip())
+        except ValueError:
+            continue
+        kind = data.get("type") or event
+        if kind == "error":
+            err = data.get("error") or {}
+            raise ProviderError(f"the AI stopped with an error: {err.get('type', '')} {err.get('message', '')}".strip())
+        if kind == "message_start":
+            msg = dict(data.get("message") or {})
+            msg["content"] = list(msg.get("content") or [])
+            msg["usage"] = dict(msg.get("usage") or {})
+        elif msg is None:
+            continue
+        elif kind == "content_block_start":
+            msg["content"].append(dict(data.get("content_block") or {}))
+        elif kind == "content_block_delta":
+            i, d = data.get("index", len(msg["content"]) - 1), data.get("delta") or {}
+            while len(msg["content"]) <= i:
+                msg["content"].append({"type": "text", "text": ""})
+            if d.get("type") == "text_delta":
+                block = msg["content"][i]
+                block["text"] = block.get("text", "") + d.get("text", "")
+                prog.add(answer=d.get("text", ""))
+            elif d.get("type") == "thinking_delta":
+                prog.add(thinking=d.get("thinking", ""))
+        elif kind == "message_delta":
+            d = data.get("delta") or {}
+            if "stop_reason" in d:
+                msg["stop_reason"] = d["stop_reason"]
+            msg["usage"].update({k: v for k, v in (data.get("usage") or {}).items() if v is not None})
+        elif kind == "message_stop":
+            msg["_complete"] = True
+            break
+    if msg is None:
+        raise ProviderError("request failed: the AI's answer was empty")
+    if not msg.pop("_complete", False) and not msg.get("stop_reason"):
+        raise ProviderError("request failed: the connection dropped before the AI finished answering")
+    return msg
+
+
+def _post_claude_stream(url, body, headers) -> dict:
+    import urllib.error as ue
+    import urllib.request as ur
+    req = ur.Request(url, data=json.dumps({**body, "stream": True}).encode("utf-8"),
+                     headers={**headers, "Accept": "text/event-stream"}, method="POST")
+    try:
+        with ur.urlopen(req, timeout=HTTP_TIMEOUT) as r:          # the timeout is per read: a quiet connection
+            return _read_claude_stream(line.decode("utf-8", errors="replace") for line in r)
+    except ue.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", errors="replace")[:400]
+        except Exception:  # noqa: BLE001
+            detail = str(e)
+        raise ProviderError(f"HTTP {e.code}: {detail}") from None
+    except ProviderError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise ProviderError(f"request failed: {e}") from None
+
+
+def _read_openai_stream(lines) -> dict:
+    """Put a streamed OpenAI-style chat answer (Grok, Muse) back together as the response a non-streamed call returns:
+    {choices: [{message: {role, content}, finish_reason}], usage}. Reasoning pieces are left out, as before."""
+    text, finish, usage, model, done, seen = [], None, {}, None, False, False
+    prog = _Progress()
+    for raw in lines:
+        line = raw.rstrip("\r\n")
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload == "[DONE]":
+            done = True
+            break
+        try:
+            data = json.loads(payload)
+        except ValueError:
+            continue
+        if data.get("error"):
+            err = data["error"]
+            raise ProviderError("the AI stopped with an error: "
+                                + (err.get("message", "") if isinstance(err, dict) else str(err)))
+        seen = True
+        model = data.get("model") or model
+        if data.get("usage"):
+            usage = data["usage"]
+        for ch in data.get("choices") or []:
+            delta = ch.get("delta") or {}
+            if isinstance(delta.get("content"), str):
+                text.append(delta["content"])
+                prog.add(answer=delta["content"])
+            if isinstance(delta.get("reasoning_content"), str):
+                prog.add(thinking=delta["reasoning_content"])
+            if ch.get("finish_reason"):
+                finish = ch["finish_reason"]
+    if not seen:
+        raise ProviderError("request failed: the AI's answer was empty")
+    if not done and not finish:
+        raise ProviderError("request failed: the connection dropped before the AI finished answering")
+    return {"model": model, "choices": [{"index": 0, "message": {"role": "assistant", "content": "".join(text)},
+                                         "finish_reason": finish}], "usage": usage}
+
+
+def _post_openai_stream(url, body, headers) -> dict:
+    import urllib.error as ue
+    import urllib.request as ur
+    # include_usage: the token counts come in the last piece, for the agents' daily spend.
+    req = ur.Request(url, data=json.dumps({**body, "stream": True, "stream_options": {"include_usage": True}})
+                     .encode("utf-8"), headers={**headers, "Accept": "text/event-stream"}, method="POST")
+    try:
+        with ur.urlopen(req, timeout=HTTP_TIMEOUT) as r:          # the timeout is per read: a quiet connection
+            return _read_openai_stream(line.decode("utf-8", errors="replace") for line in r)
+    except ue.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", errors="replace")[:400]
+        except Exception:  # noqa: BLE001
+            detail = str(e)
+        raise ProviderError(f"HTTP {e.code}: {detail}") from None
+    except ProviderError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise ProviderError(f"request failed: {e}") from None
+
+
 def _claude_api(system, user, model, images=None):
     key = _key("claude_api")
     if not key:
@@ -383,15 +619,33 @@ def _claude_api(system, user, model, images=None):
         content.append({"type": "text", "text": user})
     else:
         content = user                           # text-only calls send exactly what they sent before
-    data = _post(CLAUDE_URL, {"model": model, "max_tokens": MAX_TOKENS,
-                              "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                              "messages": [{"role": "user", "content": content}]},
-                 {"Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01"})
+    cap = _max_tokens(images)
+    headers = {"Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01"}
+
+    def send(n):
+        return _post(CLAUDE_URL, {"model": model, "max_tokens": n,
+                                  "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                                  "messages": [{"role": "user", "content": content}]}, headers)
+    try:
+        data = send(cap)
+    except ProviderError as e:
+        # A model with less output room than MAX_TOKENS answers 400 about max_tokens: ask again with less.
+        if cap > FALLBACK_MAX_TOKENS and "HTTP 400" in str(e) and "max_tokens" in str(e):
+            cap = FALLBACK_MAX_TOKENS
+            data = send(cap)
+        else:
+            raise
     text = "".join(b.get("text", "") for b in data.get("content") or [] if b.get("type") == "text")
     u = data.get("usage") or {}
     cr, cw = int(u.get("cache_read_input_tokens", 0) or 0), int(u.get("cache_creation_input_tokens", 0) or 0)
-    return text, {"input": int(u.get("input_tokens", 0)) + cr + cw, "cache_read": cr, "cache_write": cw,
-                  "output": int(u.get("output_tokens", 0))}
+    usage = {"input": int(u.get("input_tokens", 0)) + cr + cw, "cache_read": cr, "cache_write": cw,
+             "output": int(u.get("output_tokens", 0))}
+    if data.get("stop_reason") == "max_tokens":
+        # A cut-off answer is never usable JSON: say what happened (and let the backup provider try) instead of
+        # leaving the caller to report "the AI didn't answer with JSON". The tokens were paid for: they go with it.
+        raise ProviderError(f"the AI's answer was cut off at the {cap}-token limit ({len(text)} characters came back)",
+                            usage=usage)
+    return text, usage
 
 
 def _grok_api(system, user, model, images=None):

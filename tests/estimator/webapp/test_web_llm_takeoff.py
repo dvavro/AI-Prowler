@@ -153,7 +153,7 @@ def test_no_candidates_llm_off_fails_fast_saying_the_ai_did_not_run(call, db, em
     r = call("POST", f"{API}/auto-run", _body(empty))
     assert r.status == 200, r.json()
     assert r.json()["status"] == "failed"
-    assert "did not run" in r.json()["error"] and "LLM takeoff is off" in r.json()["error"]
+    assert "did not run" in r.json()["error"] and "AI measuring is off" in r.json()["error"]
     assert "AI agents" in r.json()["error"]                     # where to turn it on
     assert agent_spawns.calls == []
     row = db.execute("SELECT status, error FROM auto_runs WHERE id = ?", (r.json()["run_id"],)).fetchone()
@@ -353,8 +353,8 @@ def test_blueprint_review_points_at_the_llm_switch_when_takeoff_is_off():
     Estimator tab → AI agents since 2026-11-13 (the agents' settings live on the desktop) - instead of only
     suggesting manual measuring. The on / not-ready lines stay as they were."""
     review = (WEB / "review.js").read_text(encoding="utf-8")
-    for needle in ("didn't run because LLM takeoff is off",
-                   "Turn it on in AI-Prowler's 🏗 Estimator tab → 🤖 AI agents (AI takeoff → Suggest)",
-                   "the AI will read the plan instead when you run it (LLM takeoff is on)",
-                   "LLM takeoff is on, but the AI isn't ready"):
+    for needle in ("didn't run because AI measuring is off",
+                   "Turn it on in AI-Prowler's 🏗 Estimator tab → 🤖 AI agents (AI measuring → Suggest)",
+                   "the AI will read the plan instead when you run it (AI measuring is on)",
+                   "AI measuring is on, but the AI isn't ready"):
         assert needle in review, needle

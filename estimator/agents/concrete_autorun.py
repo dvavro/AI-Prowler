@@ -153,9 +153,14 @@ class RunStore:
 
     def update(self, run_id: int, *, status: str | None = None, step: str | None = None,
                error: str | None = None, candidate_id: str | None = None,
-               candidates: list | None = None, measurement_ids: list | None = None) -> None:
-        """Only the given fields change (None leaves a field alone)."""
+               candidates: list | None = None, measurement_ids: list | None = None,
+               live=...) -> None:
+        """Only the given fields change (None leaves a field alone). live: the AI's progress while it reads
+        ({...}), or None to clear it; left out, it's left alone."""
         sets, args = [], []
+        if live is not ...:
+            sets.append("live_json = ?")
+            args.append(json.dumps(live) if live is not None else None)
         if status is not None:
             sets.append("status = ?")
             args.append(status)

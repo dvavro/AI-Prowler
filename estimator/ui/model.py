@@ -281,7 +281,7 @@ def modules() -> list[dict]:
     """Every installed trade and service module, for the 📦 Modules section."""
     reg = _registry()
     return [{"id": m.id, "name": m.name, "category": m.category, "version": m.version,
-             "how": {"quick_estimate": "quick quote", "plan_takeoff": "plan takeoff", "both": "quick or plans"}.get(m.path, m.path)}
+             "how": {"quick_estimate": "quick quote", "plan_takeoff": "measure from plans", "both": "quick or plans"}.get(m.path, m.path)}
             for m in sorted(reg.list(), key=lambda m: (m.category, m.name))]
 
 
@@ -318,7 +318,7 @@ def services() -> list[dict]:
     with _open() as conn:
         off = trades_off(conn, _ctx().company_id)
     return [{"id": m.id, "name": m.name, "version": m.version, "enabled": m.id not in off,
-             "how": {"quick_estimate": "quick quote", "plan_takeoff": "plan takeoff", "both": "quick or plans"}.get(m.path, m.path)}
+             "how": {"quick_estimate": "quick quote", "plan_takeoff": "measure from plans", "both": "quick or plans"}.get(m.path, m.path)}
             for m in sorted((m for m in reg.list() if m.category == "service"), key=lambda m: m.name)]
 
 
@@ -631,7 +631,7 @@ def web_app_access() -> dict:
         "url": f"http://localhost:{port}/estimator/",
         "port": port,
         "lines": [
-            "The Estimator web app is built: plans, reviews and takeoffs in a browser, on this PC or a phone.",
+            "The Estimator web app is built: plans, reviews and measurements in a browser, on this PC or a phone.",
             f"On this PC: http://localhost:{port}/estimator/",
             "You can also see your estimates in the Jobs app, on the Estimates screen \u2014 it is the same web app, on your phone.",
             "Sign-in uses AI-Prowler accounts. The owner has full access; managers and staff sign in as office, and with the Estimating scope (Admin, Manage Scopes) as estimators who can change and approve; field crew can look, but not change or approve.",

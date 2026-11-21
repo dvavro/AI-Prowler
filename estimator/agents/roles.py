@@ -27,10 +27,10 @@ ROLES = {
                   "does": "Drafts a short follow-up email for quotes that are due one. A person sends it."},
     "plan_reader": {"label": "Plan Reader", "works_now": False,
                     "does": "Reads and classifies plan sheets. Starts when the Plan Engine is installed."},
-    "takeoff": {"label": "Takeoff agents", "works_now": False,
+    "takeoff": {"label": "Measuring agents", "works_now": False,
                 "does": "Measures each trade from the plans for the Estimate Runner. Starts when the Plan Engine is "
                         "installed; until then trades are measured by a person or from chat."},
-    "llm_takeoff": {"label": "LLM takeoff", "works_now": True,
+    "llm_takeoff": {"label": "AI measuring", "works_now": True,
                     "does": "When the concrete auto-run finds no slab outline in the drawing, reads the foundation "
                             "sheet with the AI instead (uses the API key, costs tokens, counts against the budget "
                             "below). It only reads dimensions - the app does the maths - and every measurement it "

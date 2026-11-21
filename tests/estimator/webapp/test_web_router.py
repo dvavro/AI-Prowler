@@ -113,7 +113,7 @@ def test_redact_is_recursive_and_leaves_others_alone():
 
 # ---------------------------------------------------------------- menu and permissions
 
-SPEC_MENU = ["Quick estimate", "Jobs board", "Dashboard", "Projects", "Plans", "Takeoffs", "Reviews", "Estimates", "Bids", "Price Book",
+SPEC_MENU = ["Quick estimate", "Jobs board", "Dashboard", "Projects", "Plans", "Measure", "Reviews", "Estimates", "Bids", "Price Book",
              "Symbol Library", "Agents", "Reports", "Settings", "Help"]
 
 

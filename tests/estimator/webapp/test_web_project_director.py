@@ -73,10 +73,12 @@ def test_guided_tours_can_be_turned_off_per_user(call):
     prog = call("GET", f"{API}/help/tours/progress").json()
     assert prog["auto"] is False and "_auto_tours" not in prog["tours"]             # not listed as a tour
     assert call("POST", f"{API}/help/tours/auto", {"enabled": True}).json()["enabled"] is True
+    # 2026-11-21: tours never start on their own now, so the web app no longer offers the switch ("Don't show tours",
+    # Settings > Guided tours). The endpoint stays, harmless, for older clients.
     tour = (router.WEB_DIR / "tour.js").read_text(encoding="utf-8")
-    assert "if (!tourAuto) return;" in tour and 'id: "tour-stop-all"' in tour
+    assert "tourAuto" not in tour and "tour-stop-all" not in tour and "Don't show tours" not in tour
     settings = (router.WEB_DIR / "settings.js").read_text(encoding="utf-8")
-    assert '["tours", "🎓 Guided tours"]' in settings and 'id: "set-tours-auto"' in settings
+    assert '"🎓 Guided tours"]' not in settings and "set-tours-auto" not in settings
 
 
 def test_archive_restore_and_delete_a_project(call):

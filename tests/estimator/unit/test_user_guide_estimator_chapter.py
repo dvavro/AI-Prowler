@@ -9,7 +9,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GUIDE = REPO_ROOT / "COMPLETE_USER_GUIDE.md"
-HEADING = "## 29. Estimator — Estimates, Takeoffs and Bids"
+HEADING = "## 29. Estimator — Estimates, Measuring and Bids"
 
 
 def _guide_text():
@@ -21,7 +21,7 @@ def test_s29_g01_guide_has_the_estimator_chapter():
 
 
 def test_s29_g02_table_of_contents_lists_it():
-    assert "29. Estimator — Estimates, Takeoffs and Bids" in _guide_text()
+    assert "29. Estimator — Estimates, Measuring and Bids" in _guide_text()
 
 
 def test_s29_g03_chapter_sits_before_the_appendices():
@@ -32,7 +32,7 @@ def test_s29_g03_chapter_sits_before_the_appendices():
 def test_s29_g04_chapter_covers_the_built_features():
     text = _guide_text()
     chapter = text[text.index(HEADING):text.index("## Appendix A")]
-    for needle in ("setup wizard", "Team and approvals", "practice project", "Blueprint Review",
+    for needle in ("setup wizard", "Team and approvals", "practice project", "Measure from plans (takeoff)",
                    "Runner", "Estimating scope", "localhost:8770", "CAD and tools",
                    "ODA File Converter", "Director"):
         assert needle in chapter, needle

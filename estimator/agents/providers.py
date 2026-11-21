@@ -24,7 +24,12 @@ _OVERRIDE: dict = {}
 
 
 class ProviderError(RuntimeError):
-    """The provider couldn't answer (no key, HTTP error, bad reply). The message is safe to show."""
+    """The provider couldn't answer (no key, HTTP error, bad reply). The message is safe to show. usage: the tokens a
+    failed call still used (a cut-off answer), for the budget meter - None when nothing was charged."""
+
+    def __init__(self, message="", usage=None):
+        super().__init__(message)
+        self.usage = usage
 
 
 def set_provider(fake) -> None:
@@ -139,7 +144,7 @@ def ask(provider: str, system: str, user: str, model: str = "") -> tuple[str, di
     try:
         return h.ask(provider, system, user, model=model)
     except Exception as exc:  # noqa: BLE001 - desk_agent_providers.ProviderError and friends
-        raise ProviderError(str(exc)[:400]) from None
+        raise ProviderError(str(exc)[:400], usage=getattr(exc, "usage", None)) from None
 
 
 def ask_vision(provider: str, system: str, user: str, images: list, model: str = "") -> tuple[str, dict]:
@@ -156,7 +161,20 @@ def ask_vision(provider: str, system: str, user: str, images: list, model: str =
     try:
         return fn(provider, system, user, images, model=model)
     except Exception as exc:  # noqa: BLE001 - desk_agent_providers.ProviderError and friends
-        raise ProviderError(str(exc)[:400]) from None
+        raise ProviderError(str(exc)[:400], usage=getattr(exc, "usage", None)) from None
+
+
+def set_progress(callback) -> None:
+    """Report this thread's streamed AI answers to callback(info) while they arrive ({phase, thought, item,
+    thinking_chars, answer_chars}); None stops (2026-11-21: AI Auto Run shows it with its waiting message).
+    A host (or a test fake) without streaming simply reports nothing."""
+    h = _host()
+    fn = getattr(h, "set_progress", None) if h is not None else None
+    if fn is not None:
+        try:
+            fn(callback)
+        except Exception:  # noqa: BLE001 - progress is a nicety, never a failure
+            pass
 
 
 def cost_micros(model: str, usage: dict) -> int:

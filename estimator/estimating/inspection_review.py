@@ -243,10 +243,11 @@ def _call(conn, ctx: RequestContext, cfg: dict, est: dict, system: str, user: st
         try:
             text, usage = providers.ask(which, system, user, model)
         except providers.ProviderError as exc:
+            spent = getattr(exc, "usage", None)          # a cut-off answer was still paid for (2026-11-20)
             roles.record_usage(conn, ctx, task_id=None, role=ROLE, provider=which, model=model,
-                               usage=None, ok=False, error=str(exc))
+                               usage=spent, ok=False, error=str(exc))
             ai_log.record(conn, ctx, provider=which, model=model, role=ROLE, purpose=purpose,
-                          system_prompt=system, user_prompt=user, estimate_id=est["id"],
+                          system_prompt=system, user_prompt=user, estimate_id=est["id"], usage=spent,
                           duration_ms=int((time.monotonic() - started) * 1000), ok=False, error=str(exc))
             errors.append(f"{which}: {exc}")
             continue

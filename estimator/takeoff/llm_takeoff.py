@@ -243,7 +243,7 @@ def _call(conn, ctx: RequestContext, cfg: dict, run: dict, system: str, user: st
     """
     ok_budget, why = roles.budget_left(conn, ctx.company_id)
     if not ok_budget:
-        raise LlmTakeoffError(f"LLM takeoff can't run: {why}")
+        raise LlmTakeoffError(f"AI measuring can't run: {why}")
     errors = []
     for which in [p for p in (cfg["provider"], cfg.get("fallback_provider")) if p]:
         ok, why = providers.ready(which)
@@ -256,10 +256,11 @@ def _call(conn, ctx: RequestContext, cfg: dict, run: dict, system: str, user: st
         try:
             text, usage = providers.ask_vision(which, system, user, images, model)
         except providers.ProviderError as exc:
+            spent = getattr(exc, "usage", None)          # a cut-off answer was still paid for (2026-11-20)
             roles.record_usage(conn, ctx, task_id=run["id"], role=ROLE, provider=which, model=model,
-                               usage=None, ok=False, error=str(exc))
+                               usage=spent, ok=False, error=str(exc))
             ai_log.record(conn, ctx, provider=which, model=model, role=ROLE, purpose=purpose,
-                          system_prompt=system, user_prompt=user, images=images_refs,
+                          system_prompt=system, user_prompt=user, images=images_refs, usage=spent,
                           auto_run_id=run["id"], estimate_id=run["estimate_id"],
                           duration_ms=int((time.monotonic() - started) * 1000),
                           ok=False, error=str(exc))
@@ -397,6 +398,32 @@ def _slab_viewport(conn, sheet_id: int) -> int | None:
 SECTION_UNIT = "sqft/lf"            # the footer cross-section: square feet of concrete per foot of footer
 
 
+def replace_earlier_proposals(conn, ctx: RequestContext, run: dict, module_id: str, sheet_id) -> set[str]:
+    """A rerun of AI Auto Run recalculates the trade on that sheet: the earlier AI Auto Run measurements of the trade
+    on the sheet go (2026-11-19, David: two runs' proposals waiting side by side showed 4 weatherproof outlets where
+    there were 2). Whether the items a person already approved stay is the run's keep_approved choice (on by
+    default - "this can cost the user lots of review time"): kept, they are not proposed again; off, the trade starts
+    over from scratch. Measurements a person drew or typed are never touched. The estimate's history log records each
+    removal. Call it inside the transaction that inserts the new proposals; it returns the questions (feeds) whose
+    approved AI measurement was kept, for the caller to skip."""
+    keep = bool(run.get("keep_approved", 1))
+    reason = f"replaced by AI Auto Run #{run['id']}"
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, feeds, qty, unit, status FROM measurements WHERE company_id = ? AND estimate_id = ?"
+        " AND module_id = ? AND sheet_id = ? AND proposed_by = ?",
+        (ctx.company_id, run["estimate_id"], module_id, sheet_id, PROPOSED_BY))]
+    kept = set()
+    for r in rows:
+        if keep and r["status"] == "approved":
+            kept.add(r["feeds"])
+            continue
+        conn.execute("DELETE FROM measurements WHERE id = ?", (r["id"],))
+        service._log(conn, ctx, run["estimate_id"], "measurement_deleted",
+                     {"measurement_id": r["id"], "qty": r["qty"], "unit": r["unit"], "feeds": r["feeds"],
+                      "status": r["status"], "reason": reason})
+    return kept
+
+
 def create_measurements(conn, ctx: RequestContext, run: dict, reading: dict, quantities: dict,
                         provider: str, model: str, footer: dict | None = None) -> list[int]:
     """Propose the slab, footer and form measurements from the quantities the app
@@ -435,7 +462,10 @@ def create_measurements(conn, ctx: RequestContext, run: dict, reading: dict, qua
          f"form length = slab perimeter from the dimensions the AI read ({dims})", "forms"),
     ]
     with service.transaction(conn):
+        kept = replace_earlier_proposals(conn, ctx, run, MODULE_ID, sheet_id)
         for kind, feeds, label, qty, unit, how, shape_key in planned:
+            if feeds in kept:                    # already approved, and the run keeps approved items
+                continue
             shape = shapes.get(shape_key)       # in sheet units, so it draws wherever its view is on the sheet
             geometry = json.dumps({"type": shape["type"], "points": shape["points"]}) if shape else None
             calc = {"source": "llm", "auto_run_id": run["id"], "candidate_id": CANDIDATE_ID, "how": how,
@@ -477,11 +507,11 @@ def run_llm_takeoff(conn, ctx: RequestContext, run: dict, on_step=None) -> dict:
 
     cfg = roles.get_role(conn, ctx.company_id, ROLE)
     if cfg["provider"] not in providers.API_PROVIDERS:
-        raise LlmTakeoffError("LLM takeoff is off - turn it on in \U0001f916 AI agents (Setup) to let the AI"
+        raise LlmTakeoffError("AI measuring is off - turn it on in \U0001f916 AI agents (Setup) to let the AI"
                               " read the plan when no slab outline is found")
     ok_budget, why = roles.budget_left(conn, ctx.company_id)
     if not ok_budget:
-        raise LlmTakeoffError(f"LLM takeoff can't run: {why}")
+        raise LlmTakeoffError(f"AI measuring can't run: {why}")
     sheet = conn.execute("SELECT * FROM sheets WHERE id = ? AND company_id = ?",
                          (int(run["sheet_id"]), ctx.company_id)).fetchone()
     if sheet is None:
@@ -509,7 +539,7 @@ def run_llm_takeoff(conn, ctx: RequestContext, run: dict, on_step=None) -> dict:
     else:
         shown = ranked[:CLASSIFY_MAX_SHEETS]
         preps = [_prepare_image(conn, person_ctx, s["id"],
-                                "LLM takeoff: find the foundation sheet", cfg["provider"]) for s in shown]
+                                "AI measuring: find the foundation sheet", cfg["provider"]) for s in shown]
         images = [_image_payload(Path(p["file_path"]), CLASSIFY_MAX_PX) for p in preps]
         refs = [_image_ref(p, CLASSIFY_MAX_PX) for p in preps]
         listed = "\n".join(f"{i + 1}. {_sheet_label(s)}" for i, s in enumerate(shown))
@@ -519,7 +549,7 @@ def run_llm_takeoff(conn, ctx: RequestContext, run: dict, on_step=None) -> dict:
                                      " foundation sections)? Reply with ONLY this JSON: {\"foundation_sheet_id\": <the"
                                      " sheet's id, or null if none of these sheets shows a foundation drawing>,"
                                      " \"notes\": \"one line saying why\"}. If you cannot tell, return null - never guess.",
-                                   images, purpose="LLM takeoff: find the foundation sheet",
+                                   images, purpose="AI measuring: find the foundation sheet",
                                    images_refs=refs, step="classify")
         try:
             found_id, notes = parse_classification(text, [s["id"] for s in shown])
@@ -538,7 +568,7 @@ def run_llm_takeoff(conn, ctx: RequestContext, run: dict, on_step=None) -> dict:
 
     step("reading the plan with the AI")
     prep = _prepare_image(conn, person_ctx, foundation["id"],
-                          "LLM takeoff: read the slab dimensions", cfg["provider"])
+                          "AI measuring: read the slab dimensions", cfg["provider"])
     path = Path(prep["file_path"])
     hints = _hints(conn, ctx.company_id, foundation["id"])
     hint_text = (" Labels the drawing model found on this sheet (hints only - read the dimensions from the"
@@ -558,7 +588,7 @@ def run_llm_takeoff(conn, ctx: RequestContext, run: dict, on_step=None) -> dict:
           " as printed (e.g. 12x20) or null; footer_bar is the bar size as printed (e.g. #5) or null."
           " confidence is 0-1, how sure you are about the dimensions you did read.",
         [_image_payload(path)],
-        purpose="LLM takeoff: read the slab dimensions", images_refs=[_image_ref(prep)])
+        purpose="AI measuring: read the slab dimensions", images_refs=[_image_ref(prep)])
     try:
         reading = parse_reading(text, foundation["id"])
     except LlmTakeoffError as exc:
@@ -625,10 +655,10 @@ def _prepare_detail(conn, person_ctx: RequestContext, sheet_id: int, provider: s
             b = json.loads(vp["bbox_json"])
             pad = 0.1
             return crops.prepare(conn, person_ctx, sheet_id, bbox=[b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad],
-                                 purpose="LLM takeoff: read the footer section detail", provider=provider)
+                                 purpose="AI measuring: read the footer section detail", provider=provider)
         except (EstimatorError, ValueError, TypeError, IndexError):
             pass                                    # too big to crop, or no picture of it: the whole sheet
-    return _prepare_image(conn, person_ctx, sheet_id, "LLM takeoff: read the footer section detail", provider)
+    return _prepare_image(conn, person_ctx, sheet_id, "AI measuring: read the footer section detail", provider)
 
 
 def _read_footer(conn, ctx: RequestContext, person_ctx: RequestContext, cfg: dict, run: dict, foundation: dict,
@@ -643,7 +673,7 @@ def _read_footer(conn, ctx: RequestContext, person_ctx: RequestContext, cfg: dic
         prep = _prepare_detail(conn, person_ctx, foundation["id"], cfg["provider"])
         payload, ref = _image_payload(Path(prep["file_path"])), _image_ref(prep)
         text, _, _, log_id = _call(conn, ctx, cfg, run, fs.READ_SYSTEM, fs.read_prompt(_sheet_label(foundation)),
-                                   [payload], purpose="LLM takeoff: read the footer section", images_refs=[ref])
+                                   [payload], purpose="AI measuring: read the footer section", images_refs=[ref])
         try:
             out["read"] = fs.parse_read(text)
         except (ValueError, TypeError) as exc:
@@ -653,7 +683,7 @@ def _read_footer(conn, ctx: RequestContext, person_ctx: RequestContext, cfg: dic
         step("checking the reading against the plan")
         dims = f"{reading.get('slab_width_ft')} x {reading.get('slab_length_ft')}"
         text, _, _, log_id = _call(conn, ctx, cfg, run, fs.CHECK_SYSTEM, fs.check_prompt(out["read"], dims),
-                                   [payload], purpose="LLM takeoff: check the footer reading against the plan",
+                                   [payload], purpose="AI measuring: check the footer reading against the plan",
                                    images_refs=[ref], step="check")
         try:
             out["check"] = fs.parse_check(text)

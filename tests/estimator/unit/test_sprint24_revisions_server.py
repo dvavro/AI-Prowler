@@ -110,7 +110,7 @@ def revs(db, tmp_path):
     porch = m.propose(db, CTX, est, "roofing", o["PORCH"], kind="area", label="porch", confirm=True)["proposed"][0]["id"]
     typed = m.manual(db, CTX, est, "roofing", feeds="ridge_lf", qty="20", unit="lf", confirm=True)["measurement"]["id"]
     m.confirm_measurements(db, CTX, [keep, slab, porch], confirm=True)
-    b = store.upload(db, CTX, est, _pdf(tmp_path / "revB.pdf", 2, "B"), supersedes_plan_set_id=a,
+    b = store.upload(db, CTX, est, _pdf(tmp_path / "revB.pdf", 2, "B"), supersedes_plan_set_id=a, keep_old=True,
                      confirm=True)["plan_set_id"]
     store.save_results(db, CTX, b, PLAN("B"), "fake")
     return {"est": est, "a": a, "b": b, "o": o, "keep": keep, "moved": moved, "slab": slab, "gfi": gfi,
@@ -170,7 +170,7 @@ def test_compare_refusals(db, revs, tmp_path):  # S24-C03
         revisions.compare(db, CTX, revs["a"])
     with pytest.raises(InvalidInput, match="same plan set"):
         revisions.compare(db, CTX, revs["a"], revs["a"])
-    c = store.upload(db, CTX, revs["est"], _pdf(tmp_path / "revC.pdf", 1, "C"), supersedes_plan_set_id=revs["b"],
+    c = store.upload(db, CTX, revs["est"], _pdf(tmp_path / "revC.pdf", 1, "C"), supersedes_plan_set_id=revs["b"], keep_old=True,
                      confirm=True)["plan_set_id"]
     with pytest.raises(InvalidInput, match="hasn't been read"):
         revisions.compare(db, CTX, c)

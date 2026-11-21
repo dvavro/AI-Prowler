@@ -23,6 +23,7 @@ symbol_detections rows (estimator/symbols/results.py). Nothing here is ever appr
 from __future__ import annotations
 
 import math
+import re
 
 STEP = 0.008                 # inches between sample points along line work
 MIN_DIAG, MAX_DIAG = 0.06, 1.5
@@ -386,13 +387,73 @@ def scan_sheet(page, sheet: dict, entries: list[dict], templates: dict, skip=(),
     return out[:MAX_DETECTIONS]
 
 
+_CAD_LEGEND_TITLE = re.compile(r"^\s*(?:[A-Z]+\s+){0,2}LEGEND\s*:?\s*$", re.I)   # LEGEND, SYMBOL LEGEND, ELECTRICAL LEGEND
+
+
+def _pts(o: dict) -> list:
+    return ((o.get("geometry") or {}).get("points")) or []
+
+
+def cad_legend_boxes(sheet: dict) -> list[list[float]]:
+    """2026-11-19 (David: "your counts include the legend itself and that's a mistake"). A CAD sheet's legend - one sample
+    of each symbol with its description - is drawn with the same blocks as the plan, so its samples were counted as
+    devices. The legend is found from its title ("LEGEND", "ELECTRICAL LEGEND"...): the box starts at the title and
+    grows down over the symbols and text rows below it, row by row, until a gap. Nothing near the plan's walls or rooms
+    joins it, so a legend beside the plan never swallows the plan. Sheet coordinates (y down)."""
+    objs = sheet.get("objects") or []
+    w, h = float(sheet.get("width") or 0), float(sheet.get("height") or 0)
+    gap = max(w, h) * 0.03 or 1.0
+    plan = []                                        # boxes round the walls and rooms, padded
+    for o in objs:
+        if o.get("kind") in ("wall", "room") and _pts(o):
+            xs, ys = [p[0] for p in _pts(o)], [p[1] for p in _pts(o)]
+            if w and h and (max(xs) - min(xs)) * (max(ys) - min(ys)) > 0.5 * w * h:
+                continue                             # the sheet's border read as a room: not the plan
+            plan.append((min(xs) - gap, min(ys) - gap, max(xs) + gap, max(ys) + gap))
+
+    def on_plan(x, y):
+        return any(b[0] <= x <= b[2] and b[1] <= y <= b[3] for b in plan)
+    boxes = []
+    for t in objs:
+        if t.get("kind") != "text" or not _CAD_LEGEND_TITLE.match(t.get("label") or "") or not _pts(t):
+            continue
+        tx, ty = _pts(t)[0][0], _pts(t)[0][1]
+        if on_plan(tx, ty):
+            continue
+        box = [tx, ty, tx, ty]
+        cands = [o for o in objs if o is not t and o.get("kind") in ("text", "symbol") and _pts(o)]
+        used, grew = set(), True
+        while grew:
+            grew = False
+            for i, o in enumerate(cands):
+                if i in used:
+                    continue
+                x, y = _pts(o)[0][0], _pts(o)[0][1]
+                if y < ty - gap / 2 or not box[1] - gap <= y <= box[3] + gap or on_plan(x, y):
+                    continue
+                box = [min(box[0], x), min(box[1], y), max(box[2], x), max(box[3], y)]
+                used.add(i)
+                grew = True
+        if sum(1 for i in used if cands[i].get("kind") == "symbol") >= 2:     # a title alone isn't a legend
+            pad = gap / 2
+            boxes.append([round(box[0] - pad, 4), round(box[1] - pad, 4), round(box[2] + pad, 4), round(box[3] + pad, 4)])
+    return boxes
+
+
 def cad_symbols(sheet: dict) -> int:
-    """CAD blocks: the block name says what it is. Adds a "symbol" record to each block object; returns how many."""
+    """CAD blocks: the block name says what it is. Adds a "symbol" record to each block object; returns how many.
+    The legend's samples aren't devices (2026-11-19): they stay plain blocks, and the legend box is kept with the sheet."""
     from estimator.plan_engine import symbol_library as lib
+    legend = cad_legend_boxes(sheet)
+    for b in legend:
+        sheet.setdefault("legends", []).append({"title": "Legend", "discipline": sheet.get("discipline"),
+                                                "bbox": b, "confidence": 0.8})
     n = 0
     for o in sheet.get("objects") or []:
         if o.get("kind") != "symbol" or not o.get("block_name") or o.get("symbol"):
             continue
+        if legend and _pts(o) and any(b[0] <= _pts(o)[0][0] <= b[2] and b[1] <= _pts(o)[0][1] <= b[3] for b in legend):
+            continue                                 # a sample in the legend, not a device on the plan
         std = lib.by_block_name(o["block_name"])
         if std is None:                 # doors, furniture, north arrows...: stay plain CAD blocks (Sprint 11 learns them)
             continue
@@ -400,6 +461,58 @@ def cad_symbols(sheet: dict) -> int:
                        "scores": {"legend": None, "vision": None, "ocr": None, "ai": None, "cad": 0.95},
                        "confidence": 0.95, "rotation": None, "mirrored": False, "bbox": None,
                        "method": "cad", "needs_review": False}
+        n += 1
+    _outside_wall_lights(sheet)
+    return n
+
+
+def _footprints(sheet: dict) -> list[list[float]]:
+    """The buildings (or floors) on a sheet: its rooms' boxes merged where they touch. The sheet's border read as a
+    room (over half the sheet) isn't a building. Sheet coordinates."""
+    w, h = float(sheet.get("width") or 0), float(sheet.get("height") or 0)
+    tol = max(w, h) * 0.03          # rooms a hall apart (no room read for the hall) are one building; floors drawn
+    boxes = []                      # side by side, far further apart, stay two
+    for o in sheet.get("objects") or []:
+        if o.get("kind") != "room" or not _pts(o):
+            continue
+        xs, ys = [p[0] for p in _pts(o)], [p[1] for p in _pts(o)]
+        b = [min(xs), min(ys), max(xs), max(ys)]
+        if w and h and (b[2] - b[0]) * (b[3] - b[1]) > 0.5 * w * h:
+            continue
+        boxes.append(b)
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(boxes)):
+            for j in range(i + 1, len(boxes)):
+                a, b = boxes[i], boxes[j]
+                if a[0] <= b[2] + tol and b[0] <= a[2] + tol and a[1] <= b[3] + tol and b[1] <= a[3] + tol:
+                    boxes[i] = [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
+                    del boxes[j]
+                    merged = True
+                    break
+            if merged:
+                break
+    return boxes
+
+
+def _outside_wall_lights(sheet: dict) -> int:
+    """2026-11-20 (David: exterior lights found 2 but lit up nothing). A plan often draws a porch or entry light with
+    the plain wall-light block, on the outside face of an outside wall. Those are exterior lights (a different fixture to
+    order), so a wall light outside every building footprint becomes light_exterior - and the drawing then lights up
+    what the AI counted as exterior lights, instead of counting them in wall lights too."""
+    feet = _footprints(sheet)
+    if not feet:
+        return 0
+    n = 0
+    for o in sheet.get("objects") or []:
+        s = o.get("symbol") or {}
+        if s.get("item_type") != "light_wall" or not _pts(o):
+            continue
+        x, y = _pts(o)[0][0], _pts(o)[0][1]
+        if any(b[0] <= x <= b[2] and b[1] <= y <= b[3] for b in feet):
+            continue
+        s.update(item_type="light_exterior", standard="light_exterior")   # method stays "cad" (results.METHODS)
         n += 1
     return n
 

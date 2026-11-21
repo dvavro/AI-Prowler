@@ -121,7 +121,7 @@ def test_revised_set_becomes_revision_2(call):
     first = call("POST", f"{API}/estimates/{e['id']}/plans/attach",
                  {"stage_id": _stage(call, e["id"]).json()["stage_id"]}).json()["plan_set_id"]
     s = _stage(call, e["id"], data=PDF + b"% rev B\n", name="rev B.pdf", supersedes=first).json()
-    assert s["details"]["revision"] == 2 and f"plan set {first}" in s["question"]
+    assert s["details"]["revision"] == 2 and "plan set #1" in s["question"]     # the project's number, not the id
     a = call("POST", f"{API}/estimates/{e['id']}/plans/attach",
              {"stage_id": s["stage_id"], "supersedes_plan_set_id": first}).json()
     assert a["revision"] == 2

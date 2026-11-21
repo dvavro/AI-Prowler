@@ -61,12 +61,14 @@ def parse_framing_reading(text: str, sheet_id: int) -> dict:
     """The read call's answer, validated: three whole-number counts (0 when there are
     none - never null), the rooms with their printed dimensions, the evidence for
     each quantity, confidence 0-1 (or None), notes. Any defect rejects the whole
-    answer - a count the AI hedged on is no count at all. The framing sheet is the
-    one that was shown, whatever id the AI wrote down. The dimensions are only
-    checked as text here; quantities_from_reading parses them (and fails loudly
-    when one isn't a length)."""
+    answer - a count the AI hedged on is no count at all, and a dimension it hedged
+    on is no dimension at all. The framing sheet is the one that was shown,
+    whatever id the AI wrote down."""
     obj = lt._parse_json_object(text)
     rooms = lq.parse_rooms(obj.get("rooms"), "rooms")
+    for r in rooms:      # the dimensions must parse now - a bad one rejects the whole answer
+        lq.dimension_inches(r["width_ft"], f"room {r['name'] or '?'} width")
+        lq.dimension_inches(r["length_ft"], f"room {r['name'] or '?'} length")
     reading = lq.parse_counts(text, sheet_id, COUNT_IDS, "framing_sheet_id")
     reading["evidence"] = lq.parse_evidence(obj, ALL_IDS)
     reading["rooms"] = rooms

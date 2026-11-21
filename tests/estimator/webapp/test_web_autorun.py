@@ -394,7 +394,7 @@ def test_auto_calibrate_route(call, db, slab, session_for):                     
     r = call("POST", f"{API}/viewports/{slab['vp']}/auto-calibrate", {})
     assert r.status == 200 and r.json()["needs_confirmation"] is True and "already has a scale" in r.json()["question"]
     got = call("POST", f"{API}/viewports/{slab['vp']}/auto-calibrate", {"confirm": True}).json()
-    assert got["status"] == "manual_required" and "AI takeoff is off" in got["reason"] and "Calibrate" in got["how"]
+    assert got["status"] == "manual_required" and "AI measuring is off" in got["reason"] and "Calibrate" in got["how"]
     vp = call("GET", f"{API}/sheets/{slab['sheet']}").json()["viewports"][0]
     assert vp["auto_calibration"]["status"] == "manual_required"
     assert call("POST", f"{API}/viewports/{slab['vp']}/auto-calibrate", {"confirm": True},
@@ -488,7 +488,7 @@ def test_start_electrical_run_llm_off_fails_fast(call, db, two_sheets, agent_spa
                                          "viewport_id": two_sheets["vp_e"], "module_id": "electrical"})
     assert r.status == 200, r.json()
     assert r.json()["status"] == "failed"
-    assert "turn LLM takeoff on" in r.json()["error"] and "count the devices" in r.json()["error"]
+    assert "turn AI measuring on" in r.json()["error"] and "count the devices" in r.json()["error"]
     assert agent_spawns.calls == []
     row = db.execute("SELECT status, error FROM auto_runs WHERE id = ?",
                      (r.json()["run_id"],)).fetchone()
@@ -552,7 +552,7 @@ def test_start_plumbing_run_llm_off_fails_fast(call, db, two_sheets, agent_spawn
                                          "viewport_id": two_sheets["vp_p"], "module_id": "plumbing"})
     assert r.status == 200, r.json()
     assert r.json()["status"] == "failed"
-    assert "turn LLM takeoff on" in r.json()["error"] and "count the fixtures" in r.json()["error"]
+    assert "turn AI measuring on" in r.json()["error"] and "count the fixtures" in r.json()["error"]
     assert agent_spawns.calls == []
     row = db.execute("SELECT status, error FROM auto_runs WHERE id = ?",
                      (r.json()["run_id"],)).fetchone()

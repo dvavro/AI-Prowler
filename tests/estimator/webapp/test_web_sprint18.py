@@ -151,7 +151,9 @@ def test_tour_ids_match_the_api():                                        # C2S1
 def test_every_tour_step_names_a_real_control():                          # C2S18-W12
     src = _web_text()
     steps = _steps()
-    assert len(steps) == 90          # 2026-11-17: the Estimate tour gains Reopen, Change order and the total
+    assert len(steps) == 88          # 2026-11-17: the Estimate tour gains Reopen, Change order and the total;
+                                     # 2026-11-21: the Agents tour gains AI Auto Runs; the Projects tour loses
+                                     # Name / Create project and the Project tour loses Upload the plans (the Director's job)
     screens = {s["id"] for s in nav.SCREENS}
     for sel, _go, title, body in steps:
         assert title.strip() and body.strip(), sel
@@ -180,17 +182,19 @@ def test_practice_tour_walks_across_screens():                           # C2S18
     assert bases == {"#/projects/", "#/takeoffs/", "#/reviews", "#/estimates/", "#/bids"}
 
 
-def test_tour_engine_auto_starts_and_marks_progress():                   # C2S18-W14
+def test_tour_engine_starts_only_when_asked_and_marks_progress():         # C2S18-W14
+    # 2026-11-21: tours never start on their own (the Director guides the work); "🎓 Show me this screen" starts one.
     tour = (WEB / "tour.js").read_text(encoding="utf-8")
-    assert "async function maybeStartTour" in tour
-    assert "if (prog[id]) return;" in tour                     # finished or skipped: no auto-start
-    assert 'tourSaveProgress(id, "skipped")' in tour           # Skip saves skipped
-    assert 'tourSaveProgress(id, "completed")' in tour         # Finish saves completed
-    close = tour.split("function tourClose()")[1].split("function ")[0]
-    assert "tourSaveProgress" not in close                     # X saves nothing
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    assert "maybeStartTour" not in tour and "maybeStartTour" not in app   # no auto-start hook on route()
+    assert "function showMeThisScreen(fallback)" in tour
+    link = app.split("function helpLink(screenId)")[1].split("\nfunction ")[0]
+    assert 'id: "show-me-link"' in link and "🎓 Show me this screen" in link and "showMeThisScreen(screenId)" in link
+    # 2026-11-21: nothing is tracked any more (no done / skipped), and Skip tour went (it was the same as ✕).
+    assert "tourSaveProgress" not in tour and "tourLoadProgress" not in tour and "tour-skip" not in tour
+    assert "/help/tours/progress" not in tour
     assert "translateX(-50%)" in tour                          # centred when a step has no control
     assert "r.top - h - 10" in tour                            # flips above when no room below
-    assert "maybeStartTour()" in (WEB / "app.js").read_text(encoding="utf-8")   # route hook
 
 
 # ------------------------------------------------------------------ help panel, "?", Help screen
@@ -218,9 +222,9 @@ def test_help_panel_has_search_replay_and_close():                       # C2S18
 
 def test_help_screen_lists_tours_with_replay():                          # C2S18-W17
     app = (WEB / "app.js").read_text(encoding="utf-8")
-    for part in ("TOUR_IDS", "tourReplayBtn", '"Guided tours"', 'id: "help-tours"',
-                 "tourLoadProgress", "A tour runs the first time you open its screen"):
+    for part in ("TOUR_IDS", "tourReplayBtn", '"Guided tours"', 'id: "help-tours"', "They only start when you ask"):
         assert part in app, part
+    assert '" - done"' not in app and '" - skipped"' not in app      # 2026-11-21: no done / skipped
 
 
 # ------------------------------------------------------------------ guides
@@ -252,7 +256,8 @@ def test_new_guides_are_served_for_their_screens(call):                 # C2S18-
 def test_empty_states_name_the_next_step():                              # C2S18-W20
     cases = [
         ("review.js", ["takeoffs-empty", "No plans or measurements yet.", "Open Projects", "#/projects"]),
-        ("verify.js", ["runs-empty", "No takeoff runs yet.", "a project's estimate"]),   # 2026-11-17: no agents table
+        ("verify.js", ["runs-empty", "No Director measure runs yet.", "a project's estimate",   # 2026-11-17: no agents table
+                       "auto-runs-empty", "No AI Auto Runs yet."]),                  # 2026-11-21: AI Auto Runs listed too
         ("estimates.js", ["estimates-empty", "No estimates", "Create one from Projects"]),
         ("app.js", ["No trades priced yet.", "Open the estimate", "start a quick estimate",
                     "No projects yet — create one to start."]),
