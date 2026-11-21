@@ -1,16 +1,76 @@
 # Golden cases: sample prices, no markups. Totals in cents (one month).
-- name: 5,000 sq ft lawn every 2 weeks
-  answers: {lawn_sqft: 5000}
-  # 5,000 x 2 visits x $0.01
-  expected_lines: {mowing: 10000}
+- name: Standard yard every 2 weeks (defaults) - job minimum applies
+  answers: {}
+  # 2 visits x $37 = $74, raised to the $80 job minimum
+  expected_lines: {mow_standard: 7400}
+  expected_total_cents: 8000
+- name: Standard yard weekly
+  answers: {visits: weekly}
+  # 4 visits x $37
+  expected_lines: {mow_standard: 14800}
+  expected_total_cents: 14800
+- name: Small yard weekly with edging, a few bushes, small beds, leaf cleanup
+  answers: {yard_size: small, visits: weekly, edging: true, hedges: few, beds: small, leaf_cleanup: true}
+  # mow 4 x $27 = $108; edge 4 x $7 = $28; hedges $40; beds $25; leaves $140
+  expected_lines: {mow_small: 10800, edging: 2800, hedges_few: 4000, beds_small: 2500, leaves_small: 14000}
+  expected_total_cents: 34100
+- name: Exact 1 acre every 2 weeks
+  answers: {exact_size: 1, exact_unit: acre}
+  # 43.56k sq ft -> 11 + 32.56 x 0.5 = 27.28 -> 28 units x 2 visits = 56 x $2.35
+  expected_lines: {mow_exact: 13160}
+  expected_total_cents: 13160
+- name: Exact 5,000 sq ft weekly with leaf cleanup (minimums apply)
+  answers: {exact_size: 5000, visits: weekly, leaf_cleanup: true}
+  # mow 12-unit minimum x 4 visits = 48 x $2.35 = $112.80; leaves 20-unit minimum x $7 = $140
+  expected_lines: {mow_exact: 11280, leaves_exact: 14000}
+  expected_total_cents: 25280
+- name: Exact 2 acres every 2 weeks with leaf cleanup (leaf half rate past 1 acre)
+  answers: {exact_size: 2, exact_unit: acre, leaf_cleanup: true}
+  # mow 11 + 76.12 x 0.5 = 49.06 -> 50 x 2 = 100 x $2.35 = $235; leaves 44 + 43.12 x 0.5 = 65.56 -> 66 x $7 = $462
+  expected_lines: {mow_exact: 23500, leaves_exact: 46200}
+  expected_total_cents: 69700
+- name: Standard yard weekly, 250 ft of edging
+  answers: {visits: weekly, edging: true, edge_ft: 250}
+  # mow 4 x $37 = $148; edging 3 (per 100 ft) x 4 visits = 12 x $23.40 = $280.80
+  expected_lines: {mow_standard: 14800, edging_ft: 28080}
+  expected_total_cents: 42880
+- name: No mowing, 100 ft of hedge under 6 ft
+  answers: {yard_size: none, hedges: ft_low, hedge_ft: 100}
+  expected_lines: {hedges_ft_low: 12000}
+  expected_total_cents: 12000
+- name: No mowing, 10 ft of tall hedge - 17 ft minimum, then job minimum
+  answers: {yard_size: none, hedges: ft_tall, hedge_ft: 10}
+  # 17 ft x $3 = $51, raised to the $80 job minimum
+  expected_lines: {hedges_ft_tall: 5100}
+  expected_total_cents: 8000
+- name: Desert yard every 2 weeks - rock, weed spray, drip check, hard access
+  answers: {yard_size: none, rock_area: standard, weed_spray: standard, irrigation_check: true, hard_access: true}
+  # rock 2 x $33.50 = $67; weeds $43.50; drip $23.50; access 2 x $10 = $20
+  expected_lines: {rock_standard: 6700, weed_standard: 4350, irrigation: 2350, hard_access: 2000}
+  expected_total_cents: 15400
+- name: Standard yard weekly with 3 mid palms, 2 trees, overseed, green waste
+  answers: {visits: weekly, palm_height: mid, palm_qty: 3, trees_qty: 2, overseed: true, green_waste: true}
+  # mow $148; palms 3 x $167 = $501; trees 2 x $167 = $334; overseed $147; green waste $26.75
+  expected_lines: {mow_standard: 14800, palms_mid: 50100, trees: 33400, overseed_standard: 14700, green_waste: 2675}
+  expected_total_cents: 115675
+- name: Exact 1 acre every 2 weeks with overseeding
+  answers: {exact_size: 1, exact_unit: acre, overseed: true}
+  # overseed 43.56 -> 44 x $8 = $352
+  expected_lines: {mow_exact: 13160, overseed_exact: 35200}
+  expected_total_cents: 48360
+- name: Palms by height - 2 at 40 to 60 ft, then 1 over 60 ft
+  answers: {yard_size: none, palm_height: from40to60, palm_qty: 2}
+  expected_lines: {palms_40_60: 87000}
+  expected_total_cents: 87000
+- name: One palm over 60 ft
+  answers: {yard_size: none, palm_height: over60}
+  expected_lines: {palms_over60: 60200}
+  expected_total_cents: 60200
+- name: Hard access ignored when there are no visits (hedges only)
+  answers: {yard_size: none, hedges: full, hard_access: true}
+  expected_lines: {hedges_full: 10000}
   expected_total_cents: 10000
-- name: 8,000 sq ft weekly with edging, 60 ft hedges, 200 sq ft beds, leaf cleanup
-  answers: {lawn_sqft: 8000, visits: weekly, edging: true, hedge_lf: 60, beds_sqft: 200, leaf_cleanup: true}
-  # mow 32,000 x $0.01 = $320; edge 4 x $10; hedges 60 x $1.50 = $90; beds 800 x $0.02 = $16; leaves $150
-  expected_lines: {mowing: 32000, edging: 4000, hedges: 9000, beds: 1600, leaves: 15000}
-  expected_total_cents: 61600
-- name: 1 acre lawn every 2 weeks
-  answers: {lawn_sqft: 1, lawn_unit: acre}
-  # 1 acre = 43,560 sq ft x 2 visits x $0.01
-  expected_lines: {mowing: 87120}
-  expected_total_cents: 87120
+- name: No mowing, full-yard hedges only
+  answers: {yard_size: none, hedges: full}
+  expected_lines: {hedges_full: 10000}
+  expected_total_cents: 10000

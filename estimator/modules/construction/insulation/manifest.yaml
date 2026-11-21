@@ -14,8 +14,9 @@ notes:
   - "Hot attics: R-38 to R-49 pays back fast; keep insulation clear of recessed lights that aren't IC-rated and keep soffit vents open."
 
 questions:
-  - {id: attic_sqft, label: "Attic area (blown-in)", type: number, unit: sqft, default: 0, min: 0, max: 100000}
+  - {id: attic_sqft, label: "Attic area (blown-in)", type: number, unit: sqft, default: 0, min: 0, max: 100000, help: "Attic floor area to blow insulation into, usually the same as the home's footprint."}
   - id: attic_r
+    help: "R-value is how well it insulates. Higher is better. R-38 to R-49 is common for attics."
     label: "Attic R-value"
     type: choice
     default: "38"
@@ -24,10 +25,11 @@ questions:
       - {value: "30", label: "R-30", factor: "30"}
       - {value: "38", label: "R-38", factor: "38"}
       - {value: "49", label: "R-49", factor: "49"}
-  - {id: remove_old, label: "Remove the old attic insulation?", type: boolean, default: false}
-  - {id: air_seal, label: "Air-seal the attic floor first?", type: boolean, default: false}
-  - {id: wall_sqft, label: "Open wall area (batts)", type: number, unit: sqft, default: 0, min: 0, max: 100000}
+  - {id: remove_old, label: "Remove the old attic insulation?", type: boolean, default: false, help: "Vacuum out old, dirty or damaged insulation before adding new."}
+  - {id: air_seal, label: "Air-seal the attic floor first?", type: boolean, default: false, help: "Seal gaps around pipes, wires and lights so air doesn't leak into the attic. Makes the insulation work better."}
+  - {id: wall_sqft, label: "Open wall area (batts)", type: number, unit: sqft, default: 0, min: 0, max: 100000, help: "Open wall area (studs showing) to fill with batts, in square feet."}
   - id: wall_r
+    help: "Batts sized for the wall depth. R-13 or R-15 for 2x4 walls, R-19 for 2x6 walls."
     label: "Wall batts"
     type: choice
     default: "13"
@@ -35,9 +37,10 @@ questions:
       - {value: "13", label: "R-13 (2x4)", factor: "13"}
       - {value: "15", label: "R-15 (2x4, dense)", factor: "15"}
       - {value: "19", label: "R-19 (2x6)", factor: "19"}
-  - {id: vapor_barrier, label: "Vapor barrier on the walls?", type: boolean, default: false}
-  - {id: spray_foam_sqft, label: "Spray foam area", type: number, unit: sqft, default: 0, min: 0, max: 50000}
+  - {id: vapor_barrier, label: "Vapor barrier on the walls?", type: boolean, default: false, help: "Plastic sheet over the insulation to keep moisture out of the walls. Needed in some climates."}
+  - {id: spray_foam_sqft, label: "Spray foam area", type: number, unit: sqft, default: 0, min: 0, max: 50000, help: "Area to spray with foam insulation, in square feet."}
   - id: foam_inches
+    help: "Thicker foam insulates better and costs more."
     label: "Spray foam thickness"
     type: choice
     default: "3"
@@ -45,7 +48,7 @@ questions:
       - {value: "2", label: "2 in", factor: "2"}
       - {value: "3", label: "3 in", factor: "3"}
       - {value: "5.5", label: "5.5 in (full 2x6)", factor: "5.5"}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false, help: "Some cities require a permit for insulation work. Adds the permit fee."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 scenarios:

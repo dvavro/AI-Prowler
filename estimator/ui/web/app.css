@@ -563,3 +563,9 @@ tr.pb-history > td { background: #f8fafc; }
 .ai-log-text { white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; max-height: 24rem; overflow: auto; font-size: 13px; }
 .ai-log-img { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; }
 .ai-log-figure { margin: 12px 0; }
+
+/* Question explanations: hover (or tap) the question text to see them (2026-11-18, Jamie). */
+.help-hover { cursor: help; border-bottom: 1px dotted #98a2b3; }
+.help-hover-tip { position: fixed; z-index: 9999; max-width: 340px; background: #1d2330; color: #fff; font-size: 13px;
+  line-height: 1.45; font-weight: 400; padding: 8px 10px; border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, .25);
+  pointer-events: none; }

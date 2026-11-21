@@ -15,6 +15,7 @@ notes:
 
 questions:
   - id: system
+    help: "Split systems are most common in homes. Heat pumps heat and cool with electric. Mini-splits need no ducts. Package units sit on the roof or ground."
     label: "System"
     type: choice
     required: true
@@ -24,14 +25,15 @@ questions:
       - {value: heat_pump, label: "Heat pump split system", factor: "2"}
       - {value: mini_split, label: "Ductless mini-split", factor: "3"}
       - {value: package, label: "Package unit (rooftop or ground)", factor: "4"}
-  - {id: conditioned_sqft, label: "Area to heat and cool", type: number, unit: sqft, default: 0, min: 0, max: 50000}
+  - {id: conditioned_sqft, label: "Area to heat and cool", type: number, unit: sqft, default: 0, min: 0, max: 50000, help: "Floor area that will be heated and cooled, in square feet."}
   - {id: tons, label: "Tons, if you already know them", type: number, default: 0, min: 0, max: 50,
      help: "Leave 0 to size from the area."}
   - {id: sqft_per_ton, label: "Square feet per ton (sizing rule)", type: number, unit: sqft, default: 500, min: 200,
-     max: 1000}
+     max: 1000, help: "Rule of thumb for sizing the unit. Lower numbers mean a bigger unit for hot climates or poor insulation."}
   - {id: zones, label: "Mini-split indoor heads", type: integer, default: 0, min: 0, max: 20,
      help: "Leave 0 to allow one head per 400 sq ft."}
   - id: ducts
+    help: "Reuse ducts that are in good shape, seal leaky ones, or install new ductwork."
     label: "Ducts"
     type: choice
     default: reuse
@@ -42,12 +44,12 @@ questions:
       - {value: seal, label: "Seal and repair the existing ducts", factor: "2"}
   - {id: registers, label: "Supply registers", type: integer, default: 0, min: 0, max: 200,
      help: "Leave 0 to allow one per 150 sq ft on new ducts."}
-  - {id: returns, label: "Return grilles", type: integer, default: 1, min: 0, max: 50}
-  - {id: branch_run_ft, label: "Average branch duct run", type: number, unit: ft, default: 20, min: 5, max: 100}
-  - {id: line_set_ft, label: "Refrigerant line set length", type: number, unit: ft, default: 25, min: 0, max: 200}
-  - {id: thermostats, label: "Thermostats", type: integer, default: 1, min: 0, max: 20}
-  - {id: remove_old, label: "Remove the old equipment?", type: boolean, default: true}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+  - {id: returns, label: "Return grilles", type: integer, default: 1, min: 0, max: 50, help: "Grilles that pull air back to the unit. Most homes need one or more."}
+  - {id: branch_run_ft, label: "Average branch duct run", type: number, unit: ft, default: 20, min: 5, max: 100, help: "Average length of duct from the main trunk to each room vent."}
+  - {id: line_set_ft, label: "Refrigerant line set length", type: number, unit: ft, default: 25, min: 0, max: 200, help: "Copper refrigerant lines between the outdoor and indoor units."}
+  - {id: thermostats, label: "Thermostats", type: integer, default: 1, min: 0, max: 20, help: "Number of thermostats to install."}
+  - {id: remove_old, label: "Remove the old equipment?", type: boolean, default: true, help: "Disconnect and haul away the old equipment."}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: true, help: "HVAC replacement usually needs a permit and inspection. Adds the permit fee."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 lines:

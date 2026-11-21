@@ -13,13 +13,14 @@ notes:
   - "Hot weather: plan exterior painting for mornings; most paints shouldn't go on surfaces in direct sun over about 90 F."
 
 questions:
-  - {id: wall_sqft, label: "Interior wall area", type: number, unit: sqft, default: 0, min: 0, max: 200000}
-  - {id: ceiling_sqft, label: "Ceiling area", type: number, unit: sqft, default: 0, min: 0, max: 200000}
+  - {id: wall_sqft, label: "Interior wall area", type: number, unit: sqft, default: 0, min: 0, max: 200000, help: "Interior wall area to paint. Wall length x height for each room, added up."}
+  - {id: ceiling_sqft, label: "Ceiling area", type: number, unit: sqft, default: 0, min: 0, max: 200000, help: "Ceiling area to paint, usually the same as the floor area."}
   - {id: exterior_sqft, label: "Exterior wall area (siding, stucco)", type: number, unit: sqft, default: 0, min: 0,
-     max: 200000}
-  - {id: trim_lf, label: "Trim and baseboard", type: number, unit: lf, default: 0, min: 0, max: 50000}
-  - {id: doors, label: "Doors (both sides)", type: integer, default: 0, min: 0, max: 500}
+     max: 200000, help: "Outside wall area to paint, like siding or stucco."}
+  - {id: trim_lf, label: "Trim and baseboard", type: number, unit: lf, default: 0, min: 0, max: 50000, help: "Feet of baseboard, door and window trim to paint."}
+  - {id: doors, label: "Doors (both sides)", type: integer, default: 0, min: 0, max: 500, help: "Number of doors to paint on both sides."}
   - id: coats
+    help: "Two coats is standard. One coat for the same color refresh, three for a big color change."
     label: "Coats"
     type: choice
     default: "2"
@@ -27,8 +28,9 @@ questions:
       - {value: "1", label: "1 coat (same colour refresh)", factor: "1"}
       - {value: "2", label: "2 coats", factor: "2"}
       - {value: "3", label: "3 coats (big colour change)", factor: "3"}
-  - {id: primer, label: "Prime first?", type: boolean, default: false}
+  - {id: primer, label: "Prime first?", type: boolean, default: false, help: "Primer helps paint stick and cover. Needed for new drywall, stains or big color changes."}
   - id: grade
+    help: "Premium paint covers better and lasts longer but costs more."
     label: "Paint"
     type: choice
     default: standard
@@ -36,7 +38,7 @@ questions:
     choices:
       - {value: standard, label: "Standard", factor: "1"}
       - {value: premium, label: "Premium", factor: "2"}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false, help: "Painting rarely needs a permit, but some HOAs require approval for outside colors."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 scenarios:

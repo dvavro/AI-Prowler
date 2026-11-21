@@ -1,44 +1,90 @@
-# Pest control: service call plus treatment by home size, with plan discounts and add-ons.
+# Pest control, bid the way pest companies bid it:
+#   One time  -> one full treatment.
+#   Plans     -> a one-time startup service, then a lower price per visit.
+# Home size is a flat price up to 2,500 sq ft, plus a small charge per extra 1,000 sq ft.
 id: pest_control
 name: Pest Control
 version: 0.1.0
 category: service
 path: quick_estimate
-description: Residential pest treatment priced by home size, pest level and plan (one-time, quarterly, monthly), with termite inspection, rodent stations and yard treatment.
+description: Residential pest control priced like pest companies do it - one-time treatment, or a startup service plus a lower price per visit on a monthly, every-2-months or quarterly plan - with scorpion, rodent, termite, bed bug, mosquito and yard add-ons.
 minimum_charge: "99.00"
-keywords: [pest control, pest, pests, exterminator, bugs, ants, roaches, cockroaches, spiders, scorpions, termite, termites, rodent, rodents, mice, rats]
+keywords: [pest control, pest, pests, exterminator, bugs, ants, roaches, cockroaches, spiders, scorpions, termite, termites, rodent, rodents, mice, rats, bed bugs, mosquitoes]
 # A won quote with one of these answers becomes a repeating job in AI-Prowler.
-recurrence: {question: plan, map: {quarterly: Quarterly, monthly: Monthly}}
+recurrence: {question: plan, map: {monthly: Monthly, bimonthly: Bimonthly, quarterly: Quarterly}}
 
 questions:
-  - {id: sqft, label: "Home size", type: number, unit: sqft, required: true, min: 200, max: 20000}
+  - id: home_size
+    label: "Home size"
+    type: choice
+    default: standard
+    help: "Most companies charge one flat price up to about 2,500 sq ft, then a little more for each extra 1,000 sq ft. Use Exact size for very big homes."
+    choices:
+      - {value: standard, label: "Up to 2,500 sq ft", factor: "0"}
+      - {value: large, label: "2,500 to 3,500 sq ft", factor: "1"}
+      - {value: xlarge, label: "3,500 to 4,500 sq ft", factor: "2"}
+      - {value: xxlarge, label: "Over 4,500 sq ft", factor: "3"}
+  - {id: exact_sqft, label: "Exact home size (optional)", type: number, unit: sqft, default: 0, min: 0, max: 50000, help: "Leave at 0 to use Home size above. If you type the square feet, it's priced from that instead."}
+  - id: plan
+    label: "Service plan"
+    type: choice
+    default: one_time
+    help: "One time is a single full treatment. Plans start with a one-time startup service to knock pests down, then a lower price for each regular visit."
+    choices:
+      - {value: one_time, label: "One time", factor: "0"}
+      - {value: monthly, label: "Monthly plan", factor: "1"}
+      - {value: bimonthly, label: "Every 2 months plan", factor: "2"}
+      - {value: quarterly, label: "Quarterly plan", factor: "3"}
   - id: level
     label: "How bad is it?"
     type: choice
     default: light
+    help: "Moderate or heavy activity takes more product and time on the first treatment. Regular visits after that cost the same."
     choices:
-      - {value: light, label: "Prevention / light", factor: "1.0"}
-      - {value: moderate, label: "Moderate", factor: "1.25"}
-      - {value: heavy, label: "Heavy infestation", factor: "1.6"}
-  - id: plan
-    label: "Service plan (price per visit)"
+      - {value: light, label: "Prevention / light", factor: "0"}
+      - {value: moderate, label: "Moderate", factor: "1"}
+      - {value: heavy, label: "Heavy infestation", factor: "2"}
+  - {id: scorpions, label: "Scorpion treatment?", type: boolean, default: false, help: "Extra scorpion product and a black-light check around the outside. Charged on the first treatment and on every plan visit."}
+  - {id: scorpion_seal, label: "Scorpion sealing (one time)?", type: boolean, default: false, help: "Seal gaps, weep holes, door sweeps and pipe openings so scorpions and bugs can't get in."}
+  - {id: rodents, label: "Rodent control?", type: boolean, default: false, help: "Bait stations and traps set up once, then checked and refilled every month."}
+  - {id: termite_inspection, label: "Termite inspection?", type: boolean, default: false, help: "One-time termite inspection. Termite treatment is quoted separately after the inspection."}
+  - {id: bedbug_rooms, label: "Bed bug rooms to treat", type: integer, default: 0, min: 0, max: 20, help: "Number of rooms with bed bugs. Priced per room and usually needs a follow-up visit, which is included."}
+  - {id: mosquitoes, label: "Mosquito treatment?", type: boolean, default: false, help: "Spray the yard where mosquitoes rest. Charged on the first treatment and on every plan visit."}
+  - id: yard
+    label: "Yard treatment"
     type: choice
-    default: one_time
+    default: none
+    help: "Spray the lawn and yard for fleas, ticks, ants and crickets. Charged on the first treatment and on every plan visit."
     choices:
-      - {value: one_time, label: "One time", factor: "1.0"}
-      - {value: quarterly, label: "Quarterly (25% off each visit)", factor: "0.75"}
-      - {value: monthly, label: "Monthly (45% off each visit)", factor: "0.55"}
-  - {id: termite_inspection, label: "Termite inspection?", type: boolean, default: false}
-  - {id: rodent_stations, label: "Rodent bait stations", type: integer, default: 0, min: 0, max: 50}
-  - {id: yard_sqft, label: "Yard to treat", type: number, unit: sqft, default: 0, min: 0, max: 200000}
+      - {value: none, label: "None", factor: "0"}
+      - {value: small, label: "Small yard", factor: "1"}
+      - {value: standard, label: "Standard yard", factor: "2"}
+      - {value: large, label: "Large yard", factor: "3"}
 
 lines:
-  - {id: visit, description: "Service call", kind: other, unit: ea, quantity: "1", price_key: pc_visit_ea}
-  - {id: treatment, description: "Interior and exterior treatment", kind: other, unit: sqft,
-     quantity: "sqft * level * plan", price_key: pc_treatment_sqft}
-  - {id: termite, description: "Termite inspection", kind: other, unit: ea, quantity: "1",
-     price_key: pc_termite_ea, when: "termite_inspection"}
-  - {id: rodents, description: "Rodent bait stations", kind: other, unit: ea, quantity: "rodent_stations",
-     price_key: pc_rodent_station_ea, when: "rodent_stations > 0"}
-  - {id: yard, description: "Yard treatment", kind: other, unit: sqft, quantity: "yard_sqft",
-     price_key: pc_yard_sqft, when: "yard_sqft > 0"}
+  # --- Main service ---
+  - {id: one_time, description: "Pest treatment, inside and out (one time)", kind: other, unit: ea, quantity: "1", price_key: pc_one_time_ea, when: "plan == 0"}
+  - {id: startup, description: "Startup service, first treatment (one time)", kind: other, unit: ea, quantity: "1", price_key: pc_startup_ea, when: "plan > 0"}
+  - {id: visit_monthly, description: "Monthly service (per visit)", kind: other, unit: ea, quantity: "1", price_key: pc_visit_monthly_ea, when: "plan == 1"}
+  - {id: visit_bimonthly, description: "Every 2 months service (per visit)", kind: other, unit: ea, quantity: "1", price_key: pc_visit_bimonthly_ea, when: "plan == 2"}
+  - {id: visit_quarterly, description: "Quarterly service (per visit)", kind: other, unit: ea, quantity: "1", price_key: pc_visit_quarterly_ea, when: "plan == 3"}
+  # --- Bigger homes: per extra 1,000 sq ft over 2,500 ---
+  - {id: size_first, description: "Larger home, first treatment (per extra 1,000 sq ft)", kind: other, unit: ea, quantity: "home_size", price_key: pc_size_first_ea, when: "exact_sqft == 0 and home_size > 0"}
+  - {id: size_first_exact, description: "Larger home, first treatment (per extra 1,000 sq ft)", kind: other, unit: ea, quantity: "ceil((exact_sqft - 2500) / 1000)", price_key: pc_size_first_ea, when: "exact_sqft > 2500"}
+  - {id: size_visit, description: "Larger home (per visit, per extra 1,000 sq ft)", kind: other, unit: ea, quantity: "home_size", price_key: pc_size_visit_ea, when: "plan > 0 and exact_sqft == 0 and home_size > 0"}
+  - {id: size_visit_exact, description: "Larger home (per visit, per extra 1,000 sq ft)", kind: other, unit: ea, quantity: "ceil((exact_sqft - 2500) / 1000)", price_key: pc_size_visit_ea, when: "plan > 0 and exact_sqft > 2500"}
+  # --- Pest level: extra on the first treatment only ---
+  - {id: level_moderate, description: "Moderate activity, extra on first treatment", kind: other, unit: ea, quantity: "1", price_key: pc_level_moderate_ea, when: "level == 1"}
+  - {id: level_heavy, description: "Heavy infestation, extra on first treatment", kind: other, unit: ea, quantity: "1", price_key: pc_level_heavy_ea, when: "level == 2"}
+  # --- Add-ons ---
+  - {id: scorpion_first, description: "Scorpion treatment, first treatment", kind: other, unit: ea, quantity: "1", price_key: pc_scorpion_first_ea, when: "scorpions"}
+  - {id: scorpion_visit, description: "Scorpion treatment (per visit)", kind: other, unit: ea, quantity: "1", price_key: pc_scorpion_visit_ea, when: "scorpions and plan > 0"}
+  - {id: scorpion_seal, description: "Scorpion sealing (one time)", kind: other, unit: ea, quantity: "1", price_key: pc_scorpion_seal_ea, when: "scorpion_seal"}
+  - {id: rodent_setup, description: "Rodent control setup (one time)", kind: other, unit: ea, quantity: "1", price_key: pc_rodent_setup_ea, when: "rodents"}
+  - {id: rodent_monthly, description: "Rodent station service (monthly)", kind: other, unit: ea, quantity: "1", price_key: pc_rodent_monthly_ea, when: "rodents"}
+  - {id: termite, description: "Termite inspection (one time)", kind: other, unit: ea, quantity: "1", price_key: pc_termite_inspection_ea, when: "termite_inspection"}
+  - {id: bedbugs, description: "Bed bug treatment with follow-up (per room)", kind: other, unit: ea, quantity: "bedbug_rooms", price_key: pc_bedbug_room_ea, when: "bedbug_rooms > 0"}
+  - {id: mosquito, description: "Mosquito treatment (per visit)", kind: other, unit: ea, quantity: "1", price_key: pc_mosquito_ea, when: "mosquitoes"}
+  - {id: yard_small, description: "Yard treatment, small (per visit)", kind: other, unit: ea, quantity: "1", price_key: pc_yard_small_ea, when: "yard == 1"}
+  - {id: yard_standard, description: "Yard treatment, standard (per visit)", kind: other, unit: ea, quantity: "1", price_key: pc_yard_standard_ea, when: "yard == 2"}
+  - {id: yard_large, description: "Yard treatment, large (per visit)", kind: other, unit: ea, quantity: "1", price_key: pc_yard_large_ea, when: "yard == 3"}

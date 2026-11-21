@@ -14,6 +14,7 @@ notes:
 
 questions:
   - id: install
+    help: "Replacement fits a new window into the old frame. New construction replaces the whole frame and is more work."
     label: "Type of install"
     type: choice
     default: retrofit
@@ -21,13 +22,14 @@ questions:
     choices:
       - {value: retrofit, label: "Replacement (retrofit)", factor: "1"}
       - {value: new, label: "New construction", factor: "2"}
-  - {id: windows_small, label: "Windows under 15 sq ft", type: integer, default: 0, min: 0, max: 500}
-  - {id: windows_large, label: "Windows 15 sq ft and over", type: integer, default: 0, min: 0, max: 500}
-  - {id: patio_doors, label: "Patio sliders or French doors", type: integer, default: 0, min: 0, max: 50}
-  - {id: exterior_doors, label: "Exterior doors (prehung)", type: integer, default: 0, min: 0, max: 50}
-  - {id: interior_doors, label: "Interior doors (prehung)", type: integer, default: 0, min: 0, max: 200}
-  - {id: garage_doors, label: "Garage doors", type: integer, default: 0, min: 0, max: 10}
+  - {id: windows_small, label: "Windows under 15 sq ft", type: integer, default: 0, min: 0, max: 500, help: "Windows under about 15 sq ft, like most bedroom and bathroom windows."}
+  - {id: windows_large, label: "Windows 15 sq ft and over", type: integer, default: 0, min: 0, max: 500, help: "Windows 15 sq ft and bigger, like living room or picture windows."}
+  - {id: patio_doors, label: "Patio sliders or French doors", type: integer, default: 0, min: 0, max: 50, help: "Sliding glass doors or French doors to a patio."}
+  - {id: exterior_doors, label: "Exterior doors (prehung)", type: integer, default: 0, min: 0, max: 50, help: "Front, back or side entry doors that come pre-hung in a frame."}
+  - {id: interior_doors, label: "Interior doors (prehung)", type: integer, default: 0, min: 0, max: 200, help: "Inside doors that come pre-hung in a frame."}
+  - {id: garage_doors, label: "Garage doors", type: integer, default: 0, min: 0, max: 10, help: "Number of garage doors to install."}
   - id: window_grade
+    help: "Vinyl is the most common and affordable. Fiberglass is stronger and costs more."
     label: "Window type"
     type: choice
     default: vinyl
@@ -35,9 +37,9 @@ questions:
     choices:
       - {value: vinyl, label: "Vinyl, dual pane low-E", factor: "1"}
       - {value: fiberglass, label: "Fiberglass, dual pane low-E", factor: "2"}
-  - {id: casing, label: "New interior casing (trim)?", type: boolean, default: true}
-  - {id: remove_old, label: "Remove the old units?", type: boolean, default: true}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+  - {id: casing, label: "New interior casing (trim)?", type: boolean, default: true, help: "New trim around the inside of each window or door."}
+  - {id: remove_old, label: "Remove the old units?", type: boolean, default: true, help: "Take out and haul away the old windows and doors."}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: true, help: "Window and door replacement often needs a permit. Adds the permit fee."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 scenarios:

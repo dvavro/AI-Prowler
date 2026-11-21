@@ -15,6 +15,7 @@ notes:
 
 questions:
   - id: work
+    help: "New or remodel includes running pipes in the walls. Replace only swaps fixtures where pipes already are."
     label: "Type of work"
     type: choice
     default: new
@@ -22,14 +23,15 @@ questions:
     choices:
       - {value: new, label: "New or remodel (rough-in and trim)", factor: "1"}
       - {value: replace, label: "Replace fixtures only", factor: "2"}
-  - {id: toilets, label: "Toilets", type: integer, default: 0, min: 0, max: 200}
-  - {id: sinks, label: "Bathroom sinks", type: integer, default: 0, min: 0, max: 200}
-  - {id: kitchen_sinks, label: "Kitchen or bar sinks", type: integer, default: 0, min: 0, max: 100}
-  - {id: showers, label: "Showers and tubs", type: integer, default: 0, min: 0, max: 100}
-  - {id: dishwashers, label: "Dishwashers to hook up", type: integer, default: 0, min: 0, max: 50}
-  - {id: washers, label: "Washer boxes (laundry)", type: integer, default: 0, min: 0, max: 50}
-  - {id: hose_bibs, label: "Hose bibs", type: integer, default: 0, min: 0, max: 50}
+  - {id: toilets, label: "Toilets", type: integer, default: 0, min: 0, max: 200, help: "Number of toilets to install."}
+  - {id: sinks, label: "Bathroom sinks", type: integer, default: 0, min: 0, max: 200, help: "Number of bathroom sinks to install."}
+  - {id: kitchen_sinks, label: "Kitchen or bar sinks", type: integer, default: 0, min: 0, max: 100, help: "Number of kitchen or bar sinks to install."}
+  - {id: showers, label: "Showers and tubs", type: integer, default: 0, min: 0, max: 100, help: "Number of showers or tubs to install, including the valve."}
+  - {id: dishwashers, label: "Dishwashers to hook up", type: integer, default: 0, min: 0, max: 50, help: "Dishwashers to connect to water and drain."}
+  - {id: washers, label: "Washer boxes (laundry)", type: integer, default: 0, min: 0, max: 50, help: "Laundry hookup boxes for a washing machine."}
+  - {id: hose_bibs, label: "Hose bibs", type: integer, default: 0, min: 0, max: 50, help: "Outside water spigots."}
   - id: water_heater
+    help: "Standard 50 gallon tank or an on-demand tankless heater."
     label: "Water heater"
     type: choice
     default: none
@@ -41,9 +43,9 @@ questions:
      help: "Leave 0 to allow 25 ft per fixture on new work."}
   - {id: drain_lf, label: "Drain and vent pipe", type: number, unit: lf, default: 0, min: 0, max: 20000,
      help: "Leave 0 to allow 15 ft per fixture on new work."}
-  - {id: gas_line_lf, label: "Gas line", type: number, unit: lf, default: 0, min: 0, max: 2000}
-  - {id: supply_fixtures, label: "Supply the fixtures (not the customer)?", type: boolean, default: false}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+  - {id: gas_line_lf, label: "Gas line", type: number, unit: lf, default: 0, min: 0, max: 2000, help: "Feet of gas pipe to run, like to a stove, dryer or water heater."}
+  - {id: supply_fixtures, label: "Supply the fixtures (not the customer)?", type: boolean, default: false, help: "Check if you are buying the fixtures. Leave unchecked if the customer supplies them."}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: true, help: "Most plumbing work needs a permit and inspection. Adds the permit fee."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 lines:

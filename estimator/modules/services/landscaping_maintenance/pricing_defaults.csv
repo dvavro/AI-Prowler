@@ -1,6 +1,38 @@
 price_key,description,kind,unit,cost
-lm_mow_sqft,Mowing per sq ft per visit (sample),other,sqft,0.01
-lm_edge_ea,Edging per visit (sample),other,ea,10.00
-lm_hedge_lf,Hedge trimming per linear ft (sample),other,lf,1.50
-lm_bed_sqft,Bed weeding per sq ft per visit (sample),other,sqft,0.02
-lm_leaf_ea,Leaf cleanup (sample),other,ea,150.00
+lm_mow_small_ea,"Mowing per visit, under 1/4 acre (sample)",other,ea,27.00
+lm_mow_standard_ea,"Mowing per visit, 1/4 to 1/2 acre (sample)",other,ea,37.00
+lm_mow_large_ea,"Mowing per visit, 1/2 to 1 acre (sample)",other,ea,47.00
+lm_mow_xlarge_ea,"Mowing per visit, over 1 acre (sample)",other,ea,65.00
+lm_mow_ksqft,"Mowing per 1,000 sq ft per visit, exact size (sample)",other,ea,2.35
+lm_edge_ea,Edging per visit (sample),other,ea,7.00
+lm_edge_100ft,"Edging per 100 ft per visit, by length (sample)",other,ea,23.40
+lm_hedge_lf_low,"Hedge trimming per linear ft, under 6 ft tall (sample)",other,lf,1.20
+lm_hedge_lf_tall,"Hedge trimming per linear ft, over 6 ft tall (sample)",other,lf,3.00
+lm_hedge_few_ea,"Hedge trimming, a few bushes, monthly (sample)",other,ea,40.00
+lm_hedge_full_ea,"Hedge trimming, full yard, monthly (sample)",other,ea,100.00
+lm_bed_small_ea,"Bed weeding, small beds, monthly (sample)",other,ea,25.00
+lm_bed_large_ea,"Bed weeding, large beds, monthly (sample)",other,ea,60.00
+lm_leaf_small_ea,"Leaf cleanup, small yard (sample)",other,ea,140.00
+lm_leaf_standard_ea,"Leaf cleanup, standard yard (sample)",other,ea,200.00
+lm_leaf_large_ea,"Leaf cleanup, large yard (sample)",other,ea,300.00
+lm_leaf_xlarge_ea,"Leaf cleanup, extra large yard (sample)",other,ea,450.00
+lm_leaf_ksqft,"Leaf cleanup per 1,000 sq ft, exact size (sample)",other,ea,7.00
+lm_rock_small_ea,"Rock yard upkeep per visit, small (sample)",other,ea,23.50
+lm_rock_standard_ea,"Rock yard upkeep per visit, standard (sample)",other,ea,33.50
+lm_rock_large_ea,"Rock yard upkeep per visit, large (sample)",other,ea,50.00
+lm_weed_small_ea,"Weed spraying monthly, small area (sample)",other,ea,30.00
+lm_weed_standard_ea,"Weed spraying monthly, standard area (sample)",other,ea,43.50
+lm_weed_large_ea,"Weed spraying monthly, large area (sample)",other,ea,63.50
+lm_irrigation_ea,Irrigation / drip check monthly (sample),other,ea,23.50
+lm_palm_under20_ea,"Palm trimming per tree, under 20 ft (sample)",other,ea,84.00
+lm_palm_mid_ea,"Palm trimming per tree, 20 to 40 ft (sample)",other,ea,167.00
+lm_palm_40_60_ea,"Palm trimming per tree, 40 to 60 ft (sample)",other,ea,435.00
+lm_palm_over60_ea,"Palm trimming per tree, over 60 ft, lift or climber (sample)",other,ea,602.00
+lm_tree_prune_ea,"Tree pruning per tree, under 25 ft (sample)",other,ea,167.00
+lm_overseed_small_ea,"Winter rye overseeding, small yard (sample)",other,ea,80.00
+lm_overseed_standard_ea,"Winter rye overseeding, standard yard (sample)",other,ea,147.00
+lm_overseed_large_ea,"Winter rye overseeding, large yard (sample)",other,ea,268.00
+lm_overseed_xlarge_ea,"Winter rye overseeding, extra large yard (sample)",other,ea,435.00
+lm_overseed_ksqft,"Winter rye overseeding per 1,000 sq ft, exact size (sample)",other,ea,8.00
+lm_green_waste_ea,Green waste haul-away monthly (sample),other,ea,26.75
+lm_hard_access_ea,Steep slope / hard access per visit (sample),other,ea,10.00

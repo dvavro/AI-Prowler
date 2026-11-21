@@ -4,13 +4,30 @@
   # hours = (1 + 1.5 + 1.5 + 1.35) x 1.0 = 5.35 -> 5.35 x $50
   expected_lines: {labor: 26750}
   expected_total_cents: 26750
-- name: dirty 2 bed with pets, biweekly, oven and 10 windows
+- name: dirty 2 bed with pets, biweekly, oven and 10 windows - first visit is a deep clean
   answers: {bedrooms: 2, bathrooms: 1, sqft: 1000, condition: "4", pets: true, frequency: biweekly,
             oven: true, interior_windows: 10}
   # hours = round(3.5 x 1.2 + 0.25, 2) x 0.85 = 3.7825 -> $189.125 -> 18913 cents (half up)
-  expected_lines: {labor: 18913, oven: 3500, windows: 6000}
-  expected_total_cents: 28413
+  # first visit deep: round(3.5 x 1.2 x 0.5, 2) = 2.1 hr x $50 = $105
+  expected_lines: {labor: 18913, first_deep: 10500, oven: 3500, windows: 6000}
+  expected_total_cents: 38913
 - name: small clean home monthly hits the minimum
   answers: {bedrooms: 1, bathrooms: 1, sqft: 500, condition: "2", frequency: monthly}
-  expected_subtotal_cents: 10620
-  expected_total_cents: 12000
+  # labor round(2.625 x 0.9, 2) = 2.36 x 0.9 = 2.124 hr -> $106.20; first deep round(2.625 x 0.9 x 0.5, 2) = 1.18 hr -> $59
+  expected_lines: {labor: 10620, first_deep: 5900}
+  expected_total_cents: 16520
+- name: deep clean, 2 bed 1 bath 1000 sq ft
+  answers: {bedrooms: 2, bathrooms: 1, sqft: 1000, clean_type: deep}
+  # 3.5 x 1.5 = 5.25 hr x $50
+  expected_lines: {labor: 26250}
+  expected_total_cents: 26250
+- name: move-out clean, 4 bed 2 bath 2000 sq ft - cabinets and baseboards already included
+  answers: {bedrooms: 4, bathrooms: 2, sqft: 2000, clean_type: move_out, cabinets: true, baseboards: true}
+  # 6.0 x 1.75 = 10.5 hr x $50
+  expected_lines: {labor: 52500}
+  expected_total_cents: 52500
+- name: standard one-time with every add-on
+  answers: {bedrooms: 3, bathrooms: 2, sqft: 1800, cabinets: true, baseboards: true, blinds: 6, laundry_loads: 2,
+            dishes: true, garage: true, patio: true}
+  expected_lines: {labor: 26750, cabinets: 3000, baseboards: 2675, blinds: 2010, laundry: 2000, dishes: 1340, garage: 2675, patio: 2000}
+  expected_total_cents: 42450

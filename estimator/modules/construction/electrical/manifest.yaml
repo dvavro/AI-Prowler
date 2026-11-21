@@ -18,6 +18,7 @@ notes:
 
 questions:
   - id: work
+    help: "New work is when walls are open. Old work means fishing wire through finished walls, which takes longer. Swap only replaces existing devices."
     label: "Type of work"
     type: choice
     default: new
@@ -27,6 +28,7 @@ questions:
       - {value: remodel, label: "Old work (finished walls)", factor: "1.6"}
       - {value: replace, label: "Swap devices only", factor: "0.5"}
   - id: voltage
+    help: "Most homes are 110 V. 220 V is for big appliances. 3-phase is mostly for commercial buildings."
     label: "Voltage and phase"
     type: choice
     default: "110"
@@ -37,30 +39,49 @@ questions:
       - {value: "220", label: "220 V (single-phase)", factor: "2"}
       - {value: "220_3ph", label: "220 V 3-phase (commercial)", factor: "3"}
   # 2026-11-19 (David): outlets are counted by type too - each is a different part to order (the BOM lists them apart).
-  - {id: outlets, label: "Outlets (standard duplex)", type: integer, default: 0, min: 0, max: 1000}
-  - {id: usb_outlets, label: "USB outlets", type: integer, default: 0, min: 0, max: 200}
-  - {id: quad_outlets, label: "Quad outlets (4-plex)", type: integer, default: 0, min: 0, max: 200}
-  - {id: floor_boxes, label: "Floor boxes", type: integer, default: 0, min: 0, max: 100}
+  # 2026-11-21 merge: help text on every question (Jamie's hover-help change), kept with the per-type counts.
+  - {id: outlets, label: "Outlets (standard duplex)", type: integer, default: 0, min: 0, max: 1000,
+     help: "Number of standard wall outlets to install."}
+  - {id: usb_outlets, label: "USB outlets", type: integer, default: 0, min: 0, max: 200,
+     help: "Wall outlets with built-in USB charging ports."}
+  - {id: quad_outlets, label: "Quad outlets (4-plex)", type: integer, default: 0, min: 0, max: 200,
+     help: "Four-plug outlets in a two-gang box, e.g. behind a TV or desk."}
+  - {id: floor_boxes, label: "Floor boxes", type: integer, default: 0, min: 0, max: 100,
+     help: "Outlets set in the floor, with a floor-rated box and cover."}
   - {id: wp_outlets, label: "Weatherproof outdoor outlets (GFCI, in-use cover)", type: integer, default: 0, min: 0,
-     max: 100}
+     max: 100, help: "Outdoor outlets: GFCI protected, with a cover that stays closed while something is plugged in."}
   # 2026-11-19 (David): switches are counted by type - each is a different part to order (the BOM lists them apart).
   # An older estimate's "switches" count reads as single-pole switches.
-  - {id: switches, label: "Single-pole switches", type: integer, default: 0, min: 0, max: 1000}
-  - {id: switches_3way, label: "3-way switches", type: integer, default: 0, min: 0, max: 500}
-  - {id: switches_4way, label: "4-way switches", type: integer, default: 0, min: 0, max: 200}
-  - {id: dimmers, label: "Dimmer switches", type: integer, default: 0, min: 0, max: 500}
-  - {id: occupancy_switches, label: "Occupancy sensor switches", type: integer, default: 0, min: 0, max: 200}
-  - {id: gfci, label: "GFCI outlets", type: integer, default: 0, min: 0, max: 500}
+  - {id: switches, label: "Single-pole switches", type: integer, default: 0, min: 0, max: 1000,
+     help: "Number of ordinary light switches (one switch controls the light)."}
+  - {id: switches_3way, label: "3-way switches", type: integer, default: 0, min: 0, max: 500,
+     help: "Switches that work in pairs, so one light is controlled from two places (stairs, hallways)."}
+  - {id: switches_4way, label: "4-way switches", type: integer, default: 0, min: 0, max: 200,
+     help: "The middle switch when one light is controlled from three or more places."}
+  - {id: dimmers, label: "Dimmer switches", type: integer, default: 0, min: 0, max: 500,
+     help: "Switches that dim the lights."}
+  - {id: occupancy_switches, label: "Occupancy sensor switches", type: integer, default: 0, min: 0, max: 200,
+     help: "Switches that turn the light on when someone walks in and off when the room is empty."}
+  - {id: gfci, label: "GFCI outlets", type: integer, default: 0, min: 0, max: 500,
+     help: "Outlets with built-in shock protection, needed in kitchens, bathrooms, garages and outdoors."}
   # 2026-11-20 (David): lights are counted by type - each is a different fixture to order (the BOM lists them apart).
   # Fixtures are supplied by the customer unless you set prices; an older estimate's "lights" reads as ceiling lights.
-  - {id: lights, label: "Ceiling lights (surface fixtures)", type: integer, default: 0, min: 0, max: 1000}
-  - {id: recessed_lights, label: "Recessed lights (cans)", type: integer, default: 0, min: 0, max: 1000}
-  - {id: wall_lights, label: "Wall lights (sconces)", type: integer, default: 0, min: 0, max: 500}
-  - {id: pendant_lights, label: "Pendant lights", type: integer, default: 0, min: 0, max: 300}
-  - {id: undercabinet_lights, label: "Under-cabinet lights", type: integer, default: 0, min: 0, max: 300}
-  - {id: exterior_lights, label: "Exterior lights (floods, porch lights)", type: integer, default: 0, min: 0, max: 300}
-  - {id: exit_emergency_lights, label: "Exit signs and emergency lights", type: integer, default: 0, min: 0, max: 300}
-  - {id: fans, label: "Ceiling fans", type: integer, default: 0, min: 0, max: 200}
+  - {id: lights, label: "Ceiling lights (surface fixtures)", type: integer, default: 0, min: 0, max: 1000,
+     help: "Light fixtures mounted on the ceiling."}
+  - {id: recessed_lights, label: "Recessed lights (cans)", type: integer, default: 0, min: 0, max: 1000,
+     help: "Lights set into the ceiling (cans or wafer lights)."}
+  - {id: wall_lights, label: "Wall lights (sconces)", type: integer, default: 0, min: 0, max: 500,
+     help: "Light fixtures mounted on a wall."}
+  - {id: pendant_lights, label: "Pendant lights", type: integer, default: 0, min: 0, max: 300,
+     help: "Lights that hang down from the ceiling, e.g. over a kitchen island."}
+  - {id: undercabinet_lights, label: "Under-cabinet lights", type: integer, default: 0, min: 0, max: 300,
+     help: "Lights mounted under the kitchen cabinets."}
+  - {id: exterior_lights, label: "Exterior lights (floods, porch lights)", type: integer, default: 0, min: 0, max: 300,
+     help: "Outdoor lights: porch lights, wall packs and flood lights."}
+  - {id: exit_emergency_lights, label: "Exit signs and emergency lights", type: integer, default: 0, min: 0, max: 300,
+     help: "Lit exit signs and battery-backed emergency lights, mostly in commercial buildings."}
+  - {id: fans, label: "Ceiling fans", type: integer, default: 0, min: 0, max: 200,
+     help: "Number of ceiling fans to install, including a fan-rated box."}
   # 2026-11-20 (David: "if the customer provides the light fixtures, to install them as well as fans takes labor"):
   # who buys the fixtures and fan units. Either way the electrician hangs and wires them (its own labor line).
   - id: fixtures
@@ -82,6 +103,7 @@ questions:
   - {id: main_panels, label: "Main panels (new service)", type: integer, default: 0, min: 0, max: 10,
      help: "A new main panel and service on a new build. For an existing house use Panel work (subpanel or upgrade) instead - an upgrade and a new main panel aren't priced together."}
   - id: box_material
+    help: "Plastic boxes are standard in homes. Metal boxes are needed for some commercial jobs and certain codes."
     label: "Box material"
     type: choice
     default: plastic
@@ -94,12 +116,14 @@ questions:
   # and plan takeoff counts 240 V receptacles and EV chargers here), now with a 2-pole breaker instead of
   # the single-pole breaker it used to get. 15 Amp circuits are the new circuits_15a count.
   - {id: appliance_circuits, label: "Dedicated 30 Amp circuits (range, dryer, AC, EV charger)", type: integer, default: 0, min: 0,
-     max: 100}
+     max: 100, help: "Separate 30 Amp circuits for big appliances like a range, dryer, AC unit or EV charger."}
   - {id: circuits_15a, label: "Dedicated 15 Amp circuits (microwave, disposal, fridge)", type: integer, default: 0, min: 0,
-     max: 100}
+     max: 100, help: "Separate 15 Amp circuits for things like a microwave, garbage disposal or fridge."}
   # 2026-11-20 (David): the range and dryer plug into their own 240 V receptacles - a part to order.
-  - {id: range_receptacles, label: "Range receptacles (240 V, NEMA 14-50)", type: integer, default: 0, min: 0, max: 20}
-  - {id: dryer_receptacles, label: "Dryer receptacles (240 V, NEMA 14-30)", type: integer, default: 0, min: 0, max: 20}
+  - {id: range_receptacles, label: "Range receptacles (240 V, NEMA 14-50)", type: integer, default: 0, min: 0, max: 20,
+     help: "The 240 V outlet an electric range plugs into."}
+  - {id: dryer_receptacles, label: "Dryer receptacles (240 V, NEMA 14-30)", type: integer, default: 0, min: 0, max: 20,
+     help: "The 240 V outlet an electric dryer plugs into."}
   # 2026-11-20 (David: "add any new symbols needed"): equipment the code wants a disconnect in sight of - the A/C
   # condenser (NEC 440.14) and, unless its breaker locks off, the water heater (NEC 422.31).
   - {id: disconnects, label: "Equipment disconnects (A/C, water heater)", type: integer, default: 0, min: 0, max: 50,
@@ -119,21 +143,32 @@ questions:
       - {value: standard, label: "Standard breakers", factor: "1"}
       - {value: afci, label: "AFCI breakers (code for homes)", factor: "2"}
       - {value: dual, label: "Dual-function AFCI/GFCI breakers", factor: "3"}
-  - {id: low_voltage, label: "Data or TV drops", type: integer, default: 0, min: 0, max: 500}
+  - {id: low_voltage, label: "Data or TV drops", type: integer, default: 0, min: 0, max: 500,
+     help: "Network (data) or TV cable outlets to run."}
   # 2026-11-19 (David): cable measured by the wiring takeoff (Measure screen, Wiring run), one question per size.
   # When any is filled in, these lines price the cable and the 'average run per device' lines step aside.
-  - {id: wire_14_2_ft, label: "Measured cable 14/2 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
-  - {id: wire_14_3_ft, label: "Measured cable 14/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
-  - {id: wire_12_2_ft, label: "Measured cable 12/2 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
-  - {id: wire_12_3_ft, label: "Measured cable 12/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
-  - {id: wire_10_2_ft, label: "Measured cable 10/2 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
-  - {id: wire_10_3_ft, label: "Measured cable 10/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
-  - {id: wire_8_3_ft, label: "Measured cable 8/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
-  - {id: wire_6_3_ft, label: "Measured cable 6/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000}
-  - {id: avg_run_ft, label: "Average wire run per device", type: number, unit: ft, default: 25, min: 5, max: 200}
+  - {id: wire_14_2_ft, label: "Measured cable 14/2 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000,
+     help: "Feet of 14/2 cable measured by Run wiring (15 Amp lighting circuits)."}
+  - {id: wire_14_3_ft, label: "Measured cable 14/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000,
+     help: "Feet of 14/3 cable measured by Run wiring (3-way switch runs on 15 Amp circuits)."}
+  - {id: wire_12_2_ft, label: "Measured cable 12/2 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000,
+     help: "Feet of 12/2 cable measured by Run wiring (20 Amp outlet circuits)."}
+  - {id: wire_12_3_ft, label: "Measured cable 12/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000,
+     help: "Feet of 12/3 cable measured by Run wiring (3-way runs and shared circuits on 20 Amp)."}
+  - {id: wire_10_2_ft, label: "Measured cable 10/2 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000,
+     help: "Feet of 10/2 cable measured by Run wiring (30 Amp circuits, e.g. a water heater)."}
+  - {id: wire_10_3_ft, label: "Measured cable 10/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000,
+     help: "Feet of 10/3 cable measured by Run wiring (30 Amp 240 V circuits, e.g. a dryer)."}
+  - {id: wire_8_3_ft, label: "Measured cable 8/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000,
+     help: "Feet of 8/3 cable measured by Run wiring (40 Amp circuits, e.g. a cooktop)."}
+  - {id: wire_6_3_ft, label: "Measured cable 6/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000,
+     help: "Feet of 6/3 cable measured by Run wiring (50 Amp circuits, e.g. a range or EV charger)."}
+  - {id: avg_run_ft, label: "Average wire run per device", type: number, unit: ft, default: 25, min: 5, max: 200,
+     help: "About how far the wire runs from the panel to each device. Longer runs use more wire. Not used when the cable was measured by Run wiring."}
   - {id: underground_ft, label: "Underground run", type: number, unit: ft, default: 0, min: 0, max: 5000,
      help: "Feet of run buried underground (direct-burial cable in conduit), e.g. to a detached garage or shed."}
   - id: panel
+    help: "A subpanel adds more circuit space. A 200 A upgrade replaces the main panel for more power."
     label: "Panel work"
     type: choice
     default: none
@@ -150,7 +185,7 @@ questions:
     choices:
       - {value: "100", label: "100 Amp subpanel", factor: "100"}
       - {value: "200", label: "200 Amp subpanel", factor: "200"}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: true}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: true, help: "Most electrical work needs a permit and inspection. Adds the permit fee."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 lines:

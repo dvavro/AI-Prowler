@@ -1,14 +1,66 @@
 # Golden cases: sample prices, no markups. Totals in cents.
 - name: quarter truck
   answers: {load: quarter}
-  expected_lines: {load: 15000}
-  expected_total_cents: 15000
+  expected_lines: {load: 13500}
+  expected_total_cents: 13500
 - name: half truck, 2 mattresses, 1 appliance, 2 flights, same day
   answers: {load: half, mattresses: 2, appliances: 1, stairs: 2, same_day: true}
-  # $300 + $50 + $40 + $50 + $50
-  expected_lines: {load: 30000, mattresses: 5000, appliances: 4000, stairs: 5000, same_day: 5000}
-  expected_total_cents: 49000
+  # $270 + $50 + $25 + $50 + $50
+  expected_lines: {load: 27000, mattresses: 5000, appliances: 2500, stairs: 5000, same_day: 5000}
+  expected_total_cents: 44500
 - name: minimum load hits the minimum charge
   answers: {load: minimum}
-  expected_subtotal_cents: 7500
+  expected_subtotal_cents: 6750
   expected_total_cents: 9500
+- name: one and a half trucks
+  answers: {load: one_and_half}
+  expected_lines: {load: 81000}
+  expected_total_cents: 81000
+- name: heavy debris - 2 quarter trucks and 2000 lbs known, billed by weight
+  answers: {load: none, heavy_quarters: 2, heavy_lbs: 2000}
+  # weight known -> 2000 x $0.07; no per-quarter-truck line
+  expected_lines: {heavy: 14000}
+  expected_total_cents: 14000
+- name: heavy debris - 2 quarter trucks, weight unknown, billed per 1/4 truck
+  answers: {load: none, heavy_quarters: 2}
+  # 2 x $200
+  expected_lines: {heavy_quarter: 40000}
+  expected_total_cents: 40000
+- name: heavy debris - only 10 lbs is billed at the 1,000 lb minimum
+  answers: {load: none, heavy_lbs: 10}
+  # max(10, 1000) x $0.07 = $70, then the $95 job minimum
+  expected_lines: {heavy: 7000}
+  expected_subtotal_cents: 7000
+  expected_total_cents: 9500
+- name: heavy debris - 1.5 quarter trucks rounds up to 2 (strict 1/4-truck increments)
+  answers: {load: none, heavy_quarters: 1.5}
+  expected_lines: {heavy_quarter: 40000}
+  expected_total_cents: 40000
+- name: chemical - quarter truck plus 3 lithium batteries
+  answers: {load: quarter, is_chemical: true, chem_type: batteries, chem_qty: 3}
+  # $135 + 3 x $8
+  expected_lines: {load: 13500, chem_batteries: 2400}
+  expected_total_cents: 15900
+- name: chemical - 4 cans of paint plus 2 TVs (special item and chemical on the same quote)
+  answers: {load: quarter, special: tvs, special_qty: 2, is_chemical: true, chem_type: paint, chem_qty: 4}
+  # $135 + 2 x $15 + 4 x $20
+  expected_lines: {load: 13500, tvs: 3000, chem_paint: 8000}
+  expected_total_cents: 24500
+- name: two surcharge items on one quote - 4 tires and 1 TV
+  answers: {load: quarter, special: tires, special_qty: 4, special2: tvs, special2_qty: 1}
+  # $135 + 4 x $10 + 1 x $15
+  expected_lines: {load: 13500, tires: 4000, tvs2: 1500}
+  expected_total_cents: 19000
+- name: chemical type is ignored unless "Is it a chemical?" is checked
+  answers: {load: quarter, chem_type: paint, chem_qty: 4}
+  expected_lines: {load: 13500}
+  expected_total_cents: 13500
+- name: special item - half truck of construction waste (2 quarter-truck surcharges)
+  answers: {load: half, special: construction, special_qty: 2}
+  # $270 + 2 x $40
+  expected_lines: {load: 27000, construction: 8000}
+  expected_total_cents: 35000
+- name: asbestos adds no price line
+  answers: {load: quarter, is_chemical: true, chem_type: asbestos, chem_qty: 1}
+  expected_lines: {load: 13500}
+  expected_total_cents: 13500

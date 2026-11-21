@@ -50,10 +50,10 @@ def test_price_review_clears_samples(db):  # S3-W05
     e = service.create_estimate(db, CTX, "x")
     quick.answer(db, CTX, e["id"], "pressure_washing", {"driveway_sqft": 1000}, e["rev"], REG)
     s = setup.setup_status(db, CTX)
-    assert s["sample_prices_in_use"] == 7
+    assert s["sample_prices_in_use"] == 14   # 7 -> 14: pressure washing add-ons (2026-11-20, Jamie)
     s = setup.setup_step(db, CTX, "price_book_review", {"prices": {"pw_driveway_sqft": "0.18"}})
     assert get_price(db, "default", "pw_driveway_sqft").cost_cents == 18
-    assert s["sample_prices_in_use"] == 6 and not s["ready_for_first_bid"]
+    assert s["sample_prices_in_use"] == 13 and not s["ready_for_first_bid"]
     s = setup.setup_step(db, CTX, "price_book_review", {"keep_samples": True})
     assert s["sample_prices_in_use"] == 0 and s["ready_for_first_bid"]
     with pytest.raises(NotFound):

@@ -13,8 +13,9 @@ notes:
   - "Garage walls and ceilings shared with living space usually need 5/8 in fire-rated board; check local code."
 
 questions:
-  - {id: wall_lf, label: "Wall length (all walls added up)", type: number, unit: lf, default: 0, min: 0, max: 20000}
+  - {id: wall_lf, label: "Wall length (all walls added up)", type: number, unit: lf, default: 0, min: 0, max: 20000, help: "Add up the length of every wall getting drywall, in feet. Doors and windows are taken out automatically."}
   - id: wall_height
+    help: "Floor to ceiling height. Taller walls use more board and take more time."
     label: "Wall height"
     type: choice
     default: "8"
@@ -22,10 +23,11 @@ questions:
       - {value: "8", label: "8 ft", factor: "8"}
       - {value: "9", label: "9 ft", factor: "9"}
       - {value: "10", label: "10 ft", factor: "10"}
-  - {id: ceiling_sqft, label: "Ceiling area", type: number, unit: sqft, default: 0, min: 0, max: 100000}
+  - {id: ceiling_sqft, label: "Ceiling area", type: number, unit: sqft, default: 0, min: 0, max: 100000, help: "Ceiling area to cover, in square feet. Usually the same as the room's floor area."}
   - {id: openings_sqft, label: "Door and window area to leave out", type: number, unit: sqft, default: 0, min: 0,
      max: 100000, help: "About 20 sq ft per door and 15 per window."}
   - id: board
+    help: "Standard for most rooms. Fire-rated is needed in garages and between units. Moisture-resistant for bathrooms."
     label: "Board"
     type: choice
     default: standard
@@ -35,6 +37,7 @@ questions:
       - {value: fire, label: "Fire-rated 5/8 in Type X", factor: "2"}
       - {value: moisture, label: "Moisture-resistant (baths)", factor: "3"}
   - id: finish
+    help: "How smooth the walls end up. Level 3 for textured walls, Level 4 for flat paint, Level 5 for a perfectly smooth look."
     label: "Finish level"
     type: choice
     default: "4"
@@ -42,8 +45,8 @@ questions:
       - {value: "3", label: "Level 3 (under texture)", factor: "3"}
       - {value: "4", label: "Level 4 (flat paint)", factor: "4"}
       - {value: "5", label: "Level 5 (skim coat, smooth)", factor: "5"}
-  - {id: remove_existing, label: "Tear out the old drywall?", type: boolean, default: false}
-  - {id: permit, label: "Pull a permit?", type: boolean, default: false}
+  - {id: remove_existing, label: "Tear out the old drywall?", type: boolean, default: false, help: "Tear out and haul away the old drywall before hanging new board."}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false, help: "Some cities require a permit for drywall, especially fire-rated walls. Adds the permit fee."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 scenarios:

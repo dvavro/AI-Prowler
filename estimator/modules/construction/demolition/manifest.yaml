@@ -15,8 +15,9 @@ notes:
   - "Never take out a bearing wall without an engineer's beam design and a permit."
 
 questions:
-  - {id: interior_sqft, label: "Interior area to demo", type: number, unit: sqft, default: 0, min: 0, max: 100000}
+  - {id: interior_sqft, label: "Interior area to demo", type: number, unit: sqft, default: 0, min: 0, max: 100000, help: "Floor area of the rooms being demolished, in square feet."}
   - id: level
+    help: "Selective takes out finishes and fixtures only. Gut strips the room down to the studs."
     label: "How much comes out?"
     type: choice
     default: selective
@@ -24,11 +25,12 @@ questions:
     choices:
       - {value: selective, label: "Selective (finishes, fixtures)", factor: "1"}
       - {value: gut, label: "Gut to the studs", factor: "2"}
-  - {id: walls_lf, label: "Non-bearing walls to remove", type: number, unit: lf, default: 0, min: 0, max: 2000}
-  - {id: cabinets_lf, label: "Cabinets to remove", type: number, unit: lf, default: 0, min: 0, max: 1000}
-  - {id: fixtures, label: "Fixtures to remove (toilets, tubs, sinks)", type: integer, default: 0, min: 0, max: 200}
-  - {id: flooring_sqft, label: "Flooring to tear out", type: number, unit: sqft, default: 0, min: 0, max: 100000}
+  - {id: walls_lf, label: "Non-bearing walls to remove", type: number, unit: lf, default: 0, min: 0, max: 2000, help: "Total length of non-load-bearing walls to tear out. Load-bearing walls need an engineer and are quoted separately."}
+  - {id: cabinets_lf, label: "Cabinets to remove", type: number, unit: lf, default: 0, min: 0, max: 1000, help: "Total length of upper and lower cabinets to remove, measured along the wall."}
+  - {id: fixtures, label: "Fixtures to remove (toilets, tubs, sinks)", type: integer, default: 0, min: 0, max: 200, help: "Count of toilets, tubs, showers and sinks to disconnect and remove."}
+  - {id: flooring_sqft, label: "Flooring to tear out", type: number, unit: sqft, default: 0, min: 0, max: 100000, help: "Square feet of floor covering to tear out down to the subfloor."}
   - id: floor_type
+    help: "Tile set in mortar takes the most labor to remove. Carpet is the fastest."
     label: "Flooring type"
     type: choice
     default: carpet
@@ -37,12 +39,12 @@ questions:
       - {value: carpet, label: "Carpet and pad", factor: "0.5"}
       - {value: wood, label: "Wood, laminate or vinyl", factor: "1.5"}
       - {value: tile, label: "Tile on mortar", factor: "2.5"}
-  - {id: concrete_sqft, label: "Concrete to break out (4 in)", type: number, unit: sqft, default: 0, min: 0, max: 50000}
+  - {id: concrete_sqft, label: "Concrete to break out (4 in)", type: number, unit: sqft, default: 0, min: 0, max: 50000, help: "Square feet of 4 in thick concrete to break up and haul away, like a patio or walkway."}
   - {id: structure_sqft, label: "Shed, carport or small structure footprint", type: number, unit: sqft, default: 0, min: 0,
-     max: 5000}
-  - {id: protection, label: "Dust walls and floor protection?", type: boolean, default: true}
-  - {id: hazard_test, label: "Asbestos and lead test first?", type: boolean, default: false}
-  - {id: permit, label: "Pull a demolition permit?", type: boolean, default: false}
+     max: 5000, help: "Footprint of a shed, carport or small outbuilding to tear down and haul away."}
+  - {id: protection, label: "Dust walls and floor protection?", type: boolean, default: true, help: "Plastic dust walls and floor covering to protect the rest of the home while work is going on."}
+  - {id: hazard_test, label: "Asbestos and lead test first?", type: boolean, default: false, help: "Older homes can have asbestos or lead paint. Testing first keeps the crew and family safe and is often required."}
+  - {id: permit, label: "Pull a demolition permit?", type: boolean, default: false, help: "Many cities require a permit for demolition. Adds the permit fee."}
   - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
 
 lines:

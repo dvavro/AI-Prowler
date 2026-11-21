@@ -1,8 +1,15 @@
 price_key,description,kind,unit,cost
 pw_driveway_sqft,Driveway / flatwork wash (sample),other,sqft,0.15
-pw_siding_sqft,House siding wash (sample),other,sqft,0.25
+pw_siding_sqft,House siding wash by area (sample),other,sqft,0.12
 pw_deck_sqft,Deck wash (sample),other,sqft,0.35
-pw_roof_sqft,Roof soft wash (sample),other,sqft,0.40
-pw_fence_lf,Fence wash (sample),other,lf,1.50
+pw_roof_sqft,Roof soft wash (sample),other,sqft,0.20
+pw_fence_lf,Fence wash (sample),other,lf,0.90
 pw_oil_stain_ea,Oil stain treatment (sample),other,ea,25.00
 pw_sealer_sqft,Driveway sealing (sample),other,sqft,0.30
+pw_house_small_ea,"House soft wash, under 1,500 sq ft home (sample)",other,ea,145.40
+pw_house_medium_ea,"House soft wash, 1,500 to 2,500 sq ft home (sample)",other,ea,203.60
+pw_house_large_ea,"House soft wash, 2,500 to 3,500 sq ft home (sample)",other,ea,261.70
+pw_house_xlarge_ea,"House soft wash, over 3,500 sq ft home (sample)",other,ea,349.00
+pw_gutter_lf,Gutter cleaning and brightening per foot (sample),other,lf,0.75
+pw_window_ea,Exterior window wash each (sample),other,ea,4.00
+pw_solar_ea,Solar panel cleaning each (sample),other,ea,8.00

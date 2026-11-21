@@ -1,6 +1,21 @@
 price_key,description,kind,unit,cost
-pc_visit_ea,Service call (sample),other,ea,60.00
-pc_treatment_sqft,Treatment per sq ft (sample),other,sqft,0.04
-pc_termite_ea,Termite inspection (sample),other,ea,95.00
-pc_rodent_station_ea,Rodent bait station (sample),other,ea,35.00
-pc_yard_sqft,Yard treatment per sq ft (sample),other,sqft,0.01
+pc_one_time_ea,"One-time pest treatment, up to 2,500 sq ft (sample)",other,ea,167.00
+pc_startup_ea,"Plan startup service, up to 2,500 sq ft (sample)",other,ea,117.00
+pc_visit_monthly_ea,"Monthly plan visit, up to 2,500 sq ft (sample)",other,ea,33.45
+pc_visit_bimonthly_ea,"Every 2 months plan visit, up to 2,500 sq ft (sample)",other,ea,57.00
+pc_visit_quarterly_ea,"Quarterly plan visit, up to 2,500 sq ft (sample)",other,ea,87.00
+pc_size_first_ea,"Larger home, first treatment, per extra 1,000 sq ft (sample)",other,ea,16.75
+pc_size_visit_ea,"Larger home, per plan visit, per extra 1,000 sq ft (sample)",other,ea,6.70
+pc_level_moderate_ea,"Moderate activity, extra on first treatment (sample)",other,ea,33.50
+pc_level_heavy_ea,"Heavy infestation, extra on first treatment (sample)",other,ea,67.00
+pc_scorpion_first_ea,"Scorpion treatment, first treatment (sample)",other,ea,83.60
+pc_scorpion_visit_ea,"Scorpion treatment, per plan visit (sample)",other,ea,23.40
+pc_scorpion_seal_ea,Scorpion sealing package (sample),other,ea,200.70
+pc_rodent_setup_ea,"Rodent control setup, stations and traps (sample)",other,ea,150.50
+pc_rodent_monthly_ea,Rodent station service monthly (sample),other,ea,46.80
+pc_termite_inspection_ea,Termite inspection (sample),other,ea,67.00
+pc_bedbug_room_ea,"Bed bug treatment per room, with follow-up (sample)",other,ea,301.00
+pc_mosquito_ea,Mosquito yard treatment per visit (sample),other,ea,63.50
+pc_yard_small_ea,"Yard treatment per visit, small (sample)",other,ea,16.75
+pc_yard_standard_ea,"Yard treatment per visit, standard (sample)",other,ea,26.75
+pc_yard_large_ea,"Yard treatment per visit, large (sample)",other,ea,40.15

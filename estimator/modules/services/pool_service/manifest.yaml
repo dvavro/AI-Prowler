@@ -1,24 +1,37 @@
-# Pool service: monthly maintenance price plus optional one-time work.
+# Pool service: a flat monthly price for regular service (how pool companies bill), plus one-time work.
 id: pool_service
 name: Pool Service
 version: 0.1.1
 category: service
 path: quick_estimate
-description: Monthly pool maintenance priced by visits, pool size and spa, with chemicals, filter cleaning and green-pool cleanup.
+description: Pool service priced like pool companies do it - a flat monthly rate for full or chemical-only service, or a one-time cleaning - adjusted for pool size, spa, salt and debris, with filter cleaning, green-pool cleanup, acid wash, tile cleaning, drain and refill, and repair hours.
 minimum_charge: "100.00"
-keywords: [pool service, pool cleaning, my pool, swimming pool, pool guy, pool water, clean my pool, pool maintenance, pool, spa, hot tub, green pool, pool chemicals, filter clean]
+keywords: [pool service, pool cleaning, my pool, swimming pool, pool guy, pool water, clean my pool, pool maintenance, pool, spa, hot tub, green pool, pool chemicals, filter clean, acid wash, salt water pool]
 # A won quote with one of these answers becomes a repeating job in AI-Prowler.
-recurrence: {question: visits, map: {weekly: Weekly, biweekly: Biweekly}}
+recurrence: {question: visits, map: {weekly: Weekly, monthly: Monthly, biweekly: Biweekly}}
 
 questions:
   - id: visits
+    help: "Weekly is the most common plan and keeps the water cleanest. Monthly plans are a flat price per month, usually billed at the start of the month. One-time cleaning is a single visit with no plan."
     label: "How often?"
     type: choice
     required: true
+    default: weekly
     choices:
       - {value: weekly, label: "Weekly (about 4 visits a month)", factor: "4"}
       - {value: biweekly, label: "Every 2 weeks (2 visits a month)", factor: "2"}
+      - {value: monthly, label: "Monthly (1 visit a month)", factor: "1"}
+      - {value: one_time, label: "One-time cleaning (no plan)", factor: "0"}
+  - id: service_level
+    label: "Service level"
+    type: choice
+    default: full
+    help: "Full service is cleaning plus chemicals: skim, brush, vacuum, empty baskets, test and balance the water. Chemical-only means the tech tests and balances the water, and the owner does the cleaning."
+    choices:
+      - {value: full, label: "Full service", factor: "1.0"}
+      - {value: chem_only, label: "Chemicals only (owner cleans)", factor: "0.55"}
   - id: pool_type
+    help: "A spa adds time for cleaning and balancing its water."
     label: "Pool only, or pool and spa?"
     type: choice
     default: pool
@@ -26,16 +39,21 @@ questions:
       - {value: pool, label: "Pool only", factor: "1.0"}
       - {value: pool_and_spa, label: "Pool and spa", factor: "1.3"}
   - id: size
+    help: "Bigger pools need more time and chemicals. A typical backyard pool is 15,000 to 25,000 gallons."
     label: "Pool size"
     type: choice
     default: medium
     choices:
       - {value: small, label: "Small (under 15,000 gal)", factor: "0.9"}
       - {value: medium, label: "Medium (15,000-25,000 gal)", factor: "1.0"}
-      - {value: large, label: "Large (over 25,000 gal)", factor: "1.25"}
-  - {id: chemicals, label: "Include chemicals?", type: boolean, default: true}
-  - {id: filter_clean, label: "Filter cleaning this month?", type: boolean, default: false}
+      - {value: large, label: "Large (25,000-35,000 gal)", factor: "1.25"}
+      - {value: xlarge, label: "Extra large (over 35,000 gal)", factor: "1.5"}
+  - {id: chemicals, label: "Include chemicals?", type: boolean, default: true, help: "Include chlorine, acid and balancing chemicals in the monthly price. Most companies include them; leave unchecked to bill chemicals separately."}
+  - {id: salt, label: "Salt water pool?", type: boolean, default: false, help: "Salt pools make their own chlorine but the salt cell needs checking and cleaning, which adds a little each month."}
+  - {id: debris, label: "Trees or heavy debris?", type: boolean, default: false, help: "Trees, palms or bushes over the pool drop leaves and seeds, so every visit takes longer to skim and empty baskets."}
+  - {id: filter_clean, label: "Filter cleaning this month?", type: boolean, default: false, help: "Take apart and clean the pool filter. Usually done every few months."}
   - id: cleanup
+    help: "Cloudy or green water needs a one-time cleanup before regular service starts."
     label: "Does the pool need a one-time cleanup first?"
     type: choice
     default: none
@@ -43,15 +61,34 @@ questions:
       - {value: none, label: "No, it's clear", factor: "0"}
       - {value: cloudy, label: "Cloudy", factor: "1"}
       - {value: green, label: "Green", factor: "2.5"}
+  - {id: acid_wash, label: "Acid wash (one time)?", type: boolean, default: false, help: "Drain the pool and wash the plaster with acid to remove stains and algae. Usually every few years."}
+  - {id: tile_clean, label: "Tile cleaning (one time)?", type: boolean, default: false, help: "Remove the white calcium line from the waterline tile, usually with bead blasting."}
+  - {id: drain_refill, label: "Drain and refill (one time)?", type: boolean, default: false, help: "Drain old water and refill when the water has too many dissolved minerals to balance. Water cost is extra."}
+  - {id: repair_hours, label: "Repair hours", type: number, unit: hr, default: 0, min: 0, max: 100, help: "Hours for repairs or special projects, like a pump, heater or leak. Parts are quoted separately."}
 
 lines:
   - {id: service, description: "Monthly pool service (visits, size adjusted)", kind: other, unit: ea,
-     quantity: "visits * pool_type * size", price_key: ps_visit_ea,
+     quantity: "visits * service_level * pool_type * size", price_key: ps_visit_ea, when: "visits > 0",
      show: "visits", show_unit: visit}
   - {id: chemicals, description: "Chemicals", kind: material, unit: ea, quantity: "visits",
-     price_key: ps_chemicals_ea, when: "chemicals"}
+     price_key: ps_chemicals_ea, when: "chemicals and visits > 0"}
+  - {id: salt, description: "Salt cell care (monthly)", kind: other, unit: ea, quantity: "1",
+     price_key: ps_salt_ea, when: "salt and visits > 0"}
+  - {id: debris, description: "Heavy debris (per visit)", kind: other, unit: ea, quantity: "visits",
+     price_key: ps_debris_ea, when: "debris and visits > 0"}
+  - {id: one_time, description: "One-time pool cleaning (size adjusted)", kind: other, unit: ea,
+     quantity: "pool_type * size", price_key: ps_one_time_ea, when: "visits == 0",
+     show: "1", show_unit: cleaning}
   - {id: filter, description: "Filter cleaning", kind: other, unit: ea, quantity: "1",
      price_key: ps_filter_ea, when: "filter_clean"}
   - {id: cleanup, description: "One-time pool cleanup", kind: other, unit: ea, quantity: "cleanup",
      price_key: ps_cleanup_ea, when: "cleanup > 0",
      show: "1", show_unit: cleanup}
+  - {id: acid_wash, description: "Acid wash (one time)", kind: other, unit: ea, quantity: "1",
+     price_key: ps_acid_wash_ea, when: "acid_wash"}
+  - {id: tile_clean, description: "Tile cleaning (one time)", kind: other, unit: ea, quantity: "1",
+     price_key: ps_tile_clean_ea, when: "tile_clean"}
+  - {id: drain_refill, description: "Drain and refill (one time)", kind: other, unit: ea, quantity: "1",
+     price_key: ps_drain_refill_ea, when: "drain_refill"}
+  - {id: repairs, description: "Repair labor", kind: labor, unit: hr, quantity: "repair_hours",
+     price_key: ps_repair_hr, when: "repair_hours > 0"}

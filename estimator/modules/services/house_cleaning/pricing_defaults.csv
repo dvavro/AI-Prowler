@@ -3,3 +3,10 @@ hc_labor_hr,Cleaning labor per hour (sample),labor,hr,50.00
 hc_oven_ea,Inside oven (sample),other,ea,35.00
 hc_fridge_ea,Inside fridge (sample),other,ea,35.00
 hc_window_ea,Interior window (sample),other,ea,6.00
+hc_cabinets_ea,Inside kitchen cabinets (sample),other,ea,30.00
+hc_baseboards_ea,Hand-wiped baseboards (sample),other,ea,26.75
+hc_blind_ea,Blinds dusted each (sample),other,ea,3.35
+hc_laundry_load_ea,Laundry per load (sample),other,ea,10.00
+hc_dishes_ea,Dishes (sample),other,ea,13.40
+hc_garage_ea,Garage sweep (sample),other,ea,26.75
+hc_patio_ea,Patio sweep (sample),other,ea,20.00

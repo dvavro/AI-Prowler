@@ -23,8 +23,9 @@ scenarios:
 recurrence: {question: how_often, map: {weekly: Weekly, biweekly: Biweekly, monthly: Monthly}}
 
 questions:
-  - {id: vehicles, label: "Number of vehicles", type: integer, default: 1, min: 1, max: 50}
+  - {id: vehicles, label: "Number of vehicles", type: integer, default: 1, min: 1, max: 50, help: "How many vehicles to detail on this visit."}
   - id: vehicle_size
+    help: "Bigger vehicles take more time and product."
     label: "Vehicle size"
     type: choice
     default: car
@@ -34,6 +35,7 @@ questions:
       - {value: large, label: "Large SUV / full-size truck / minivan", factor: "1.4"}
       - {value: oversize, label: "Van / 3-row SUV / dually", factor: "1.6"}
   - id: package
+    help: "Exterior is the outside only, interior is the inside only, full detail is both."
     label: "Package"
     type: choice
     required: true
@@ -43,6 +45,7 @@ questions:
       - {value: interior, label: "Interior (vacuum, wipe down, glass, mats)", factor: "2"}
       - {value: full, label: "Full detail (inside and out)", factor: "3"}
   - id: condition
+    help: "Heavy dirt, stains, sand or kid messes take extra time."
     label: "How dirty is it?"
     type: choice
     default: normal
@@ -50,12 +53,13 @@ questions:
       - {value: light, label: "Light (kept up)", factor: "1.0"}
       - {value: normal, label: "Normal", factor: "1.15"}
       - {value: heavy, label: "Heavy (stains, mud, sand, kids' mess)", factor: "1.4"}
-  - {id: pet_hair, label: "Pet hair removal?", type: boolean, default: false}
-  - {id: shampoo, label: "Shampoo seats and carpets?", type: boolean, default: false}
+  - {id: pet_hair, label: "Pet hair removal?", type: boolean, default: false, help: "Pet hair sticks in carpet and seats and takes extra time to remove."}
+  - {id: shampoo, label: "Shampoo seats and carpets?", type: boolean, default: false, help: "Deep clean of cloth seats and carpets with an extractor."}
   - {id: odor, label: "Odor removal (ozone treatment)?", type: boolean, default: false,
      help: "Smoke, pets or spills."}
-  - {id: clay_bar, label: "Clay bar paint decontamination?", type: boolean, default: false}
+  - {id: clay_bar, label: "Clay bar paint decontamination?", type: boolean, default: false, help: "Removes stuck-on grime from the paint so it feels smooth. Done before polish or wax."}
   - id: paint_correction
+    help: "Machine polishing to remove swirls and light scratches. Two-step is for heavier marks."
     label: "Paint correction (polish)"
     type: choice
     default: none
@@ -66,11 +70,12 @@ questions:
       - {value: two_step, label: "Two-step compound and polish (heavier swirls, scratches)", factor: "2"}
   - {id: ceramic_coating, label: "Ceramic coating?", type: boolean, default: false,
      help: "Usually after a clay bar and paint correction."}
-  - {id: headlights, label: "Headlight pairs to restore", type: integer, default: 0, min: 0, max: 50}
-  - {id: engine_bay, label: "Engine bay cleaning?", type: boolean, default: false}
+  - {id: headlights, label: "Headlight pairs to restore", type: integer, default: 0, min: 0, max: 50, help: "Pairs of cloudy or yellow headlights to restore clear."}
+  - {id: engine_bay, label: "Engine bay cleaning?", type: boolean, default: false, help: "Clean and dress the engine compartment."}
   - {id: mobile, label: "Mobile (at the customer's place)?", type: boolean, default: false,
      help: "One travel fee for the visit."}
   - id: how_often
+    help: "Regular plans keep the vehicle clean and cost less per visit."
     label: "How often?"
     type: choice
     default: one_time
