@@ -15019,6 +15019,34 @@ def build_daily_route(
 
 
 
+_LONG_DRIVE_WARN_MIN = 240   # 4 hours: no normal service-day leg is this long
+
+
+def _long_drive_warnings(stops_out: list, origin: str) -> list:
+    """2026-11-22 (Jamie): LONG DRIVE warnings for build_daily_route's stops
+    (each with drive_from_prev minutes; job=None marks the start / return
+    bookends). Leg i runs from stop i-1 to stop i; the first job's leg starts
+    at `origin` when one is in use. Returns ready-to-print lines."""
+    out = []
+    prev_label = f"the starting address ({origin})" if origin else ""
+    for s in stops_out:
+        job = s.get("job")
+        if job is None:
+            here = f"the starting address ({s.get('return_address') or origin})"
+        else:
+            here = f"{job.get('cust_name') or '?'} ({job.get('job_id')})"
+        minutes = s.get("drive_from_prev") or 0
+        if prev_label and minutes > _LONG_DRIVE_WARN_MIN and prev_label != here:
+            hours = minutes / 60.0
+            hint = (" Check the starting address (Settings → Start/End Address, or your "
+                    "home address) — it may be in the wrong city or state."
+                    if "starting address" in prev_label or "starting address" in here
+                    else " Check both jobs' addresses.")
+            out.append(f"⚠️  LONG DRIVE: {hours:.1f} hours from {prev_label} to {here}.{hint}")
+        prev_label = here
+    return out
+
+
 def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_hour: int,
                              filepath: str, backup: bool, accept_reorder: bool,
                              email_link: "bool | None", email_to: str, ctx) -> str:
@@ -15545,6 +15573,14 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
             "departure": return_arrival,
         })
 
+    # ── LONG DRIVE warnings (2026-11-22, Jamie) ───────────────────────────────
+    # A server whose Start/End Address was in another state gave a Chandler, AZ
+    # job a 37-hour drive with only a LATE ARRIVAL warning. Any leg longer than
+    # _LONG_DRIVE_WARN_MIN is flagged, naming where it starts and ends; a leg to
+    # or from the starting address points at that address, since a wrong
+    # start/home address is the usual cause. Advisory only, like LATE ARRIVAL.
+    long_drive_warnings = _long_drive_warnings(stops_out, effective_origin)
+
     # ── Backup now — right before the actual write, not earlier — so a
     # pre-flight-savings-alert call (which returns above and writes nothing)
     # never creates a wasted backup. Also covers the Latitude/Longitude
@@ -15691,6 +15727,9 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
     lines.append("")
 
 
+    if long_drive_warnings:
+        lines.extend(long_drive_warnings)
+        lines.append("")
     if no_address_lines:
         lines.append("⚠️  NO ADDRESS (not on this route):")
         lines.extend(f"  - {f}" for f in no_address_lines)
@@ -15706,7 +15745,7 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
         lines.extend(overlap_warnings)
         lines.append("")
 
-    if no_address_lines or geocode_failures or late_warnings or overlap_warnings:
+    if long_drive_warnings or no_address_lines or geocode_failures or late_warnings or overlap_warnings:
         lines.append("🚨 Review the warnings above before dispatching this route.")
     else:
         lines.append("✅ No scheduling conflicts detected.")
