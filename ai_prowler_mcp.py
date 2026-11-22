@@ -14946,9 +14946,14 @@ def build_daily_route(
     Args:
         route_date:      Date to build the route for, e.g. "2026-09-22".
         crew:            Optional — if given, only jobs assigned to this
-                          Crew / Technician are included. If omitted, ALL
-                          jobs scheduled that date are included (each stop
-                          keeps its own job's own Crew / Technician value).
+                          Crew / Technician are included. If omitted: in
+                          personal mode, ALL jobs scheduled that date are
+                          included (each stop keeps its own job's own Crew /
+                          Technician value); in server mode it means the
+                          signed-in caller's OWN route (R-055) — only jobs
+                          whose Crew / Technician names them, so a job with
+                          a blank crew is on nobody's route there. Owner /
+                          manager / staff can name another person.
         origin:          Optional — a starting address for THIS route, e.g.
                           "123 Main St, Daytona Beach FL". Only use this
                           when the person explicitly says where they're
@@ -15142,10 +15147,26 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
                 round_trip_reason = home_label
 
     # ── Find all jobs on route_date (optionally filtered by crew) ───────────
-    matching_jobs = db_get_jobs_for_route(db_path, target_date.isoformat(), crew)
+    # 2026-11-22 (Jamie): jobs with no street address used to vanish here
+    # without a word; they're collected and reported as NO ADDRESS below.
+    no_address_jobs = []
+    matching_jobs = db_get_jobs_for_route(db_path, target_date.isoformat(), crew,
+                                          skipped=no_address_jobs)
+    no_address_lines = [
+        f"{j['cust_name'] or '?'} ({j['job_id']}) — no street address; add one to the job to route it"
+        for j in no_address_jobs
+    ]
 
     if not matching_jobs:
         crew_note = f" for crew {crew!r}" if crew.strip() else ""
+        if no_address_lines:
+            return (
+                f"⚠️  No routable jobs on {target_date.isoformat()}{crew_note} — "
+                f"{len(no_address_lines)} job(s) scheduled that day have no address.\n"
+                "NO ADDRESS (not on the route):\n"
+                + "\n".join(f"  - {l}" for l in no_address_lines)
+                + "\nNothing to route — no route was modified."
+            )
         return (
             f"ℹ️  No jobs scheduled on {target_date.isoformat()}{crew_note}.\n"
             "Nothing to route — no route was modified."
@@ -15670,6 +15691,10 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
     lines.append("")
 
 
+    if no_address_lines:
+        lines.append("⚠️  NO ADDRESS (not on this route):")
+        lines.extend(f"  - {f}" for f in no_address_lines)
+        lines.append("")
     if geocode_failures:
         lines.append("⚠️  GEOCODING FAILED (excluded from route):")
         lines.extend(f"  - {f}" for f in geocode_failures)
@@ -15681,7 +15706,7 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
         lines.extend(overlap_warnings)
         lines.append("")
 
-    if geocode_failures or late_warnings or overlap_warnings:
+    if no_address_lines or geocode_failures or late_warnings or overlap_warnings:
         lines.append("🚨 Review the warnings above before dispatching this route.")
     else:
         lines.append("✅ No scheduling conflicts detected.")

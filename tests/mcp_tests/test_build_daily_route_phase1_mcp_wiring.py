@@ -172,6 +172,43 @@ def test_personal_mode_builds_route_and_persists_stops(personal_env, monkeypatch
     assert all(not u[0] for u in urls)
 
 
+def test_personal_mode_warns_about_job_with_no_address(personal_env, monkeypatch, mcp_mod):
+    """2026-11-22: a job with no street address is left off the route AND
+    listed under NO ADDRESS (it used to vanish with no message)."""
+    _install_osrm_route_mock(monkeypatch, num_legs=0)
+    mcp_mod.create_job({
+        "CustomerID": _cust_id(mcp_mod, "A"), "Customer Name / Company": "A", "Service Date": "2026-04-05",
+        "Street Address": "1 Main St", "City": "NSB", "State": "FL",
+        "Latitude (AI Geocode)": 29.0, "Longitude (AI Geocode)": -80.9, "Start Time": "08:00",
+    }, filepath="", backup=False, ctx=None)
+    no_addr = _job_id(mcp_mod.create_job({
+        "CustomerID": _cust_id(mcp_mod, "Est Customer"), "Customer Name / Company": "Est Customer",
+        "Service Date": "2026-04-05",
+    }, filepath="", backup=False, ctx=None))
+
+    result = mcp_mod.build_daily_route("2026-04-05", filepath="", backup=False,
+                                        email_link=False, ctx=None)
+    assert result.startswith("🗺️"), result
+    assert "Stops:  1" in result
+    assert "NO ADDRESS" in result
+    assert f"Est Customer ({no_addr})" in result
+    assert "Review the warnings above" in result
+    assert "No scheduling conflicts detected" not in result
+
+
+def test_personal_mode_only_no_address_jobs_says_so(personal_env, mcp_mod):
+    """Every job that day lacks an address: say so, not 'No jobs scheduled'."""
+    no_addr = _job_id(mcp_mod.create_job({
+        "CustomerID": _cust_id(mcp_mod, "Est Customer"), "Customer Name / Company": "Est Customer",
+        "Service Date": "2026-04-05",
+    }, filepath="", backup=False, ctx=None))
+    result = mcp_mod.build_daily_route("2026-04-05", filepath="", backup=False,
+                                        email_link=False, ctx=None)
+    assert result.startswith("⚠️"), result
+    assert "No jobs scheduled" not in result
+    assert "NO ADDRESS" in result and no_addr in result
+
+
 def test_personal_mode_crew_filter_only_includes_matching_jobs(personal_env, monkeypatch, mcp_mod):
     _install_osrm_route_mock(monkeypatch)
     mcp_mod.create_job({

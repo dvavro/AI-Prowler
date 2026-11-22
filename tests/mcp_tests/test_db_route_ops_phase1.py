@@ -93,6 +93,30 @@ def test_get_jobs_for_route_skips_jobs_with_no_address(db_path):
     assert jobs == []
 
 
+def test_get_jobs_for_route_reports_skipped_no_address_jobs(db_path):
+    """2026-11-22: a skipped list gets the address-less jobs back, so
+    build_daily_route can warn instead of dropping them silently. Cancelled
+    jobs and other crews' jobs are not reported."""
+    db_create_job(db_path, {"CustomerID (Customers!A)": _cust_id(db_path, "NoAddr"),
+                            "Customer Name / Company": "NoAddr", "Service Date": "2026-04-05",
+                            "Crew / Technician": "Jake R"}, actor="dave")
+    db_create_job(db_path, {"CustomerID (Customers!A)": _cust_id(db_path, "Gone"),
+                            "Customer Name / Company": "Gone", "Service Date": "2026-04-05",
+                            "Crew / Technician": "Jake R", "Job Status": "Cancelled"}, actor="dave")
+    db_create_job(db_path, {"CustomerID (Customers!A)": _cust_id(db_path, "Other"),
+                            "Customer Name / Company": "Other", "Service Date": "2026-04-05",
+                            "Crew / Technician": "Maria S"}, actor="dave")
+    db_create_job(db_path, {"CustomerID (Customers!A)": _cust_id(db_path, "Has"),
+                            "Customer Name / Company": "Has", "Service Date": "2026-04-05",
+                            "Crew / Technician": "Jake R", "Street Address": "1 Main St"}, actor="dave")
+    skipped = []
+    jobs = db_get_jobs_for_route(db_path, "2026-04-05", crew="Jake R", skipped=skipped)
+    assert [j["cust_name"] for j in jobs] == ["Has"]
+    assert [s["cust_name"] for s in skipped] == ["NoAddr"]
+    # without the argument nothing changes
+    assert [j["cust_name"] for j in db_get_jobs_for_route(db_path, "2026-04-05", crew="Jake R")] == ["Has"]
+
+
 def test_get_jobs_for_route_returns_existing_geocode(db_path):
     db_create_job(db_path, {
         "CustomerID (Customers!A)": _cust_id(db_path, "A"), "Customer Name / Company": "A", "Service Date": "2026-04-05",
