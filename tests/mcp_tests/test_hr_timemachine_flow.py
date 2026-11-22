@@ -74,7 +74,11 @@ def hr(tmp_path, monkeypatch, time_machine):
     h.ap, h.hs, h.mails, h.tm = ap, hs, mails, time_machine
 
     def go(day):                                   # move to 06:00 local on `day`
-        time_machine.move_to(dt.datetime.combine(day, dt.time(6, 0)), tick=False)
+        # .astimezone(): time_machine reads a naive datetime as UTC, so 06:00
+        # UTC was still the day before west of UTC-6 (e.g. 23:00 Sunday in
+        # Arizona), and every date came out a day early. Same as
+        # tests/analysis/test_scheduler.py and the GUI time-machine servers.
+        time_machine.move_to(dt.datetime.combine(day, dt.time(6, 0)).astimezone(), tick=False)
     h.go = go
 
     def run_day(day):

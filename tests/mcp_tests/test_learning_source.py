@@ -70,6 +70,20 @@ FIELD_USER = {
 import rag_preprocessor as _rp   # for patching OWNER_NAME directly
 
 
+@pytest.fixture(autouse=True)
+def _no_real_owner_name(monkeypatch):
+    """2026-11-22 (Jamie): _get_personal_owner_name() reads the REAL
+    ~/.ai-prowler/config.json first, so these tests got whoever owns the PC
+    running them ("Jamie Vavro" on Jamie's PC) instead of the OWNER_NAME they
+    patch, and only passed where the PC's owner happened to be David Vavro.
+    Keep the function's in-memory fallback only, so each test's own
+    OWNER_NAME is what counts. Tests that patch _get_personal_owner_name
+    themselves still override this."""
+    import ai_prowler_mcp as _mcp_mod
+    monkeypatch.setattr(_mcp_mod, "_get_personal_owner_name",
+                        lambda: (_rp.OWNER_NAME or "").strip())
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _call_record(sl_mcp_env, *, user=None, auto_detected=False,
