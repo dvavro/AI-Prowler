@@ -11,7 +11,13 @@ description: Monthly lawn and yard upkeep priced by yard size and visits, with e
 minimum_charge: "80.00"
 keywords: [landscaping maintenance, lawn care, lawn service, lawn mowing, mow, mowing, mow my lawn, yard maintenance, yard work, hedge trimming, hedges, weeding, leaf cleanup, edging, gardener]
 # A won quote with one of these answers becomes a repeating job in AI-Prowler.
-recurrence: {question: visits, map: {weekly: Weekly, biweekly: Biweekly, monthly: Monthly}}
+recurrence: {question: visits, map: {weekly: Weekly, biweekly: Biweekly, monthly: Monthly},
+             # The price is for a month of visits: the repeating job is billed per visit (price / visits).
+             per_month: {weekly: 4, biweekly: 2, monthly: 1},
+             # One-time work goes on its own job, not on every visit.
+             once: [leaves_small, leaves_standard, leaves_large, leaves_xlarge, leaves_exact,
+                    palms_under20, palms_mid, palms_40_60, palms_over60, trees,
+                    overseed_small, overseed_standard, overseed_large, overseed_xlarge, overseed_exact]}
 questions:
   - id: yard_size
     label: "Yard size"

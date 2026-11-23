@@ -110,7 +110,8 @@ class TradeModule:
     sample_prices: dict = field(default_factory=dict)
     keywords: tuple[str, ...] = ()    # words the Director's triage matches in a request
     required_any: tuple[str, ...] = ()  # the Director won't price until at least one of these is non-zero
-    recurrence: dict | None = None    # {"question": id, "map": {choice value: AI-Prowler Recurrence}}
+    recurrence: dict | None = None    # {"question": id, "map": {choice value: AI-Prowler Recurrence},
+                                      #  "per_month": {choice value: visits a month}, "once": (one-time line ids)}
     notes: tuple[str, ...] = ()       # reminders the Reviewer shows (e.g. hot-weather pour timing)
     scenarios: tuple[dict, ...] = ()  # good/better/best: ({"id", "label", "answers"}, ...)
 
@@ -353,7 +354,25 @@ def load_module(folder: Path) -> TradeModule:
         badv = [v for v in recurrence["map"].values() if v not in RECURRENCE_VALUES]
         if badv:
             raise ManifestError(f"{where}: recurrence values must be one of {RECURRENCE_VALUES}")
-        recurrence = {"question": rq.id, "map": {str(k): v for k, v in recurrence["map"].items()}}
+        # 2026-11-22 (Jamie, David's decision B): a module whose price covers a whole month of visits says how many
+        # visits a month each answer means (per_month) and which lines are one-time work (once), so Make it a job
+        # can make the repeating job at the per-visit price and the one-time work a job of its own.
+        per_month = recurrence.get("per_month") or {}
+        if not isinstance(per_month, dict):
+            raise ManifestError(f"{where}: recurrence per_month must map choices to visits a month")
+        bad = [k for k in per_month if str(k) not in recurrence["map"]]
+        if bad:
+            raise ManifestError(f"{where}: recurrence per_month names choices that don't repeat {bad}")
+        if any(isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in per_month.values()):
+            raise ManifestError(f"{where}: recurrence per_month visits must be whole numbers of 1 or more")
+        once = recurrence.get("once") or []
+        if not isinstance(once, list) or not all(isinstance(x, str) for x in once):
+            raise ManifestError(f"{where}: recurrence once must be a list of line ids")
+        bad = [x for x in once if x not in lids]
+        if bad:
+            raise ManifestError(f"{where}: recurrence once names unknown lines {bad}")
+        recurrence = {"question": rq.id, "map": {str(k): v for k, v in recurrence["map"].items()},
+                      "per_month": {str(k): int(v) for k, v in per_month.items()}, "once": tuple(once)}
     raw_notes = raw.get("notes") or []
     if not isinstance(raw_notes, list) or not all(isinstance(n, str) and n.strip() for n in raw_notes):
         raise ManifestError(f"{where}: notes must be a list of sentences")

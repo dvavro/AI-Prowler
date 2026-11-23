@@ -8,7 +8,11 @@ description: Pool service priced like pool companies do it - a flat monthly rate
 minimum_charge: "100.00"
 keywords: [pool service, pool cleaning, my pool, swimming pool, pool guy, pool water, clean my pool, pool maintenance, pool, spa, hot tub, green pool, pool chemicals, filter clean, acid wash, salt water pool]
 # A won quote with one of these answers becomes a repeating job in AI-Prowler.
-recurrence: {question: visits, map: {weekly: Weekly, monthly: Monthly, biweekly: Biweekly}}
+recurrence: {question: visits, map: {weekly: Weekly, monthly: Monthly, biweekly: Biweekly},
+             # The price is for a month of visits: the repeating job is billed per visit (price / visits).
+             per_month: {weekly: 4, biweekly: 2, monthly: 1},
+             # One-time work goes on its own job, not on every visit.
+             once: [one_time, filter, cleanup, acid_wash, tile_clean, drain_refill, repairs]}
 
 questions:
   - id: visits
