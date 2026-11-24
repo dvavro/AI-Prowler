@@ -51,6 +51,12 @@ a{color:var(--acc)}
 .top{display:flex;align-items:center;gap:12px;margin:0 0 14px}
 .top img{width:52px;height:52px;border-radius:12px;object-fit:contain;flex:none;background:#fff}
 .top .biz{margin:0}
+/* 🛒 header cart button with the number of items (2026-11-24) */
+.topcart{position:relative;flex:none;background:#fff;color:var(--acc);border:1px solid var(--acc);
+  font-size:24px;line-height:1;padding:10px 14px;border-radius:12px}
+.topcart .n{position:absolute;top:-8px;right:-8px;min-width:22px;height:22px;padding:0 6px;border-radius:999px;
+  background:var(--acc);color:#fff;font-size:13px;font-weight:700;line-height:22px;text-align:center}
+.topcart .n.zero{background:#9aa3b2}
 body.look .top{background:rgba(255,255,255,.93);border-radius:var(--r);padding:10px 14px;box-shadow:0 1px 3px rgba(0,0,0,.12)}
 body.bgpic{background-size:cover;background-position:center;background-attachment:fixed}
 body.look .card{box-shadow:0 1px 3px rgba(0,0,0,.12)}
@@ -92,7 +98,8 @@ body.look .live{background:rgba(255,255,255,.93);display:inline-block;border-rad
 <body>
 <main>
   <header class="top" id="top"><img id="logo" class="hide" alt="">
-    <div><h1 id="h1">Service request</h1><p class="biz" id="biz"></p></div></header>
+    <div style="flex:1;min-width:0"><h1 id="h1">Service request</h1><p class="biz" id="biz"></p></div>
+    <button type="button" id="topCart" class="topcart hide" aria-label="Shopping cart, 0 items">🛒<span class="n" id="topCartN">0</span></button></header>
   <p class="live hide" id="live" role="status" aria-live="polite">Updated just now</p>
   <div id="app"></div>
 </main>
@@ -155,6 +162,10 @@ async function boot() {
   const m = location.pathname.match(/^\/support\/t\/([A-Za-z0-9_-]{20,100})/);
   if (m) { P.token = m[1]; history.replaceState(null, '', '/support/t/' + P.token); return showStatus(); }
   const qs = new URLSearchParams(location.search);
+  if (shopOn()) {                               // 🛒 the header cart, with the items already in it
+    loadCart(); drawTopCart();
+    $('#topCart').addEventListener('click', openCart);
+  }
   P.wantSvc = qs.get('service') || '';          // Share & embed: "Book gutter cleaning" buttons
   const want = qs.get('path') || (P.wantSvc && P.paths.includes('book') ? 'book' : '');
   if (want && P.paths.includes(want)) return showForm(want);
@@ -478,8 +489,24 @@ function loadCart() {
     if (P.products.some(p => p.code === code && p.buyable) && +q >= 1) P.cart[code] = Math.min(+q | 0, P.maxQty);
   }
 }
-function saveCart() { try { localStorage.setItem(CART_KEY, JSON.stringify(P.cart || {})); } catch (_) {} }
-function clearCart() { P.cart = {}; try { localStorage.removeItem(CART_KEY); } catch (_) {} }
+function saveCart() { try { localStorage.setItem(CART_KEY, JSON.stringify(P.cart || {})); } catch (_) {} drawTopCart(); }
+function clearCart() { P.cart = {}; try { localStorage.removeItem(CART_KEY); } catch (_) {} drawTopCart(); }
+// The 🛒 button at the top of every customer page (not a request's status page) while the Shop is
+// on, with how many items are in the cart. Tap: the Shop, straight to the cart when it has items.
+function shopOn() { return !P.token && (P.paths || []).includes('buy') && (P.products || []).some(p => p.buyable); }
+function drawTopCart() {
+  const b = $('#topCart'); if (!b) return;
+  b.classList.toggle('hide', !shopOn());
+  const n = cartCount(), badge = $('#topCartN');
+  badge.textContent = n > 99 ? '99+' : String(n);
+  badge.classList.toggle('zero', !n);
+  b.setAttribute('aria-label', `Shopping cart, ${n} item${n === 1 ? '' : 's'}`);
+  b.title = n ? `${n} item${n === 1 ? '' : 's'} in your cart — ${money(cartTotals().total)}` : 'Your cart is empty';
+}
+function openCart() {
+  if (P.path !== 'buy' || !$('#catalog')) showForm('buy');
+  showCart(cartCount() > 0);
+}
 function cartItems() { return Object.entries(P.cart || {}).map(([code, qty]) => ({ code, qty })); }
 function cartCount() { return cartItems().reduce((n, x) => n + (+x.qty || 0), 0); }
 function cartQtyOk() { const it = cartItems(); return it.length > 0 && it.every(x => x.qty >= 1 && x.qty <= P.maxQty); }
