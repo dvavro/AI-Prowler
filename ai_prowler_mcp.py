@@ -14946,9 +14946,14 @@ def build_daily_route(
     Args:
         route_date:      Date to build the route for, e.g. "2026-09-22".
         crew:            Optional — if given, only jobs assigned to this
-                          Crew / Technician are included. If omitted, ALL
-                          jobs scheduled that date are included (each stop
-                          keeps its own job's own Crew / Technician value).
+                          Crew / Technician are included. If omitted: in
+                          personal mode, ALL jobs scheduled that date are
+                          included (each stop keeps its own job's own Crew /
+                          Technician value); in server mode it means the
+                          signed-in caller's OWN route (R-055) — only jobs
+                          whose Crew / Technician names them, so a job with
+                          a blank crew is on nobody's route there. Owner /
+                          manager / staff can name another person.
         origin:          Optional — a starting address for THIS route, e.g.
                           "123 Main St, Daytona Beach FL". Only use this
                           when the person explicitly says where they're
@@ -15012,6 +15017,34 @@ def build_daily_route(
             email_link=email_link, email_to=email_to, ctx=ctx,
         )
 
+
+
+_LONG_DRIVE_WARN_MIN = 240   # 4 hours: no normal service-day leg is this long
+
+
+def _long_drive_warnings(stops_out: list, origin: str) -> list:
+    """2026-11-22 (Jamie): LONG DRIVE warnings for build_daily_route's stops
+    (each with drive_from_prev minutes; job=None marks the start / return
+    bookends). Leg i runs from stop i-1 to stop i; the first job's leg starts
+    at `origin` when one is in use. Returns ready-to-print lines."""
+    out = []
+    prev_label = f"the starting address ({origin})" if origin else ""
+    for s in stops_out:
+        job = s.get("job")
+        if job is None:
+            here = f"the starting address ({s.get('return_address') or origin})"
+        else:
+            here = f"{job.get('cust_name') or '?'} ({job.get('job_id')})"
+        minutes = s.get("drive_from_prev") or 0
+        if prev_label and minutes > _LONG_DRIVE_WARN_MIN and prev_label != here:
+            hours = minutes / 60.0
+            hint = (" Check the starting address (Settings → Start/End Address, or your "
+                    "home address) — it may be in the wrong city or state."
+                    if "starting address" in prev_label or "starting address" in here
+                    else " Check both jobs' addresses.")
+            out.append(f"⚠️  LONG DRIVE: {hours:.1f} hours from {prev_label} to {here}.{hint}")
+        prev_label = here
+    return out
 
 
 def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_hour: int,
@@ -15142,10 +15175,26 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
                 round_trip_reason = home_label
 
     # ── Find all jobs on route_date (optionally filtered by crew) ───────────
-    matching_jobs = db_get_jobs_for_route(db_path, target_date.isoformat(), crew)
+    # 2026-11-22 (Jamie): jobs with no street address used to vanish here
+    # without a word; they're collected and reported as NO ADDRESS below.
+    no_address_jobs = []
+    matching_jobs = db_get_jobs_for_route(db_path, target_date.isoformat(), crew,
+                                          skipped=no_address_jobs)
+    no_address_lines = [
+        f"{j['cust_name'] or '?'} ({j['job_id']}) — no street address; add one to the job to route it"
+        for j in no_address_jobs
+    ]
 
     if not matching_jobs:
         crew_note = f" for crew {crew!r}" if crew.strip() else ""
+        if no_address_lines:
+            return (
+                f"⚠️  No routable jobs on {target_date.isoformat()}{crew_note} — "
+                f"{len(no_address_lines)} job(s) scheduled that day have no address.\n"
+                "NO ADDRESS (not on the route):\n"
+                + "\n".join(f"  - {l}" for l in no_address_lines)
+                + "\nNothing to route — no route was modified."
+            )
         return (
             f"ℹ️  No jobs scheduled on {target_date.isoformat()}{crew_note}.\n"
             "Nothing to route — no route was modified."
@@ -15524,6 +15573,14 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
             "departure": return_arrival,
         })
 
+    # ── LONG DRIVE warnings (2026-11-22, Jamie) ───────────────────────────────
+    # A server whose Start/End Address was in another state gave a Chandler, AZ
+    # job a 37-hour drive with only a LATE ARRIVAL warning. Any leg longer than
+    # _LONG_DRIVE_WARN_MIN is flagged, naming where it starts and ends; a leg to
+    # or from the starting address points at that address, since a wrong
+    # start/home address is the usual cause. Advisory only, like LATE ARRIVAL.
+    long_drive_warnings = _long_drive_warnings(stops_out, effective_origin)
+
     # ── Backup now — right before the actual write, not earlier — so a
     # pre-flight-savings-alert call (which returns above and writes nothing)
     # never creates a wasted backup. Also covers the Latitude/Longitude
@@ -15670,6 +15727,13 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
     lines.append("")
 
 
+    if long_drive_warnings:
+        lines.extend(long_drive_warnings)
+        lines.append("")
+    if no_address_lines:
+        lines.append("⚠️  NO ADDRESS (not on this route):")
+        lines.extend(f"  - {f}" for f in no_address_lines)
+        lines.append("")
     if geocode_failures:
         lines.append("⚠️  GEOCODING FAILED (excluded from route):")
         lines.extend(f"  - {f}" for f in geocode_failures)
@@ -15681,7 +15745,7 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
         lines.extend(overlap_warnings)
         lines.append("")
 
-    if geocode_failures or late_warnings or overlap_warnings:
+    if long_drive_warnings or no_address_lines or geocode_failures or late_warnings or overlap_warnings:
         lines.append("🚨 Review the warnings above before dispatching this route.")
     else:
         lines.append("✅ No scheduling conflicts detected.")

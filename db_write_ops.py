@@ -4141,6 +4141,18 @@ def db_schedule_next_recurring_job(db_path: str, job_identifier: str, actor: str
 
     next_date = delta_fn(base_date)
 
+    # 2026-11-22 (Jamie): the next visit keeps the price, tax setting,
+    # duration unit and the job's own Recurrence. Before, the new job had no
+    # Quote Amount ("No price to invoice"), lost No Sales Tax, fell back to
+    # the default duration unit, and, without Recurrence, stopped the chain
+    # when the customer has no Frequency of their own (Estimator quotes).
+    # A one-off Discount Applied is not carried.
+    def _col(name):
+        try:
+            return job[name]
+        except (KeyError, IndexError):
+            return None
+
     new_job_updates = {
         "CustomerID (Customers!A)": cust_id,
         "Customer Name / Company": cust_name,
@@ -4157,6 +4169,13 @@ def db_schedule_next_recurring_job(db_path: str, job_identifier: str, actor: str
         "Est. Duration": est_dur,
         "Job Status": "Scheduled",
     }
+    for header, column in (("Quote Amount ($)", "quote_amount"),
+                           ("No Sales Tax", "no_sales_tax"),
+                           ("Est. Duration Unit", "est_duration_unit"),
+                           ("Recurrence", "recurrence")):
+        value = _col(column)
+        if value is not None and str(value).strip() != "":
+            new_job_updates[header] = value
     create_result = db_create_job(db_path, new_job_updates, actor)
     new_job_id = (create_result.split("NEW_JOB_ID=")[1].splitlines()[0].strip()
                   if "NEW_JOB_ID=" in create_result else "?")

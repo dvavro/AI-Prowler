@@ -172,6 +172,91 @@ def test_personal_mode_builds_route_and_persists_stops(personal_env, monkeypatch
     assert all(not u[0] for u in urls)
 
 
+def test_personal_mode_warns_about_job_with_no_address(personal_env, monkeypatch, mcp_mod):
+    """2026-11-22: a job with no street address is left off the route AND
+    listed under NO ADDRESS (it used to vanish with no message)."""
+    _install_osrm_route_mock(monkeypatch, num_legs=0)
+    mcp_mod.create_job({
+        "CustomerID": _cust_id(mcp_mod, "A"), "Customer Name / Company": "A", "Service Date": "2026-04-05",
+        "Street Address": "1 Main St", "City": "NSB", "State": "FL",
+        "Latitude (AI Geocode)": 29.0, "Longitude (AI Geocode)": -80.9, "Start Time": "08:00",
+    }, filepath="", backup=False, ctx=None)
+    no_addr = _job_id(mcp_mod.create_job({
+        "CustomerID": _cust_id(mcp_mod, "Est Customer"), "Customer Name / Company": "Est Customer",
+        "Service Date": "2026-04-05",
+    }, filepath="", backup=False, ctx=None))
+
+    result = mcp_mod.build_daily_route("2026-04-05", filepath="", backup=False,
+                                        email_link=False, ctx=None)
+    assert result.startswith("🗺️"), result
+    assert "Stops:  1" in result
+    assert "NO ADDRESS" in result
+    assert f"Est Customer ({no_addr})" in result
+    assert "Review the warnings above" in result
+    assert "No scheduling conflicts detected" not in result
+
+
+def test_personal_mode_only_no_address_jobs_says_so(personal_env, mcp_mod):
+    """Every job that day lacks an address: say so, not 'No jobs scheduled'."""
+    no_addr = _job_id(mcp_mod.create_job({
+        "CustomerID": _cust_id(mcp_mod, "Est Customer"), "Customer Name / Company": "Est Customer",
+        "Service Date": "2026-04-05",
+    }, filepath="", backup=False, ctx=None))
+    result = mcp_mod.build_daily_route("2026-04-05", filepath="", backup=False,
+                                        email_link=False, ctx=None)
+    assert result.startswith("⚠️"), result
+    assert "No jobs scheduled" not in result
+    assert "NO ADDRESS" in result and no_addr in result
+
+
+def test_personal_mode_warns_about_impossible_drive(personal_env, monkeypatch, mcp_mod):
+    """2026-11-22: a 37-hour leg gets a LONG DRIVE warning (it used to show only
+    LATE ARRIVAL), and the route asks for review."""
+    _install_osrm_route_mock(monkeypatch, num_legs=1, leg_minutes=37 * 60)
+    mcp_mod.create_job({
+        "CustomerID": _cust_id(mcp_mod, "A"), "Customer Name / Company": "A", "Service Date": "2026-04-05",
+        "Street Address": "1 Main St", "City": "NSB", "State": "FL",
+        "Latitude (AI Geocode)": 29.0, "Longitude (AI Geocode)": -80.9, "Start Time": "08:00",
+    }, filepath="", backup=False, ctx=None)
+    j2 = _job_id(mcp_mod.create_job({
+        "CustomerID": _cust_id(mcp_mod, "B"), "Customer Name / Company": "B", "Service Date": "2026-04-05",
+        "Street Address": "2 Main St", "City": "Chandler", "State": "AZ",
+        "Latitude (AI Geocode)": 33.3, "Longitude (AI Geocode)": -111.8, "Start Time": "09:00",
+    }, filepath="", backup=False, ctx=None))
+    result = mcp_mod.build_daily_route("2026-04-05", filepath="", backup=False,
+                                        email_link=False, ctx=None)
+    assert result.startswith("🗺️"), result
+    assert "LONG DRIVE: 37.0 hours" in result
+    assert f"B ({j2})" in result
+    assert "Review the warnings above" in result
+
+
+def test_long_drive_warnings_helper(mcp_mod):
+    """The leg into each stop is checked; a leg touching the starting address
+    points at that address; short legs and bookends at 0 min say nothing."""
+    job_a = {"cust_name": "A", "job_id": "JOB-1"}
+    job_b = {"cust_name": "B", "job_id": "JOB-2"}
+    start = "100 Ocean Ave, New Smyrna Beach, FL"
+    stops = [
+        {"job": None, "return_address": start, "drive_from_prev": 0},   # Company Location start bookend
+        {"job": job_a, "drive_from_prev": 2220},                           # 37 h from the start
+        {"job": job_b, "drive_from_prev": 15},
+        {"job": None, "return_address": start, "drive_from_prev": 2230},  # back to the start
+    ]
+    w = mcp_mod._long_drive_warnings(stops, start)
+    assert len(w) == 2, w
+    assert w[0].startswith("⚠️  LONG DRIVE: 37.0 hours from the starting address") and "A (JOB-1)" in w[0]
+    assert "Start/End Address" in w[0]
+    assert "from B (JOB-2) to the starting address" in w[1]
+    # job to job, no origin: points at the jobs' addresses
+    w2 = mcp_mod._long_drive_warnings(
+        [{"job": job_a, "drive_from_prev": 0}, {"job": job_b, "drive_from_prev": 300}], "")
+    assert len(w2) == 1 and "from A (JOB-1) to B (JOB-2)" in w2[0] and "both jobs' addresses" in w2[0]
+    # 4 hours exactly is not flagged
+    assert mcp_mod._long_drive_warnings(
+        [{"job": job_a, "drive_from_prev": 0}, {"job": job_b, "drive_from_prev": 240}], "") == []
+
+
 def test_personal_mode_crew_filter_only_includes_matching_jobs(personal_env, monkeypatch, mcp_mod):
     _install_osrm_route_mock(monkeypatch)
     mcp_mod.create_job({

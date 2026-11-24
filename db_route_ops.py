@@ -112,10 +112,15 @@ def _jobs_worked_on(db_path: str, route_date: str) -> list:
 
 
 def db_get_jobs_for_route(db_path: str, route_date: str, crew: str = "",
-                          expand_multi: bool = False) -> list:
+                          expand_multi: bool = False, skipped: list = None) -> list:
     """Returns jobs scheduled on route_date (YYYY-MM-DD text), optionally
     filtered to one person. Jobs with no street address are skipped, matching
     the original's posture that an address-less job can't be routed.
+
+    skipped (2026-11-22, Jamie): pass a list to get those address-less jobs
+    back ({"job_id", "cust_name", "crew"} each), so the caller can warn about
+    them. Before, build_daily_route never heard of them and a scheduled job
+    simply wasn't on the route, with no message.
 
     R-056 (David 2026-09-28): a job may be assigned to several people
     ("Samual Cronin, Vicki Vavro") and is then on EACH of their routes. So
@@ -182,6 +187,9 @@ def db_get_jobs_for_route(db_path: str, route_date: str, crew: str = "",
             # No street = not routable (2026-09-25). City/ZIP alone would geocode
             # to the middle of town and put a fake stop on the map. The route
             # prescreen reports these as errors before routing.
+            if skipped is not None and not any(s["job_id"] == row["job_id"] for s in skipped):
+                skipped.append({"job_id": row["job_id"], "cust_name": row["customer_name"],
+                                "crew": job_crew})
             continue
 
         _day_dur = per_day_duration(db_path, row["est_duration"], row["est_duration_unit"], day_no)

@@ -137,7 +137,10 @@ def _snapshot(est: dict, registry=None) -> dict:
             ln_total = int(ln["total_cents"] or 0)
             qty, unit = _shown(ln)
             lines.append({"description": ln["description"], "quantity": qty, "unit": unit,
-                          "price_cents": ln_total - ln_tax})
+                          "price_cents": ln_total - ln_tax,
+                          # 2026-11-22: which module line made it and its own tax, so Make it a job can tell a
+                          # month's repeating work from one-time work (decision B)
+                          "rule": (ln.get("calc") or {}).get("rule"), "tax_cents": ln_tax})
             line_sum += ln_total - ln_tax
             tax += ln_tax
         if lines:
@@ -400,6 +403,12 @@ def _split_name(name: str) -> tuple[str, str]:
 
 def _recurrence(conn, ctx, estimate_id: int, registry=None) -> str | None:
     """The repeat schedule from the quote's answers (e.g. weekly pool service -> "Weekly"), if any."""
+    return _repeat_plan(conn, ctx, estimate_id, registry)[0]
+
+
+def _repeat_plan(conn, ctx, estimate_id: int, registry=None) -> tuple[str | None, dict | None]:
+    """(Recurrence, plan). plan is set when the repeating module's price covers a month of visits:
+    {"module_id", "visits" (a month), "once" (one-time line ids)} - see recurrence per_month in the registry."""
     from estimator.modules import get_registry
     reg = registry or get_registry()
     est = service.get_estimate(conn, ctx, estimate_id)
@@ -409,8 +418,39 @@ def _recurrence(conn, ctx, estimate_id: int, registry=None) -> str | None:
             value = sec["answers"].get(mod.recurrence["question"])
             mapped = mod.recurrence["map"].get(str(value)) if value is not None else None
             if mapped:
-                return mapped
-    return None
+                visits = (mod.recurrence.get("per_month") or {}).get(str(value))
+                plan = ({"module_id": mod.id, "visits": int(visits), "once": set(mod.recurrence.get("once") or ())}
+                        if visits else None)
+                return mapped, plan
+    return None, None
+
+
+def split_month(snapshot: dict, plan: dict) -> dict | None:
+    """Decision B (David, 2026-11-22): a monthly-priced repeating quote becomes a job billed per visit, and its
+    one-time work (and any other trade on the same quote) becomes a job of its own, so a weekly pool job isn't
+    billed the whole month every week. Amounts include their own tax; the quote's minimum-charge/rounding
+    adjustment is shared out by size. Returns {"visit_cents", "month_cents", "once_cents", "once_lines"}, or None
+    when the quote was saved before lines knew their rule (no split - the old behaviour)."""
+    lines = [(sec["module_id"], ln) for sec in snapshot["sections"] for ln in sec["lines"]]
+    if not lines or any(mid == plan["module_id"] and not ln.get("rule") for mid, ln in lines):
+        return None
+    month = once = 0
+    once_lines = []
+    for mid, ln in lines:
+        cents = int(ln["price_cents"]) + int(ln.get("tax_cents") or 0)
+        if mid == plan["module_id"] and ln["rule"] not in plan["once"]:
+            month += cents
+        else:
+            once += cents
+            once_lines.append(ln)
+    totals = snapshot["totals"]
+    adjustment = int(totals["total_cents"]) - month - once
+    if month + once:
+        month_adj = round(adjustment * month / (month + once))
+        month, once = month + month_adj, once + adjustment - month_adj
+    visits = max(int(plan["visits"]), 1)
+    return {"visit_cents": round(month / visits), "month_cents": month, "once_cents": once, "once_lines": once_lines,
+            "visits": visits}
 
 
 def ensure_customer(cust: dict, customer_id: str | None = None, frequency: str | None = None) -> tuple[str, dict]:
@@ -505,7 +545,8 @@ def convert_to_job(conn, ctx: RequestContext, bid_id: int, *, confirm: bool = Fa
     secs = b["snapshot"]["sections"]
     service_type = ", ".join(sec["title"] for sec in secs)[:80]
     details = "; ".join(f"{ln['description']} {ln['quantity']} {ln['unit']}" for sec in secs for ln in sec["lines"])
-    recurrence = _recurrence(conn, ctx, b["estimate_id"], registry)
+    recurrence, plan = _repeat_plan(conn, ctx, b["estimate_id"], registry)
+    split = split_month(b["snapshot"], plan) if plan else None
     customer_id, created = ensure_customer(cust, customer_id, frequency=recurrence)
     name = cust.get("name") or customer_id
     totals = b["snapshot"]["totals"]
@@ -524,14 +565,34 @@ def convert_to_job(conn, ctx: RequestContext, bid_id: int, *, confirm: bool = Fa
         "Service Details / Notes": f"From Estimator quote {b['number']}"
                                    + (f" (Quote {quote_id})" if quote_id else "") + f": {details}"[:1000],
         "Quote Amount ($)": dollars(totals["total_cents"]),
+        # Decision A (David, 2026-11-22): the quote total already includes the Estimator's tax, so the job is marked
+        # No Sales Tax and its invoice equals what the customer accepted (before, the invoice added tax again).
+        "No Sales Tax": 1,
     }
     if service_date:
         job_updates.update({"Service Date": service_date, "Job Status": "Scheduled"})
+    once_job_id = None
+    if split:
+        # Decision B: the repeating job is billed per visit; one-time work gets a job of its own.
+        job_updates["Quote Amount ($)"] = dollars(split["visit_cents"])
+        job_updates["Service Details / Notes"] = (
+            f"Per visit: {format_cents(split['month_cents'])} a month / {split['visits']} visit"
+            f"{'s' if split['visits'] != 1 else ''}. " + job_updates["Service Details / Notes"])[:1000]
+        if split["once_cents"] > 0:
+            once_updates = {k: v for k, v in job_updates.items() if k != "Service Details / Notes"}
+            once_updates["Quote Amount ($)"] = dollars(split["once_cents"])
+            once_updates["Service Details / Notes"] = (
+                f"One-time work from Estimator quote {b['number']}" + (f" (Quote {quote_id})" if quote_id else "")
+                + ": " + "; ".join(f"{ln['description']} {ln['quantity']} {ln['unit']}" for ln in split["once_lines"]))[:1000]
+            otext = host.call("create_job", updates=once_updates)
+            once_job_id = host.extract_id(otext, "JOB")
     if recurrence:
         job_updates["Recurrence"] = recurrence
         job_updates["Service Details / Notes"] = f"{recurrence} service. " + job_updates["Service Details / Notes"]
     jtext = host.call("create_job", updates=job_updates)
     job_id = host.extract_id(jtext, "JOB")
+    if once_job_id:
+        created = dict(created, once_job_id=once_job_id)
     now = _now()
     with service.transaction(conn):
         conn.execute("UPDATE bids SET customer_id = ?, customer_json = ?, quote_id = ?, job_id = ?, rev = rev + 1,"
@@ -547,6 +608,10 @@ def convert_to_job(conn, ctx: RequestContext, bid_id: int, *, confirm: bool = Fa
     out = _public(_load(conn, ctx, b["id"]))
     out["created"] = dict(created, quote_id=quote_id, job_id=job_id)
     out["recurrence"] = recurrence
+    if split:
+        out["per_visit"] = {"visit": format_cents(split["visit_cents"]), "month": format_cents(split["month_cents"]),
+                            "visits_a_month": split["visits"], "one_time": format_cents(split["once_cents"]),
+                            "one_time_job_id": once_job_id}
     out["warnings"] = job_warnings(cust, ctx, job_id)
     return out
 

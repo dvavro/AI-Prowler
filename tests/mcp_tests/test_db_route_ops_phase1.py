@@ -93,6 +93,30 @@ def test_get_jobs_for_route_skips_jobs_with_no_address(db_path):
     assert jobs == []
 
 
+def test_get_jobs_for_route_reports_skipped_no_address_jobs(db_path):
+    """2026-11-22: a skipped list gets the address-less jobs back, so
+    build_daily_route can warn instead of dropping them silently. Cancelled
+    jobs and other crews' jobs are not reported."""
+    db_create_job(db_path, {"CustomerID (Customers!A)": _cust_id(db_path, "NoAddr"),
+                            "Customer Name / Company": "NoAddr", "Service Date": "2026-04-05",
+                            "Crew / Technician": "Jake R"}, actor="dave")
+    db_create_job(db_path, {"CustomerID (Customers!A)": _cust_id(db_path, "Gone"),
+                            "Customer Name / Company": "Gone", "Service Date": "2026-04-05",
+                            "Crew / Technician": "Jake R", "Job Status": "Cancelled"}, actor="dave")
+    db_create_job(db_path, {"CustomerID (Customers!A)": _cust_id(db_path, "Other"),
+                            "Customer Name / Company": "Other", "Service Date": "2026-04-05",
+                            "Crew / Technician": "Maria S"}, actor="dave")
+    db_create_job(db_path, {"CustomerID (Customers!A)": _cust_id(db_path, "Has"),
+                            "Customer Name / Company": "Has", "Service Date": "2026-04-05",
+                            "Crew / Technician": "Jake R", "Street Address": "1 Main St"}, actor="dave")
+    skipped = []
+    jobs = db_get_jobs_for_route(db_path, "2026-04-05", crew="Jake R", skipped=skipped)
+    assert [j["cust_name"] for j in jobs] == ["Has"]
+    assert [s["cust_name"] for s in skipped] == ["NoAddr"]
+    # without the argument nothing changes
+    assert [j["cust_name"] for j in db_get_jobs_for_route(db_path, "2026-04-05", crew="Jake R")] == ["Has"]
+
+
 def test_get_jobs_for_route_returns_existing_geocode(db_path):
     db_create_job(db_path, {
         "CustomerID (Customers!A)": _cust_id(db_path, "A"), "Customer Name / Company": "A", "Service Date": "2026-04-05",
@@ -432,6 +456,67 @@ def test_schedule_next_new_job_carries_over_fields(db_path):
     assert row["street_address"] == "1 Main St"
     assert row["job_status"] == "Scheduled"
     assert row["service_date"] == "2026-04-19"  # +14 days
+
+
+def _job_row(db_path, job_id):
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+    conn.close()
+    return row
+
+
+def test_schedule_next_carries_price_tax_unit_and_recurrence(db_path):
+    """2026-11-22: the next visit keeps Quote Amount, No Sales Tax, the
+    duration unit and Recurrence, so it can be invoiced and the chain goes on.
+    A one-off discount is not carried."""
+    cust_id = _cust_id(db_path, "Pool Co", Frequency="Weekly")
+    db_create_job(db_path, {
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "Pool Co",
+        "Service Date": "2026-04-05", "Quote Amount ($)": 185.5, "No Sales Tax": 1,
+        "Est. Duration": 45, "Est. Duration Unit": "min", "Recurrence": "Weekly",
+        "Discount Applied ($)": 20,
+    }, actor="dave")
+    result = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")
+    assert result.startswith("✅"), result
+    row = _job_row(db_path, "JOB-0002")
+    assert float(row["quote_amount"]) == 185.5
+    assert int(row["no_sales_tax"]) == 1
+    assert row["est_duration_unit"] == "min"
+    assert row["recurrence"] == "Weekly"
+    assert not row["discount_applied"]
+
+
+def test_schedule_next_chain_continues_without_customer_frequency(db_path):
+    """A customer with no Frequency whose job repeats (an Estimator weekly
+    quote): each follow-up job keeps Recurrence, so the next one can be made
+    from it too, at the same price."""
+    cust_id = _cust_id(db_path, "No Freq Co")
+    db_create_job(db_path, {
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "No Freq Co",
+        "Service Date": "2026-04-05", "Quote Amount ($)": 120, "Recurrence": "Biweekly",
+    }, actor="dave")
+    first = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")
+    assert first.startswith("✅"), first
+    second = db_schedule_next_recurring_job(db_path, "JOB-0002", actor="dave")
+    assert second.startswith("✅"), second
+    row = _job_row(db_path, "JOB-0003")
+    assert row["service_date"] == "2026-05-03"  # +14 +14 days
+    assert float(row["quote_amount"]) == 120
+    assert row["recurrence"] == "Biweekly"
+
+
+def test_schedule_next_job_without_price_still_scheduled(db_path):
+    """No price on the old job: the new one is still made, just without one."""
+    cust_id = _cust_id(db_path, "Plain Co", Frequency="Monthly")
+    db_create_job(db_path, {
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "Plain Co",
+        "Service Date": "2026-04-05",
+    }, actor="dave")
+    result = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")
+    assert result.startswith("✅"), result
+    row = _job_row(db_path, "JOB-0002")
+    assert row["quote_amount"] in (None, "", 0)
 
 
 # ══════════════════════════════════════════════════════════════════════════
