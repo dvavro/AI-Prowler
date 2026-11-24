@@ -162,6 +162,10 @@ def test_symbol_counts_into_measurements(db, house):                            
     calc = json.loads(db.execute("SELECT calc_json FROM measurements WHERE id = ?",
                                  (e["outlets"]["id"],)).fetchone()[0])
     assert len(calc["symbol_detection_ids"]) == 2 and calc["include_proposed_symbols"] is False
+    # 2026-11-24 (David: "it should automatically open the correct file"): a symbol count has no sheet of its own, so the
+    # list says which sheet its symbols are on and the Measure screen opens it.
+    sheet = db.execute("SELECT id FROM sheets WHERE plan_set_id = ? ORDER BY id LIMIT 1", (ps,)).fetchone()["id"]
+    assert e["outlets"]["sheet_id"] is None and e["outlets"]["plan_sheet_id"] == sheet
     out = from_plans.propose(db, CTX, eid, "electrical", include_proposed=True, confirm=True)
     assert out["counts"]["update"] == 1 and meas(db, eid, "electrical")["outlets"]["qty"] == "3.00"
     p = from_plans.propose(db, CTX, eid, "plumbing", confirm=True)

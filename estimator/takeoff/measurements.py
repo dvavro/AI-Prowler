@@ -505,6 +505,43 @@ def _suggest(conn, ctx, m: dict, value: Decimal, reason: str) -> None:
 
 # ---------------------------------------------------------------- reading
 
+def _symbol_sheets(conn, ctx: RequestContext, rows: list[dict]) -> dict[int, int]:
+    """{measurement id: sheet id} for counts taken from symbols on the plans that have no sheet of their own - the sheet
+    most of their symbols are on. 2026-11-24 (David: "when you click on the measured item to the right it should
+    automatically open the correct file ... it stayed on the architecture sheet"): the review opens that sheet."""
+    want: dict[int, list[int]] = {}
+    for r in rows:
+        if r.get("sheet_id"):
+            continue
+        try:
+            ids = (json.loads(r.get("calc_json") or "{}") or {}).get("symbol_detection_ids") or []
+        except (TypeError, ValueError):
+            ids = []
+        ids = [int(i) for i in ids if str(i).isdigit()]
+        if ids:
+            want[r["id"]] = ids
+    if not want:
+        return {}
+    every = sorted({i for ids in want.values() for i in ids})
+    sheet_of: dict[int, int] = {}
+    for k in range(0, len(every), 500):
+        part = every[k:k + 500]
+        q = ",".join("?" * len(part))
+        for d in conn.execute(f"SELECT id, sheet_id FROM symbol_detections WHERE company_id = ? AND id IN ({q})",
+                              [ctx.company_id, *part]):
+            if d["sheet_id"]:
+                sheet_of[d["id"]] = d["sheet_id"]
+    out = {}
+    for mid, ids in want.items():
+        tally: dict[int, int] = {}
+        for i in ids:
+            if i in sheet_of:
+                tally[sheet_of[i]] = tally.get(sheet_of[i], 0) + 1
+        if tally:
+            out[mid] = max(tally, key=lambda s: (tally[s], -s))
+    return out
+
+
 def list_measurements(conn, ctx: RequestContext, estimate_id: int, module_id: str | None = None,
                       status: str | None = None, sheet_id: int | None = None, registry=None) -> dict:
     """Measurements with status and confidence, the review queue (lowest confidence first), and the approved totals
@@ -529,10 +566,13 @@ def list_measurements(conn, ctx: RequestContext, estimate_id: int, module_id: st
     answers = approved_answers(conn, ctx, int(estimate_id), module_id, registry)
     from estimator.takeoff.reviews import status_for_estimate
     rstat = status_for_estimate(conn, ctx, int(estimate_id))["by_target"]
+    homes = _symbol_sheets(conn, ctx, rows)
     out_rows = []
     for r in rows:
         o = _out(r)
         o["review_status"] = rstat.get(("measurement", r["id"]), "unreviewed")
+        if r["id"] in homes:
+            o["plan_sheet_id"] = homes[r["id"]]
         out_rows.append(o)
     return {"ok": True, "estimate_id": int(estimate_id), "count": len(rows), "counts": counts,
             "measurements": out_rows, "review_queue": [r["id"] for r in queue],

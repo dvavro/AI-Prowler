@@ -3938,7 +3938,9 @@ function conduitMatch(feeds) {
   let mm;
   if ((mm = /^thhn_(\d+)_ft$/.exec(feeds))) {
     const g = +mm[1];
-    return { pick: r => (r.awg || []).includes(g), head: g + " AWG THHN — pulled in these conduits" };
+    // 2026-11-24 (David: "approving the 6 AWG run but why is it highlighting 12 AWG and other circuits?"): a home run
+    // carries several circuits; only the circuits of this gauge light up, the conduits they share are still drawn.
+    return { pick: r => (r.awg || []).includes(g), head: g + " AWG THHN", gauge: g };
   }
   if ((mm = /^(emt|pvc)_(050|075|100)_ft$/.exec(feeds))) {
     const size = CONDUIT_SIZE[mm[2]], mat = mm[1];
@@ -3958,6 +3960,8 @@ function conduitMatch(feeds) {
   return null;
 }
 function isConduitFeed(feeds) { return !!conduitMatch(feeds || ""); }
+// "6/3" -> 6 (the gauge of a circuit's wire), null when it isn't a gauge/conductors size
+function wireGauge(wire) { const mm = /^(\d+)\/\d$/.exec(wire || ""); return mm ? +mm[1] : null; }
 
 function conduitMarks(run) {
   const runs = (run.overlay && run.overlay.conduit) || [];
@@ -4058,8 +4062,11 @@ function drawWiringKey(run, info, bySize) {
   const MARK_HEAD = { branch_circuits: "Branch breakers", range_receptacles: "Range receptacle", dryer_receptacles: "Dryer receptacle" };
   const cm = RV.conduitFeeds ? conduitMatch(RV.conduitFeeds) : null;
   const cruns = cm ? (run.overlay.conduit || []).filter(cm.pick) : [];
-  const head = cm ? "🔩 " + cm.head + " — " + cruns.length + " run" + (cruns.length === 1 ? "" : "s") + " · "
-      + num(cruns.reduce((a, r) => a + (r.length_ft || 0), 0)) + " ft"
+  const pipeFt = num(cruns.reduce((a, r) => a + (r.length_ft || 0), 0));
+  const head = cm && cm.gauge && lit
+      ? "🔩 " + cm.head + " — " + lit.size + " circuit" + (lit.size === 1 ? "" : "s") + " (" + [...lit].join(", ") + ") · in "
+        + cruns.length + " conduit run" + (cruns.length === 1 ? "" : "s") + " (" + pipeFt + " ft of pipe; the conduits they share are drawn too)"
+    : cm ? "🔩 " + cm.head + " — " + cruns.length + " run" + (cruns.length === 1 ? "" : "s") + " · " + pipeFt + " ft"
     : lit ? "⚡ " + (MARK_HEAD[RV.wiringMark] || (RV.wiringSize ? RV.wiringSize + " cable" : "Circuits")) + " — " + lit.size + " circuit" + (lit.size === 1 ? "" : "s")
     : bySize ? "⚡ " + RV.wiringSize + " circuits" : RV.wiringPick ? "⚡ Circuit " + RV.wiringPick : "⚡ Wiring — " + run.overlay.circuits.length + " circuits";
   key.append(el("div", { class: "bp-wiring-key-head" }, el("strong", {}, head), close));
@@ -4276,12 +4283,21 @@ function measurementRow(m, msg) {
 const REVIEW_KINDS_COUNTED = new Set(["count"]);
 function isCountMeasurement(m) { return REVIEW_KINDS_COUNTED.has(m.kind) || m.unit === "ea"; }
 
+// The sheet a measurement belongs on: its own, or (a count taken from symbols on the plans, which has no sheet of its
+// own) the sheet its symbols are on. 2026-11-24 (David: "it should automatically open the correct file ... it stayed
+// on the architecture sheet").
+function homeSheet(m) { return (m && (m.sheet_id || m.plan_sheet_id)) || null; }
+async function goToHomeSheet(m, msg) {
+  const sid = homeSheet(m);
+  if (sid && sid !== RV.sheetId && $("review-sheet") && RV.data.sheets.some(s => s.id === sid)) {
+    $("review-sheet").value = sid;
+    await openSheet(sid, msg);
+  }
+}
+
 async function openReview(m, msg) {
   if (RV.review && RV.review.mid === m.id) { closeReview(); return; }
-  if (m.sheet_id && m.sheet_id !== RV.sheetId && $("review-sheet") && RV.data.sheets.some(s => s.id === m.sheet_id)) {
-    $("review-sheet").value = m.sheet_id;
-    await openSheet(m.sheet_id, msg);
-  }
+  await goToHomeSheet(m, msg);
   // 2026-11-21 (David: "selecting each wiring estimate, I expected the wiring color code to popup and highlight the
   // wire routing"): a wiring run's cable has no symbols - its circuits light up on the floor plan with the colour key,
   // the other circuits faded; a breaker / range / dryer count lights up the run's mark and the circuits behind it.
@@ -4294,7 +4310,7 @@ async function openReview(m, msg) {
     const lit = wireSize ? await auditShowWiring(wireSize[1] + "/" + wireSize[2], msg)
                          : await auditShowWiring(null, msg, m.feeds);
     // The measurement says which circuits its cable is (a range's 10/2 on the schedule is priced as 10/3): light those.
-    const mine = wireSize && m.calc && Array.isArray(m.calc.circuits) ? m.calc.circuits : [];
+    const mine = (wireSize || /^thhn_\d+_ft$/.test(m.feeds || "")) && m.calc && Array.isArray(m.calc.circuits) ? m.calc.circuits : [];
     if (mine.length && RV.wiring && RV.wiring.run && RV.wiring.run.overlay) {
       RV.wiringLit = mine;
       renderWiring(); drawWiringRoutes();
@@ -4526,10 +4542,7 @@ function detailEmpty() {
 async function showDetail(id, msg, zoom) {
   RV.measurementId = id;
   const m = RV.data.takeoff.measurements.find(x => x.id === id);
-  if (m && m.sheet_id && m.sheet_id !== RV.sheetId && $("review-sheet") && RV.data.sheets.some(s => s.id === m.sheet_id)) {
-    $("review-sheet").value = m.sheet_id;
-    await openSheet(m.sheet_id, msg);
-  }
+  if (m) await goToHomeSheet(m, msg);
   drawMeasurements();
   refreshList(msg);
   if (zoom && m && m.sheet_id === RV.sheetId) RV.viewer.zoomToSelection();
@@ -4878,7 +4891,9 @@ async function auditShowWiring(size, msg, mark) {
     const cm = conduitMatch(mark);
     const lit = run.overlay.conduit.filter(cm.pick);
     RV.conduitFeeds = mark;
-    RV.wiringLit = [...new Set(lit.flatMap(r => r.circuits || []))];
+    RV.wiringLit = cm.gauge
+      ? run.overlay.circuits.filter(c => wireGauge(c.wire) === cm.gauge).map(c => c.id)    // only this gauge's circuits
+      : [...new Set(lit.flatMap(r => r.circuits || []))];
     renderWiring(); drawWiringRoutes();
     const pts = (lit.length ? lit : run.overlay.conduit).flatMap(r => r.line);
     if (pts.length && RV.viewer) {
