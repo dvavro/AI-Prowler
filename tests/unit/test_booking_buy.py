@@ -221,6 +221,68 @@ def test_a_failed_checkout_says_try_again(env):
     assert st == 400 and "try again" in pay["message"]
 
 
+# ── 🛒 Shopping cart (2026-11-24, Jamie: "add a shopping cart for online pay") ──────────────
+
+def _two_products(env):
+    jobs = env[1]
+    conn = get_connection(jobs)
+    conn.execute("INSERT INTO service_pricing (service_code, category, name, base_price) "
+                 "VALUES ('ROUTER', 'Hardware', 'Router', 80.0)")
+    conn.close()
+    booking_db.sync_services(jobs)
+    booking_db.update_service(jobs, "ROUTER", online=True, mode="request", shipping="$5")
+
+
+def test_a_cart_adds_every_line_and_works_out_tax_once(env):
+    _two_products(env)
+    q = booking_db.cart_quote(env[1], [{"code": "SSD", "qty": 2}, {"code": "ROUTER", "qty": 1},
+                                       {"code": "ROUTER", "qty": 1}])               # same product twice: added up
+    assert [(x["code"], x["qty"]) for x in q["lines"]] == [("SSD", 2), ("ROUTER", 2)]
+    # items 500 + 160, shipping 30 + 10, subtotal 700, tax 7% = 49
+    assert (q["items"], q["shipping"], q["subtotal"], q["tax"], q["total"]) == (660.0, 40.0, 700.0, 49.0, 749.0)
+    assert booking_db.order_text(q) == "Mini Server .5TB SSD × 2, Router × 2 + shipping & handling"
+
+
+def test_a_one_line_cart_is_the_same_as_a_single_order(env):
+    one = booking_db.order_quote(env[1], "SSD", 2)
+    cart = booking_db.cart_quote(env[1], [{"code": "SSD", "qty": 2}])
+    assert {k: cart[k] for k in one} == one and len(cart["lines"]) == 1
+
+
+@pytest.mark.parametrize("items,msg", [([], "cart is empty"), ([{"code": "SSD", "qty": 0}], "1 to 20"),
+                                       ([{"code": "SSD", "qty": 1}, {"code": "CABLE", "qty": 1}], "no price yet")])
+def test_a_bad_cart_is_refused_before_the_code_is_used(env, items, msg):
+    cid, c = start(env)
+    st, d = api(env[0], "POST", "/verify", {"contact_id": cid, "code": c, "path": "buy", "items": items,
+                                            "address": ADDR})
+    assert st == 400 and msg in d["message"]
+
+
+def test_a_cart_order_is_one_job_one_invoice_and_one_checkout(env):
+    tickets, jobs, sent, made = env
+    _two_products(env)
+    cid, c = start(env)
+    st, d = api(tickets, "POST", "/verify", {"contact_id": cid, "code": c, "path": "buy", "address": ADDR,
+                                             "items": [{"code": "SSD", "qty": 2}, {"code": "ROUTER", "qty": 1}]})
+    assert st == 201, d
+    # items 500 + 80, shipping 30 + 5, subtotal 615, tax 7% = 43.05
+    assert d["order"]["total"] == 658.05 and d["order"]["can_pay"] is True and len(d["order"]["lines"]) == 2
+    conn = get_connection(jobs)
+    jobs_made = conn.execute("SELECT * FROM jobs WHERE service_type LIKE 'Order:%'").fetchall()
+    job = dict(jobs_made[0])
+    inv = dict(conn.execute("SELECT * FROM invoices WHERE invoice_id = ?", (job["invoice_id"],)).fetchone())
+    conn.close()
+    assert len(jobs_made) == 1 and job["service_type"] == "Order: Mini Server .5TB SSD + 1 more"
+    assert "Mini Server .5TB SSD × 2" in job["service_details"] and "Router × 1" in job["service_details"]
+    assert (inv["subtotal"], inv["tax"], inv["total_due"]) == (615.0, 43.05, 658.05)
+    t = desk_db.get_ticket(tickets, d["ticket_id"], actor={"id": "owner", "role": "owner"}, edition=r.SOLO)
+    assert t["title"] == "Order: Mini Server .5TB SSD × 2, Router × 1 + shipping & handling"
+    st, v = api(tickets, "GET", f"/t/{d['token']}")
+    assert [x["code"] for x in v["ticket"]["order"]["lines"]] == ["SSD", "ROUTER"]
+    st, pay = api(tickets, "POST", f"/t/{d['token']}/order/pay")
+    assert st == 200 and pay["url"].endswith("?amount=658.05") and "Router × 1" in made[-1][1]
+
+
 def test_shipping_is_set_per_product_only(env):
     jobs = env[1]
     assert dgs.set_shipping(jobs, "SSD", "12.5") == (True, "Saved — shipping & handling $12.50 per item.")

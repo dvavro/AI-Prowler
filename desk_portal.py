@@ -367,7 +367,8 @@ def verify_and_file(db_path: str, *, contact_id: str, code: str, title: str = ""
                     edition: str = rules.BUSINESS, base_url: str = "", now=None,
                     path: str = "problem", service: str = "", service_code: str = "",
                     address: dict | None = None, preferred: str = "", window_key: str = "",
-                    hold_id: str = "", backups: list | None = None, qty=1) -> dict:
+                    hold_id: str = "", backups: list | None = None, qty=1,
+                    items: list | None = None) -> dict:
     """Step 2: check the code, then file. Paths (booking-spec.md §3):
       problem — a Customer request ticket, linked to the customer's recent job if any
       new     — a Requested job (no date) in the Jobs app + a linked ticket, so the
@@ -386,15 +387,18 @@ def verify_and_file(db_path: str, *, contact_id: str, code: str, title: str = ""
     quote = None
     if path == "buy":
         # Checked BEFORE the code is used up, so a mistake doesn't cost the customer their code.
-        if not service_code:
-            raise desk_db.DeskError("pick a product")
+        # 🛒 cart (2026-11-24): `items` = [{code, qty}, …]; a single service_code/qty still works.
+        cart = [x for x in (items or []) if isinstance(x, dict)] or (
+            [{"code": service_code, "qty": qty}] if service_code else [])
+        if not cart:
+            raise desk_db.DeskError("your cart is empty — add a product")
         if not a["street"] or not (a["city"] or a["zip"]):
             raise desk_db.DeskError("enter the shipping address (street, and city or ZIP)")
         if not _jobs_db():
             raise desk_db.DeskError("online ordering isn't available right now — please call or text us")
         import booking_db
         try:
-            quote = booking_db.order_quote(_jobs_db(), service_code, qty)
+            quote = booking_db.cart_quote(_jobs_db(), cart)
         except booking_db.BookingError as e:
             raise desk_db.DeskError(str(e)) from None
     elif path in ("new", "book"):
@@ -528,8 +532,9 @@ def verify_and_file(db_path: str, *, contact_id: str, code: str, title: str = ""
                 jobs_db, name=contact.get("name") or "", phone=phone, email=email, street=a["street"],
                 city=a["city"], state=a["state"], zip_code=a["zip"], by=booking_db.ORDER_BY)
             quote = booking_db.create_order(
-                jobs_db, customer_id=customer_id, customer_name=contact.get("name") or "", code=service_code,
-                qty=quote["qty"], street=a["street"], city=a["city"], state=a["state"], zip_code=a["zip"],
+                jobs_db, customer_id=customer_id, customer_name=contact.get("name") or "",
+                items=[{"code": x["code"], "qty": x["qty"]} for x in quote["lines"]],
+                street=a["street"], city=a["city"], state=a["state"], zip_code=a["zip"],
                 notes=description or "")
             job_id = quote["job_id"]
             note = (f"🛒 Online order — invoice {quote['invoice_id']} for ${quote['total']:,.2f} (unpaid). "
@@ -541,7 +546,8 @@ def verify_and_file(db_path: str, *, contact_id: str, code: str, title: str = ""
             note = f"Couldn't add this order to the Jobs app automatically ({e}) — please call the customer."
             title += " (call the customer)"
         body = "\n".join(x for x in (
-            body, f"{quote['name']} × {quote['qty']} at ${quote['unit_price']:,.2f} = ${quote['items']:,.2f}",
+            body, *(f"{x['name']} × {x['qty']} at ${x['unit_price']:,.2f} = ${x['items']:,.2f}"
+                    for x in quote["lines"]),
             f"Shipping & handling: ${quote['shipping']:,.2f}" if quote["shipping"] else "",
             f"Sales tax: ${quote['tax']:,.2f}" if quote["tax"] else "",
             f"Total: ${quote['total']:,.2f}", f"Ship to: {_address_text(a)}", f"Phone: {phone}") if x)
@@ -618,7 +624,8 @@ def verify_and_file(db_path: str, *, contact_id: str, code: str, title: str = ""
            "job_id": (job_id or "") if path in ("new", "book", "buy") else "", "out_of_area": out_of_area,
            "booking": booking}
     if path == "buy":
-        out["order"] = {k: quote[k] for k in ("name", "qty", "items", "shipping", "tax", "total")}
+        out["order"] = {k: quote[k] for k in ("name", "qty", "items", "shipping", "tax", "total", "lines")}
+        out["order"]["can_pay"] = bool(job_id) and pay_online()   # the page goes straight to checkout
     return out
 
 
@@ -1076,7 +1083,8 @@ def pay_link(db_path: str, token: str, *, base_url: str = "", now=None) -> dict:
         raise desk_db.DeskError("this order can't be paid online — please call us")
     if not pay_online():
         raise desk_db.DeskError("online payment isn't available — we'll send you the invoice")
-    what = f"{o['name']} × {o['qty']}" + (" + shipping & handling" if o.get("shipping") else "")
+    import booking_db
+    what = booking_db.order_text(o)
     try:
         url = checkout_fn(float(o["due"]), f"{what} — order {t['ticket_id']}", o["invoice_id"] or t["ticket_id"],
                           link_url(base_url, token) if base_url else "")
@@ -1335,7 +1343,8 @@ def _route(method, sub, q, raw, ctype, ip, db, edition, base_url, business, now)
                               address=addr, preferred=b.get("preferred", ""),
                               window_key=b.get("window_key", ""), hold_id=b.get("hold_id", ""),
                               backups=b.get("backups") if isinstance(b.get("backups"), list) else [],
-                              qty=b.get("qty", 1))
+                              qty=b.get("qty", 1),
+                              items=b.get("items") if isinstance(b.get("items"), list) else None)
         return _j(201, out)
 
     if sub == "/ask" and method == "POST":

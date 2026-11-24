@@ -700,7 +700,7 @@ def _build_data(app, f, db, edition):
 # 2026-11-02 (David: "it's not clear ... the difference between Book a service and request a new service"):
 # the same names and one-line explanations the customer page shows.
 PATH_LABELS = {"book": "📅 Book a service — pick an open time online",
-               "buy": "🛒 Shop products — photos, specs, order and pay online",
+               "buy": "🛒 Shop products — photos, specs, a shopping cart, order and pay online",
                "new": "✨ Get a quote — they tell you what they need, you call to quote and schedule",
                "problem": "🛠 Report a problem — something wrong after a visit or with a purchase"}
 PATH_HELP = {
@@ -710,11 +710,14 @@ PATH_HELP = {
              "frees its time at once. The time is held and waits for your OK in the Service Desk app → "
              "📅 To approve — unless you change 'Approving bookings' below."),
     "buy": ("The Shop: every product (Type = Product, ticked Online) as a card with its photos, price and specs "
-            "(Details… in the list below). One with a Base Price in Services & Pricing can be ordered — how "
-            "many, and where to ship it; one without a price shows \"Ask about it\" (a quote request). The total adds your Shipping & handling (per item, below) and sales "
-            "tax. It lands in the Jobs app as an order job plus an unpaid invoice, and the customer's page has "
-            "a 💳 Pay now button — made from your Stripe or Square keys in Settings → Small Business → Online "
-            "Payment Links. With no keys set, the order is still taken and you send the invoice."),
+            "(Details… in the list below). One with a Base Price in Services & Pricing has 🛒 Add to cart — "
+            "customers can put several products in one cart, change how many or remove one, then check out with "
+            "one shipping address; one without a price shows \"Ask about it\" (a quote request). The total adds "
+            "your Shipping & handling (per item, below) and sales tax. The whole cart lands in the Jobs app as ONE "
+            "order job plus ONE unpaid invoice. With your Stripe or Square keys in Settings → Small Business → "
+            "Online Payment Links, 💳 Place order & pay takes the customer straight to the card payment page "
+            "(their order page also has 💳 Pay now). With no keys set, the order is still taken and you send "
+            "the invoice."),
     "new": ("Get a quote (was \"Request a new service\"): for anything that can't be booked on the spot — not sure "
             "what they need, a bigger job, or no open time suits them. They give the address and preferred days, "
             "and it lands in the Jobs app as a 'Requested' job (no date yet) plus a ticket, so you call, quote "

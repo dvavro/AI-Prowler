@@ -780,19 +780,75 @@ def order_quote(db_path: str, code: str, qty) -> dict:
             "tax_rate": rate, "tax": tax, "total": round(subtotal + tax, 2)}
 
 
+MAX_CART_LINES = 20
+
+
+def cart_quote(db_path: str, items) -> dict:
+    """🛒 Shopping cart (2026-11-24, Jamie: "add a shopping cart for online pay"): several products
+    in ONE order — one job, one invoice, one checkout. `items` is a list of {code, qty} (the same
+    product twice is added together). Each line is priced like order_quote; tax is worked out once
+    on the whole subtotal (items + shipping), the same math every invoice uses. A one-line cart
+    gives exactly what order_quote gives, plus 'lines'."""
+    merged: dict[str, int] = {}
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict):
+            continue
+        code = str(it.get("code") or "").strip()[:40]
+        if not code:
+            continue
+        try:
+            q = int(it.get("qty"))
+        except (TypeError, ValueError):
+            raise BookingError("enter how many you'd like") from None
+        merged[code] = merged.get(code, 0) + q
+    if not merged:
+        raise BookingError("your cart is empty — add a product")
+    if len(merged) > MAX_CART_LINES:
+        raise BookingError(f"a cart can hold up to {MAX_CART_LINES} different products — call us for more")
+    lines = [order_quote(db_path, code, qty) for code, qty in merged.items()]
+    if len(lines) == 1:
+        return {**lines[0], "lines": [_line(lines[0])]}
+    rate = lines[0]["tax_rate"]
+    items_total = round(sum(x["items"] for x in lines), 2)
+    shipping = round(sum(x["shipping"] for x in lines), 2)
+    subtotal = round(items_total + shipping, 2)
+    tax = round(subtotal * rate, 2)
+    return {"code": lines[0]["code"], "name": cart_name(lines), "qty": sum(x["qty"] for x in lines),
+            "unit_price": None, "shipping_each": None, "items": items_total, "shipping": shipping,
+            "subtotal": subtotal, "tax_rate": rate, "tax": tax, "total": round(subtotal + tax, 2),
+            "lines": [_line(x) for x in lines]}
+
+
+def _line(q: dict) -> dict:
+    return {k: q.get(k) for k in ("code", "name", "qty", "unit_price", "shipping_each", "items", "shipping")}
+
+
+def cart_name(lines: list) -> str:
+    """'Mini Server', or 'Mini Server + 2 more' — for the job and invoice's service type."""
+    return lines[0]["name"] + (f" + {len(lines) - 1} more" if len(lines) > 1 else "")
+
+
 def order_text(q: dict) -> str:
     """One line for the ticket, the job and the checkout page."""
-    return f"{q['name']} × {q['qty']}" + (" + shipping & handling" if q["shipping"] else "")
+    lines = q.get("lines") or []
+    what = (", ".join(f"{x['name']} × {x['qty']}" for x in lines) if len(lines) > 1
+            else f"{lines[0]['name'] if lines else q['name']} × {lines[0]['qty'] if lines else q['qty']}")
+    return what + (" + shipping & handling" if q["shipping"] else "")
 
 
-def create_order(db_path: str, *, customer_id: str, customer_name: str, code: str, qty, street: str = "",
-                 city: str = "", state: str = "", zip_code: str = "", notes: str = "", by: str = ORDER_BY) -> dict:
-    """Records an order (see the section note). Returns the quote + job_id + invoice_id."""
+def create_order(db_path: str, *, customer_id: str, customer_name: str, code: str = "", qty=1, street: str = "",
+                 city: str = "", state: str = "", zip_code: str = "", notes: str = "", by: str = ORDER_BY,
+                 items: list | None = None) -> dict:
+    """Records an order (see the section note): one product (code, qty) or a whole cart (items).
+    Returns the quote + job_id + invoice_id."""
     import json
     from db_write_ops import generate_next_id
-    q = order_quote(db_path, code, qty)
+    q = cart_quote(db_path, items if items else [{"code": code, "qty": qty}])
+    code = q["lines"][0]["code"]
     ship_to = address_line({"street": street, "city": city, "state": state, "zip": zip_code})
-    lines = [f"Online order: {q['name']} × {q['qty']} at ${q['unit_price']:,.2f}",
+    lines = [*(f"Online order: {x['name']} × {x['qty']} at ${x['unit_price']:,.2f}"
+               + (f" + ${x['shipping']:,.2f} shipping & handling" if len(q["lines"]) > 1 and x["shipping"] else "")
+               for x in q["lines"]),
              f"Shipping & handling: ${q['shipping']:,.2f}" if q["shipping"] else "",
              f"Sales tax: ${q['tax']:,.2f}" if q["tax"] else "",
              f"Total: ${q['total']:,.2f}", f"Ship to: {ship_to}", notes.strip(),
@@ -841,9 +897,10 @@ def order_view(db_path: str, job_id: str) -> dict | None:
     status = str(inv["payment_status"] or "") if inv else ""
     paid = status.lower() == "paid" or bool(inv and inv["total_due"] and (inv["amount_paid"] or 0) >= inv["total_due"])
     gone = bool(job and str(job["job_status"] or "").lower() in _GONE)
-    keep = ("name", "qty", "unit_price", "items", "shipping", "tax", "total", "invoice_id", "ship_to")
+    keep = ("name", "qty", "unit_price", "items", "shipping", "tax", "total", "invoice_id", "ship_to", "lines")
     # what's still owed: the invoice as it stands now (the office may have adjusted it)
     due = round(float(inv["total_due"] or 0) - float(inv["amount_paid"] or 0), 2) if inv else 0.0
+    o.setdefault("lines", [_line(o)] if o.get("code") and o.get("unit_price") is not None else [])  # pre-cart orders
     return {**{k: o.get(k) for k in keep}, "due": due, "paid": paid, "cancelled": gone,
             "can_pay": not paid and not gone and due > 0}
 

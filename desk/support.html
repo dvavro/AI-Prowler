@@ -78,6 +78,14 @@ body.look .live{background:rgba(255,255,255,.93);display:inline-block;border-rad
 .pbody details{font-size:14px}
 .pbody summary{cursor:pointer;color:var(--acc)}
 .pbody ul{margin:6px 0 0;padding-left:18px}
+/* 🛒 cart (2026-11-24) */
+.cartbar{position:sticky;top:0;z-index:5;display:flex;justify-content:space-between;align-items:center;gap:10px;
+  background:#fff;border:1px solid var(--acc);border-radius:var(--r);padding:10px 12px;margin-bottom:12px}
+.cline{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
+.cline img{width:56px;height:56px;object-fit:contain;border:1px solid var(--line);border-radius:8px;background:#fff;flex:none}
+.cline .cn{flex:1;min-width:0}
+.cline input{width:70px;padding:8px}
+.cline .rm{background:none;color:var(--mute);padding:6px 8px;font-weight:400}
 .pbody .go{margin-top:auto}
 </style>
 </head>
@@ -181,7 +189,7 @@ const PATHS = {
   book:    { icon: '📅', label: 'Book a service', h: 'Book a service',
              sub: 'Pick a service and an open time — booked online in a minute.' },
   buy:     { icon: '🛒', label: 'Shop products', h: 'Shop products',
-             sub: 'Equipment and parts we sell — see photos and specs, order and pay online, shipped to you.' },
+             sub: 'Equipment and parts we sell — see photos and specs, add them to your cart and pay online, shipped to you.' },
   new:     { icon: '✨', label: 'Get a quote', h: 'Get a quote',
              sub: 'Not sure what you need, a bigger job, or no time that suits you? Tell us and we’ll call to quote and schedule it.' },
   problem: { icon: '🛠', label: 'Report a problem', h: 'Report a problem',
@@ -342,7 +350,7 @@ function productCard(p) {
   const price = p.buyable ? money(p.unit_price) : 'Price on request';
   const ship = !p.buyable ? '' : +p.shipping ? ` <span class="muted" style="font-weight:400">+ ${money(p.shipping)} shipping &amp; handling each</span>`
     : ' <span class="muted" style="font-weight:400">· free shipping</span>';
-  const go = p.buyable ? `<button class="go" data-buy="${esc(p.code)}">Buy</button>`
+  const go = p.buyable ? `<button class="go" data-buy="${esc(p.code)}">🛒 Add to cart</button>`
     : P.paths.includes('new') ? `<button class="ghost go" data-ask="${esc(p.code)}">Ask about it</button>`
     : '<p class="muted go">Call or text us about this one.</p>';
   return `<div class="prod" data-code="${esc(p.code)}">
@@ -372,11 +380,12 @@ function showForm(path, opts) {
     <div id="wins"><p class="muted">Loading open times…</p></div>
     ${P.paths.includes('new') ? `<p class="muted" style="font-size:14px">No time suits you? <a href="#" id="toNew">Ask us to call you instead</a>.</p>` : ''}
     <label>Anything we should know? (optional)</label><textarea id="fDesc"></textarea>` : path === 'buy' ? `
-    ${P.products.length ? `<div class="prods" id="catalog">${P.products.map(productCard).join('')}</div>
+    ${P.products.length ? `<div class="cartbar hide" id="cartBar"></div>
+    <div class="prods" id="catalog">${P.products.map(productCard).join('')}</div>
     <div id="orderBox" class="hide">
-      <p style="margin:0 0 6px"><a href="#" id="toCatalog">← All products</a></p>
-      <div id="picked"></div>
-      <label>How many?</label><input id="fQty" type="number" min="1" max="${P.maxQty}" value="1" inputmode="numeric" style="max-width:110px">
+      <p style="margin:0 0 6px"><a href="#" id="toCatalog">← Keep shopping</a></p>
+      <b style="font-size:17px">🛒 Your cart</b>
+      <div id="cartLines"></div>
       <div id="fSum" style="margin-top:12px"></div>
       <label>Shipping address</label><input id="fStreet" autocomplete="street-address" placeholder="Street">
       <div class="row" style="margin-top:8px"><input id="fCity" autocomplete="address-level2" placeholder="City">
@@ -418,7 +427,7 @@ function showForm(path, opts) {
     <label>Enter the 6-digit code we sent you</label>
     <input id="fCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6">
     <p id="cErr" class="err"></p>
-    <div class="row"><button id="fVerify">${path === 'book' ? 'Book it' : path === 'buy' ? 'Place order' : 'Submit request'}</button><button class="ghost" id="fResend">Send a new code</button></div></div>`;
+    <div class="row"><button id="fVerify">${path === 'book' ? 'Book it' : path === 'buy' ? (P.payOnline ? '💳 Place order & pay' : 'Place order') : 'Submit request'}</button><button class="ghost" id="fResend">Send a new code</button></div></div>`;
   if ($('#back')) $('#back').addEventListener('click', e => { e.preventDefault(); showChoices(); });
   if ($('#fOtherWrap')) $('#fSvc').addEventListener('change', () =>
     $('#fOtherWrap').classList.toggle('hide', $('#fSvc').value !== ''));
@@ -431,20 +440,20 @@ function showForm(path, opts) {
     loadWins();
   }
   if (path === 'buy' && P.products.length) {
-    P.prod = '';
-    $('#fQty').addEventListener('input', drawOrder);
-    $('#toCatalog').addEventListener('click', e => { e.preventDefault(); pickProduct(''); });
+    loadCart();
+    $('#toCatalog').addEventListener('click', e => { e.preventDefault(); showCart(false); });
     app.querySelectorAll('[data-ph]').forEach(b => b.addEventListener('click', () => {   // switch the big photo
       const card = b.closest('.prod');
       card.querySelector('.pimg img').src = b.dataset.ph;
       card.querySelectorAll('[data-ph]').forEach(x => x.classList.toggle('on', x === b));
     }));
-    app.querySelectorAll('[data-buy]').forEach(b => b.addEventListener('click', () => pickProduct(b.dataset.buy)));
+    app.querySelectorAll('[data-buy]').forEach(b => b.addEventListener('click', () => addToCart(b.dataset.buy)));
     app.querySelectorAll('[data-ask]').forEach(b => b.addEventListener('click', () => {
       const p = P.products.find(x => x.code === b.dataset.ask);
       showForm('new', { other: p ? p.name : '' });
     }));
-    if (P.wantSvc && P.products.some(p => p.code === P.wantSvc && p.buyable)) pickProduct(P.wantSvc);
+    if (P.wantSvc && P.products.some(p => p.code === P.wantSvc && p.buyable)) addToCart(P.wantSvc);
+    else drawCartBar();
   }
   if (path === 'new' && opts.other) {          // "Ask about it" on a product with no price
     $('#fSvc').value = ''; $('#fOtherWrap').classList.remove('hide'); $('#fOther').value = opts.other;
@@ -458,38 +467,94 @@ function showForm(path, opts) {
 // The same math the server uses for the invoice; the server's numbers are the ones charged.
 function money(n) { return '$' + (+n || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
 const cents = n => Math.round((+n || 0) * 100) / 100;
-function qtyOf() { const q = parseInt(($('#fQty') || {}).value, 10); return q >= 1 && q <= P.maxQty ? q : 0; }
+// 🛒 The cart (2026-11-24, Jamie: "add a shopping cart for online pay"): {code: qty}, kept in this
+// browser (localStorage, best-effort) so it survives a reload. One order, one invoice, one checkout.
+const CART_KEY = 'aip_cart_v1';
+function loadCart() {
+  let c = {};
+  try { c = JSON.parse(localStorage.getItem(CART_KEY) || '{}') || {}; } catch (_) { c = {}; }
+  P.cart = {};
+  for (const [code, q] of Object.entries(c)) {          // only products still for sale
+    if (P.products.some(p => p.code === code && p.buyable) && +q >= 1) P.cart[code] = Math.min(+q | 0, P.maxQty);
+  }
+}
+function saveCart() { try { localStorage.setItem(CART_KEY, JSON.stringify(P.cart || {})); } catch (_) {} }
+function clearCart() { P.cart = {}; try { localStorage.removeItem(CART_KEY); } catch (_) {} }
+function cartItems() { return Object.entries(P.cart || {}).map(([code, qty]) => ({ code, qty })); }
+function cartCount() { return cartItems().reduce((n, x) => n + (+x.qty || 0), 0); }
+function cartQtyOk() { const it = cartItems(); return it.length > 0 && it.every(x => x.qty >= 1 && x.qty <= P.maxQty); }
+function cartTotals() {       // the same math the server uses; the server's numbers are the ones charged
+  let items = 0, ship = 0; const rows = [];
+  for (const { code, qty } of cartItems()) {
+    const p = P.products.find(x => x.code === code); if (!p || !(qty >= 1)) continue;
+    const it = cents(p.unit_price * qty); items = cents(items + it); ship = cents(ship + p.shipping * qty);
+    rows.push([`${p.name} × ${qty}`, it]);
+  }
+  const sub = cents(items + ship), tax = cents(sub * P.taxRate);
+  if (ship) rows.push(['Shipping & handling', ship]);
+  if (tax) rows.push(['Sales tax', tax]);
+  return { rows, total: cents(sub + tax) };
+}
+function addToCart(code) {
+  const p = P.products.find(x => x.code === code); if (!p || !p.buyable) return;
+  P.cart = P.cart || {};
+  P.cart[code] = Math.min((P.cart[code] || 0) + 1, P.maxQty);
+  saveCart(); drawCartBar(`Added ${p.name}`);
+}
+function drawCartBar(flash) {
+  const bar = $('#cartBar'); if (!bar) return;
+  const n = cartCount();
+  bar.classList.toggle('hide', !n);
+  if (!n) { bar.innerHTML = ''; return; }
+  bar.innerHTML = `<span>${flash ? `✅ ${esc(flash)} · ` : ''}🛒 <b>${n} item${n > 1 ? 's' : ''}</b> · ${money(cartTotals().total)}</span>
+    <button id="viewCart">View cart &amp; check out</button>`;
+  $('#viewCart').addEventListener('click', () => showCart(true));
+}
+// "View cart" -> the cart (the catalog hides); "← Keep shopping" goes back.
+function showCart(open) {
+  if (open && !cartCount()) open = false;
+  $('#catalog').classList.toggle('hide', !!open);
+  $('#cartBar').classList.toggle('hide', !!open || !cartCount());
+  $('#orderBox').classList.toggle('hide', !open);
+  $('#who').classList.toggle('hide', !open);
+  if (!open) { drawCartBar(); return; }
+  drawOrder();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
 function sumRows(rows, total) {
   return `<table style="width:100%;border-collapse:collapse;font-size:15px">${rows.map(([k, v]) =>
     `<tr><td style="padding:3px 0">${esc(k)}</td><td style="text-align:right">${money(v)}</td></tr>`).join('')}
     <tr><td style="padding:6px 0 0;border-top:1px solid var(--line)"><b>Total</b></td>
     <td style="text-align:right;padding-top:6px;border-top:1px solid var(--line)"><b>${money(total)}</b></td></tr></table>`;
 }
-// Buy on a card -> the order box (the catalog hides); "← All products" goes back.
-function pickProduct(code) {
-  P.prod = code;
-  const p = P.products.find(x => x.code === code);
-  $('#catalog').classList.toggle('hide', !!p);
-  $('#orderBox').classList.toggle('hide', !p);
-  $('#who').classList.toggle('hide', !p);
-  if (!p) return;
-  const ph = (p.photos || [])[0];
-  $('#picked').innerHTML = `<div style="display:flex;gap:12px;align-items:center">
-    ${ph ? `<img alt="" src="${esc(ph)}" style="width:72px;height:72px;object-fit:contain;border:1px solid var(--line);border-radius:8px;background:#fff">` : ''}
-    <div><b id="pickedName">${esc(p.name)}</b><div class="muted">${money(p.unit_price)} each</div></div></div>`;
-  drawOrder();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-}
+// The cart's lines (photo, name, price, how many, remove) and the total. Redrawn on every change.
 function drawOrder() {
-  const p = P.products.find(x => x.code === P.prod), box = $('#fSum');
-  const q = qtyOf();
-  if (!p || !q) { box.innerHTML = q ? '' : `<p class="err">Enter how many — 1 to ${P.maxQty}.</p>`; return; }
-  const items = cents(p.unit_price * q), ship = cents(p.shipping * q), sub = cents(items + ship), tax = cents(sub * P.taxRate);
-  const rows = [[`${p.name} × ${q}`, items]];
-  if (ship) rows.push(['Shipping & handling', ship]);
-  if (tax) rows.push(['Sales tax', tax]);
-  box.innerHTML = sumRows(rows, cents(sub + tax)) + `<p class="muted" style="font-size:14px;margin:8px 0 0">${P.payOnline
-    ? 'After you confirm your order you can pay by card right away.' : "We'll send you an invoice to pay."}</p>`;
+  const lines = $('#cartLines'); if (!lines) return;
+  if (!cartCount()) { showCart(false); return; }
+  lines.innerHTML = cartItems().map(({ code, qty }) => {
+    const p = P.products.find(x => x.code === code) || {}, ph = (p.photos || [])[0];
+    return `<div class="cline" data-line="${esc(code)}">${ph ? `<img alt="" src="${esc(ph)}">` : ''}
+      <div class="cn"><b>${esc(p.name || code)}</b><div class="muted">${money(p.unit_price)} each</div></div>
+      <input class="cartQty" data-code="${esc(code)}" type="number" min="1" max="${P.maxQty}" value="${qty}"
+        inputmode="numeric" aria-label="How many ${esc(p.name || code)}">
+      <button type="button" class="rm" data-rm="${esc(code)}" aria-label="Remove ${esc(p.name || code)}">✕</button></div>`;
+  }).join('');
+  lines.querySelectorAll('.cartQty').forEach(i => i.addEventListener('input', () => {
+    const q = parseInt(i.value, 10);
+    P.cart[i.dataset.code] = q >= 1 && q <= P.maxQty ? q : 0;      // 0 = not valid yet (kept while typing)
+    saveCart(); drawSum();
+  }));
+  lines.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', () => {
+    delete P.cart[b.dataset.rm]; saveCart(); drawOrder();
+  }));
+  drawSum();
+}
+function drawSum() {
+  const box = $('#fSum');
+  if (!cartQtyOk()) { box.innerHTML = `<p class="err">Enter how many — 1 to ${P.maxQty} of each.</p>`; return; }
+  const { rows, total } = cartTotals();
+  box.innerHTML = sumRows(rows, total) + `<p class="muted" style="font-size:14px;margin:8px 0 0">${P.payOnline
+    ? 'After you confirm your order you go straight to a secure card payment page.' : "We'll send you an invoice to pay."}</p>`;
 }
 
 // ── arrival windows (booking-spec.md §3) ──────────────────────────────────
@@ -549,8 +614,8 @@ function formProblem() {
       return 'Enter the address — street, and city or ZIP.';
     if (!P.picks.length) return 'Tap the arrival window you’d like.';
   } else if (P.path === 'buy') {
-    if (!P.prod) return 'Pick a product.';
-    if (!qtyOf()) return `Enter how many — 1 to ${P.maxQty}.`;
+    if (!cartCount()) return 'Your cart is empty — add a product.';
+    if (!cartQtyOk()) return `Enter how many — 1 to ${P.maxQty} of each.`;
     if (!$('#fStreet').value.trim() || !($('#fCity').value.trim() || $('#fZip').value.trim()))
       return 'Enter the shipping address — street, and city or ZIP.';
   } else if (P.path === 'new') {
@@ -592,8 +657,7 @@ async function verify() {
                  state: $('#fState').value.trim(), zip: $('#fZip').value.trim() },
       window_key: P.picks[0], hold_id: P.hold ? P.hold.hold_id : '', backups: P.picks.slice(1) });
   } else if (P.path === 'buy') {
-    const p = P.products.find(x => x.code === P.prod) || {};
-    Object.assign(body, { service_code: P.prod, service: p.name || '', qty: qtyOf(), address: { street: $('#fStreet').value.trim(), city: $('#fCity').value.trim(),
+    Object.assign(body, { items: cartItems(), address: { street: $('#fStreet').value.trim(), city: $('#fCity').value.trim(),
                                state: $('#fState').value.trim(), zip: $('#fZip').value.trim() } });
   } else if (P.path === 'new') {
     const sel = $('#fSvc');
@@ -611,6 +675,14 @@ async function verify() {
         but we've saved your request and we'll call you at <b>${esc($('#fPhone') ? $('#fPhone').value.trim() : '')}</b>
         to talk it through.</p><a href="/support/t/${encodeURIComponent(d.token)}"><button>See your request</button></a></div>`;
       return;
+    }
+    if (P.path === 'buy') {
+      clearCart();
+      if (d.order && d.order.can_pay) {      // 💳 straight to the Stripe / Square checkout
+        $('#fVerify').disabled = true; $('#fVerify').textContent = 'Opening the payment page…';
+        try { const pay = await call('POST', `/t/${d.token}/order/pay`); location.href = pay.url; return; }
+        catch (_) { /* the order is taken — they can still pay from their order page */ }
+      }
     }
     location.href = '/support/t/' + d.token;
   } catch (e) {
@@ -811,7 +883,7 @@ function render(d) {
 // ── the order on the status page ("Buy a product", 2026-11-02) ─────────────
 function orderCard(o) {
   if (!o) return '';
-  const rows = [[`${o.name} × ${o.qty}`, o.items]];
+  const rows = (o.lines && o.lines.length ? o.lines : [o]).map(x => [`${x.name} × ${x.qty}`, x.items]);   // 🛒 every cart line
   if (+o.shipping) rows.push(['Shipping & handling', o.shipping]);
   if (+o.tax) rows.push(['Sales tax', o.tax]);
   const state = o.paid ? '<p style="margin:10px 0 0"><b>✅ Paid — thank you!</b> We’ll let you know when it ships.</p>'

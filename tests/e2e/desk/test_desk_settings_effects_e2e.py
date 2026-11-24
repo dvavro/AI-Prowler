@@ -289,9 +289,10 @@ def test_W6_buy_a_product_with_shipping_and_pay_now(solo, people):
         card.locator(".pth button").nth(1).click()                                   # tap the 2nd photo
         assert big.get_attribute("src") != first
         assert cust.page.locator("#fSend").is_hidden()                               # no form until one is picked
-        cust.click(".prod[data-code='PROD-SSD'] [data-buy]")
-        cust.page.locator("#pickedName", has_text="ZTEST Server 0.5 TB SSD").wait_for()
-        cust.page.fill("#fQty", "2")
+        cust.click(".prod[data-code='PROD-SSD'] [data-buy]")                        # 🛒 add to cart
+        cust.click("#viewCart")
+        cust.page.locator(".cline", has_text="ZTEST Server 0.5 TB SSD").wait_for()
+        cust.page.fill(".cartQty[data-code='PROD-SSD']", "2")
         total = cust.page.locator("#fSum")
         total.locator("text=Shipping & handling").wait_for()
         # 2 × $500 + 2 × $15 shipping = $1,030, + 7% tax $72.10 = $1,102.10

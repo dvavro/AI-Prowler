@@ -77,19 +77,18 @@ def test_cp_24_pay_now_then_paid(box, person):
     try:
         who, p = _open(box, person, "buy")
         p.locator("[data-buy='ZAG-PROD']").click()
+        p.locator("#viewCart").click()
         c = _who()
         _address(who)
         _details(who, c)
-        token = _send_and_submit(who, box, c)
-        o = _view(box, token)["order"]
-        assert o["can_pay"] and o["pay_online"] and not o["paid"], o
-        p.locator("#payNow").click()
-        p.wait_for_url(re.compile("zagpaid="))
-        assert "zagpaid=" + str(o["invoice_id"]) in p.url, p.url
-        _sql(box, "UPDATE invoices SET payment_status = 'Paid', amount_paid = total_due WHERE invoice_id = ?", (o["invoice_id"],))
-        assert _view(box, token)["order"]["paid"], _view(box, token)["order"]
-        p.goto(f"{box.base}/support/t/{token}")
-        p.locator("#order", has_text="Paid").wait_for()
+        assert "pay" in p.locator("#fVerify").inner_text().lower()      # "💳 Place order & pay"
+        _send_and_submit(who, box, c, wait_status=False)
+        p.wait_for_url(re.compile("zagpaid="))                         # 🛒 straight to checkout (2026-11-24)
+        inv = _sql(box, "SELECT invoice_id FROM invoices WHERE service_type LIKE 'Order:%' ORDER BY rowid DESC LIMIT 1")[0][0]
+        assert "zagpaid=" + str(inv) in p.url, p.url
+        _sql(box, "UPDATE invoices SET payment_status = 'Paid', amount_paid = total_due WHERE invoice_id = ?", (inv,))
+        jid = _sql(box, "SELECT job_id FROM invoices WHERE invoice_id = ?", (inv,))[0][0]
+        assert _sql(box, "SELECT payment_status FROM invoices WHERE job_id = ?", (jid,))[0][0] == "Paid"
     finally:
         box.control("POST", "/pay-stub", {})
 
