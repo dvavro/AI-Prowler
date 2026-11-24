@@ -520,29 +520,97 @@ function inspectionReviewCard(d, sec, msg) {
   box.append(runRow);
   if (review) {
     const icon = { pass: "✓", flag: "⚠", missing: "✗" };
-    const rows = (review.checklist || []).map(item => {
-      const action = item.suggested_action;
-      let add = null;
-      if (action && d.can_edit) {
-        add = el("button", { class: "button", type: "button", "data-inspection-add": item.id }, "Add to estimate");
-        add.addEventListener("click", async () => {
-          add.disabled = true;
-          try {
-            await api("POST", "/estimates/" + est.id + "/inspection-review/" + review.id + "/apply",
-              { item_id: item.id, rev: est.rev });
-            toast("Added to the estimate");
-            route();
-          } catch (e) { if (e.status !== 401) msg.replaceChildren(errorBox(e)); add.disabled = false; }
-        });
+    // 2026-11-23 (David: "when I review the inspection and click add to the estimate, nothing happens"): the AI had
+    // named items that aren't in the price book, and the refusal showed at the top of the page. Now an item in the
+    // price book adds in one click; one that isn't opens a picker right under its row (the closest items, or type a
+    // price), and anything that goes wrong is said beside the button.
+    const apply = async (btn, out, item, extra) => {
+      btn.disabled = true;
+      out.replaceChildren();
+      try {
+        await api("POST", "/estimates/" + est.id + "/inspection-review/" + review.id + "/apply",
+          { item_id: item.id, rev: est.rev, ...extra });
+        toast("Added to the estimate — see Other lines");
+        route();
+      } catch (e) {
+        if (e.status !== 401) out.replaceChildren(errorBox(e));
+        btn.disabled = false;
       }
-      return el("tr", { "data-inspection-item": item.id },
+    };
+    const pickerRow = (item, action, cols) => {
+      const tr = el("tr", { class: "inspection-pick", "data-inspection-pick": item.id, hidden: "" });
+      const matches = action.matches || [];
+      const pick = el("select", { "data-inspection-price": item.id, "aria-label": "Price book item" },
+        ...matches.map(p => el("option", { value: p.price_key },
+          p.description + " — " + money(p.cost_cents) + " / " + p.unit + (p.sample ? " (sample)" : ""))),
+        el("option", { value: "" }, "None of these — type a price"));
+      const qty = el("input", { "data-inspection-qty": item.id, inputmode: "decimal", maxlength: 20, size: 5,
+        value: String(action.quantity || 1), "aria-label": "Quantity" });
+      const cost = el("input", { "data-inspection-cost": item.id, inputmode: "decimal", maxlength: 20, size: 8,
+        placeholder: "$ each", "aria-label": "Unit cost in dollars" });
+      const costLabel = el("label", { class: "small" }, "Unit cost ", cost);
+      const sync = () => { costLabel.hidden = !!pick.value; };
+      pick.addEventListener("change", sync);
+      sync();
+      const out = el("div", {});
+      const go = el("button", { class: "primary", type: "button", "data-inspection-pick-go": item.id }, "Add it");
+      const cancel = el("button", { class: "button", type: "button" }, "Cancel");
+      cancel.addEventListener("click", () => { tr.hidden = true; });
+      go.addEventListener("click", () => {
+        const extra = { quantity: qty.value.trim() };
+        if (pick.value) extra.price_key = pick.value;
+        else {
+          const dollarsTyped = parseFloat(cost.value.replace(/[$,]/g, ""));
+          if (isNaN(dollarsTyped) || dollarsTyped < 0) {
+            out.replaceChildren(el("p", { class: "error" }, "Type the unit cost in dollars, or pick a price book item."));
+            cost.focus();
+            return;
+          }
+          extra.unit_cost_cents = Math.round(dollarsTyped * 100);
+        }
+        apply(go, out, item, extra);
+      });
+      tr.append(el("td", {}), el("td", { colspan: String(cols - 1) },
+        el("p", { class: "small" }, (action.price_key ? "“" + action.price_key + "” isn't in your price book. " : "") +
+          (matches.length ? "Pick the closest item, or type a price:" : "Nothing close in your price book — type a price:")),
+        el("div", { class: "row" }, matches.length ? pick : null, el("label", { class: "small" }, "Qty ", qty),
+          costLabel, go, cancel),
+        out));
+      // only a close match is chosen for you; otherwise it starts on "type a price" (the list is still there)
+      pick.value = matches.length && matches[0].strong ? matches[0].price_key : "";
+      sync();
+      return tr;
+    };
+    const rows = [];
+    (review.checklist || []).forEach(item => {
+      const action = item.suggested_action;
+      let cell = null, picker = null;
+      if (action && d.can_edit) {
+        const out = el("div", {});
+        const missing = action.in_price_book === false;
+        const add = el("button", { class: "button", type: "button", "data-inspection-add": item.id },
+          missing ? "Add to estimate…" : "Add to estimate");
+        if (missing) {
+          picker = pickerRow(item, action, 5);
+          add.addEventListener("click", () => {
+            picker.hidden = !picker.hidden;
+            if (!picker.hidden) { const f = picker.querySelector("select, input"); if (f) f.focus(); }
+          });
+        } else add.addEventListener("click", () => apply(add, out, item, {}));
+        cell = el("div", {}, add, out);
+      }
+      const price = action && action.price ? " — " + money(action.price.cost_cents) + " / " + action.price.unit +
+        (action.price.sample ? " (sample price)" : "") : "";
+      rows.push(el("tr", { "data-inspection-item": item.id },
         el("td", {}, icon[item.status] || "?"),
         el("td", {}, item.description,
           action ? el("div", { class: "muted small" },
-            "Add: " + (action.quantity || 1) + " " + (action.unit || "") + " " + (action.description || action.price_key)) : null),
+            "Add: " + (action.quantity || 1) + " " + (action.unit || "") + " " + (action.description || action.price_key) +
+            price + (action.in_price_book === false ? " (not in your price book)" : "")) : null),
         el("td", {}, item.code_ref),
         el("td", {}, item.note || ""),
-        el("td", {}, add));
+        el("td", {}, cell)));
+      if (picker) rows.push(picker);
     });
     box.append(el("table", { class: "list", id: "inspection-checklist-" + sec.module_id },
       el("thead", {}, el("tr", {}, el("th", {}, ""), el("th", {}, "Check"), el("th", {}, "Code"), el("th", {}, "Note"), el("th", {}, ""))),

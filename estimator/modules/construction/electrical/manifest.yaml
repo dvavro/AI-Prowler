@@ -163,6 +163,47 @@ questions:
      help: "Feet of 8/3 cable measured by Run wiring (40 Amp circuits, e.g. a cooktop)."}
   - {id: wire_6_3_ft, label: "Measured cable 6/3 (wiring takeoff)", type: number, unit: ft, default: 0, min: 0, max: 100000,
      help: "Feet of 6/3 cable measured by Run wiring (50 Amp circuits, e.g. a range or EV charger)."}
+  # 2026-11-23 (David: "a metal shed ... mount the conduit on top of the steel ... adding power after a house is built,
+  # outside the walls ... include a basic expansion coefficient"): surface conduit measured by Run wiring with the wiring
+  # method set to EMT or PVC (estimator/takeoff/conduit.py) - the pipe, its fittings, THHN wire instead of cable.
+  - {id: thhn_14_ft, label: "Measured THHN 14 AWG (wiring, in conduit)", type: number, unit: ft, default: 0, min: 0, max: 200000,
+     help: "Feet of 14 AWG THHN pulled in conduit: each circuit's conductors and ground times its length."}
+  - {id: thhn_12_ft, label: "Measured THHN 12 AWG (wiring, in conduit)", type: number, unit: ft, default: 0, min: 0, max: 200000,
+     help: "Feet of 12 AWG THHN pulled in conduit (20 Amp circuits)."}
+  - {id: thhn_10_ft, label: "Measured THHN 10 AWG (wiring, in conduit)", type: number, unit: ft, default: 0, min: 0, max: 200000,
+     help: "Feet of 10 AWG THHN pulled in conduit (30 Amp circuits)."}
+  - {id: thhn_8_ft, label: "Measured THHN 8 AWG (wiring, in conduit)", type: number, unit: ft, default: 0, min: 0, max: 200000,
+     help: "Feet of 8 AWG THHN pulled in conduit (40 Amp circuits)."}
+  - {id: thhn_6_ft, label: "Measured THHN 6 AWG (wiring, in conduit)", type: number, unit: ft, default: 0, min: 0, max: 200000,
+     help: "Feet of 6 AWG THHN pulled in conduit (50 Amp circuits)."}
+  - {id: emt_050_ft, label: "Measured 1/2 in EMT (wiring)", type: number, unit: ft, default: 0, min: 0, max: 100000,
+     help: "Feet of 1/2 in EMT on the surface, measured by Run wiring."}
+  - {id: emt_075_ft, label: "Measured 3/4 in EMT (wiring)", type: number, unit: ft, default: 0, min: 0, max: 100000,
+     help: "Feet of 3/4 in EMT (home runs carrying several circuits)."}
+  - {id: emt_100_ft, label: "Measured 1 in EMT (wiring)", type: number, unit: ft, default: 0, min: 0, max: 100000,
+     help: "Feet of 1 in EMT."}
+  - {id: pvc_050_ft, label: "Measured 1/2 in PVC (wiring)", type: number, unit: ft, default: 0, min: 0, max: 100000,
+     help: "Feet of 1/2 in Schedule 40 PVC (outside, or PVC throughout)."}
+  - {id: pvc_075_ft, label: "Measured 3/4 in PVC (wiring)", type: number, unit: ft, default: 0, min: 0, max: 100000,
+     help: "Feet of 3/4 in Schedule 40 PVC."}
+  - {id: pvc_100_ft, label: "Measured 1 in PVC (wiring)", type: number, unit: ft, default: 0, min: 0, max: 100000,
+     help: "Feet of 1 in Schedule 40 PVC."}
+  - {id: emt_elbows, label: "EMT 90-degree elbows (wiring)", type: integer, default: 0, min: 0, max: 5000}
+  - {id: emt_couplings, label: "EMT couplings (wiring)", type: integer, default: 0, min: 0, max: 5000}
+  - {id: emt_connectors, label: "EMT box connectors (wiring)", type: integer, default: 0, min: 0, max: 5000}
+  - {id: emt_straps, label: "EMT straps (wiring)", type: integer, default: 0, min: 0, max: 20000}
+  - {id: emt_expansion, label: "EMT expansion fittings (wiring)", type: integer, default: 0, min: 0, max: 1000,
+     help: "Where a straight EMT run moves 1/4 in or more over the temperature swing (6.5e-6 in/in/F, NEC 300.7(B))."}
+  - {id: pvc_elbows, label: "PVC 90-degree elbows (wiring)", type: integer, default: 0, min: 0, max: 5000}
+  - {id: pvc_couplings, label: "PVC couplings (wiring)", type: integer, default: 0, min: 0, max: 5000}
+  - {id: pvc_connectors, label: "PVC male adapters (wiring)", type: integer, default: 0, min: 0, max: 5000}
+  - {id: pvc_straps, label: "PVC straps (wiring)", type: integer, default: 0, min: 0, max: 20000}
+  - {id: pvc_expansion, label: "PVC expansion couplings (wiring)", type: integer, default: 0, min: 0, max: 1000,
+     help: "Where a straight PVC run moves 1/4 in or more over the temperature swing (3.38e-5 in/in/F, NEC 352.44)."}
+  - {id: conduit_bodies, label: "Conduit bodies / LBs (wiring)", type: integer, default: 0, min: 0, max: 1000}
+  - {id: surface_boxes, label: "Surface boxes with raised covers (wiring)", type: integer, default: 0, min: 0, max: 5000,
+     help: "Boxes for conduit work, in place of the plastic or metal wall boxes."}
+  - {id: wp_boxes, label: "Weatherproof boxes (wiring)", type: integer, default: 0, min: 0, max: 5000}
   - {id: avg_run_ft, label: "Average wire run per device", type: number, unit: ft, default: 25, min: 5, max: 200,
      help: "About how far the wire runs from the panel to each device. Longer runs use more wire. Not used when the cable was measured by Run wiring."}
   - {id: underground_ft, label: "Underground run", type: number, unit: ft, default: 0, min: 0, max: 5000,
@@ -202,7 +243,9 @@ lines:
      price_key: el_labor_hr, when: "lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + fans + exhaust_fans > 0"}
   - {id: circuit_labor, description: "Run dedicated circuits", kind: labor, unit: hr,
      quantity: "(appliance_circuits + circuits_15a) * 3 * work * (1.25 if voltage == 3 else 1)", price_key: el_labor_hr,
-     when: "appliance_circuits + circuits_15a > 0"}
+     when: "emt_050_ft + emt_075_ft + emt_100_ft + pvc_050_ft + pvc_075_ft + pvc_100_ft == 0 and appliance_circuits + circuits_15a > 0"}
+  # 2026-11-23 (David: "no double counting"): with measured conduit the dedicated circuits are in the conduit labor
+  # (every circuit's runs and wire pull) - not run again here
   - {id: outlets, description: "Outlets and plates", kind: material, unit: ea, quantity: "outlets",
      price_key: el_outlet_ea, when: "outlets > 0"}
   - {id: usb_outlets, description: "USB outlets and plates", kind: material, unit: ea, quantity: "usb_outlets",
@@ -269,28 +312,28 @@ lines:
   # the housing is ours to set at rough-in when the owner supplies the trims (ours: it's in "cans and trims").
   - {id: fixture_boxes, description: "Light fixture boxes, round fixture-rated with bracket", kind: material, unit: ea,
      quantity: "lights + wall_lights + pendant_lights + exterior_lights + exit_emergency_lights", price_key: el_fixture_box_ea,
-     when: "work >= 1 and lights + wall_lights + pendant_lights + exterior_lights + exit_emergency_lights > 0"}
+     when: "surface_boxes + wp_boxes == 0 and work >= 1 and lights + wall_lights + pendant_lights + exterior_lights + exit_emergency_lights > 0"}
   - {id: recessed_housings, description: "Recessed light housings, new construction (owner supplies the trims)", kind: material,
      unit: ea, quantity: "recessed_lights", price_key: el_recessed_housing_ea,
      when: "work >= 1 and recessed_lights > 0 and fixtures == 1"}
   - {id: boxes_plastic, description: "Plastic electrical boxes", kind: material, unit: ea, quantity: "outlets + usb_outlets + quad_outlets + wp_outlets + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + undercabinet_lights + smoke_detectors",
-     price_key: el_box_plastic_ea, when: "box_material == 1 and work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + undercabinet_lights + smoke_detectors > 0"}
+     price_key: el_box_plastic_ea, when: "surface_boxes + wp_boxes == 0 and box_material == 1 and work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + undercabinet_lights + smoke_detectors > 0"}
   - {id: boxes_metal, description: "Metal electrical boxes", kind: material, unit: ea, quantity: "outlets + usb_outlets + quad_outlets + wp_outlets + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + undercabinet_lights + smoke_detectors",
-     price_key: el_box_metal_ea, when: "box_material == 2 and work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + undercabinet_lights + smoke_detectors > 0"}
+     price_key: el_box_metal_ea, when: "surface_boxes + wp_boxes == 0 and box_material == 2 and work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + undercabinet_lights + smoke_detectors > 0"}
   - {id: wire, description: "Branch circuit wire (12/2)", kind: material, unit: lf,
      quantity: "(outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans) * avg_run_ft", waste: "0.15", price_key: el_wire_lf,
-     when: "(wire_14_2_ft + wire_14_3_ft + wire_12_2_ft + wire_12_3_ft + wire_10_2_ft + wire_10_3_ft + wire_8_3_ft + wire_6_3_ft) == 0 and voltage == 1 and work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans > 0"}
+     when: "(wire_14_2_ft+wire_14_3_ft+wire_12_2_ft+wire_12_3_ft+wire_10_2_ft+wire_10_3_ft+wire_8_3_ft+wire_6_3_ft+thhn_14_ft+thhn_12_ft+thhn_10_ft+thhn_8_ft+thhn_6_ft) == 0 and voltage == 1 and work >= 1 and outlets+usb_outlets+quad_outlets+wp_outlets+floor_boxes+switches+switches_3way+switches_4way+dimmers+occupancy_switches+gfci+lights+recessed_lights+wall_lights+pendant_lights+undercabinet_lights+exterior_lights+exit_emergency_lights+smoke_detectors+fans+exhaust_fans > 0"}
   - {id: wire_220, description: "Branch circuit wire, 220 V (12/3)", kind: material, unit: lf,
      quantity: "(outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans) * avg_run_ft", waste: "0.15", price_key: el_wire_220_lf,
-     when: "(wire_14_2_ft + wire_14_3_ft + wire_12_2_ft + wire_12_3_ft + wire_10_2_ft + wire_10_3_ft + wire_8_3_ft + wire_6_3_ft) == 0 and voltage == 2 and work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans > 0"}
+     when: "(wire_14_2_ft+wire_14_3_ft+wire_12_2_ft+wire_12_3_ft+wire_10_2_ft+wire_10_3_ft+wire_8_3_ft+wire_6_3_ft+thhn_14_ft+thhn_12_ft+thhn_10_ft+thhn_8_ft+thhn_6_ft) == 0 and voltage == 2 and work >= 1 and outlets+usb_outlets+quad_outlets+wp_outlets+floor_boxes+switches+switches_3way+switches_4way+dimmers+occupancy_switches+gfci+lights+recessed_lights+wall_lights+pendant_lights+undercabinet_lights+exterior_lights+exit_emergency_lights+smoke_detectors+fans+exhaust_fans > 0"}
   - {id: wire_3ph, description: "Branch circuit wire, 220 V 3-phase", kind: material, unit: lf,
      quantity: "(outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans) * avg_run_ft", waste: "0.15", price_key: el_wire_3ph_lf,
-     when: "(wire_14_2_ft + wire_14_3_ft + wire_12_2_ft + wire_12_3_ft + wire_10_2_ft + wire_10_3_ft + wire_8_3_ft + wire_6_3_ft) == 0 and voltage == 3 and work >= 1 and outlets + usb_outlets + quad_outlets + wp_outlets + floor_boxes + switches + switches_3way + switches_4way + dimmers + occupancy_switches + gfci + lights + recessed_lights + wall_lights + pendant_lights + undercabinet_lights + exterior_lights + exit_emergency_lights + smoke_detectors + fans + exhaust_fans > 0"}
+     when: "(wire_14_2_ft+wire_14_3_ft+wire_12_2_ft+wire_12_3_ft+wire_10_2_ft+wire_10_3_ft+wire_8_3_ft+wire_6_3_ft+thhn_14_ft+thhn_12_ft+thhn_10_ft+thhn_8_ft+thhn_6_ft) == 0 and voltage == 3 and work >= 1 and outlets+usb_outlets+quad_outlets+wp_outlets+floor_boxes+switches+switches_3way+switches_4way+dimmers+occupancy_switches+gfci+lights+recessed_lights+wall_lights+pendant_lights+undercabinet_lights+exterior_lights+exit_emergency_lights+smoke_detectors+fans+exhaust_fans > 0"}
   - {id: wire_15a, description: "Wire for 15 Amp dedicated circuits (12/2)", kind: material, unit: lf,
-     quantity: "circuits_15a * avg_run_ft", waste: "0.15", price_key: el_wire_lf, when: "(wire_14_2_ft + wire_14_3_ft + wire_12_2_ft + wire_12_3_ft + wire_10_2_ft + wire_10_3_ft + wire_8_3_ft + wire_6_3_ft) == 0 and circuits_15a > 0"}
+     quantity: "circuits_15a * avg_run_ft", waste: "0.15", price_key: el_wire_lf, when: "(wire_14_2_ft + wire_14_3_ft + wire_12_2_ft + wire_12_3_ft + wire_10_2_ft + wire_10_3_ft + wire_8_3_ft + wire_6_3_ft + thhn_14_ft + thhn_12_ft + thhn_10_ft + thhn_8_ft + thhn_6_ft) == 0 and circuits_15a > 0"}
   - {id: heavy_wire, description: "Heavy-gauge wire for 30 Amp circuits", kind: material, unit: lf,
      quantity: "appliance_circuits * avg_run_ft", waste: "0.15", price_key: el_heavy_wire_lf,
-     when: "(wire_14_2_ft + wire_14_3_ft + wire_12_2_ft + wire_12_3_ft + wire_10_2_ft + wire_10_3_ft + wire_8_3_ft + wire_6_3_ft) == 0 and appliance_circuits > 0"}
+     when: "(wire_14_2_ft + wire_14_3_ft + wire_12_2_ft + wire_12_3_ft + wire_10_2_ft + wire_10_3_ft + wire_8_3_ft + wire_6_3_ft + thhn_14_ft + thhn_12_ft + thhn_10_ft + thhn_8_ft + thhn_6_ft) == 0 and appliance_circuits > 0"}
   # Branch breakers follow the voltage (single-pole at 110 V, 2-pole at 220 V, 3-pole at 3-phase);
   # dedicated circuits keep their amperage breaker (15 Amp single-pole, 30 Amp 2-pole).
   # 2026-11-20 (David): the branch breakers are counted from the panel schedule when given (else one per 10 devices),
@@ -327,6 +370,60 @@ lines:
      quantity: "wire_8_3_ft", waste: "0.10", price_key: el_wire_8_3_lf, when: "wire_8_3_ft > 0"}
   - {id: cable_6_3, description: "Cable 6/3 NM-B (measured)", kind: material, unit: lf,
      quantity: "wire_6_3_ft", waste: "0.10", price_key: el_wire_6_3_lf, when: "wire_6_3_ft > 0"}
+  # 2026-11-23: surface conduit (Run wiring, method EMT or PVC) - wire, pipe, fittings, boxes and the labor to run it.
+  - {id: thhn_14, description: "THHN 14 AWG wire in conduit (measured)", kind: material, unit: lf,
+     quantity: "thhn_14_ft", waste: "0.10", price_key: el_thhn_14_lf, when: "thhn_14_ft > 0"}
+  - {id: thhn_12, description: "THHN 12 AWG wire in conduit (measured)", kind: material, unit: lf,
+     quantity: "thhn_12_ft", waste: "0.10", price_key: el_thhn_12_lf, when: "thhn_12_ft > 0"}
+  - {id: thhn_10, description: "THHN 10 AWG wire in conduit (measured)", kind: material, unit: lf,
+     quantity: "thhn_10_ft", waste: "0.10", price_key: el_thhn_10_lf, when: "thhn_10_ft > 0"}
+  - {id: thhn_8, description: "THHN 8 AWG wire in conduit (measured)", kind: material, unit: lf,
+     quantity: "thhn_8_ft", waste: "0.10", price_key: el_thhn_8_lf, when: "thhn_8_ft > 0"}
+  - {id: thhn_6, description: "THHN 6 AWG wire in conduit (measured)", kind: material, unit: lf,
+     quantity: "thhn_6_ft", waste: "0.10", price_key: el_thhn_6_lf, when: "thhn_6_ft > 0"}
+  - {id: emt_050, description: "1/2 in EMT conduit (measured)", kind: material, unit: lf,
+     quantity: "emt_050_ft", waste: "0.10", price_key: el_emt_050_lf, when: "emt_050_ft > 0"}
+  - {id: emt_075, description: "3/4 in EMT conduit (measured)", kind: material, unit: lf,
+     quantity: "emt_075_ft", waste: "0.10", price_key: el_emt_075_lf, when: "emt_075_ft > 0"}
+  - {id: emt_100, description: "1 in EMT conduit (measured)", kind: material, unit: lf,
+     quantity: "emt_100_ft", waste: "0.10", price_key: el_emt_100_lf, when: "emt_100_ft > 0"}
+  - {id: pvc_050, description: "1/2 in Schedule 40 PVC conduit (measured)", kind: material, unit: lf,
+     quantity: "pvc_050_ft", waste: "0.10", price_key: el_pvc_050_lf, when: "pvc_050_ft > 0"}
+  - {id: pvc_075, description: "3/4 in Schedule 40 PVC conduit (measured)", kind: material, unit: lf,
+     quantity: "pvc_075_ft", waste: "0.10", price_key: el_pvc_075_lf, when: "pvc_075_ft > 0"}
+  - {id: pvc_100, description: "1 in Schedule 40 PVC conduit (measured)", kind: material, unit: lf,
+     quantity: "pvc_100_ft", waste: "0.10", price_key: el_pvc_100_lf, when: "pvc_100_ft > 0"}
+  - {id: emt_elbows, description: "EMT 90-degree elbows", kind: material, unit: ea, quantity: "emt_elbows",
+     price_key: el_emt_elbow_ea, when: "emt_elbows > 0"}
+  - {id: emt_couplings, description: "EMT set-screw couplings", kind: material, unit: ea, quantity: "emt_couplings",
+     price_key: el_emt_coupling_ea, when: "emt_couplings > 0"}
+  - {id: emt_connectors, description: "EMT box connectors", kind: material, unit: ea, quantity: "emt_connectors",
+     price_key: el_emt_connector_ea, when: "emt_connectors > 0"}
+  - {id: emt_straps, description: "EMT straps (with screws for steel or wood)", kind: material, unit: ea, quantity: "emt_straps",
+     price_key: el_emt_strap_ea, when: "emt_straps > 0"}
+  - {id: emt_expansion, description: "EMT expansion fittings with bonding jumper (thermal movement)", kind: material, unit: ea,
+     quantity: "emt_expansion", price_key: el_emt_expansion_ea, when: "emt_expansion > 0"}
+  - {id: pvc_elbows, description: "PVC 90-degree elbows", kind: material, unit: ea, quantity: "pvc_elbows",
+     price_key: el_pvc_elbow_ea, when: "pvc_elbows > 0"}
+  - {id: pvc_couplings, description: "PVC couplings", kind: material, unit: ea, quantity: "pvc_couplings",
+     price_key: el_pvc_coupling_ea, when: "pvc_couplings > 0"}
+  - {id: pvc_connectors, description: "PVC male adapters and locknuts", kind: material, unit: ea, quantity: "pvc_connectors",
+     price_key: el_pvc_adapter_ea, when: "pvc_connectors > 0"}
+  - {id: pvc_straps, description: "PVC straps", kind: material, unit: ea, quantity: "pvc_straps",
+     price_key: el_pvc_strap_ea, when: "pvc_straps > 0"}
+  - {id: pvc_expansion, description: "PVC expansion couplings (thermal movement, NEC 352.44)", kind: material, unit: ea,
+     quantity: "pvc_expansion", price_key: el_pvc_expansion_ea, when: "pvc_expansion > 0"}
+  - {id: conduit_bodies, description: "Conduit bodies (LBs and pull points)", kind: material, unit: ea, quantity: "conduit_bodies",
+     price_key: el_conduit_body_ea, when: "conduit_bodies > 0"}
+  - {id: surface_boxes, description: "Surface boxes, 4 in square with raised covers", kind: material, unit: ea,
+     quantity: "surface_boxes", price_key: el_surface_box_ea, when: "surface_boxes > 0"}
+  - {id: wp_boxes, description: "Weatherproof boxes", kind: material, unit: ea, quantity: "wp_boxes",
+     price_key: el_wp_box_ea, when: "wp_boxes > 0"}
+  # hours: EMT 4.5 / 100 ft, PVC 3.5 / 100 ft (strapped on the surface, bends, cuts), pulling THHN 0.6 / 100 ft of
+  # conductor, each expansion fitting or conduit body 0.5
+  - {id: conduit_labor, description: "Run conduit on the surface and pull the wire", kind: labor, unit: hr,
+     quantity: "((emt_050_ft + emt_075_ft + emt_100_ft) * 0.045 + (pvc_050_ft + pvc_075_ft + pvc_100_ft) * 0.035 + (thhn_14_ft + thhn_12_ft + thhn_10_ft + thhn_8_ft + thhn_6_ft) * 0.006 + (emt_expansion + pvc_expansion + conduit_bodies) * 0.5) * (1.25 if voltage == 3 else 1)",
+     price_key: el_labor_hr, when: "emt_050_ft + emt_075_ft + emt_100_ft + pvc_050_ft + pvc_075_ft + pvc_100_ft > 0"}
   # 2026-11-20 (David): the range and dryer plug into 240 V receptacles - parts to order.
   - {id: range_receptacles, description: "Range receptacles (240 V, NEMA 14-50)", kind: material, unit: ea,
      quantity: "range_receptacles", price_key: el_range_receptacle_ea, when: "range_receptacles > 0"}

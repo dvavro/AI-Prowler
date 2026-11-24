@@ -443,6 +443,53 @@ def test_apply_refuses_an_unknown_price_key(db, elec, fake):
         ir.apply_item(db, CTX, elec["id"], review["id"], "gfci", elec["rev"])
 
 
+def test_an_item_not_in_the_price_book_can_be_picked_or_priced(db, elec, fake):
+    """2026-11-23 (David: "when I review the inspection and click add to the estimate, nothing happens"): the AI named
+    items that aren't in the price book (subpanel_100a, ground_rod). The review says so, with the closest real items
+    (a close one first and marked strong), and the person adds a picked item or types a unit cost."""
+    _on(db)
+    sub = {"id": "subpanel", "description": "Neutral and ground separated in subpanels", "code_ref": "250.24(A)(5)",
+           "status": "missing", "note": "", "suggested_action": {"price_key": "subpanel_100a", "quantity": 1,
+                                                                 "unit": "ea", "description": "100 Amp subpanel"}}
+    rod = {"id": "rods", "description": "Grounding electrode system", "code_ref": "250.50", "status": "missing",
+           "note": "", "suggested_action": {"price_key": "ground_rod", "quantity": 2, "unit": "ea",
+                                            "description": "8 ft ground rods to the shed subpanel"}}
+    fake.replies["claude_api"] = [_reply(GFCI_ITEM, sub, rod)]
+    review = ir.run_review(db, CTX, elec["id"], on_date=ON_DATE)["reviews"][0]
+    # the AI was given the trade's real items
+    assert "- el_subpanel_100a_ea — 100 Amp subpanel" in fake.calls[-1]["user"]
+    acts = {i["id"]: i["suggested_action"] for i in review["checklist"]}
+    assert acts["gfci"]["in_price_book"] is True and acts["gfci"]["price"]["unit"] == "ea"
+    assert acts["subpanel"]["in_price_book"] is False
+    assert acts["subpanel"]["matches"][0]["price_key"] == "el_subpanel_100a_ea" and acts["subpanel"]["matches"][0]["strong"]
+    assert not any(m["strong"] for m in acts["rods"]["matches"])           # nothing close: the person types a price
+    # adding it as is: refused with the closest items, the message says what to do
+    with pytest.raises(NotFound, match="pick an item from your price book or type a unit cost") as e:
+        ir.apply_item(db, CTX, elec["id"], review["id"], "subpanel", elec["rev"])
+    assert e.value.details["matches"][0]["price_key"] == "el_subpanel_100a_ea"
+    out = ir.apply_item(db, CTX, elec["id"], review["id"], "subpanel", elec["rev"], price_key="el_subpanel_100a_ea")
+    out = ir.apply_item(db, CTX, elec["id"], review["id"], "rods", out["rev"], unit_cost_cents=3500, quantity="3")
+    custom = next(s for s in out["sections"] if s["module_id"] == "custom")
+    got = {(ln["price_key"], ln["quantity"], ln["unit_cost_cents"]) for ln in custom["lines"]}
+    assert ("el_subpanel_100a_ea", "1", custom["lines"][0]["unit_cost_cents"]) in got
+    assert (None, "3", 3500) in got
+
+
+def test_the_prompt_lists_the_trades_price_book(db, elec):
+    est = service.get_estimate(db, CTX, elec["id"])
+    prices = ir.trade_prices(db, CTX.company_id, "electrical")
+    assert any(p["price_key"] == "el_gfci_ea" for p in prices)
+    _system, user = ir.build_prompt(est, _section(est, "electrical"),
+                                    {"zip": "32168", "city": "New Smyrna Beach", "state": "Florida",
+                                     "state_abbr": "FL", "verified": True},
+                                    code_edition("FL", "electrical", ON_DATE), "electrical", prices=prices)
+    assert "MUST be one of these" in user and "- el_gfci_ea — GFCI outlet" in user
+    # an item nothing in the book fits: price_key "" with a description is accepted
+    out = ir.parse_review_response(_reply({**GFCI_ITEM, "suggested_action": {"price_key": "", "quantity": 2,
+                                                                            "description": "8 ft ground rods"}}))
+    assert out[0]["suggested_action"]["price_key"] == "" and out[0]["suggested_action"]["description"]
+
+
 def test_apply_refuses_an_item_with_no_suggestion(db, elec, fake):
     review = _reviewed(db, elec, fake)
     with pytest.raises(InvalidInput, match="no item to add"):

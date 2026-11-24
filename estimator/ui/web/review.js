@@ -77,6 +77,7 @@ async function renderTakeoffs(main, screen) {
 async function renderReview(main, estimateId) {
   const q = new URLSearchParams(location.hash.split("?")[1] || "");
   if (RV.estimateId !== estimateId) { RV.view = {}; RV.selected = new Set(); RV.measurementId = null; }
+  RV.designFor = null;                  // 2026-11-21: ✨ AI design reads its state again each time the screen opens
   RV.estimateId = estimateId;
   RV.data = await api("GET", "/estimates/" + estimateId + "/takeoff");
   const d = RV.data;
@@ -395,6 +396,15 @@ function toolPalette(msg) {
       pick.addEventListener("change", () => { AUTO.pickedTrade = pick.value; drawAutoRunStatus(); });
       box.append(pick);
     }
+    // 2026-11-23 (David: "move the Let AI Design to the main measure window by the AI Auto Run, let's not hide it in the
+    // 'to measure' tab"): ✨ AI design on the toolbar, opening its own window (openDesignPanel).
+    const design = el("button", { class: "button", type: "button", id: "bp-ai-design",
+      title: "Describe what to add (e.g. lighting, receptacles and a subpanel for your shed) — the AI reads the building, " +
+             "places every symbol to code and draws a new plan and panel schedule for you to review and approve. " +
+             "Nothing is priced until you approve it. Uses the agent API key." }, designButtonText());
+    design.addEventListener("click", () => openDesignPanel());
+    box.append(design);
+    if (RV.designFor !== RV.estimateId) drawDesign();     // the button says when a design is working or ready
     // 2026-11-20 (David: "I don't see the run wiring"): just the wiring, beside AI Auto Run - routes the cable from the
     // floor plan and the panel drawing (plain geometry, no AI tokens), the same run as the Wiring card's button.
     if (RV.data.trades.some(t => t.module_id === "electrical")) {
@@ -405,6 +415,23 @@ function toolPalette(msg) {
         "⚡ Run wiring");
       wire.addEventListener("click", () => openWiringOptions(wire));   // 2026-11-21: how the cable runs, first
       box.append(attachHoverCard(wire, "bp-run-wiring-help", wiringHelp));
+      // 2026-11-21 (David: "I thought we can generate a schematic diagram after the wiring is ran? I don't see it"): the
+      // schematic was only in the Wiring card at the bottom of the To measure tab - now on the toolbar beside Run wiring.
+      const sch = el("button", { class: "button", type: "button", id: "bp-tool-schematic",
+        title: "Show the wiring schematic from the last wiring run: the panel, its breakers and every circuit's " +
+               "conductors (black, red, white, ground) out to its devices. Zoom in, or download it as a DXF." },
+        "📐 Wiring schematic");
+      sch.addEventListener("click", async () => {
+        // no run yet (or one from before schematics): say so instead of a failed download
+        let w = null;
+        try { w = await api("GET", "/wiring/" + RV.estimateId); } catch (e) { if (e.status === 401) return; }
+        if (!(w && w.run && w.run.schematic)) {
+          toast("No wiring schematic yet — click ⚡ Run wiring first; each run draws one.");
+          return;
+        }
+        openWiringViewer("schematic");          // shown on the screen; ⬇ Download DXF is in the viewer
+      });
+      box.append(sch);
     }
     // 2026-11-19 (David): a rerun recalculates the trade; whether the items already approved stay (not proposed
     // again - saves the review time) or everything starts over from scratch is the user's choice. Kept between visits.
@@ -2871,6 +2898,451 @@ function drawTakeoffGuide() {
   drawWiring();
 }
 
+// ------------------------------------------------------------------ ✨ AI design (2026-11-21, David)
+// "In many cases the user has a shed drawing or house drawing and wants AI to do the addition of the electrical work ...
+// design me the lighting and receptacles ... then review." The person says what to add; the AI reads the building, places
+// every symbol to code, and the server draws a new plan + panel schedule. It stays proposed - changed in plain words,
+// viewed, approved (it becomes plan sets that are measured and priced) or discarded. Electrical first.
+const DESIGN_TYPES = {
+  outlet: "outlets", outlet_gfci: "GFCI outlets", outlet_wp: "weatherproof outlets", outlet_usb: "USB outlets",
+  outlet_quad: "quad outlets", outlet_240: "240 V outlets", range_outlet: "range outlets", dryer_outlet: "dryer outlets",
+  ev_charger: "EV chargers", disconnect: "disconnects", switch: "switches", switch_3way: "3-way switches",
+  switch_4way: "4-way switches", switch_dimmer: "dimmers", light: "ceiling lights", light_led: "LED shop lights",
+  light_recessed: "recessed lights", light_pendant: "pendants", light_wall: "wall lights",
+  light_undercabinet: "under-cabinet lights", light_exterior: "exterior lights", fan: "ceiling fans",
+  exhaust_fan: "exhaust fans", smoke: "smoke alarms", smoke_co: "smoke/CO alarms", junction_box: "junction boxes",
+  data: "data drops", tv: "TV drops" };
+
+// 2026-11-23 (David: "move it to the main measure window by the AI Auto Run ... it will not let me type anything"):
+// the card lives in its own window opened from the toolbar's ✨ AI design - the To measure tab redrew itself (and the
+// card with it) whenever the screen refreshed, which threw away what was being typed. The window is only redrawn when
+// the design itself changes, and what is typed is kept in RV.designDraft across any redraw.
+function openDesignPanel() {
+  closeDesignPanel();
+  const x = el("button", { class: "button", type: "button", id: "bp-design-x", title: "Close (Esc)" }, "✕");
+  x.addEventListener("click", closeDesignPanel);
+  const panel = el("div", { class: "bp-wv bp-dp", id: "bp-design-panel", role: "dialog", "aria-label": "AI design" },
+    el("div", { class: "bp-wv-head" }, el("strong", {}, "✨ AI design"), el("span", { class: "bp-wv-btns" }, x)),
+    el("div", { class: "card section", id: "bp-design" }));
+  const back = el("div", { class: "bp-wv-back", id: "bp-design-back" }, panel);
+  back.addEventListener("click", e => { if (e.target.id === "bp-design-back") closeDesignPanel(); });
+  document.body.append(back);
+  document.addEventListener("keydown", designPanelKeys);
+  drawDesign();
+  setTimeout(() => { const t = $("bp-design-request") || $("bp-design-change"); if (t) t.focus(); }, 50);
+}
+function designPanelKeys(e) { if (e.key === "Escape" && !$("bp-wiring-viewer-back")) closeDesignPanel(); }
+window.addEventListener("hashchange", () => { closeDesignPanel(); closeWiringViewer(); });   // leaving the screen closes them
+function closeDesignPanel() {
+  const b = $("bp-design-back");
+  if (b) b.remove();
+  document.removeEventListener("keydown", designPanelKeys);
+}
+
+function designButtonText() {
+  const j = designJob();
+  if (j && j.status === "working") return /^approving/.test(j.step || "") ? "⏳ Approving the AI design…" : "⏳ AI design working…";
+  if (j && j.status === "proposed") return "✨ AI design (ready to review)";
+  if (j && j.reapply) return "✨ AI design (not in place yet)";
+  return "✨ AI design";
+}
+function designButtonState() {
+  const b = $("bp-ai-design");
+  if (b) b.textContent = designButtonText();
+}
+
+async function drawDesign() {
+  if (!RV.estimateId) return;
+  if (RV.designFor !== RV.estimateId) { RV.design = null; RV.designNew = false; RV.designDraft = {}; }
+  RV.designFor = RV.estimateId;
+  if (!RV.design) renderDesign();
+  try { RV.design = await api("GET", "/design/" + RV.estimateId); }
+  catch (e) { if (e.status === 401) return; RV.design = { error: e }; }
+  renderDesign();
+  designPoll();
+}
+
+function designJob() { return RV.design && RV.design.designs ? RV.design.designs.electrical : null; }
+
+// While the AI works (a minute or two), check every few seconds - with the window closed too: the toolbar button says
+// it's working, and a message says when it's ready.
+function designPoll() {
+  clearTimeout(RV.designTimer);
+  designButtonState();
+  const j = designJob();
+  if (!j || j.status !== "working") return;
+  const est = RV.estimateId;
+  RV.designTimer = setTimeout(async () => {
+    if (RV.estimateId !== est || !location.hash.startsWith("#/takeoffs/")) return;     // left the screen
+    try {
+      const r = await api("GET", "/design/" + est + "/electrical");
+      RV.design.designs.electrical = r.design;
+      renderDesign();
+      if (r.design && r.design.status !== "working") {
+        if (r.design.status === "proposed") toast(r.design.rev > 1 ? "The AI made the change — open ✨ AI design to have a look."
+                                                                     : "The AI design is ready — open ✨ AI design to have a look.");
+        else if (r.design.status === "failed") toast("The AI design didn't finish — open ✨ AI design to see why.");
+        else if (r.design.status === "approved") designApproved(r.design);
+      }
+    } catch (e) { if (e.status === 401) return; }
+    designPoll();
+  }, 3000);
+}
+
+// What is being typed survives a redraw (a poll, a refresh).
+function designKeep(t, key) {
+  if (!RV.designDraft) RV.designDraft = {};
+  if (RV.designDraft[key] !== undefined) t.value = RV.designDraft[key];
+  t.addEventListener("input", () => { RV.designDraft[key] = t.value; });
+  return t;
+}
+
+// 2026-11-23 (David: "add screenshots to the AI Design to give geometric guidance to the AI, for example move this
+// here"): up to 3 screenshots with a request or a change - picked (📎) or pasted (Ctrl+V in the text box). Each is shrunk
+// here so the request stays small; the server sends them to the AI with its numbered reference picture of the building.
+const DESIGN_MAX_SHOTS = 3;
+function designShots(key) {
+  if (!RV.designShotList) RV.designShotList = {};
+  if (!RV.designShotList[key]) RV.designShotList[key] = [];
+  return RV.designShotList[key];
+}
+
+function shrinkPicture(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let side = 1400, q = 0.85, out = "";
+      for (let i = 0; i < 6; i++) {
+        const k = Math.min(1, side / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+        const g = c.getContext("2d");
+        g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);
+        g.drawImage(img, 0, 0, c.width, c.height);
+        out = c.toDataURL("image/jpeg", q);
+        if (out.length <= 300000) break;            // three of them stay well under the server's 1 MB request limit
+        side = Math.round(side * 0.82); q = Math.max(0.5, q - 0.08);
+      }
+      resolve(out);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("that file isn't a picture")); };
+    img.src = url;
+  });
+}
+
+async function designAddShots(key, files) {
+  const list = designShots(key);
+  const msg = $("bp-design-msg");
+  for (const f of files) {
+    if (!f || !/^image\//.test(f.type || "")) continue;
+    if (list.length >= DESIGN_MAX_SHOTS) { toast("Up to " + DESIGN_MAX_SHOTS + " screenshots at a time."); break; }
+    try { list.push({ name: f.name || "screenshot", url: await shrinkPicture(f) }); }
+    catch (e) { if (msg) msg.replaceChildren(el("p", { class: "error" }, "That screenshot couldn't be read — " + e.message)); }
+  }
+  const box = $("bp-design-shots-" + key);
+  if (box) box.replaceWith(designShotBox(key));
+}
+
+// Paste a screenshot straight into the text box (Snipping Tool, Print Screen ...).
+function designPaste(t, key) {
+  t.addEventListener("paste", e => {
+    const files = [...((e.clipboardData && e.clipboardData.items) || [])].filter(i => i.kind === "file").map(i => i.getAsFile());
+    if (files.length) { e.preventDefault(); designAddShots(key, files); }
+  });
+  return t;
+}
+
+function designShotBox(key) {
+  const list = designShots(key);
+  const input = el("input", { type: "file", accept: "image/*", multiple: "", id: "bp-design-file-" + key, hidden: "" });
+  input.addEventListener("change", () => { designAddShots(key, [...input.files]); input.value = ""; });
+  const add = el("button", { class: "button", type: "button", id: "bp-design-attach-" + key,
+    disabled: list.length >= DESIGN_MAX_SHOTS ? "" : null,
+    title: "Add a screenshot or photo with your marks on it (an arrow, a circle, 'here') — up to " + DESIGN_MAX_SHOTS },
+    "📎 Add screenshot");
+  add.addEventListener("click", () => input.click());
+  const thumbs = list.map((s, i) => {
+    const x = el("button", { class: "link-btn", type: "button", title: "Remove", "aria-label": "Remove screenshot " + (i + 1) }, "✕");
+    x.addEventListener("click", () => { list.splice(i, 1); $("bp-design-shots-" + key).replaceWith(designShotBox(key)); });
+    return el("span", { class: "bp-shot" }, el("img", { src: s.url, alt: s.name }), x);
+  });
+  return el("div", { class: "bp-shots", id: "bp-design-shots-" + key }, input, add, ...thumbs,
+    el("span", { class: "muted small" }, list.length ? list.length + " of " + DESIGN_MAX_SHOTS
+      : "or paste one into the box (Ctrl+V) — mark it up to show what goes where"));
+}
+
+function renderDesign() {
+  const box = $("bp-design");
+  if (!box) return;
+  const head = el("h4", {}, "Describe it — the AI draws it");
+  const d = RV.design;
+  if (!d) { box.replaceChildren(head, el("p", { class: "muted small" }, "Loading…")); return; }
+  if (d.error) { box.replaceChildren(head, errorBox(d.error)); return; }
+  const parts = [head, el("p", { class: "muted small" },
+    "Tell the AI what to add to your drawings — it reads the building, places every symbol to the code rules and your specs, " +
+    "and draws a new plan and panel schedule for you to review. Nothing is priced until you approve it. " +
+    "Uses the agent API key" + (d.ai_label ? " (" + d.ai_label + ")" : "") + ".")];
+  if (!d.ai_on) parts.push(el("p", { class: "note warn small", id: "bp-design-off" }, d.why_off));
+  const j = designJob();
+  parts.push(el("div", { id: "bp-design-msg" }));
+  if (j && j.status === "working") parts.push(designWorking(j));
+  else if (j && (j.status === "proposed" || j.status === "approved") && !RV.designNew) parts.push(...designResult(j, d));
+  else {
+    if (j && j.status === "failed") parts.push(el("p", { class: "error", id: "bp-design-failed" }, "The last design didn't finish: " + j.error));
+    if (d.can_run) parts.push(designForm(d, j));
+    else parts.push(el("p", { class: "muted small" }, "An owner or estimator can start an AI design."));
+  }
+  box.replaceChildren(...parts);
+}
+
+function designForm(d, j) {
+  const trade = el("select", { id: "bp-design-trade", "aria-label": "Trade" },
+    ...d.trades.map(t => el("option", { value: t.id, disabled: t.ready ? null : "" }, t.label + (t.ready ? "" : " (coming)"))));
+  const sets = d.plan_sets || [];
+  const ps = el("select", { id: "bp-design-plans", "aria-label": "The drawings to design on" },
+    ...sets.map(p => el("option", { value: p.id }, "#" + p.id + " " + p.name + (p.file_type === "dxf" ? " (CAD)" : ""))));
+  const ex = (d.trades.find(t => t.id === "electrical") || {}).example || "";
+  const req = designPaste(designKeep(el("textarea", { id: "bp-design-request", rows: "5", maxlength: "3000",
+    placeholder: "e.g. " + ex }, (j && j.request) || ""), "request"), "start");
+  const specs = designKeep(el("textarea", { id: "bp-design-specs", rows: "3", maxlength: "3000",
+    placeholder: "e.g. receptacles at 48 in, LED 4 ft shop lights, 3-way at both walk doors, metal building — EMT conduit" },
+    (j && j.specs) || ""), "specs");
+  const go = el("button", { class: "primary", type: "button", id: "bp-design-go",
+    disabled: d.ai_on && sets.length ? null : "" }, "✨ Design it");
+  go.addEventListener("click", () => designStart(go, req, specs, ps, trade));
+  const cancel = RV.designNew ? el("button", { class: "button", type: "button", id: "bp-design-cancel" }, "Back to the design") : null;
+  if (cancel) cancel.addEventListener("click", () => { RV.designNew = false; renderDesign(); });
+  return el("div", { id: "bp-design-form" },
+    !sets.length ? el("p", { class: "note warn small" }, "Upload the building's drawings first (PDF, photo or CAD) on the project page.") : null,
+    el("div", { class: "row" }, el("label", { for: "bp-design-trade" }, "Trade "), trade,
+      el("label", { for: "bp-design-plans" }, " on "), ps),
+    el("label", { for: "bp-design-request", class: "small" }, "What do you want added?"), req, designShotBox("start"),
+    el("details", { id: "bp-design-specs-box", open: (j && j.specs) ? "" : null },
+      el("summary", { class: "small" }, "Specs and preferences (optional)"), specs),
+    el("div", { class: "row" }, go, cancel));
+}
+
+async function designStart(btn, req, specs, ps, trade) {
+  const msg = $("bp-design-msg");
+  btn.disabled = true;
+  msg.replaceChildren();
+  try {
+    const r = await api("POST", "/design/" + RV.estimateId + "/" + trade.value,
+      { request: req.value, specs: specs.value, plan_set_id: parseInt(ps.value, 10),
+        images: designShots("start").map(s => s.url) });
+    RV.design.designs.electrical = r.design;
+    RV.designNew = false;
+    RV.designDraft = {};                                      // the job keeps the request and specs now
+    RV.designShotList.start = [];
+    renderDesign();
+    designPoll();
+  } catch (e) {
+    if (e.status !== 401) msg.replaceChildren(errorBox(e));
+    btn.disabled = false;
+  }
+}
+
+function designWorking(j) {
+  const approving = /^approving/.test(j.step || "");
+  return el("div", { id: "bp-design-working", class: "note", role: "status" },
+    el("strong", {}, approving ? "✅ Approving: " : "🤖 The AI is working: "),
+    (approving ? j.step.replace(/^approving:\s*/, "") : (j.step || "starting")) + "…", el("br", {}),
+    el("span", { class: "muted small" }, approving
+      ? "Putting the design in place of the older drawings, measuring it and pricing it — no AI cost. The card updates by itself."
+      : "This takes a minute or two — you can keep working; the card updates by itself."));
+}
+
+// The approval finished: say what was done, and show the new drawings and counts on the Measure screen.
+function designApproved(j) {
+  toast((j.approval && j.approval.say) || "Approved.");
+  if (RV.estimateId) refreshData();
+}
+
+function designResult(j, d) {
+  const out = [];
+  const c = j.counts || {}, b = j.building || {}, ds = j.design || {};
+  if (j.status === "approved") {
+    const a = j.approval || {};
+    if (j.reapply) out.push(el("p", { class: "note warn", id: "bp-design-reapply" },
+      "This design was approved before the app took over the rest of the work, so the older electrical drawings are " +
+      "still on the project and it wasn't measured. Click ✅ Put it in place of the older drawings below — the app " +
+      "replaces them, counts every device, runs the wiring and updates the estimate (no AI cost)."));
+    else out.push(el("p", { class: "note ok", id: "bp-design-approved" },
+      "✅ " + (a.say || "Approved.") + " It's the project's electrical plan and panel schedule now (plan sets " +
+      (j.approved_plan_set_ids || []).map(i => "#" + i).join(" and ") + ")" +
+      (a.approved ? " — the counts and the cable are approved; see them in the measurement list." : ".")));
+  }
+  else out.push(el("p", { class: "note warn small", id: "bp-design-proposed" },
+    "Proposed — revision " + j.rev + ". Have a look, change anything in plain words, then approve it."));
+  if (j.error) out.push(el("p", { class: "error", id: "bp-design-error" }, j.error));
+  out.push(el("p", { class: "small", id: "bp-design-building" },
+    el("strong", {}, b.name || "Building"), " · " + (b.size || "") + " · " + (b.kind || "") +
+    " · read from " + (b.source === "dxf" ? "the CAD drawing" : "the sheets by the AI")));
+  if (ds.summary) out.push(el("p", { class: "small", id: "bp-design-summary" }, ds.summary));
+  const chips = Object.entries(c.devices || {}).map(([k, n]) => el("span", { class: "chip" }, n + " " + (DESIGN_TYPES[k] || words(k))));
+  out.push(el("div", { class: "chips", id: "bp-design-counts" },
+    el("span", { class: "chip strong" }, (c.total || 0) + " devices · " + (c.circuits || 0) + " circuits · " + (c.panel || "")), ...chips));
+  const p = ds.panel || {};
+  if (p.kind === "subpanel") out.push(el("p", { class: "small", id: "bp-design-feeder" },
+    "Fed from: " + (p.fed_from || "—") + (p.feeder ? " · " + p.feeder : "") +
+    (p.feeder_breaker_amps ? " · feeder breaker " + p.feeder_breaker_amps + " A (confirm by load calc)" : "")));
+  const view = (id, label, what) => {
+    const btn = el("button", { class: "button", type: "button", id }, label);
+    btn.addEventListener("click", () => openDrawingViewer({
+      title: what === "panel" ? "AI design — panel schedule" : "AI design — electrical plan",
+      url: "/design/" + RV.estimateId + "/electrical/" + what + "/svg",
+      download: b2 => designDownload(b2, what),
+      other: { label: what === "panel" ? "🗺 Plan" : "📋 Panel schedule", title: "Show the other drawing",
+               go: () => $(what === "panel" ? "bp-design-view-plan" : "bp-design-view-panel").click() } }));
+    return btn;
+  };
+  const ref = el("button", { class: "button", type: "button", id: "bp-design-view-ref",
+    title: "Every device numbered on a 5 ft grid — say \"move 12 to x 30, y 44\", or mark it up and paste it as a screenshot" },
+    "🔢 Numbered plan");
+  ref.addEventListener("click", () => openDrawingViewer({
+    title: "AI design — numbered plan (what the AI sees with your screenshots)",
+    url: "/design/" + RV.estimateId + "/electrical/reference",
+    download: b2 => designDownload(b2, "reference"),
+    downloadLabel: "⬇ Save picture", downloadTitle: "Save it as a PNG to mark up" }));
+  out.push(el("div", { class: "row", id: "bp-design-files" }, view("bp-design-view-plan", "👁 View the plan", "plan"),
+    view("bp-design-view-panel", "👁 Panel schedule", "panel"), ref));
+  out.push(designFindings(j));
+  if ((ds.circuits || []).length) out.push(el("details", { id: "bp-design-circuits" },
+    el("summary", { class: "small" }, "Circuits (" + ds.circuits.length + ")"),
+    el("table", { class: "small" }, el("tbody", {}, ...ds.circuits.map(x => el("tr", {},
+      el("td", {}, x.id), el("td", {}, x.description), el("td", {}, x.amps + " A" + (x.poles > 1 ? " 2P" : "")), el("td", {}, x.wire)))))));
+  const notes = [...(ds.assumptions || []).map(a => "Assumed: " + a), ...(ds.code_notes || [])];
+  if (notes.length) out.push(el("details", { id: "bp-design-notes" }, el("summary", { class: "small" }, "Assumptions and code notes (" + notes.length + ")"),
+    el("ul", { class: "small" }, ...notes.map(n => el("li", {}, n)))));
+  if ((ds.changes || []).length && j.rev > 1) out.push(el("div", { class: "small", id: "bp-design-changes" },
+    el("strong", {}, "What changed: "), el("ul", {}, ...ds.changes.map(x => el("li", {}, x)))));
+  if (d.can_run) out.push(designActions(j));
+  const revs = j.revisions || [];
+  if (revs.length > 1 || j.cost_usd) out.push(el("p", { class: "muted small", id: "bp-design-cost" },
+    "AI cost of this design: $" + (j.cost_usd || 0).toFixed(2) + (j.model ? " (" + j.model + ")" : "") +
+    " · " + revs.length + " revision" + (revs.length === 1 ? "" : "s")));
+  return out;
+}
+
+function designFindings(j) {
+  const f = j.findings || [];
+  const icon = { error: "⛔", warning: "⚠️", info: "ℹ️" };
+  const head = j.errors ? j.errors + " code error" + (j.errors === 1 ? "" : "s") + " to fix before approving"
+    : j.warnings ? "No code errors · " + j.warnings + " thing" + (j.warnings === 1 ? "" : "s") + " to look at" : "Code check: nothing found";
+  const main = f.filter(x => x.level !== "info"), info = f.filter(x => x.level === "info");
+  return el("div", { id: "bp-design-findings" },
+    el("p", { class: j.errors ? "error small" : "ok small" }, (j.errors ? "⛔ " : "✓ ") + head),
+    main.length ? el("ul", { class: "small" }, ...main.map(x => el("li", { class: x.level === "error" ? "error" : "" }, icon[x.level] + " " + x.message))) : null,
+    info.length ? el("details", {}, el("summary", { class: "small muted" }, info.length + " note" + (info.length === 1 ? "" : "s")),
+      el("ul", { class: "small muted" }, ...info.map(x => el("li", {}, x.message)))) : null);
+}
+
+function designActions(j) {
+  const text = designPaste(designKeep(el("textarea", { id: "bp-design-change", rows: "3", maxlength: "3000",
+    placeholder: j.errors ? "e.g. fix the errors"
+      : "e.g. add two outlets on the rear wall · move device 12 to x 30, y 44 (🔢 Numbered plan) · move this outlet here (add a marked-up screenshot)" }),
+    "change"), "change");
+  const change = el("button", { class: "button", type: "button", id: "bp-design-change-go" }, "✏️ Make the change");
+  change.addEventListener("click", () => designChange(change, text));
+  const approve = el("button", { class: "primary", type: "button", id: "bp-design-approve",
+    disabled: j.can_approve ? null : "", title: j.errors ? "Fix the code errors first (ask for it above)" : null },
+    j.reapply ? "✅ Put it in place of the older drawings" : j.status === "approved" ? "✅ Approved" : "✅ Approve design");
+  if (j.status === "approved" && !j.reapply) approve.disabled = true;
+  approve.addEventListener("click", () => designApprove(approve, false));
+  const fresh = el("button", { class: "button", type: "button", id: "bp-design-new" }, "＋ New design");
+  fresh.addEventListener("click", () => { RV.designNew = true; renderDesign(); });
+  const drop = el("button", { class: "button", type: "button", id: "bp-design-discard" }, "🗑 Discard");
+  drop.addEventListener("click", () => designDiscard(drop));
+  return el("div", { id: "bp-design-actions" },
+    el("label", { for: "bp-design-change", class: "small" }, "Change it in plain words"), text, designShotBox("change"),
+    el("div", { class: "row" }, change, approve, fresh, j.status === "proposed" ? drop : null),
+    el("div", { id: "bp-design-confirm-slot" }));
+}
+
+async function designChange(btn, text) {
+  const msg = $("bp-design-msg");
+  btn.disabled = true;
+  msg.replaceChildren();
+  try {
+    const r = await api("POST", "/design/" + RV.estimateId + "/electrical/change",
+      { text: text.value, images: designShots("change").map(s => s.url) });
+    RV.design.designs.electrical = r.design;
+    RV.designDraft.change = "";                               // sent: the box starts empty for the next change
+    RV.designShotList.change = [];
+    renderDesign();
+    designPoll();
+  } catch (e) {
+    if (e.status !== 401) msg.replaceChildren(errorBox(e));
+    btn.disabled = false;
+  }
+}
+
+async function designApprove(btn, confirmed) {
+  const slot = $("bp-design-confirm-slot"), msg = $("bp-design-msg");
+  btn.disabled = true;
+  msg.replaceChildren();
+  try {
+    const r = await api("POST", "/design/" + RV.estimateId + "/electrical/approve", confirmed ? { confirm: true } : {});
+    if (r.needs_confirmation) {
+      const yes = el("button", { class: "primary", type: "button", id: "bp-design-confirm" }, "Yes, approve it");
+      const no = el("button", { class: "button", type: "button", id: "bp-design-confirm-cancel" }, "Cancel");
+      yes.addEventListener("click", () => designApprove(yes, true));
+      no.addEventListener("click", () => { slot.replaceChildren(); btn.disabled = false; });
+      slot.replaceChildren(el("div", { class: "confirm", id: "bp-design-confirm-box" }, el("p", {}, el("strong", {}, r.question)),
+        el("div", { class: "row" }, yes, no)));
+      yes.focus();
+      return;
+    }
+    // 2026-11-23: approving replaces the older electrical drawings, measures the design and prices it - in the
+    // background; the window shows each step, then what was done
+    RV.design.designs.electrical = r;
+    renderDesign();
+    if (r.status === "approved") designApproved(r);
+    else designPoll();
+  } catch (e) {
+    if (e.status !== 401) msg.replaceChildren(errorBox(e));
+    btn.disabled = false;
+  }
+}
+
+async function designDiscard(btn) {
+  btn.disabled = true;
+  try {
+    const r = await api("POST", "/design/" + RV.estimateId + "/electrical/discard", {});
+    RV.design.designs.electrical = r.design;
+    toast("Discarded — nothing on the estimate changed.");
+    renderDesign();
+  } catch (e) {
+    if (e.status !== 401) $("bp-design-msg").replaceChildren(errorBox(e));
+    btn.disabled = false;
+  }
+}
+
+async function designDownload(btn, what) {
+  btn.disabled = true;
+  try {
+    const opts = { credentials: "same-origin", headers: {} };
+    if (APP_TOKEN) opts.headers["Authorization"] = "Bearer " + APP_TOKEN;
+    const r = await fetch(API + "/design/" + RV.estimateId + "/electrical/" + what, opts);
+    if (!r.ok) {
+      let data = null;
+      try { data = await r.json(); } catch (e) { data = null; }
+      throw new ApiError(r.status, data);
+    }
+    const name = ((r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/) || [])[1] || (what === "reference" ? "ai_design_reference.png" : "ai_design.dxf");
+    const url = URL.createObjectURL(await r.blob());
+    const a = el("a", { href: url, download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) {
+    if (e.status !== 401) toast("The download didn't work — " + (e.message || "unknown error"));
+  } finally { btn.disabled = false; }
+}
+
 // ------------------------------------------------------------------ Wiring run (2026-11-19, David)
 // The second Electrical measuring stage. The project's two CAD drawings — the electrical floor plan and the panel
 // drawing (the one with the panel schedule) — give every device, room and circuit; the run routes each circuit from the
@@ -2950,6 +3422,35 @@ const WIRE_OPTIONS = [
   // 2026-11-21 (David: "explain what these routing options are in the drop-down box and how it affects routing"):
   // each choice is [value, short label, what it does to the routing] - the "what it does" shows under the box for the
   // choice picked, so the user sees the effect before running.
+  // 2026-11-23 (David: "a metal shed ... mount the conduit on top of the steel and not drill holes through studs ...
+  // adding power after a house is built, outside the walls ... include a basic expansion coefficient"):
+  { key: "method", label: "Wiring method", tip: "How the wire is installed — it decides what's measured and priced.",
+    choices: [
+      ["nm", "NM-B cable in the walls", "Romex-type cable through the studs, joists and ceiling, stapled inside the walls — new construction or open walls. Measures cable by size."],
+      ["emt", "EMT conduit on the surface", "Steel tubing strapped to the walls, girts or ceiling with THHN wire pulled in it — metal buildings, garages, unfinished basements, adding power after a house is built. Measures the pipe, elbows, couplings, connectors, straps, surface boxes and THHN; outside runs use the outdoor material below."],
+      ["pvc", "PVC conduit on the surface", "Schedule 40 PVC strapped on the surface — wet or corrosive places and outdoors. PVC grows and shrinks about 5 times as much as steel with temperature, so long straight runs need expansion couplings (NEC 352.44)."]] },
+  { key: "outdoor_material", label: "Outside runs in", when: f => f.method === "emt",
+    tip: "From an inside run out through the wall (an LB) to a weatherproof box, or along an outside wall.",
+    choices: [
+      ["pvc", "PVC", "Schedule 40 PVC outside — doesn't rust; expands with the sun, so expansion couplings are counted where a straight leg moves 1/4 in or more."],
+      ["emt", "EMT with compression fittings", "Steel outside too, with raintight compression fittings."]] },
+  { key: "structure", label: "The conduit is strapped to", when: f => f.method !== "nm",
+    tip: "Metal conduit moves with what it's strapped to: EMT on a steel building expands nearly the same as the steel, so it rarely needs expansion fittings. PVC is counted by its own coefficient (the code table).",
+    choices: [
+      ["wood", "Wood framing", "Wood barely moves with temperature (about 2.5 millionths in/in/°F), so long EMT runs on wood can need an expansion fitting in a big temperature swing."],
+      ["steel", "A steel building", "Girts, purlins and columns — steel moves 6.5 millionths in/in/°F, the same as EMT."],
+      ["masonry", "Block or concrete", "About 5.5 millionths in/in/°F."]] },
+  { key: "temp_swing_indoor_f", label: "Temperature swing inside (°F)", step: "5", when: f => f.method !== "nm",
+    tip: "Coldest to hottest the conduit will see inside. Heated and cooled rooms 30–60; an unconditioned metal building, garage or attic 90–100." },
+  { key: "temp_swing_outdoor_f", label: "Temperature swing outside (°F)", step: "5", when: f => f.method !== "nm",
+    tip: "Coldest winter night to hottest summer day where the job is." },
+  { key: "outdoor_in_sun", label: "Outside runs are in direct sun", check: true, when: f => f.method !== "nm",
+    tip: "Sun heats the conduit well above the air — PVC makers add 30 °F." },
+  { key: "sun_add_f", label: "Added for the sun (°F)", step: "5", when: f => f.method !== "nm" && f.outdoor_in_sun },
+  { key: "expansion_threshold_in", label: "Expansion fitting where a straight leg moves (in)", step: "0.05", when: f => f.method !== "nm",
+    tip: "NEC 352.44: an expansion fitting on PVC where the movement is 1/4 in or more. Movement = coefficient × leg length × temperature swing (PVC 3.38e-5, EMT 6.5e-6 in/in/°F)." },
+  { key: "homerun_max_circuits", label: "Circuits per home-run conduit", step: "1", when: f => f.method !== "nm",
+    tip: "Home runs leave the panel together in one pipe, up to this many circuits, then split. The pipe is sized for the wires in it." },
   { key: "foundation", label: "Foundation", tip: "What the ground floor sits on — it decides where the cable from the panel travels.",
     choices: [
       ["basement", "Basement", "Cable leaves the panel, runs along the basement ceiling (under the ground floor), then comes up through the floor into the walls. Ground-floor outlets too far apart to chain are fed from below."],
@@ -3007,7 +3508,9 @@ async function openWiringOptions(btn) {
     return;
   }
   const opts = w.options || { current: {}, saved: {}, builtin: {} };
-  const f = { ...opts.current, route: { ...(opts.current.route || {}) } };
+  const f = { ...opts.current, route: { ...(opts.current.route || {}) },
+              method_by_floor: { ...(opts.current.method_by_floor || {}) } };
+  if (!f.method) f.method = "nm";
   const panel = el("div", { class: "card bp-audit bp-wire-options", id: "bp-wiring-options", role: "dialog", "aria-label": "Wiring options" });
   for (const ev of ["pointerdown", "mousedown", "wheel"]) panel.addEventListener(ev, e => e.stopPropagation());
   const close = el("button", { class: "button", type: "button", id: "bp-wiring-options-close", "aria-label": "Close" }, "✕");
@@ -3059,9 +3562,15 @@ async function openWiringOptions(btn) {
           el("option", { value: "walls" }, "Everything through the walls"));
         sel.value = f.route[String(fl.index)] || "";
         sel.addEventListener("change", () => { if (sel.value) f.route[String(fl.index)] = sel.value; else delete f.route[String(fl.index)]; });
-        return el("div", { class: "bp-wire-opt" }, el("label", { for: sel.id }, fl.name + " — this project only"), sel);
+        // 2026-11-23: a floor wired another way (a finished upstairs in NM-B, an unfinished basement in EMT)
+        const how = el("select", { id: "bp-wire-method-" + fl.index, "data-floor": String(fl.index), "aria-label": fl.name + " wiring method" },
+          el("option", { value: "" }, "Same wiring method"), el("option", { value: "nm" }, "NM-B cable in the walls"),
+          el("option", { value: "emt" }, "EMT conduit on the surface"), el("option", { value: "pvc" }, "PVC conduit on the surface"));
+        how.value = f.method_by_floor[String(fl.index)] || "";
+        how.addEventListener("change", () => { if (how.value) f.method_by_floor[String(fl.index)] = how.value; else delete f.method_by_floor[String(fl.index)]; });
+        return el("div", { class: "bp-wire-opt" }, el("label", { for: sel.id }, fl.name + " — this project only"), sel, how);
       });
-      rows.push(el("details", { class: "small", id: "bp-wire-force" }, el("summary", {}, "Force a floor one way (this project only)"), ...force));
+      rows.push(el("details", { class: "small", id: "bp-wire-force" }, el("summary", {}, "Force a floor one way, or wire it another way (this project only)"), ...force));
     }
     body.replaceChildren(...rows);
   };
@@ -3072,6 +3581,7 @@ async function openWiringOptions(btn) {
   mine.addEventListener("click", () => {
     Object.assign(f, opts.builtin, opts.saved || {});
     f.route = {};
+    f.method_by_floor = {};
     draw();
   });
   const run = el("button", { class: "primary", type: "button", id: "bp-wiring-options-run" }, "⚡ Run wiring");
@@ -3080,6 +3590,7 @@ async function openWiringOptions(btn) {
     const settings = {};
     for (const o of WIRE_OPTIONS) if (f[o.key] !== null && f[o.key] !== undefined && f[o.key] !== "") settings[o.key] = f[o.key];
     settings.route = { ...f.route };
+    settings.method_by_floor = { ...f.method_by_floor };
     try {
       if (save.checked) await api("POST", "/wiring/defaults", { settings });
     } catch (e) { if (e.status !== 401) out.replaceChildren(errorBox(e)); return; }
@@ -3149,6 +3660,31 @@ async function runWiring(btn, overrides) {
   } finally { btn.disabled = false; btn.textContent = was; }
 }
 
+// 2026-11-23 (David: surface conduit "with a basic expansion coefficient ... so the structure will last"): what the run
+// measured for the conduit, and every straight leg's thermal movement - the ones that get an expansion fitting first.
+function conduitBlock(c) {
+  const items = el("table", { id: "bp-wiring-conduit" }, el("tr", {}, el("th", {}, "Conduit and fittings"), el("th", { class: "n" }, "Qty")));
+  for (const it of c.items || []) items.append(el("tr", { title: it.how },
+    el("td", {}, it.label.replace(/ \(wiring\)$/, "")), el("td", { class: "n" }, num(it.qty) + " " + it.unit)));
+  const exp = c.expansion || [];
+  const rows = exp.map(e => el("tr", { class: e.fittings ? "bp-exp-yes" : null },
+    el("td", {}, e.run), el("td", {}, e.material.toUpperCase() + " " + e.size + " in" + (e.outdoor ? " · outside" : "")),
+    el("td", { class: "n" }, num(e.leg_ft) + " ft"), el("td", { class: "n" }, num(e.swing_f) + " °F"),
+    el("td", { class: "n" }, e.movement_in.toFixed(2) + " in"), el("td", { class: "n" }, e.fittings ? String(e.fittings) : "—")));
+  const expTable = exp.length ? el("table", { id: "bp-wiring-expansion", class: "small" },
+    el("tr", {}, el("th", {}, "Straight leg"), el("th", {}, "Conduit"), el("th", { class: "n" }, "Length"),
+      el("th", { class: "n" }, "Swing"), el("th", { class: "n" }, "Moves"), el("th", { class: "n" }, "Fittings")), ...rows) : null;
+  return el("div", { id: "bp-wiring-conduit-box" },
+    el("p", { class: "small" }, el("strong", {}, "🔩 Surface conduit: "),
+      c.runs + " runs · " + [["emt", "EMT"], ["pvc", "PVC"]].filter(([k]) => (c.total_ft || {})[k]).map(([k, n]) => num(c.total_ft[k]) + " ft " + n).join(" · ") +
+      " · " + (c.expansion_fittings ? c.expansion_fittings + " expansion fitting" + (c.expansion_fittings === 1 ? "" : "s") : "no expansion fittings needed")),
+    items,
+    el("details", { id: "bp-wiring-expansion-box", open: c.expansion_fittings ? "" : null },
+      el("summary", { class: "small" }, "Thermal expansion — movement = coefficient × leg × temperature swing"),
+      expTable || el("p", { class: "small muted" }, "No straight leg moves enough to matter."),
+      el("ul", { class: "small muted" }, ...(c.notes || []).map(n => el("li", {}, n)))));
+}
+
 function wiringResults(run, canRun) {
   const out = [];
   const devices = run.circuits.reduce((a, c) => a + c.devices, 0);
@@ -3156,11 +3692,12 @@ function wiringResults(run, canRun) {
     run.circuits.length + " circuits · " + devices + " devices" + (run.unassigned.length ? " · " + run.unassigned.length + " not on a circuit" : "")));
 
   // Cable for the Bill of Materials
-  const bom = el("table", { id: "bp-wiring-bom" }, el("tr", {}, el("th", {}, "Cable"), el("th", { class: "n" }, "Routed ft"),
-    el("th", { class: "n" }, "Order ft (+waste)"), el("th", { class: "n" }, "250 ft rolls")));
+  const bom = el("table", { id: "bp-wiring-bom" }, el("tr", {}, el("th", {}, "Cable / wire"), el("th", { class: "n" }, "Routed ft"),
+    el("th", { class: "n" }, "Order ft (+waste)"), el("th", { class: "n" }, "Rolls / spools")));
   for (const b of run.bom) bom.append(el("tr", {}, el("td", {}, b.cable), el("td", { class: "n" }, num(b.measured_ft)),
-    el("td", { class: "n" }, num(b.order_ft)), el("td", { class: "n" }, String(b.rolls))));
+    el("td", { class: "n" }, num(b.order_ft)), el("td", { class: "n" }, b.rolls + " × " + (b.roll_ft || 250) + " ft")));
   out.push(bom);
+  if (run.conduit) out.push(conduitBlock(run.conduit));
 
   // Its measurements: approve to price them; after a rerun, approved ones carry the new length as a suggestion.
   // 2026-11-21: plus the approved ones the rerun measured differently (kept, with the new value suggested).
@@ -3199,7 +3736,15 @@ function wiringResults(run, canRun) {
     title: "The panel, its breakers and every circuit's conductors (black, red, white, ground) out to its devices - a DXF" },
     "⬇ Wiring schematic (DXF)") : null;
   if (sch) sch.addEventListener("click", () => downloadWiringDxf(sch, "schematic"));
-  out.push(el("div", { class: "row" }, el("label", { for: "bp-wiring-show" }, show, " Show the routes on the plan"), dl, sch));
+  // 2026-11-21 (David: "why does the file have to be downloaded when it can be just displayed or downloaded or both?")
+  const viewDxf = el("button", { class: "button", type: "button", id: "bp-wiring-view-dxf",
+    title: "Show the wiring drawing here - zoom and move around; download it from the viewer too" }, "👁 View wiring drawing");
+  viewDxf.addEventListener("click", () => openWiringViewer("dxf"));
+  const viewSch = run.schematic ? el("button", { class: "button", type: "button", id: "bp-wiring-view-schematic",
+    title: "Show the wiring schematic here - zoom and move around; download it from the viewer too" }, "👁 View schematic") : null;
+  if (viewSch) viewSch.addEventListener("click", () => openWiringViewer("schematic"));
+  out.push(el("div", { class: "row" }, el("label", { for: "bp-wiring-show" }, show, " Show the routes on the plan")));
+  out.push(el("div", { class: "row", id: "bp-wiring-files" }, viewDxf, dl, viewSch, sch));
   if (!onSheet && run.sources && run.sources.plan) {
     out.push(el("p", { class: "muted small" }, "The routes are drawn on the floor plan's sheet (" + run.sources.plan.name + ") — open it to see them."));
   }
@@ -3329,7 +3874,7 @@ function drawWiringRoutes() {
   // ... or (2026-11-20, Show on drawing for the breakers / range / dryer receptacles) the circuits behind that mark.
   const lit = !RV.wiringPick && RV.wiringLit && RV.wiringLit.length ? new Set(RV.wiringLit) : null;
   const bySize = !RV.wiringPick && (lit ? true : RV.wiringSize && run.overlay.circuits.some(c => c.wire === RV.wiringSize));
-  const g = svg("g", { id: "bp-wiring-routes", class: RV.wiringPick || bySize ? "picked" : "" });
+  const g = svg("g", { id: "bp-wiring-routes", class: RV.wiringPick || bySize || RV.conduitFeeds ? "picked" : "" });
   const info = new Map((run.circuits || []).map(c => [c.id, c]));
   run.overlay.circuits.forEach((c, i) => {
     const col = wireColor(i);
@@ -3349,6 +3894,7 @@ function drawWiringRoutes() {
     g.append(cg);
   });
   g.append(...wiringAddedMarks(run));
+  if (RV.conduitFeeds) g.append(...conduitMarks(run));
   meas.parentNode.insertBefore(g, meas);      // over the plan, under the measurements
   drawWiringKey(run, info, bySize);
 }
@@ -3383,11 +3929,114 @@ function wiringAddedMarks(run) {
   });
 }
 
+// 2026-11-23 (David: "Cant see a visual of the conduit, so how can I review it?"): click a conduit, fitting, box or
+// THHN measurement and the conduit runs it counts are drawn on the plan - EMT grey, PVC blue, thicker for bigger pipe -
+// with the size and length on each, the expansion fittings (⇔), the conduit bodies (LB) and the elbows marked; the
+// other runs and the circuits not in them fade.
+const CONDUIT_SIZE = { "050": "1/2", "075": "3/4", "100": "1" };
+function conduitMatch(feeds) {
+  let mm;
+  if ((mm = /^thhn_(\d+)_ft$/.exec(feeds))) {
+    const g = +mm[1];
+    return { pick: r => (r.awg || []).includes(g), head: g + " AWG THHN — pulled in these conduits" };
+  }
+  if ((mm = /^(emt|pvc)_(050|075|100)_ft$/.exec(feeds))) {
+    const size = CONDUIT_SIZE[mm[2]], mat = mm[1];
+    return { pick: r => r.material === mat && r.size === size, head: size + " in " + mat.toUpperCase() };
+  }
+  if ((mm = /^(emt|pvc)_expansion$/.exec(feeds))) {
+    const mat = mm[1];
+    return { pick: r => r.material === mat && r.expansion_fittings > 0, head: mat.toUpperCase() + " expansion fittings", mark: "exp" };
+  }
+  if ((mm = /^(emt|pvc)_(elbows|couplings|connectors|straps)$/.exec(feeds))) {
+    const mat = mm[1];
+    return { pick: r => r.material === mat, head: mat.toUpperCase() + " " + mm[2], mark: mm[2] === "elbows" ? "bend" : null };
+  }
+  if (feeds === "conduit_bodies") return { pick: r => r.pull_points > 0, head: "Conduit bodies (LB) and pull points", mark: "lb" };
+  if (feeds === "wp_boxes") return { pick: r => !!r.outdoor, head: "Weatherproof boxes — the runs outside" };
+  if (feeds === "surface_boxes") return { pick: r => !r.outdoor, head: "Surface boxes — the runs inside" };
+  return null;
+}
+function isConduitFeed(feeds) { return !!conduitMatch(feeds || ""); }
+
+function conduitMarks(run) {
+  const runs = (run.overlay && run.overlay.conduit) || [];
+  const match = conduitMatch(RV.conduitFeeds || "");
+  if (!runs.length || !match) return [];
+  const pts = runs.flatMap(r => r.line);
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const u = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) / 120 || 1;   // a marker size
+  const lit = runs.filter(match.pick);
+  const out = [svg("g", { id: "bp-conduit", "data-feeds": RV.conduitFeeds })];
+  const grp = out[0];
+  const W = { "1/2": 3, "3/4": 5, "1": 7 };
+  runs.forEach((r, i) => {
+    const on = match.pick(r);
+    const cg = svg("g", { class: "bp-conduit-run" + (on ? " on" : "") + " " + r.material, "data-run": String(i) });
+    const t = svg("title", {});
+    t.textContent = r.what + "\n" + r.size + " in " + r.material.toUpperCase() + (r.outdoor ? " (outside)" : "") + " · "
+      + num(r.length_ft) + " ft · " + r.bends + " bend(s)" + (r.expansion_fittings ? " · " + r.expansion_fittings + " expansion fitting(s)" : "")
+      + (r.pull_points ? " · " + r.pull_points + " conduit body / pull point" : "") + (r.circuits && r.circuits.length ? "\nCircuits: " + r.circuits.join(", ") : "");
+    cg.append(t);
+    const line = r.line.length === 2 && r.line[0][0] === r.line[1][0] && r.line[0][1] === r.line[1][1]
+      ? [r.line[0], [r.line[0][0] + u * 2, r.line[0][1]]] : r.line;           // the short stub out through a wall
+    const p = line.map(q => q.join(",")).join(" ");
+    cg.append(svg("polyline", { points: p, class: "bp-conduit-line", "stroke-width": (W[r.size] || 3) + (on ? 2 : 0) + "px" }));
+    if (on) {
+      // the label at the middle of its longest piece
+      let best = [line[0], line[line.length - 1]], len = -1;
+      for (let k = 1; k < line.length; k++) {
+        const d = Math.hypot(line[k][0] - line[k - 1][0], line[k][1] - line[k - 1][1]);
+        if (d > len) { len = d; best = [line[k - 1], line[k]]; }
+      }
+      const mx = (best[0][0] + best[1][0]) / 2, my = (best[0][1] + best[1][1]) / 2;
+      if (lit.length <= 60) {
+        const label = svg("text", { x: mx + u * 0.6, y: my - u * 0.6, "font-size": u * 1.6, class: "bp-conduit-label" });
+        label.textContent = r.size + "\" " + r.material.toUpperCase() + " " + num(r.length_ft) + "'";
+        cg.append(label);
+      }
+      if (match.mark === "exp" && r.expansion_fittings) {
+        cg.append(svg("rect", { x: mx - u * 1.6, y: my - u, width: u * 3.2, height: u * 2, class: "bp-conduit-fit" }));
+        const tx = svg("text", { x: mx, y: my + u * 0.55, "font-size": u * 1.5, class: "bp-conduit-fit-text" });
+        tx.textContent = "⇔" + (r.expansion_fittings > 1 ? "×" + r.expansion_fittings : "");
+        cg.append(tx);
+      }
+      if (match.mark === "lb" && r.pull_points) {
+        const [ex, ey] = r.line[r.line.length - 1];
+        cg.append(svg("circle", { cx: ex, cy: ey, r: u * 1.3, class: "bp-conduit-fit" }));
+        const tx = svg("text", { x: ex, y: ey + u * 0.5, "font-size": u * 1.2, class: "bp-conduit-fit-text" });
+        tx.textContent = "LB";
+        cg.append(tx);
+      }
+      if (match.mark === "bend") {
+        for (let k = 1; k < line.length - 1; k++) {
+          const a = line[k - 1], b = line[k], c = line[k + 1];
+          if ((a[0] === b[0] && a[1] === b[1]) || (b[0] === c[0] && b[1] === c[1])) continue;
+          cg.append(svg("circle", { cx: b[0], cy: b[1], r: u * 0.7, class: "bp-conduit-bend" }));
+        }
+      }
+    }
+    grp.append(cg);
+  });
+  return out;
+}
+
+// A circuit's wire as it's installed: "12/2" for NM cable; in conduit (2026-11-23) "12 AWG THHN ×3 in EMT" - its hots
+// and neutral plus the green ground, pulled in the pipe.
+function wireLabel(c, f) {
+  const run = RV.wiring && RV.wiring.run;
+  const how = run && run.conduit && run.conduit.methods && f && f.floor != null ? run.conduit.methods[String(f.floor)] : null;
+  if (!how || how === "nm" || !/^\d+\/\d$/.test(c.wire || "")) return c.wire;
+  const [gauge, n] = c.wire.split("/");
+  return gauge + " AWG THHN ×" + (Number(n) + 1) + " in " + how.toUpperCase();
+}
+
 // "C-1 · Living / Dining receptacles · 20 A breaker (120 V) · 12/2 cable · 13 devices · 322.9 ft"
 function circuitText(c, full) {
   const f = full || {};
   const amps = f.amps ? f.amps + " A" + (f.poles === 2 ? " 2-pole breaker (240 V)" : " breaker") : "";
-  return [c.id, f.description, amps, c.wire + " cable" + (f.travelers_ft ? " (+ 3-way travelers)" : ""),
+  const w = wireLabel(c, f);
+  return [c.id, f.description, amps, (w === c.wire ? c.wire + " cable" : w) + (f.travelers_ft ? " (+ 3-way travelers)" : ""),
           f.devices != null ? f.devices + " device" + (f.devices === 1 ? "" : "s") : "",
           f.total_ft != null ? num(f.total_ft) + " ft" : ""].filter(Boolean).join(" · ") +
          (f.flags && f.flags.length ? "\n⚠ " + f.flags.join("; ") : "");
@@ -3407,7 +4056,11 @@ function drawWiringKey(run, info, bySize) {
   close.addEventListener("click", () => { RV.showWiring = false; wiringClearFocus(); renderWiring(); drawWiringRoutes(); });
   const lit = !RV.wiringPick && RV.wiringLit && RV.wiringLit.length ? new Set(RV.wiringLit) : null;
   const MARK_HEAD = { branch_circuits: "Branch breakers", range_receptacles: "Range receptacle", dryer_receptacles: "Dryer receptacle" };
-  const head = lit ? "⚡ " + (MARK_HEAD[RV.wiringMark] || (RV.wiringSize ? RV.wiringSize + " cable" : "Circuits")) + " — " + lit.size + " circuit" + (lit.size === 1 ? "" : "s")
+  const cm = RV.conduitFeeds ? conduitMatch(RV.conduitFeeds) : null;
+  const cruns = cm ? (run.overlay.conduit || []).filter(cm.pick) : [];
+  const head = cm ? "🔩 " + cm.head + " — " + cruns.length + " run" + (cruns.length === 1 ? "" : "s") + " · "
+      + num(cruns.reduce((a, r) => a + (r.length_ft || 0), 0)) + " ft"
+    : lit ? "⚡ " + (MARK_HEAD[RV.wiringMark] || (RV.wiringSize ? RV.wiringSize + " cable" : "Circuits")) + " — " + lit.size + " circuit" + (lit.size === 1 ? "" : "s")
     : bySize ? "⚡ " + RV.wiringSize + " circuits" : RV.wiringPick ? "⚡ Circuit " + RV.wiringPick : "⚡ Wiring — " + run.overlay.circuits.length + " circuits";
   key.append(el("div", { class: "bp-wiring-key-head" }, el("strong", {}, head), close));
   run.overlay.circuits.forEach((c, i) => {
@@ -3416,7 +4069,7 @@ function drawWiringKey(run, info, bySize) {
     const row = el("div", { class: "bp-wiring-key-row" + (on ? "" : " off") + (RV.wiringPick === c.id ? " picked" : ""),
       role: "listitem", tabindex: "0", "data-circuit": c.id, title: circuitText(c, f) },
       el("span", { class: "bp-wire-swatch", "data-color": String(i) }),
-      el("span", {}, el("strong", {}, c.id), " " + (f.amps ? f.amps + "A " : "") + c.wire + (f.description ? " · " + f.description : "")
+      el("span", {}, el("strong", {}, c.id), " " + (f.amps ? f.amps + "A " : "") + wireLabel(c, f) + (f.description ? " · " + f.description : "")
         + (f.flags && f.flags.length ? " ⚠" : "")));
     row.querySelector(".bp-wire-swatch").style.background = wireColor(i);
     const pick = () => pickCircuit(c.id);
@@ -3433,11 +4086,11 @@ function drawWiringKey(run, info, bySize) {
 }
 
 // Nothing picked: every circuit and mark at full strength.
-function wiringClearFocus() { RV.wiringPick = null; RV.wiringSize = null; RV.wiringLit = null; RV.wiringMark = null; }
+function wiringClearFocus() { RV.wiringPick = null; RV.wiringSize = null; RV.wiringLit = null; RV.wiringMark = null; RV.conduitFeeds = null; }
 
 function pickCircuit(id) {
   RV.wiringPick = RV.wiringPick === id ? null : id;
-  RV.wiringSize = null; RV.wiringLit = null; RV.wiringMark = null; RV.showWiring = true;
+  RV.wiringSize = null; RV.wiringLit = null; RV.wiringMark = null; RV.conduitFeeds = null; RV.showWiring = true;
   renderWiring(); drawWiringRoutes();
 }
 
@@ -3463,8 +4116,106 @@ async function downloadWiringDxf(btn, what) {
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   } catch (e) {
     const m = $("bp-wiring-msg");
-    if (m) m.replaceChildren(errorBox(e));
+    // 2026-11-21: the toolbar's 📐 Wiring schematic has no Wiring card in view - say it in a toast.
+    if (m && btn.closest("#bp-wiring")) m.replaceChildren(errorBox(e));
+    else if (e.status !== 401) toast(e.status === 404 ? "No wiring schematic yet — click ⚡ Run wiring first; each run draws one."
+                                                      : "The download didn't work — " + (e.message || "unknown error"));
   } finally { btn.disabled = false; }
+}
+
+// 2026-11-21 (David: "why does the file have to be downloaded when it can be just displayed or downloaded or both?"):
+// the wiring drawing and the wiring schematic shown on the screen - the server draws the DXF as an SVG picture - with
+// zoom (wheel, + / -), pan (drag), Fit, and the DXF download still one click away. what: "dxf" or "schematic".
+const WIRING_VIEW = { dxf: "Wiring drawing — every circuit's route on the floor plan",
+                      schematic: "Wiring schematic — the panel, its breakers and every circuit's conductors" };
+async function openWiringViewer(what) {
+  const other = what === "schematic" ? "dxf" : "schematic";
+  return openDrawingViewer({
+    title: WIRING_VIEW[what], url: "/wiring/" + RV.estimateId + "/" + what + "/svg",
+    download: b => downloadWiringDxf(b, what),
+    other: { label: other === "schematic" ? "📐 Schematic" : "🗺 Wiring drawing", title: "Show the other wiring drawing",
+             go: () => openWiringViewer(other) } });
+}
+
+// 2026-11-21: the same viewer for any drawing the server shows as SVG (the wiring drawings, an AI design's plan and
+// panel schedule). o: {title, url (API path of the SVG), download(button), other: {label, title, go}}.
+async function openDrawingViewer(o) {
+  closeWiringViewer();
+  const v = { scale: 1, x: 0, y: 0, url: null };
+  const img = el("img", { id: "bp-wiring-viewer-img", alt: o.title, draggable: "false" });
+  const stage = el("div", { class: "bp-wv-stage", id: "bp-wiring-viewer-stage" },
+    el("p", { class: "muted", id: "bp-wiring-viewer-loading" }, "Drawing it…"));
+  const place = () => { img.style.transform = "translate(" + v.x + "px," + v.y + "px) scale(" + v.scale + ")"; };
+  const fit = () => {
+    if (!img.naturalWidth) return;
+    const r = stage.getBoundingClientRect();
+    v.scale = Math.min(r.width / img.naturalWidth, r.height / img.naturalHeight) * 0.96;
+    v.x = (r.width - img.naturalWidth * v.scale) / 2;
+    v.y = (r.height - img.naturalHeight * v.scale) / 2;
+    place();
+  };
+  const zoomAt = (k, cx, cy) => {               // zoom by k about a point in the stage
+    const s = Math.min(40, Math.max(0.05, v.scale * k));
+    v.x = cx - (cx - v.x) * (s / v.scale); v.y = cy - (cy - v.y) * (s / v.scale); v.scale = s; place();
+  };
+  const mid = k => { const r = stage.getBoundingClientRect(); zoomAt(k, r.width / 2, r.height / 2); };
+  const btn = (id, label, title, fn) => {
+    const b = el("button", { class: "button", type: "button", id, title }, label);
+    b.addEventListener("click", fn);
+    return b;
+  };
+  const dl = btn("bp-wiring-viewer-download", o.downloadLabel || "⬇ Download DXF",
+    o.downloadTitle || "Save the drawing as a DXF for any CAD program", () => o.download(dl));
+  const box = el("div", { class: "bp-wv", id: "bp-wiring-viewer", role: "dialog", "aria-label": o.title },
+    el("div", { class: "bp-wv-head" },
+      el("strong", { id: "bp-wiring-viewer-title" }, o.title),
+      el("span", { class: "bp-wv-btns" },
+        btn("bp-wiring-viewer-in", "+", "Zoom in", () => mid(1.25)),
+        btn("bp-wiring-viewer-out", "−", "Zoom out", () => mid(0.8)),
+        btn("bp-wiring-viewer-fit", "Fit", "The whole drawing", fit),
+        o.other ? btn("bp-wiring-viewer-other", o.other.label, o.other.title, o.other.go) : null,
+        dl,
+        btn("bp-wiring-viewer-x", "✕", "Close (Esc)", closeWiringViewer))),
+    el("p", { class: "muted small bp-wv-hint" }, "Scroll to zoom, drag to move around."),
+    stage);
+  document.body.append(el("div", { class: "bp-wv-back", id: "bp-wiring-viewer-back" }, box));
+  $("bp-wiring-viewer-back").addEventListener("click", e => { if (e.target.id === "bp-wiring-viewer-back") closeWiringViewer(); });
+  document.addEventListener("keydown", wiringViewerKeys);
+  stage.addEventListener("wheel", e => {
+    e.preventDefault();
+    const r = stage.getBoundingClientRect();
+    zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  let drag = null;
+  stage.addEventListener("pointerdown", e => { drag = { x: e.clientX - v.x, y: e.clientY - v.y }; stage.setPointerCapture(e.pointerId); stage.classList.add("dragging"); });
+  stage.addEventListener("pointermove", e => { if (drag) { v.x = e.clientX - drag.x; v.y = e.clientY - drag.y; place(); } });
+  const end = () => { drag = null; stage.classList.remove("dragging"); };
+  stage.addEventListener("pointerup", end);
+  stage.addEventListener("pointercancel", end);
+  try {
+    const opts = { credentials: "same-origin", headers: {} };
+    if (APP_TOKEN) opts.headers["Authorization"] = "Bearer " + APP_TOKEN;
+    const r = await fetch(API + o.url, opts);
+    if (!r.ok) {
+      let data = null;
+      try { data = await r.json(); } catch (e) { data = null; }
+      throw new ApiError(r.status, data);
+    }
+    v.url = URL.createObjectURL(await r.blob());
+    WV_URL = v.url;
+    img.addEventListener("load", () => { stage.replaceChildren(img); fit(); box.dataset.ready = "1"; }, { once: true });
+    img.src = v.url;
+  } catch (e) {
+    if (e.status !== 401 && $("bp-wiring-viewer-stage")) stage.replaceChildren(errorBox(e));
+  }
+}
+let WV_URL = null;
+function wiringViewerKeys(e) { if (e.key === "Escape") closeWiringViewer(); }
+function closeWiringViewer() {
+  const b = $("bp-wiring-viewer-back");
+  if (b) b.remove();
+  document.removeEventListener("keydown", wiringViewerKeys);
+  if (WV_URL) { URL.revokeObjectURL(WV_URL); WV_URL = null; }
 }
 
 function totalsText(ms) {
@@ -3535,7 +4286,9 @@ async function openReview(m, msg) {
   // wire routing"): a wiring run's cable has no symbols - its circuits light up on the floor plan with the colour key,
   // the other circuits faded; a breaker / range / dryer count lights up the run's mark and the circuits behind it.
   const wireSize = m.proposed_by === WIRING_AGENT && /^wire_(\d+)_(\d+)_ft$/.exec(m.feeds || "");
-  const wireMark = m.proposed_by === WIRING_AGENT && WIRING_MARK_FEEDS.includes(m.feeds);
+  // 2026-11-23 (David: "Cant see a visual of the conduit, so how can I review it?"): conduit, fittings, boxes and THHN
+  // light up the conduit runs they count.
+  const wireMark = m.proposed_by === WIRING_AGENT && (WIRING_MARK_FEEDS.includes(m.feeds) || isConduitFeed(m.feeds));
   if (wireSize || wireMark) {
     RV.review = { mid: m.id, objs: new Map(), count: parseFloat(m.qty || 0) || 0, aiQty: parseFloat(m.qty || 0) || 0 };
     const lit = wireSize ? await auditShowWiring(wireSize[1] + "/" + wireSize[2], msg)
@@ -3654,6 +4407,15 @@ function reviewCard(m, msg) {
   // 2026-11-20 (David): the user can always change their mind - approve a rejected one again, change or reject an
   // approved one. Only agents are kept off approved and rejected measurements (the server checks that).
   const olds = m.status === "approved" ? [] : oldApproved(m);
+  // 2026-11-23 (David: "What is the 6, 10, 12 AWG THHN wiring when we already have a cable lengths?"): the wiring
+  // method changed (NM cable to conduit, or back) - this wire replaces the approved cable named in its calc.
+  const handed = m.status === "approved" || !m.calc || !Array.isArray(m.calc.replaces) ? []
+    : RV.data.takeoff.measurements.filter(x => m.calc.replaces.includes(x.id) && x.status === "approved");
+  if (handed.length) {
+    lines.push(el("div", { class: "small warn", id: "bp-review-handover" }, el("strong", {}, "Replaces "),
+      handed.map(o => (o.label || o.feeds).replace(/ \(wiring\)$/, "") + " (" + num(o.qty) + " " + o.unit + ")").join(", ") +
+      " — the wiring method changed. Approving this takes that off the estimate, so the wire isn't priced twice."));
+  }
   if (olds.length) {
     lines.push(el("div", { class: "small warn", id: "bp-review-replaces" }, el("strong", {}, "Replaces "),
       olds.map(o => num(o.qty) + " " + o.unit).join(", ") + " approved before the plans were read again — approving this one takes that one off the estimate, so it isn't priced twice."));
@@ -4081,7 +4843,7 @@ async function auditShow(f) {
   // 2026-11-20 (David: "3 of these items don't have symbols"): the breakers and the range/dryer receptacles have no
   // symbol on the designer's drawing - show the wiring run's marks for them, and the circuits behind them.
   // When a revised drawing has the real symbol, the wiring run marks nothing: light up the symbol instead.
-  if (WIRING_MARK_FEEDS.includes(f.feeds) && await auditShowWiring(null, msg, f.feeds)) return;
+  if ((WIRING_MARK_FEEDS.includes(f.feeds) || isConduitFeed(f.feeds)) && await auditShowWiring(null, msg, f.feeds)) return;
   await auditGoToSheet(f.sheet_id, msg);
   const objs = countSymbols(f.module_id, f.feeds);
   if (objs.length) { highlightSymbols(objs, symbolKey(objs[0])); auditKeepDrawingVisible(); }
@@ -4104,8 +4866,29 @@ async function auditShowWiring(size, msg, mark) {
     return;
   }
   await auditGoToSheet(sheet, msg);
-  RV.showWiring = true; RV.wiringPick = null; RV.wiringSize = size; RV.wiringLit = null; RV.wiringMark = null;
+  RV.showWiring = true; RV.wiringPick = null; RV.wiringSize = size; RV.wiringLit = null; RV.wiringMark = null; RV.conduitFeeds = null;
   const name = (RV.sheet && (RV.sheet.title || RV.sheet.name)) || "the floor plan";
+  if (mark && isConduitFeed(mark)) {
+    // 2026-11-23 (David: "Cant see a visual of the conduit"): the conduit runs this item counts
+    if (!(run.overlay.conduit || []).length) {
+      renderWiring(); drawWiringRoutes();
+      toast("This wiring run was made before the conduit could be drawn — click ⚡ Run wiring again to see the conduit runs.");
+      return true;
+    }
+    const cm = conduitMatch(mark);
+    const lit = run.overlay.conduit.filter(cm.pick);
+    RV.conduitFeeds = mark;
+    RV.wiringLit = [...new Set(lit.flatMap(r => r.circuits || []))];
+    renderWiring(); drawWiringRoutes();
+    const pts = (lit.length ? lit : run.overlay.conduit).flatMap(r => r.line);
+    if (pts.length && RV.viewer) {
+      const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+      RV.viewer.zoomToBox([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+    }
+    auditKeepDrawingVisible();
+    toast("On " + name + ": " + cm.head + " — " + lit.length + " conduit run(s) lit up. Hover a run for its size, length, bends and circuits.");
+    return true;
+  }
   if (mark) {
     const marks = (run.overlay.added || []).filter(a => a.feeds === mark);
     if (!marks.length) return false;           // the drawing has its own symbol for it (or no run marked it)

@@ -135,8 +135,80 @@ def _edition_text(edition: dict, module_id: str) -> str:
     return edition["code"]
 
 
+# ------------------------------------------------------------------ the trade's price book
+# 2026-11-23 (David: "when I review the inspection and click add to the estimate, nothing happens"): the AI named
+# price-book items that don't exist (subpanel_100a, ground_rod ...), so adding refused - and the refusal showed at the
+# top of the page. Now the AI is given the trade's real items, a suggestion that still names a missing one is matched
+# to the closest real items, and the person can pick one of those or type a unit cost.
+
+_STOP = {"el", "ea", "lf", "sf", "sqft", "hr", "sample", "and", "the", "a", "an", "of", "with", "per", "for", "to",
+         "in", "on", "at", "installed", "new", "not", "used", "yet", "set", "price", "if", "you"}
+
+
+def _words(*texts) -> set[str]:
+    out = set()
+    for t in texts:
+        for w in re.split(r"[^a-z0-9]+", str(t or "").lower()):
+            if w and w not in _STOP:
+                out.add(w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w)
+    return out
+
+
+def trade_prices(conn, company_id: str, module_id: str) -> list[dict]:
+    """The trade's price-book items (the company's own, or the trade's samples)."""
+    from estimator.pricing.price_book import list_prices
+    try:
+        return list_prices(conn, company_id, module_id)["prices"]
+    except Exception:  # noqa: BLE001 - an unknown trade: no list, the AI just can't name items
+        return []
+
+
+def price_matches(action: dict, prices: list[dict], n: int = 6) -> list[dict]:
+    """The price-book items closest to a suggestion (its key and description), best first."""
+    key_words = _words(str(action.get("price_key") or "").replace("_", " "))
+    want = key_words | _words(action.get("description"))
+    scored = []
+    for p in prices:
+        have = _words(p["price_key"].replace("_", " "), p["description"])
+        hit = len(want & have)
+        if not hit:
+            continue
+        score = hit / len(want) + 0.5 * len(key_words & have) / max(len(key_words), 1) \
+            - 0.05 * len(have - want) + (0.1 if p["unit"] == (action.get("unit") or "") else 0)
+        # strong: it shares at least half the words of the item the AI named (subpanel_100a -> the 100 A subpanel), not
+        # just a word of its description (a ground rod "to the shed subpanel" is not a subpanel) - only a strong one is
+        # chosen for the person
+        strong = (len(key_words & have) / len(key_words) >= 0.5) if key_words else hit / len(want) >= 0.6
+        scored.append((score + (1 if strong else 0), strong, p))
+    scored.sort(key=lambda sp: -sp[0])
+    return [{**{k: p[k] for k in ("price_key", "description", "unit", "cost_cents", "kind", "sample")},
+             "strong": strong} for _, strong, p in scored[:n]]
+
+
+def _priced(conn, company_id: str, review: dict) -> dict:
+    """Each suggestion says whether its item is in the price book; one that isn't carries the closest items."""
+    prices = trade_prices(conn, company_id, review["module_id"])
+    by_key = {p["price_key"]: p for p in prices}
+    for item in review["checklist"]:
+        a = item.get("suggested_action")
+        if not a:
+            continue
+        p = by_key.get(a.get("price_key") or "")
+        if p is None and a.get("price_key"):
+            g = get_price(conn, company_id, a["price_key"])
+            if g is not None:
+                p = {"price_key": g.price_key, "description": g.description, "unit": g.unit,
+                     "cost_cents": g.cost_cents, "kind": g.kind, "sample": g.is_sample}
+        a["in_price_book"] = p is not None
+        if p is not None:
+            a["price"] = {k: p[k] for k in ("description", "unit", "cost_cents", "sample")}
+        else:
+            a["matches"] = price_matches(a, prices)
+    return review
+
+
 def build_prompt(est: dict, section: dict, jurisdiction: dict, edition: dict,
-                 module_id: str) -> tuple[str, str]:
+                 module_id: str, prices: list[dict] | None = None) -> tuple[str, str]:
     """(system, user) for one trade's review: that trade's answers and lines, the jurisdiction
     and code edition, and the reference requirements the AI checks against."""
     name = _trade_name(module_id)
@@ -162,10 +234,15 @@ def build_prompt(est: dict, section: dict, jurisdiction: dict, edition: dict,
         f"\n\nReference — residential {lower} requirements to check the estimate against "
         "(do not add other code sections):\n" + refs +
         "\n\n" + AHJ_NOTE +
+        ("\n\nThe company's price book for this trade (price_key — description, unit). A suggested_action's "
+         "price_key MUST be one of these, copied exactly; if none of them fits, use \"\" for price_key and say "
+         "in its description exactly what to add:\n"
+         + "\n".join(f"- {p['price_key']} — {p['description']}, per {p['unit']}" for p in prices[:150])
+         if prices else "") +
         "\n\nReply with ONLY one JSON object: {\"checklist\": [{\"id\", \"description\", \"code_ref\", "
         "\"status\": \"pass|flag|missing\", \"note\", \"suggested_action\"}]}. "
         "A suggested_action is {\"price_key\", \"quantity\", \"unit\", \"description\"}; include one only "
-        "when a standard price-book item fixes a missing or flagged item.")
+        "when adding an item fixes a missing or flagged item.")
     return _system_prompt(module_id), user
 
 
@@ -202,8 +279,9 @@ def parse_review_response(text: str) -> list[dict]:
                  "note": str(item.get("note") or "").strip()[:500]}
         action = item.get("suggested_action")
         if action is not None:
+            # a price_key from the price book, or "" with a description when nothing in it fits (2026-11-23)
             if not isinstance(action, dict) or not isinstance(action.get("price_key"), str) \
-                    or not action["price_key"].strip():
+                    or not (action["price_key"].strip() or str(action.get("description") or "").strip()):
                 raise InspectionReviewError(f"{where} has a suggested action without a price_key")
             qty = action.get("quantity", 1)
             if isinstance(qty, bool) or not isinstance(qty, (int, float)) or qty <= 0:
@@ -281,7 +359,7 @@ def latest_review(conn, company_id: str, estimate_id: int, module_id: str | None
         row = conn.execute("SELECT * FROM inspection_reviews WHERE company_id = ? AND estimate_id = ?"
                            " AND module_id = ? ORDER BY id DESC LIMIT 1",
                            (company_id, estimate_id, module_id)).fetchone()
-    return _shape(row) if row else None
+    return _priced(conn, company_id, _shape(row)) if row else None
 
 
 def latest_reviews(conn, company_id: str, estimate_id: int) -> dict[str, dict]:
@@ -290,7 +368,8 @@ def latest_reviews(conn, company_id: str, estimate_id: int) -> dict[str, dict]:
                         " ORDER BY id DESC", (company_id, estimate_id)).fetchall()
     out = {}
     for row in rows:
-        out.setdefault(row["module_id"], _shape(row))
+        if row["module_id"] not in out:
+            out[row["module_id"]] = _priced(conn, company_id, _shape(row))
     return out
 
 
@@ -367,7 +446,8 @@ def run_review(conn, ctx: RequestContext, estimate_id: int, zip_code: str | None
     done = []
     for mid, section in targets:
         edition = code_edition(jurisdiction["state_abbr"], mid, on_date)
-        system, user = build_prompt(est, section, jurisdiction, edition, mid)
+        system, user = build_prompt(est, section, jurisdiction, edition, mid,
+                                    prices=trade_prices(conn, ctx.company_id, mid))
         text, _provider, _model, log_id = _call(conn, ctx, cfg, est, system, user,
                                                 purpose=f"Inspection review ({_trade_name(mid)})")
         try:
@@ -390,17 +470,21 @@ def run_review(conn, ctx: RequestContext, estimate_id: int, zip_code: str | None
                                 edition["edition"], json.dumps(checklist), "complete", ctx.actor, _now()))
             ids.append(int(cur.lastrowid))
     rows = [conn.execute("SELECT * FROM inspection_reviews WHERE id = ?", (rid,)).fetchone() for rid in ids]
-    return {"reviews": [_shape(row) for row in rows]}
+    return {"reviews": [_priced(conn, ctx.company_id, _shape(row)) for row in rows]}
 
 
 # ------------------------------------------------------------------ applying a suggested item
 
-def apply_item(conn, ctx: RequestContext, estimate_id: int, review_id: int, item_id: str, rev: int) -> dict:
+def apply_item(conn, ctx: RequestContext, estimate_id: int, review_id: int, item_id: str, rev: int,
+               price_key: str | None = None, quantity=None, unit_cost_cents: int | None = None) -> dict:
     """Add one checklist item's suggested price-book item as a hand-entered line.
 
     The line goes in the default 'custom' section ("Other lines"), so a later
     re-price of the trade never deletes it. The estimate must still be editable
     (add_line_item checks that, the role and the revision).
+
+    2026-11-23: when the suggestion names an item that isn't in the price book, the person picks one (price_key) or
+    types a unit cost (unit_cost_cents, a line of its own); quantity overrides the suggested one.
     """
     row = conn.execute("SELECT * FROM inspection_reviews WHERE id = ? AND company_id = ? AND estimate_id = ?",
                        (review_id, ctx.company_id, estimate_id)).fetchone()
@@ -414,10 +498,25 @@ def apply_item(conn, ctx: RequestContext, estimate_id: int, review_id: int, item
     action = item.get("suggested_action")
     if not action:
         raise InvalidInput(f"'{item['description']}' has no item to add", item_id=item_id)
-    price = get_price(conn, ctx.company_id, action["price_key"])
-    if price is None:
-        raise NotFound(f"no price '{action['price_key']}' in the price book", price_key=action["price_key"])
-    return service.add_line_item(conn, ctx, estimate_id, rev, kind=price.kind,
-                                 description=action.get("description") or price.description,
-                                 quantity=action.get("quantity", 1), unit=price.unit,
-                                 price_key=action["price_key"])
+    qty = quantity if quantity not in (None, "") else action.get("quantity", 1)
+    what = action.get("description") or item["description"]
+    key = (price_key or action.get("price_key") or "").strip()
+    prices = trade_prices(conn, ctx.company_id, row["module_id"])
+    p = next((x for x in prices if x["price_key"] == key), None) if key else None
+    if p is None and key:
+        g = get_price(conn, ctx.company_id, key)
+        if g is not None:
+            p = {"price_key": g.price_key, "description": g.description, "unit": g.unit, "cost_cents": g.cost_cents,
+                 "kind": g.kind}
+    if p is not None:
+        # the cost goes with it, so a trade sample not saved in the company's book yet works too
+        return service.add_line_item(conn, ctx, estimate_id, rev, kind=p["kind"],
+                                     description=(action.get("description") if not price_key else None)
+                                     or p["description"], quantity=qty, unit=p["unit"],
+                                     unit_cost_cents=int(p["cost_cents"]), price_key=p["price_key"])
+    if unit_cost_cents is not None:
+        return service.add_line_item(conn, ctx, estimate_id, rev, kind="material", description=what[:200],
+                                     quantity=qty, unit=action.get("unit") or "ea", unit_cost_cents=unit_cost_cents)
+    raise NotFound((f"'{key}' isn't in your price book" if key else f"'{what}' isn't in your price book")
+                   + " - pick an item from your price book or type a unit cost", price_key=key or None,
+                   matches=price_matches(action, prices))

@@ -79,7 +79,9 @@ def test_the_guides_name_real_buttons():                                        
     assert wiring["screen"] == "takeoffs" and wiring["steps"] >= 6
     for label in ("Wiring options", "Save as my defaults", "Through the studs", "From below", "From the ceiling",
                   "Slab on grade", "Crawlspace", "Accept the new lengths", "Approve the cable and counts",
-                  "Keep approved items on rerun", "Wiring drawing (DXF)", "Wiring schematic (DXF)", "Upper floors fed from"):
+                  "Keep approved items on rerun", "Upper floors fed from",
+                  # 2026-11-21: the drawings are shown on the screen, the DXF download in the viewer
+                  "📐 Wiring schematic", "👁 View wiring drawing", "👁 View schematic", "⬇ Download DXF", "Fit"):
         assert label in js, label
         assert label in wiring["text"], label
     measure = guides.get_guide("measure_and_approve_on_the_plans")["text"]

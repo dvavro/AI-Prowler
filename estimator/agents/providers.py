@@ -88,6 +88,7 @@ def model_for(provider: str, model: str | None = None) -> str:
 # internal step. An unknown step counts as complex (the safe side), like desk_agent_providers.
 STEP_GROUPS: dict[str, dict[str, str]] = {
     "llm_takeoff": {"classify": "simple", "read": "complex", "check": "complex"},
+    "ai_design": {"read": "complex", "design": "complex"},      # 2026-11-21: AI design (estimator/design/runs.py)
     "inspector": {"review": "complex"},
     "auto_calibrate": {"find": "complex", "pinpoint": "complex"},
     "plan_reader": {"classify": "simple"},

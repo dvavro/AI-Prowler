@@ -54,6 +54,23 @@ def test_wiring_status_run_and_download(call, job):                             
     assert b"WIRING SCHEMATIC" in s.body and b"S-NEUTRAL" in s.body
 
 
+def test_wiring_drawings_as_pictures_for_the_screen(call, job):                         # WRW-05
+    """2026-11-21 (David: "why does the file have to be downloaded when it can be just displayed?"): both wiring
+    drawings come as SVG pictures for the on-screen viewer; kept beside the DXF and drawn again after a new run."""
+    from estimator.takeoff import wiring_run
+    assert call("GET", f"{API}/wiring/{job}/schematic/svg").status == 404             # no run yet
+    call("POST", f"{API}/wiring/{job}", {"settings": {}})
+    for what, dxf in (("schematic", wiring_run.schematic_path(job)), ("dxf", wiring_run.dxf_path(job))):
+        r = call("GET", f"{API}/wiring/{job}/{what}/svg")
+        assert r.status == 200 and r.content_type == "image/svg+xml", what
+        assert b"<svg" in r.body[:500] and b"<script" not in r.body, what
+        assert "Content-Disposition" not in r.headers, what                           # shown, not saved
+        assert dxf.with_suffix(".svg").is_file(), what                                 # kept for next time
+    assert call("GET", f"{API}/wiring/{job}/schematic/png").status == 404
+    gone = wiring_run.clear(job)                                                      # a new plan revision: all go
+    assert f"estimate_{job}_schematic.svg" in gone and f"estimate_{job}_wiring.svg" in gone
+
+
 def test_routing_options_and_saved_defaults(call, job):                                  # WRW-04
     """2026-11-21 (David: "I like the user setting defaults for routing wires"): the options box opens with the
     project's settings; Save as my defaults keeps them for every new project."""

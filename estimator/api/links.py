@@ -16,6 +16,7 @@ Reads only; changes nothing. The estimate is loaded with the caller's company ch
 """
 from __future__ import annotations
 
+import re
 from decimal import Decimal, InvalidOperation
 
 from estimator.core.formula_engine.evaluator import FormulaError, formula_variables
@@ -134,6 +135,22 @@ def answers_from_measurements(conn, ctx, est: dict, module_id: str, registry=Non
                            module_id=module_id)
     sec = next((s for s in est["sections"] if s["module_id"] == module_id), None)
     current = dict((sec or {}).get("answers") or {})
+    approved = {**_wiring_cleared(module_id, approved, current), **approved}
     changes = {q: {"from": current.get(q), "to": v} for q, v in approved.items()
                if _num(current.get(q)) is None or abs(_num(current.get(q)) - _num(v)) > TOLERANCE}
     return {**current, **approved}, changes
+
+
+_WIRING_FEED = re.compile(r"^(wire_\d+_\d+_ft|thhn_\d+_ft|emt_\w+|pvc_\w+|conduit_bodies|surface_boxes|wp_boxes)$")
+
+
+def _wiring_cleared(module_id: str, approved: dict, current: dict) -> dict:
+    """2026-11-23 (David: "why is it counting wire twice?"): the wiring run measures the wire and conduit as one set.
+    Once any of that set is approved, an answer in the set with no approved measurement left (the NM cable from an
+    earlier run, after the wiring method changed to conduit - or the conduit after a change back) is cleared to 0,
+    instead of staying priced as if it had been typed in."""
+    from estimator.takeoff import wiring_run
+    if module_id != wiring_run.MODULE_ID or not any(_WIRING_FEED.match(q) for q in approved):
+        return {}
+    return {q: 0 for q, v in current.items()
+            if _WIRING_FEED.match(q) and q not in approved and (_num(v) or 0) != 0}

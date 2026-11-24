@@ -388,6 +388,9 @@ def scan_sheet(page, sheet: dict, entries: list[dict], templates: dict, skip=(),
 
 
 _CAD_LEGEND_TITLE = re.compile(r"^\s*(?:[A-Z]+\s+){0,2}LEGEND\s*:?\s*$", re.I)   # LEGEND, SYMBOL LEGEND, ELECTRICAL LEGEND
+# 2026-11-23 (David: the AI design's counts were one too many of each): a block on a legend layer is a legend sample,
+# wherever it sits - the title-and-rows search above misses a legend whose rows are spaced wider than its gap.
+_LEGEND_LAYER = re.compile(r"LEGEND|(?:^|[-_ ])LGND(?:$|[-_ ])", re.I)
 
 
 def _pts(o: dict) -> list:
@@ -454,6 +457,8 @@ def cad_symbols(sheet: dict) -> int:
             continue
         if legend and _pts(o) and any(b[0] <= _pts(o)[0][0] <= b[2] and b[1] <= _pts(o)[0][1] <= b[3] for b in legend):
             continue                                 # a sample in the legend, not a device on the plan
+        if _LEGEND_LAYER.search(o.get("layer") or ""):
+            continue                                 # 2026-11-23: on a legend layer (E-LEGEND, SYMBOL_LEGEND ...): a sample
         std = lib.by_block_name(o["block_name"])
         if std is None:                 # doors, furniture, north arrows...: stay plain CAD blocks (Sprint 11 learns them)
             continue

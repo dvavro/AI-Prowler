@@ -5,6 +5,7 @@
                                       measurements (estimator/takeoff/wiring_run.py)
   GET  /wiring/<estimate id>/dxf      the wiring drawing (DXF download)
   GET  /wiring/<estimate id>/schematic  the wiring schematic: panel, breakers, every circuit's conductors (DXF)
+  GET  /wiring/<estimate id>/dxf/svg, /schematic/svg   the same two drawings as SVG pictures for the screen (2026-11-21)
   GET  /wiring/defaults               the routing options: the company's saved defaults and the built-in ones
   POST /wiring/defaults               save routing options as the company's defaults: {"settings": {...}}
 
@@ -17,7 +18,7 @@ import re
 from estimator.api import nav
 
 _ONE = re.compile(r"^/wiring/(\d+)$")
-_DXF = re.compile(r"^/wiring/(\d+)/(dxf|schematic)$")
+_DXF = re.compile(r"^/wiring/(\d+)/(dxf|schematic)(/svg)?$")
 
 
 def handles(sub: str) -> bool:
@@ -69,6 +70,12 @@ def route(m: str, sub: str, req, ctx, conn):
         if not path.is_file():
             return _fail(404, "not_found", "run the wiring takeoff first - there's no wiring "
                          + ("schematic" if what == "schematic" else "drawing") + " yet")
+        # 2026-11-21 (David: "why does the file have to be downloaded when it can be just displayed?"): .../svg is the
+        # same drawing as a picture for the screen's viewer.
+        if mm.group(3):
+            from estimator.takeoff import wiring_svg
+            return Response(200, "image/svg+xml", wiring_svg.get(path).encode("utf-8"),
+                            {"Cache-Control": "no-store", **SECURITY_HEADERS})
         name = wiring_run.download_name(est["id"], "schematic" if what == "schematic" else "wiring")
         return Response(200, "application/dxf", path.read_bytes(),
                         {"Cache-Control": "no-store", **SECURITY_HEADERS,

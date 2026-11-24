@@ -626,6 +626,11 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
     if wiring_api.handles(sub):
         return wiring_api.route(m, sub, req, ctx, conn)
 
+    # ---------------------------------------------------------- 2026-11-21: AI design (Measure screen)
+    from estimator.api import design_api
+    if design_api.handles(sub):
+        return design_api.route(m, sub, req, ctx, conn)
+
     # ---------------------------------------------------------- AI Log: what was sent to the AI and what came back.
     from estimator.api import ai_log_api
     if ai_log_api.handles(sub):

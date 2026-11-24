@@ -109,7 +109,9 @@ async function api(method, path, body) {
   if (!r.ok || (data && data.ok === false)) throw new ApiError(r.status, data);
   // Something on the project changed here (approved, measured, priced…): the Director panel looks again (2026-11-21).
   // Its own look (/director) doesn't count, or it would keep looking at itself.
-  if (method !== "GET" && !/\/director$/.test(path)) projectChanged(null);
+  // A "needs your yes" answer changed nothing - and redrawing the panel would wipe the Yes/Cancel box the person is
+  // about to press (2026-11-23, David: "a popup asking for yes but it closes before I press anything").
+  if (method !== "GET" && !/\/director$/.test(path) && !(data && data.needs_confirmation)) projectChanged(null);
   return data;
 }
 
@@ -2413,7 +2415,13 @@ function followChanges(card, eid) {
     const id = ev.detail && ev.detail.estimate_id;
     if (id && String(id) !== String(eid)) return;
     clearTimeout(timer);
-    timer = setTimeout(() => { if (card.isConnected) loadDirectorPanel(card, eid, []); }, 1200);
+    // Never while a question is waiting for an answer in it (the same rule as the page's live redraw).
+    const look = () => {
+      if (!card.isConnected) return;
+      if (state.busy && card.querySelector(".confirm")) { timer = setTimeout(look, 1200); return; }
+      loadDirectorPanel(card, eid, []);
+    };
+    timer = setTimeout(look, 1200);
   };
   window.addEventListener("estimator:changed", on);
   setTimeout(() => { if (card.isConnected) card.dataset.seen = "1"; }, 0);

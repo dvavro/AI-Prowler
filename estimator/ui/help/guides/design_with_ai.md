@@ -1,0 +1,27 @@
+# Let the AI design it (✨ AI design)
+<!-- screen: takeoffs; words: ai design, design, design it, add electricity, add electrical, lighting, receptacles, outlets, layout, shed, shop, garage, house, subpanel, panel, place symbols, symbols, code, nec, gfci, change it, approve design, discard, proposed, screenshot, screenshots, paste, picture, mark up, move this here, numbered plan, grid -->
+Have a shed, shop or house drawing with no electrical on it? **✨ AI design** on the Measure screen lets you say what you want in plain words — the AI reads the building, places every symbol to the code rules and your specs, and draws a new electrical plan and panel schedule. Nothing is priced until you approve it. It runs on the agent API key (turn **AI measuring** on in 🤖 AI agents).
+
+1. Upload the building's drawings on the project page (a PDF, a photo or a CAD file) and read them (📖).
+2. On Measure, click **✨ AI design** on the toolbar, beside 🤖 AI Auto Run. It opens in its own window (close it with ✕ or Esc; what you typed is kept).
+3. Pick **Electrical** and the drawings to design on, and say what you want, for example: *"Here's my shed. Add electricity: LED shop lighting, 120 V receptacles on 20 A circuits, one 240 V 30 A receptacle and a 100 A subpanel fed underground from the house garage's 100 A subpanel."*
+4. Add your specs if you have any (receptacle height, fixture type, conduit or cable…) under **Specs and preferences**, then click **✨ Design it**. It takes a minute or two; you can close the window and keep working — the toolbar button says **⏳ AI design working…**, then **(ready to review)**, and a message pops up when it's done.
+5. Look at it: **👁 View the plan** and **👁 Panel schedule** (scroll to zoom, drag to move, ⬇ Download DXF). The card lists what it added, the circuits, the AI's assumptions and the code check.
+6. Want something different? Type it under **Change it in plain words** — *"add two outlets on the rear wall"*, *"move the panel to the right wall"*, *"put the lights on two circuits"* — and click **✏️ Make the change**. The card shows what changed.
+   - **Show it where**: click **📎 Add screenshot** (or paste one into the box with Ctrl+V) — up to 3 pictures. Draw arrows, circles or notes on them (*"move this here"*, *"two more like this along this wall"*). The AI also gets the app's **🔢 Numbered plan**: the building on a 5 ft grid with every device numbered, so it can match your marks to real positions in feet.
+   - Or say it by number: open **🔢 Numbered plan** and type *"move device 12 to x 30, y 44"* (x runs along the front wall from the front-left corner, y toward the rear). **⬇ Save picture** saves it as a PNG to mark up.
+7. Click **✅ Approve design** and say yes to the question — it lists exactly what changes. That's the only click: the app does the rest in a few seconds (no AI cost), and the window shows each step:
+   - the design's plan and panel schedule **replace the older electrical drawings** on the project (any plan set whose sheets are all electrical — drawn by hand, uploaded, or an earlier AI design) together with their measurements, the same way a new plan revision replaces the old one. The architectural plans stay;
+   - any other electrical count left on the estimate (for example one measured on an architectural sheet) is set aside as rejected, with the reason — it stays in the history;
+   - every device is **counted from the new drawing** and the **wiring run** routes every circuit and measures the cable;
+   - those counts and the cable are approved (they come from the design you approved) and the estimate's **Electrical is re-priced**. If the estimate is already approved or sent, it waits for you: click **🔄 Update from the plans** on the estimate (that reopens it).
+   If a step can't finish, the design stays approved and the window says what to do by hand.
+
+## Good to know
+- **The code check**: GFCI where it's required, receptacle spacing, breaker and wire sizes, how full each circuit is, switched lighting in every room, smoke alarms, a 240 V load on a 2-pole breaker, the panel and feeder sizes, and anything outside the building. ⛔ errors must be fixed before approving (ask: *"fix the errors"*); ⚠️ warnings are things to look at. When the first design has errors, the AI gets one turn to fix them on its own.
+- **The AI places every symbol**; the app only sets wall devices 0.7 ft off their wall, facing it, and slides one out of a doorway — the code check notes each such move.
+- Each symbol on the drawing carries its circuit, so ⚡ Run wiring puts every device on the circuit the design chose.
+- From a PDF or photo, the AI reads the building's walls, doors, windows and rooms from the written dimensions first; from a CAD file, the walls are read directly (no AI cost for that step). Check the building line on the card (size, kind, where it was read from).
+- Approving again after more changes replaces the plan sets the last approval made, and measures and prices again. A design approved before this worked automatically shows **✅ Put it in place of the older drawings** — click it once to do the rest. **🗑 Discard** forgets a proposed design — nothing on the estimate changes. **＋ New design** starts over.
+- Every AI call is in the AI Log and counts against the AI budget; the card shows what the design has cost so far.
+- It's a design for estimating: a licensed electrician and the local authority confirm the final layout. Electrical is ready now; plumbing, HVAC and low voltage are coming.

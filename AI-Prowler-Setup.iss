@@ -441,6 +441,7 @@ Source: "estimator\api\asgi_bridge.py"; DestDir: "{app}\estimator\api"; Flags: i
 Source: "estimator\api\auth.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\autorun_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\wiring_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
+Source: "estimator\api\design_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\estimate_api.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\jobs_board.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
 Source: "estimator\api\links.py"; DestDir: "{app}\estimator\api"; Flags: ignoreversion
@@ -639,7 +640,15 @@ Source: "estimator\takeoff\from_plans.py"; DestDir: "{app}\estimator\takeoff"; F
 Source: "estimator\takeoff\llm_electrical.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\wiring.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\wiring_schematic.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
+Source: "estimator\takeoff\wiring_svg.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
+Source: "estimator\design\__init__.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
+Source: "estimator\design\building.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
+Source: "estimator\design\draw_electrical.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
+Source: "estimator\design\electrical.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
+Source: "estimator\design\reference.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
+Source: "estimator\design\runs.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
 Source: "estimator\takeoff\wiring_run.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
+Source: "estimator\takeoff\conduit.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\audit.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\llm_demolition.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\llm_drywall.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
@@ -679,6 +688,7 @@ Source: "estimator\ui\help\guides\plan_quantities.md"; DestDir: "{app}\estimator
 Source: "estimator\ui\help\guides\quote_a_service_job.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\review_on_phone.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\run_the_wiring.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
+Source: "estimator\ui\help\guides\design_with_ai.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\send_and_follow_up_a_quote.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\set_up_your_price_book.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion
 Source: "estimator\ui\help\guides\start_with_the_director.md"; DestDir: "{app}\estimator\ui\help\guides"; Flags: ignoreversion

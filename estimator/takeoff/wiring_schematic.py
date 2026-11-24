@@ -40,7 +40,16 @@ CODES = {
     "smoke_co_detector": ("SC", "Smoke/CO detector"), "co_detector": ("CO", "CO detector"),
     "appliance": ("AP", "Appliance / 240 V load"),
 }
-APPLIANCE_CODES = {"RANGE": "RNG", "DRYER": "DRY", "WTR HTR": "WH", "WATER HEATER": "WH", "AC": "AC", "EV": "EV"}
+APPLIANCE_CODES = {"RANGE": "RNG", "DRYER": "DRY", "WTR HTR": "WH", "WATER HEATER": "WH", "AC": "AC", "EV": "EV",
+                   "240V": "240"}
+
+
+def is_subpanel(main: dict | None) -> bool:
+    """2026-11-21: the panel is a subpanel (fed from another panel) when its MAIN row says so - SUB / FEEDER / FED FROM
+    in the description or the wire. Then the schematic draws a 4-wire feeder and no main bonding jumper."""
+    m = main or {}
+    import re
+    return bool(re.search(r"\bSUB|\bFEEDER\b|\bFED FROM\b", f"{m.get('description', '')} {m.get('wire', '')}".upper()))
 
 
 def conductors(c: dict) -> list[tuple[str, str]]:
@@ -83,6 +92,12 @@ def write(result: dict, out_path: str, title: str = "") -> str:
     def line(a, b, bus):
         msp.add_line(a, b, dxfattribs={"layer": LAYER[bus]})
 
+    def dot(x, y, bus, r=0.16):
+        """2026-11-21: a filled connection dot - where a conductor lands on a bus or bar. Lines that cross without a
+        dot are not connected (the usual schematic rule; the legend says so)."""
+        h = msp.add_hatch(dxfattribs={"layer": LAYER[bus]})
+        h.paths.add_edge_path().add_arc((x, y), r, 0, 360)
+
     circuits = [c for c in result["circuits"] if c.get("assigned") or c.get("devices")]
     n = len(circuits)
     bottom = BUS_TOP - 2 - n * ROW
@@ -96,37 +111,75 @@ def write(result: dict, out_path: str, title: str = "") -> str:
 
     # Service: utility -> meter -> main breaker -> the bus bars
     yS = 1.0
-    box(0, yS - 1.2, 5, yS + 1.2, "S-PANEL"); text("UTILITY", 2.5, yS, 0.5, align=TA.MIDDLE_CENTER)
-    box(7, yS - 1.2, 12, yS + 1.2, "S-PANEL"); text("METER", 9.5, yS, 0.5, align=TA.MIDDLE_CENTER)
+    sub = is_subpanel(main)
+    if sub:
+        # 2026-11-21 (David's shed: "pulled from another 100-amp sub panel in the house garage ... buried underground"):
+        # a subpanel is fed by a 4-wire feeder from a breaker in another panel - two hots, the neutral AND the ground.
+        box(0, yS - 1.2, 5, yS + 1.2, "S-PANEL"); text("SUPPLY", 2.5, yS + 0.3, 0.45, align=TA.MIDDLE_CENTER)
+        text("PANEL", 2.5, yS - 0.4, 0.45, align=TA.MIDDLE_CENTER)
+        box(7, yS - 1.2, 12, yS + 1.2, "S-PANEL"); text("FEEDER", 9.5, yS + 0.3, 0.45, align=TA.MIDDLE_CENTER)
+        text("4-WIRE", 9.5, yS - 0.4, 0.4, align=TA.MIDDLE_CENTER)
+    else:
+        box(0, yS - 1.2, 5, yS + 1.2, "S-PANEL"); text("UTILITY", 2.5, yS, 0.5, align=TA.MIDDLE_CENTER)
+        box(7, yS - 1.2, 12, yS + 1.2, "S-PANEL"); text("METER", 9.5, yS, 0.5, align=TA.MIDDLE_CENTER)
     box(14, yS - 1.2, 19, yS + 1.2, "S-BREAKER")
     text(f"MAIN {main['amps']}A", 16.5, yS + 0.3, 0.45, align=TA.MIDDLE_CENTER)
     text(f"{main.get('poles', 2)}-POLE", 16.5, yS - 0.5, 0.4, align=TA.MIDDLE_CENTER)
-    for i, bus in enumerate(("L1", "L2", "N", "G")):
+    # 2026-11-21 (David: "review, does it look correct?"): the utility brings two hots and the neutral - no ground.
+    # The equipment ground starts at the panel: the ground bar bonded to the neutral bar (main bonding jumper) and the
+    # grounding electrode conductor out to the ground rod (NEC 250.24, 250.50).
+    # A subpanel's feeder brings the ground too (L1, L2, then G above N so the two never cross on their way round the
+    # main breaker), and the neutral and ground bars are kept apart there - no MBJ (NEC 250.32(B), 250.24(A)(5)).
+    incoming = ("L1", "L2", "G", "N") if sub else ("L1", "L2", "N")
+    for i, bus in enumerate(incoming):
         y = yS + 0.6 - i * 0.4
-        for xa, xb in ((5, 7), (12, 14) if bus in ("L1", "L2") else (12, 12.6 + 0.5 * (i - 2))):
+        stop = {"L1": 14, "L2": 14, "N": 12.3 if sub else 12.6, "G": 12.9}[bus]
+        for xa, xb in ((5, 7), (12, stop)):
             line((xa, y), (xb, y), bus)
-    # Main to the bars: the hots through the main breaker; the neutral and ground pass under it (bonded at the
-    # service), so no conductor crosses the main breaker's box or its words.
-    for k, (bus, x) in enumerate((("L1", X_L1), ("L2", X_L2), ("N", X_NEUT), ("G", X_GND))):
+    # Main to the bars: the hots through the main breaker; the neutral (and a feeder's ground) pass under it (a main
+    # breaker opens the hots only), so no conductor crosses the main breaker's box or its words.
+    for k, bus in enumerate(incoming):
         y0 = yS + 0.6 - k * 0.4
+        x = {"L1": X_L1, "L2": X_L2, "N": X_NEUT, "G": X_GND}[bus]
         if bus in ("L1", "L2"):
             line((19, y0), (x, y0), bus)
             line((x, y0), (x, BUS_TOP), bus)
         else:
-            xd = 12.6 + 0.5 * (k - 2)                                # down beside the meter, under the main
-            y_low = yS - 1.7 - 0.5 * (k - 2)
+            xd = {"N": 12.3 if sub else 12.6, "G": 12.9}[bus]
+            y_low = {"N": yS - (1.95 if sub else 1.7), "G": yS - 1.45}[bus]   # down beside the meter, under the main
             line((xd, y0), (xd, y_low), bus)
             line((xd, y_low), (x, y_low), bus)
             line((x, y_low), (x, BUS_TOP), bus)
-    text(f"SERVICE: {main.get('wire') or 'service entrance'} - L1 (BLK), L2 (RED), N (WHT), G (GRN/BARE)", 0, -3.2, 0.4)
-    text("Neutral and ground bonded at the service only", 0, -4.0, 0.35, "S-FLAG")
+    if sub:
+        text(f"FEEDER: {_short(main.get('wire') or 'feeder', 18)} - L1 (BLK), L2 (RED), N (WHT), G (GRN)", 0, -3.2, 0.4)
+        text("Subpanel: neutral and ground bars kept", 0, -4.0, 0.35, "S-FLAG")
+        text("apart (no MBJ); ground rod at this building", 0, -4.5, 0.35, "S-FLAG")
+    else:
+        text(f"SERVICE: {_short(main.get('wire') or 'service entrance', 18)} - L1 (BLK), L2 (RED), N (WHT)", 0, -3.2,
+             0.4)
+        text("Ground starts at the panel: bonded to", 0, -4.0, 0.35, "S-FLAG")
+        text("the neutral there only (MBJ)", 0, -4.5, 0.35, "S-FLAG")
 
     # The panel and its four bars
     box(X_NEUT - 1.2, bottom, X_BRK1 + 0.6, BUS_TOP, "S-PANEL")
-    text(f"{main['amps']} A PANEL", X_NEUT - 1.4, BUS_TOP - 1.0, 0.55, align=TA.BOTTOM_RIGHT)
+    text(f"{main['amps']} A {'SUBPANEL' if sub else 'PANEL'}", X_NEUT - 1.4, BUS_TOP - 1.0, 0.55, align=TA.BOTTOM_RIGHT)
     for bus, x in (("L1", X_L1), ("L2", X_L2), ("N", X_NEUT), ("G", X_GND)):
         line((x, BUS_TOP), (x, bottom + 0.5), bus)
         text({"L1": "L1", "L2": "L2", "N": "N", "G": "G"}[bus], x - 0.2, bottom + 0.1, 0.35, LAYER[bus])
+    # Main bonding jumper (neutral bar to ground bar) and the grounding electrode conductor to the ground rod.
+    if not sub:
+        y_mbj = BUS_TOP - 0.6
+        line((X_NEUT, y_mbj), (X_GND, y_mbj), "G")
+        dot(X_NEUT, y_mbj, "N")
+        dot(X_GND, y_mbj, "G")
+        text("MBJ", X_NEUT + 0.1, y_mbj + 0.12, 0.25, "S-GROUND")
+    x_rod, y_gec = 16.0, -4.7
+    line((X_GND, BUS_TOP), (X_GND, y_gec), "G")
+    line((X_GND, y_gec), (x_rod, y_gec), "G")
+    line((x_rod, y_gec), (x_rod, y_gec - 1.0), "G")
+    for k, w in enumerate((0.6, 0.4, 0.2)):                         # the earth symbol
+        line((x_rod - w, y_gec - 1.0 - k * 0.25), (x_rod + w, y_gec - 1.0 - k * 0.25), "G")
+    text("GROUND ROD (GEC)", x_rod - 0.8, y_gec - 1.35, 0.3, "S-GROUND", align=TA.MIDDLE_RIGHT)
 
     for i, c in enumerate(circuits):
         y = BUS_TOP - 2 - i * ROW
@@ -134,12 +187,15 @@ def write(result: dict, out_path: str, title: str = "") -> str:
         two = any(b == "L2" for b, _ in cons)
         # The breaker: 1-pole on L1 (alternating L1/L2 down the panel, as breakers are), 2-pole across both
         hot = "L1" if i % 2 == 0 else "L2"
-        h = 1.6 if two else 0.9
-        box(X_BRK0, y - h / 2, X_BRK1, y + h / 2, "S-BREAKER")
-        text(f"{c['id']}", X_BRK0 + 0.2, y + 0.05, 0.45, "S-BREAKER")
-        text(f"{c['amps']}A {'2P' if two else '1P'}", X_BRK0 + 0.2, y - 0.5, 0.35, "S-BREAKER")
         # Where each conductor starts: hots on the breaker, neutral and ground on their bars
         offs = [0.9 - k * 0.6 for k in range(len(cons))]
+        # 2026-11-21 (David: "the circuit breakers lettering is cut off ... does it look correct?"): the breaker box
+        # goes around the hot(s) only - the hot goes in its left side and out its right - and the neutral and ground
+        # run straight from their bars, never through it. Its name and rating sit above it, not squeezed inside.
+        hot_ys = [y + dy for (b, _), dy in zip(cons, offs) if b in ("L1", "L2")]
+        b_top, b_low = max(hot_ys) + 0.35, min(hot_ys) - 0.35
+        box(X_BRK0, b_low, X_BRK1, b_top, "S-BREAKER")
+        text(f"{c['id']}  {c['amps']}A {'2P' if two else '1P'}", X_BRK0, b_top + 0.15, 0.34, "S-BREAKER")
         devs = c.get("assigned") or []
         n_dev = max(1, len(devs))
         # Each conductor runs breaker -> device 1 -> device 2 ..., landing on each device's edge (never through it)
@@ -151,15 +207,16 @@ def write(result: dict, out_path: str, title: str = "") -> str:
             if bus in ("L1", "L2"):
                 src_bus = bus if two else hot
                 bus_x = X_L1 if src_bus == "L1" else X_L2
-                line((bus_x, yy), (X_BRK0, yy), src_bus)            # bus -> breaker
+                line((bus_x, yy), (X_BRK0, yy), src_bus)            # bus -> breaker (on the bus: a dot)
+                dot(bus_x, yy, src_bus)
+                start = X_BRK1                                      # ... and out of the breaker
             else:
-                x0 = X_NEUT if bus == "N" else X_GND
-                line((x0, yy), (X_BRK0 - 0.05, yy), bus)            # the bar -> under the breaker
-            start = X_BRK1
+                start = X_NEUT if bus == "N" else X_GND             # the bar, straight out (below the breaker)
+                dot(start, yy, bus)
             for x, hw in zip(xs, half):
                 edge = hw if hw > 1.0 else (max(1.0 - dy * dy, 0.0)) ** 0.5   # a box's side, or where it meets the circle
                 line((start, yy), (x - edge, yy), color_bus)
-                msp.add_circle((x - edge, yy), 0.08, dxfattribs={"layer": LAYER[color_bus]})   # it lands here
+                dot(x - edge, yy, color_bus, 0.1)                   # it lands here
                 start = x + edge
             if not xs:
                 line((start, yy), (X_DEV0, yy), color_bus)
@@ -210,5 +267,10 @@ def write(result: dict, out_path: str, title: str = "") -> str:
         text(desc, xx + 2.0, yy, 0.42)
     text("Breaker types (AFCI / GFCI) per the estimate; NEC 210.12 wants AFCI on most 15/20 A circuits in a home.",
          0, y - 1.3 - 4 * 0.8 - 0.6, 0.38)
+    # 2026-11-21: what the dots mean
+    dot(0.3, y - 1.3 - 4 * 0.8 - 1.45, "L1")
+    text("A dot is a connection (on a bus, bar or device); lines that cross without a dot are not connected. "
+         "Only the hot goes through a breaker; the neutral and ground go straight from their bars.",
+         1.0, y - 1.3 - 4 * 0.8 - 1.6, 0.38)
     doc.saveas(out_path)
     return out_path

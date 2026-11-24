@@ -215,7 +215,14 @@ def route(m: str, sub: str, req, ctx, conn, see: bool):
         item_id = _text(b, "item_id", 80)
         if not item_id:
             raise _refuse("say which checklist item (item_id)")
-        out = inspection_review.apply_item(conn, ctx, eid, int(review_id), item_id, _rev(b))
+        # 2026-11-23: a price-book item picked instead of the suggested one, a typed unit cost, a changed quantity
+        cost = b.get("unit_cost_cents")
+        if cost is not None and (isinstance(cost, bool) or not isinstance(cost, int) or cost < 0):
+            raise _refuse("unit_cost_cents must be a whole number of cents")
+        qty = _text(b, "quantity", 30) or None
+        out = inspection_review.apply_item(conn, ctx, eid, int(review_id), item_id, _rev(b),
+                                           price_key=_text(b, "price_key", 100) or None, quantity=qty,
+                                           unit_cost_cents=cost)
         return _json(200, redact(out, see))
     mm = _DETAIL.match(sub) or _ACTION.match(sub)
     eid, what = int(mm.group(1)), mm.group(2)

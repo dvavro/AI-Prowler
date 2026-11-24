@@ -52,6 +52,21 @@ DEFAULTS = {
     "panel_makeup_ft": 3.0,     # inside the panel, per home run
     "waste": 0.10,
     "roll_ft": 250,
+    # 2026-11-23 (David: "a metal shed ... mount the conduit on top of the steel and not drill holes through studs ...
+    # adding power after a house is built, outside the walls, a basement, garage ... include a basic expansion
+    # coefficient"): how it's wired - NM-B cable in the walls, or conduit on the surface (estimator/takeoff/conduit.py).
+    "method": "nm",             # nm (NM-B in the walls) | emt | pvc (surface conduit)
+    "method_by_floor": {},      # per floor, forced: floor index -> nm | emt | pvc
+    "outdoor_material": "pvc",  # outside runs (to a weatherproof outlet, an exterior light) with EMT inside
+    "structure": "wood",        # what the conduit is strapped to: wood | steel | masonry (metal conduit moves with it)
+    "temp_swing_indoor_f": 60.0,    # coldest to hottest inside; an unconditioned metal building or attic: 90-100
+    "temp_swing_outdoor_f": 100.0,  # coldest to hottest outside
+    "sun_add_f": 30.0,          # added outside in direct sun (manufacturers' guidance for PVC)
+    "outdoor_in_sun": True,
+    "expansion_threshold_in": 0.25,  # an expansion fitting where a straight leg moves this much (NEC 352.44: 1/4 in)
+    "homerun_max_circuits": 3,  # circuits sharing one conduit from the panel
+    "stick_ft": 10.0,
+    "outdoor_stub_ft": 2.0,     # from an inside run out through the wall to a box outside
 }
 FOUNDATIONS = ("basement", "crawlspace", "slab")
 VIAS = ("walls", "below", "above")
@@ -70,10 +85,13 @@ LOW_VOLTAGE = {"data_outlet", "phone_outlet", "tv_outlet", "speaker", "security_
 
 AMPS_WIRE = {15: "14/2", 20: "12/2", 30: "10/2", 40: "8/2", 50: "6/2"}
 TRAVELER = {"14/2": "14/3", "12/2": "12/3"}
-APPLIANCE_HEIGHT = {"RANGE": 1.0, "DRYER": 3.5, "WTR HTR": 5.0, "WATER HEATER": 5.0, "AC": 3.0, "EV": 4.0}
+APPLIANCE_HEIGHT = {"RANGE": 1.0, "DRYER": 3.5, "WTR HTR": 5.0, "WATER HEATER": 5.0, "AC": 3.0, "EV": 4.0,
+                    "240V": 4.0}
 # 2026-11-20: symbols that are the end of an appliance's 30 A circuit (the appliance names they can serve)
+# 2026-11-21 (David's shed: "20A, 30A"): a 240 V receptacle (a compressor or welder outlet) is the end of its own 30 A
+# circuit - "240V" in the panel schedule - not a device on a 20 A receptacle circuit.
 APPLIANCE_ENDS = {"range_receptacle": ("RANGE",), "dryer_receptacle": ("DRYER",),
-                  "disconnect": ("AC", "WTR HTR", "WATER HEATER", "EV")}
+                  "disconnect": ("AC", "WTR HTR", "WATER HEATER", "EV"), "receptacle_240v": ("240V",)}
 
 
 @dataclass
@@ -86,6 +104,7 @@ class Device:
     room: str = ""
     circuit: str | None = None
     why: str = ""
+    drawn: str | None = None        # 2026-11-21: the circuit the symbol itself names (a CIRCUIT attribute on the block)
 
     @property
     def kind(self) -> str:
@@ -228,11 +247,20 @@ def _floors(msp, k: float) -> list[Floor]:
         if segs:
             break
     # Walls whose x-spans overlap (or nearly touch) belong to one floor; floors drawn side by side are apart.
+    # 2026-11-21 (David's shed: three 12'-14' roll-up doors in one wall): a door drawn across a wall gap bridges it - the
+    # wall on both sides of a wide door opening is still the same building.
+    doors = []
+    for e in msp.query("LINE LWPOLYLINE"):
+        if "DOOR" in e.dxf.layer.upper():
+            p = ([(q[0], q[1]) for q in e.get_points()] if e.dxftype() == "LWPOLYLINE"
+                 else [(e.dxf.start.x, e.dxf.start.y), (e.dxf.end.x, e.dxf.end.y)])
+            doors.append((min(x for x, _ in p) * k, max(x for x, _ in p) * k))
     segs.sort(key=lambda s: min(x for x, _ in s))
     groups = []
     for s in segs:
         lo, hi = min(x for x, _ in s), max(x for x, _ in s)
-        if groups and lo <= groups[-1]["hi"] + 5.0:
+        bridged = groups and any(d0 <= groups[-1]["hi"] + 0.5 and d1 >= lo - 0.5 for d0, d1 in doors)
+        if groups and (lo <= groups[-1]["hi"] + 5.0 or bridged):
             groups[-1]["pts"] += s
             groups[-1]["hi"] = max(groups[-1]["hi"], hi)
         else:
@@ -274,12 +302,19 @@ def read_floor_plan(path: str) -> dict:
             continue                                                  # the legend, or off the plan
         entry = lib.by_block_name(e.dxf.name) or lib.by_block_name(e.dxf.layer)
         it = entry["item_type"] if entry else None
-        if it == "panel":
+        if it in ("panel", "panel_sub"):                              # 2026-11-21: a subpanel feeds its circuits too
             panel = {"x": x, "y": y, "floor": f}
             continue
         if not it or it in LOW_VOLTAGE:
             continue
-        devices.append(Device(f"{e.dxf.name}@{x:.1f},{y:.1f}", it, x, y, f))
+        # 2026-11-21 (David: "AI design the electrical part"): a symbol may say its circuit itself - a CIRCUIT attribute
+        # on the block, as the AI designer draws them (and many CAD symbol libraries do). It wins over the nearest tag.
+        drawn = None
+        try:
+            drawn = (e.get_attrib_text("CIRCUIT", default=None) or "").strip().upper() or None if e.attribs else None
+        except Exception:  # noqa: BLE001 - a block without attributes
+            drawn = None
+        devices.append(Device(f"{e.dxf.name}@{x:.1f},{y:.1f}", it, x, y, f, drawn=drawn))
     rooms, tags, appliances, riser = [], [], [], None
     for e in msp.query("TEXT MTEXT"):
         t, x, y = _text(e), e.dxf.insert.x * k, e.dxf.insert.y * k
@@ -321,9 +356,11 @@ def read_floor_plan(path: str) -> dict:
             a = min(near, key=lambda a: math.dist((a.x, a.y), (d.x, d.y)))
             if math.dist((a.x, a.y), (d.x, d.y)) <= 15:
                 a.x, a.y, a.why = d.x, d.y, f"at its {lib.BY_TYPE[d.item_type]['description'].split(' (')[0].lower()}"
+                a.drawn = d.drawn or a.drawn
                 continue
         if d.item_type != "disconnect":
-            appliances.append(Device(f"{names[0]}@{d.x:.1f},{d.y:.1f}", "appliance", d.x, d.y, d.floor, room=names[0]))
+            appliances.append(Device(f"{names[0]}@{d.x:.1f},{d.y:.1f}", "appliance", d.x, d.y, d.floor, room=names[0],
+                                     drawn=d.drawn))
     for d in devices:
         same = [r for r in rooms if r["floor"] == d.floor]
         if same:
@@ -484,6 +521,8 @@ def assign(plan: dict, schedule: dict, overrides: dict | None = None) -> list[De
     for d in plan["devices"]:
         if d.id in overrides:                                          # a person moved it to this circuit
             d.circuit, d.why = overrides[d.id], "moved by hand"
+        elif d.drawn and d.drawn in by_id:                             # 2026-11-21: the symbol names its circuit
+            d.circuit, d.why = d.drawn, "circuit on the drawing"
         elif d.lighting:
             c = lighting.get(d.floor)
             if c:
@@ -506,7 +545,8 @@ def assign(plan: dict, schedule: dict, overrides: dict | None = None) -> list[De
         else:
             by_id[d.circuit].devices.append(d)
     for a in plan["appliances"]:
-        c = next((c for c in circuits if c.amps >= 30 and c.id.replace(" ", "") in a.room.replace(" ", "")), None) \
+        c = (by_id.get(a.drawn) if a.drawn else None) \
+            or next((c for c in circuits if c.amps >= 30 and c.id.replace(" ", "") in a.room.replace(" ", "")), None) \
             or next((c for c in circuits if c.amps >= 30 and a.room.split()[0] in c.id), None)
         if c:
             a.circuit, a.why = c.id, "30 Amp label"
@@ -533,7 +573,8 @@ KITCHEN_ROOMS = ("KITCHEN", "DINING", "PANTRY", "BREAKFAST", "NOOK")
 BATH_ROOMS = ("BATH", "POWDER", "LAV")
 APPLIANCE_CIRCUITS = {"RANGE": (50, 2, "6/3", "Range"), "DRYER": (30, 2, "10/3", "Dryer"),
                       "WTR HTR": (30, 2, "10/2", "Water heater"), "WATER HEATER": (30, 2, "10/2", "Water heater"),
-                      "AC": (30, 2, "10/2", "Air conditioner"), "EV": (50, 2, "6/3", "EV charger")}
+                      "AC": (30, 2, "10/2", "Air conditioner"), "EV": (50, 2, "6/3", "EV charger"),
+                      "240V": (30, 2, "10/2", "240 V receptacle")}
 LAID_OUT = "laid out by AI-Prowler - no panel schedule"
 
 
@@ -741,6 +782,22 @@ def _cost(a, b, pa: tuple, pb: tuple, floor: int, s: dict) -> float:
     return va + across * (s["wall_detour"] if via == "walls" else 1.0) + vb
 
 
+def _parts(a, b, pa: tuple, pb: tuple, floor: int, s: dict) -> tuple[float, float, float, float]:
+    """The same link as _cost, in its straight pieces (for conduit): (drop at a, across x, across y, drop at b)."""
+    dx, dy = abs(pa[0] - pb[0]), abs(pa[1] - pb[1])
+    via = _pair_via(a, b, floor, s, dx + dy)
+    lvl = _run_level(via, floor, s)
+    k = s["wall_detour"] if via == "walls" else 1.0
+    return (0.0 if a is None else abs(pa[2] - lvl)), dx * k, dy * k, (0.0 if b is None else abs(pb[2] - lvl))
+
+
+OUTDOOR_TYPES = {"duplex_receptacle_wp", "light_exterior"}
+# 2026-11-23 (David: "make the fixes so no double counting"): devices whose box is priced with them on the estimate -
+# the weatherproof GFCI kit (box, GFCI and in-use cover), a floor box, a fan-rated box, a recessed housing and an
+# exhaust fan's own housing - get no surface or weatherproof box from the conduit run.
+OWN_BOX_TYPES = {"duplex_receptacle_wp", "floor_box", "ceiling_fan", "light_recessed", "exhaust_fan"}
+
+
 def _tree(entry: tuple, devices: list, floor: int, s: dict) -> list[tuple[int, int, float]]:
     """The shortest tree from where the circuit enters the floor (index 0) through every box (Prim): the daisy chain an
     electrician pulls, each link going the way that kind of box is wired. entry is (x, y, absolute height)."""
@@ -768,7 +825,20 @@ def settings_with_defaults(settings: dict | None) -> dict:
         s["foundation"] = DEFAULTS["foundation"]
     if s["foundation"] != "basement":
         s["panel_in_basement"] = False
+    from estimator.takeoff import conduit
+    if s["method"] not in conduit.METHODS:
+        s["method"] = "nm"
+    s["method_by_floor"] = {str(k): v for k, v in dict(s.get("method_by_floor") or {}).items() if v in conduit.METHODS}
+    if s["outdoor_material"] not in ("pvc", "emt"):
+        s["outdoor_material"] = "pvc"
+    if s["structure"] not in conduit.STRUCTURES:
+        s["structure"] = "wood"
     return s
+
+
+def method_for(floor: int, s: dict) -> str:
+    """How a floor is wired: forced for that floor, else the run's method."""
+    return s["method_by_floor"].get(str(floor)) or s["method"]
 
 
 def routing_summary(s: dict) -> str:
@@ -777,8 +847,19 @@ def routing_summary(s: dict) -> str:
     found = {"basement": "basement - runs from the basement ceiling", "crawlspace": "crawlspace - runs under the floor",
              "slab": "slab - nothing in the slab; ground floor fed from the ceiling"}[s["foundation"]]
     outlets = {"walls": "outlets through the studs", "below": "outlets from below", "above": "outlets from the ceiling"}
-    return (f"{found}; {outlets.get(s['outlets_via'], 'outlets through the studs')}; lights through the ceiling; "
+    from estimator.takeoff import conduit
+    how = conduit.METHOD_LABEL[s["method"]]
+    if s["method"] == "emt":
+        how += f" (outside: {s['outdoor_material'].upper()})"
+    if s["method"] != "nm":
+        how += f", on {conduit.STRUCTURE_LABEL[s['structure']]}"
+    if s["method_by_floor"]:
+        how += "; " + ", ".join(f"floor {int(k) + 1}: {conduit.METHOD_LABEL[v]}" for k, v in sorted(s["method_by_floor"].items()))
+    if s["method"] != "nm":
+        outlets = {"walls": "outlets along the walls", "below": "outlets from below", "above": "outlets from the ceiling"}
+    line = (f"{found}; {outlets.get(s['outlets_via'], 'outlets through the studs')}; lights through the ceiling; "
             f"{s['ceiling_ft']:g} ft ceilings")
+    return line if s["method"] == "nm" and not s["method_by_floor"] else f"{how}; {line}"
 
 
 def _panel_height(panel: dict, s: dict) -> float:
@@ -800,9 +881,18 @@ def route(plan: dict, schedule: dict, settings: dict | None = None) -> dict:
     pz = _panel_height(panel, s)
     trunk = _run_level(_feed_via(panel["floor"], s, False), panel["floor"], s)   # the panel floor's feed run
     out, totals = [], {}
+    from estimator.takeoff import conduit as cd
+    thhn, runs, homes, boxes, methods = {}, [], {}, {"in": 0, "out": 0}, {}
 
     def add(size, ft):
         totals[size] = totals.get(size, 0.0) + ft
+
+    def add_thhn(size, ft):
+        awg, n = cd.conductors(size)
+        thhn[awg] = thhn.get(awg, 0.0) + ft * n
+
+    def material(method, outdoor):
+        return (s["outdoor_material"] if method == "emt" else method) if outdoor else method
     for c in schedule["circuits"]:
         if not c.devices:
             continue
@@ -837,7 +927,9 @@ def route(plan: dict, schedule: dict, settings: dict | None = None) -> dict:
                            f"(NEC 250.140) - check with the designer")
             size = three
         ft = run + makeup
-        add(size, ft)
+        method = method_for(floor, s)
+        methods[str(floor)] = method
+        (add if method == "nm" else add_thhn)(size, ft)
         # 3-way travelers: each pair of 3-way switches (nearest first) gets /3 cable between them.
         trav = 0.0
         threes = [d for d in c.devices if d.item_type == "switch_3way"]
@@ -848,7 +940,57 @@ def route(plan: dict, schedule: dict, settings: dict | None = None) -> dict:
             lvl = floor * _storey(s)
             trav += _cost(a, b, (a.x, a.y, lvl + _z(a, s)), (b.x, b.y, lvl + _z(b, s)), floor, s) + 2 * s["makeup_ft_per_end"]
         if trav:
-            add(TRAVELER.get(size, size.split("/")[0] + "/3"), trav)
+            (add if method == "nm" else add_thhn)(TRAVELER.get(size, size.split("/")[0] + "/3"), trav)
+        if method != "nm":
+            # 2026-11-23: on the surface in conduit - each link between two boxes is a run; the link from the panel (the
+            # home run) waits to be grouped with the others leaving the panel.
+            awg, nwires = cd.conductors(size)
+            base_z = floor * _storey(s)
+            devs = [None] + list(c.devices)
+            pts = [entry] + [(d.x, d.y, base_z + _z(d, s)) for d in c.devices]
+            for d in c.devices:
+                if d.item_type in OWN_BOX_TYPES:
+                    continue                                 # its box is priced with it - not counted twice
+                boxes["out" if d.item_type in OUTDOOR_TYPES else "in"] += 1
+            home_done = False
+
+            def placed(r, path, ids=(c.id,)):
+                """2026-11-23 (David: "can't see a visual of the conduit, so how can I review it"): where the run goes
+                (plan feet, the same L the cable route takes) and the circuits in it, to draw it on the plan."""
+                r["path"] = [[round(p[0], 2), round(p[1], 2)] for p in path]
+                r["circuits"] = list(ids)
+                return r
+            for frm, to, _ in edges:
+                va, ax, ay, vb = _parts(devs[frm], devs[to], pts[frm], pts[to], floor, s)
+                a_xy, b_xy = pts[frm][:2], pts[to][:2]
+                path = [a_xy, (b_xy[0], a_xy[1]), b_xy]
+                outdoor = any(x is not None and x.item_type in OUTDOOR_TYPES for x in (devs[frm], devs[to]))
+                legs = [va, ax, ay, vb]
+                bends = (va > 0.25) + (vb > 0.25) + (ax > 0.25 and ay > 0.25)
+                name = f"{c.id}: " + (f"panel to {device_name(devs[to].item_type)}" if frm == 0
+                                     else f"{device_name(devs[frm].item_type)} to {device_name(devs[to].item_type)}")
+                if frm == 0 and not home_done:
+                    home_done = True
+                    first = (home, ax, ay, vb)                       # up or down from the panel, along, down to the box
+                    homes.setdefault((floor, method), []).append(
+                        {"circuit": c.id, "legs": list(first), "bends": 1 + bends, "wires": {awg: nwires},
+                         "outdoor": outdoor, "length": sum(first),
+                         "angle": math.atan2(pts[to][1] - entry[1], pts[to][0] - entry[0]), "name": name,
+                         "path": list(home_path) + path})
+                    continue
+                ends_out = sum(1 for x in (devs[frm], devs[to]) if x is not None and x.item_type in OUTDOOR_TYPES)
+                if ends_out == 1:
+                    # inside to one box outside: the run stays inside, then out through the wall (an LB) in a short
+                    # outdoor stub to the weatherproof box - only the stub sees the sun
+                    stub = min(s["outdoor_stub_ft"], max(legs))
+                    k = legs.index(max(legs))
+                    legs[k] -= stub
+                    out_xy = b_xy if devs[to] is not None and devs[to].item_type in OUTDOOR_TYPES else a_xy
+                    runs.append(placed(cd.run(material(method, False), legs, bends, {awg: nwires}, False, s, name), path))
+                    runs.append(placed(cd.run(material(method, True), [stub], 0, {awg: nwires}, True, s,
+                                              name + " (outside, through the wall)", bodies=1), [out_xy, out_xy]))
+                    continue
+                runs.append(placed(cd.run(material(method, outdoor), legs, bends, {awg: nwires}, outdoor, s, name), path))
         nodes = [entry[:2]] + [(d.x, d.y) for d in c.devices]
         paths = [[nodes[a], (nodes[b][0], nodes[a][1]), nodes[b]] for a, b, _ in edges]
         out.append({"id": c.id, "description": c.description, "amps": c.amps, "poles": c.poles, "wire": size,
@@ -865,7 +1007,30 @@ def route(plan: dict, schedule: dict, settings: dict | None = None) -> dict:
         bom.append({"cable": f"{size} NM-B" if not size.startswith(("6/", "8/")) else f"{size} NM-B (or SER)",
                     "measured_ft": round(ft, 1), "order_ft": math.ceil(order), "rolls": rolls,
                     "roll_ft": s["roll_ft"]})
-    return {"circuits": out, "bom": bom, "settings": s}
+    result = {"circuits": out, "bom": bom, "settings": s}
+    if runs or homes:
+        # Home runs leave the panel together: sorted by the way they go, up to homerun_max_circuits share one conduit
+        # as far as the farthest of them goes (the others branch off on the way) - its bends, all their conductors.
+        n = max(1, int(s["homerun_max_circuits"]))
+        for (floor, method), hs in homes.items():
+            hs.sort(key=lambda h: h["angle"])
+            for i in range(0, len(hs), n):
+                group = hs[i:i + n]
+                far = max(group, key=lambda h: h["length"])
+                wires = {}
+                for h in group:
+                    for awg, k in h["wires"].items():
+                        wires[awg] = wires.get(awg, 0) + k
+                what = ("home run " + ", ".join(h["circuit"] for h in group)) if len(group) > 1 else far["name"]
+                r = cd.run(material(method, far["outdoor"]), far["legs"], far["bends"], wires, far["outdoor"], s, what)
+                r["path"] = [[round(p[0], 2), round(p[1], 2)] for p in far["path"]]
+                r["circuits"] = [h["circuit"] for h in group]
+                r["home_run"] = True
+                runs.append(r)
+        result["conduit"] = {**cd.summary(runs, s, methods),
+                             "items": cd.items(runs, boxes["in"], boxes["out"], s["expansion_threshold_in"])}
+        result["bom"] = bom + cd.thhn_bom(thhn, s["waste"])
+    return result
 
 
 # ------------------------------------------------------------------ the wiring drawing

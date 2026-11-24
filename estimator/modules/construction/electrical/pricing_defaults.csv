@@ -61,3 +61,27 @@ el_range_receptacle_ea,Range receptacle 240 V NEMA 14-50 (sample),material,ea,25
 el_dryer_receptacle_ea,Dryer receptacle 240 V NEMA 14-30 (sample),material,ea,20.00
 el_disconnect_ea,Equipment disconnect 60 A non-fused (sample),material,ea,35.00
 el_small_parts_ea,Small parts per device - wire nuts staples clamps pigtails (sample),material,ea,1.50
+el_thhn_14_lf,THHN 14 AWG wire per linear ft (sample),material,lf,0.16
+el_thhn_12_lf,THHN 12 AWG wire per linear ft (sample),material,lf,0.22
+el_thhn_10_lf,THHN 10 AWG wire per linear ft (sample),material,lf,0.36
+el_thhn_8_lf,THHN 8 AWG wire per linear ft (sample),material,lf,0.70
+el_thhn_6_lf,THHN 6 AWG wire per linear ft (sample),material,lf,1.10
+el_emt_050_lf,1/2 in EMT conduit per linear ft (sample),material,lf,0.95
+el_emt_075_lf,3/4 in EMT conduit per linear ft (sample),material,lf,1.75
+el_emt_100_lf,1 in EMT conduit per linear ft (sample),material,lf,3.00
+el_pvc_050_lf,1/2 in Schedule 40 PVC conduit per linear ft (sample),material,lf,0.75
+el_pvc_075_lf,3/4 in Schedule 40 PVC conduit per linear ft (sample),material,lf,0.95
+el_pvc_100_lf,1 in Schedule 40 PVC conduit per linear ft (sample),material,lf,1.45
+el_emt_elbow_ea,EMT 90-degree elbow 1/2-3/4 in (sample),material,ea,4.50
+el_emt_coupling_ea,EMT set-screw coupling (sample),material,ea,0.65
+el_emt_connector_ea,EMT box connector (sample),material,ea,0.65
+el_emt_strap_ea,EMT one-hole strap with screw (sample),material,ea,0.45
+el_emt_expansion_ea,EMT expansion fitting with bonding jumper (sample),material,ea,38.00
+el_pvc_elbow_ea,PVC 90-degree elbow 1/2-3/4 in (sample),material,ea,1.60
+el_pvc_coupling_ea,PVC coupling (sample),material,ea,0.45
+el_pvc_adapter_ea,PVC male adapter and locknut (sample),material,ea,0.60
+el_pvc_strap_ea,PVC strap with screw (sample),material,ea,0.35
+el_pvc_expansion_ea,PVC expansion coupling 6 in travel (sample),material,ea,14.00
+el_conduit_body_ea,Conduit body LB with cover and gasket (sample),material,ea,9.00
+el_surface_box_ea,Surface box 4 in square with raised cover (sample),material,ea,7.50
+el_wp_box_ea,Weatherproof box with cover (sample),material,ea,9.00

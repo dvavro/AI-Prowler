@@ -42,14 +42,27 @@ def _superseded(conn, ctx, m: dict) -> list[dict]:
     shows 12"): the same question's approved counts from AI Auto Run or the wiring run whose sheet is gone because the
     plans were read again. Reading again flags them to re-measure; a rerun then proposes the new count on the new sheet,
     and approving it used to leave the old one approved too, so both were priced (outlets 41 + 41). Approving the new
-    one retires the old one."""
+    one retires the old one.
+    2026-11-23 (David: "What is the 6, 10, 12 AWG THHN wiring when we already have a cable lengths?"): also the approved
+    lines its calc says it replaces - the NM cable a rerun in conduit replaces with THHN (wiring_run._hand_over)."""
+    out = []
+    try:
+        named = [int(i) for i in (json.loads(m.get("calc_json") or "{}").get("replaces") or [])]
+    except (ValueError, TypeError, AttributeError):
+        named = []
+    if named:
+        marks = ",".join("?" * len(named))
+        out = [dict(r) for r in conn.execute(
+            f"SELECT * FROM measurements WHERE company_id = ? AND estimate_id = ? AND status = 'approved'"
+            f" AND id IN ({marks}) AND id != ? ORDER BY id", (ctx.company_id, m["estimate_id"], *named, m["id"]))]
     if not m.get("feeds") or not m.get("sheet_id"):
-        return []
+        return out
     marks = ",".join("?" * len(SHEET_AGENTS))
-    return [dict(r) for r in conn.execute(
+    return out + [dict(r) for r in conn.execute(
         f"SELECT * FROM measurements WHERE company_id = ? AND estimate_id = ? AND module_id = ? AND feeds = ?"
         f" AND status = 'approved' AND sheet_id IS NULL AND proposed_by IN ({marks}) AND id != ? ORDER BY id",
-        (ctx.company_id, m["estimate_id"], m["module_id"], m["feeds"], *SHEET_AGENTS, m["id"]))]
+        (ctx.company_id, m["estimate_id"], m["module_id"], m["feeds"], *SHEET_AGENTS, m["id"]))
+        if r["id"] not in named]
 
 
 def _now() -> str:
@@ -362,8 +375,10 @@ def confirm_measurements(conn, ctx: RequestContext, measurement_ids: list | None
             seen.update(o["id"] for o in replaces[m["id"]])
     old = [o for olds in replaces.values() for o in olds]
     if old:
-        what += ("; it replaces the approved " + ", ".join(f"{o['qty']} {o['unit']}" for o in old)
-                 + " from before the plans were read again, which won't be priced any more")
+        what += ("; it replaces the approved " + ", ".join(
+            f"{o['qty']} {o['unit']}" + (" from before the plans were read again" if o.get("sheet_id") is None
+                                         else f" {o.get('label') or o.get('feeds')} (the wiring method changed)")
+            for o in old) + ", which won't be priced any more")
     _confirm(confirm, what + "?", ids=[m["id"] for m in todo], skipped=skipped,
              replaces=[o["id"] for o in old])
     now = _now()
@@ -381,7 +396,8 @@ def confirm_measurements(conn, ctx: RequestContext, measurement_ids: list | None
                 _log(conn, ctx, m, "measurement_approved",
                      {"qty": m["qty"], **({"was": "rejected"} if m["status"] == "rejected" else {})})
                 for o in replaces.get(m["id"], []):
-                    why = f"replaced by measurement {m['id']} ({m['qty']} {m['unit']}) after the plans were read again"
+                    why = (f"replaced by measurement {m['id']} ({m['qty']} {m['unit']}) "
+                           + ("- the wiring method changed" if o["sheet_id"] is not None else "after the plans were read again"))
                     conn.execute("UPDATE measurements SET status = 'rejected', locked = 0, reject_reason = ?,"
                                  " updated_at = ? WHERE id = ?", (why, now, o["id"]))
                     _log(conn, ctx, o, "measurement_rejected", {"reason": why, "replaced_by": m["id"]})

@@ -117,6 +117,23 @@ ul.plain { list-style: none; margin: 0; padding: 0; }
 .small { font-size: 12px; }
 .note { background: #eef4ff; border: 1px solid #c9dafc; border-radius: 6px; padding: 8px 12px; }
 .note.warn, ul.warn { background: #fff8e6; border: 1px solid #f0d48a; border-radius: 6px; padding: 8px 12px; }
+.note.ok { background: #ebfbee; border: 1px solid #b2f2bb; }
+/* 2026-11-21: ✨ AI design card (Measure screen); 2026-11-23: in its own window from the toolbar */
+.bp-dp { flex: 0 1 820px; margin: 0 auto; max-height: 96vh; }
+.bp-dp #bp-design { overflow-y: auto; margin: 0; border: 0; box-shadow: none; padding: 12px 16px 16px; }
+#bp-design textarea { width: 100%; box-sizing: border-box; margin: 4px 0 8px; font: inherit; }
+#bp-design select { max-width: 100%; }
+/* 2026-11-23: surface conduit on the Wiring card - the legs that need an expansion fitting stand out */
+#bp-wiring-conduit td, #bp-wiring-expansion td, #bp-wiring-expansion th { padding: 2px 8px 2px 0; }
+#bp-wiring-expansion tr.bp-exp-yes td { font-weight: 600; color: #a23b00; }
+.bp-shots { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: -4px 0 8px; }
+.bp-shot { position: relative; display: inline-flex; align-items: center; gap: 2px; }
+.bp-shot img { height: 56px; max-width: 120px; object-fit: cover; border: 1px solid var(--line, #ccc); border-radius: 4px; }
+#bp-design .chip.strong { background: #dbe4ff; font-weight: 600; }
+#bp-design-findings ul { margin: 4px 0 8px 18px; padding: 0; }
+#bp-design-findings li.error { color: #c92a2a; }
+#bp-design details { margin: 6px 0; }
+#bp-design table td { padding: 2px 8px 2px 0; vertical-align: top; }
 ul.warn { list-style: none; }
 .filters { margin: 8px 0 12px; }
 progress { width: 100%; height: 10px; margin-top: 10px; }
@@ -142,6 +159,16 @@ body.embedded { --top-h: 44px; }
 /* 2026-11-21: "🎓 Show me this screen" sits just left of ❓ Help */
 .help-links { display: inline-flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
 .show-me-link { white-space: nowrap; font-size: 13px; }
+/* 2026-11-21: the wiring drawing / schematic viewer (review.js openWiringViewer) */
+.bp-wv-back { position: fixed; inset: 0; z-index: 70; background: rgba(15, 23, 42, .55); display: flex; padding: 2vh 2vw; }
+.bp-wv { flex: 1; display: flex; flex-direction: column; background: #fff; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.35); overflow: hidden; }
+.bp-wv-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.bp-wv-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.bp-wv-hint { margin: 4px 14px; }
+.bp-wv-stage { position: relative; flex: 1; overflow: hidden; background: #fff; cursor: grab; touch-action: none; }
+.bp-wv-stage.dragging { cursor: grabbing; }
+.bp-wv-stage img { position: absolute; left: 0; top: 0; transform-origin: 0 0; max-width: none; user-select: none; }
+.bp-wv-stage > p, .bp-wv-stage > .error { margin: 16px; }
 .page-head .row { margin: 0; }
 #job-next .row, #bid-actions .row { margin-top: 10px; align-items: flex-end; }
 #job-choices button { text-transform: capitalize; }
@@ -357,6 +384,17 @@ polygon.bp-hl.inslab { stroke: #868e96; fill: #868e96; fill-opacity: .25; stroke
 .bp-wiring-key .bp-wire-swatch { display: inline-block; flex: none; width: 1.6em; height: .5em; border-radius: 2px; }
 .bp-wiring-key #bp-wiring-key-all { margin-top: 4px; }
 #bp-wiring-routes .bp-wire-c.on .bp-wire { stroke-width: 4px; }
+/* 2026-11-23 (David: "Cant see a visual of the conduit"): the conduit runs a picked conduit / fitting / THHN item counts */
+.bp-conduit-run { pointer-events: all; cursor: help; }
+.bp-conduit-line { fill: none; stroke-linejoin: miter; stroke-linecap: square; opacity: .2; }
+.bp-conduit-run.emt .bp-conduit-line { stroke: #495057; }
+.bp-conduit-run.pvc .bp-conduit-line { stroke: #1c7ed6; }
+.bp-conduit-run.on .bp-conduit-line { opacity: .95; }
+.bp-conduit-label { fill: #212529; font-weight: 600; font-family: system-ui, sans-serif; paint-order: stroke;
+  stroke: #fff; stroke-width: 3px; vector-effect: non-scaling-stroke; }
+.bp-conduit-fit { fill: #fff3bf; stroke: #d9480f; stroke-width: 2px; vector-effect: non-scaling-stroke; }
+.bp-conduit-fit-text { fill: #d9480f; font-weight: 700; text-anchor: middle; font-family: system-ui, sans-serif; }
+.bp-conduit-bend { fill: #ffe066; stroke: #d9480f; stroke-width: 2px; vector-effect: non-scaling-stroke; }
 #bp-wiring .bp-wire-swatch { display: inline-block; width: .8em; height: .8em; border-radius: 2px; margin-right: .3em; vertical-align: -1px; }
 #bp-wiring table { width: 100%; border-collapse: collapse; font-size: .9em; }
 #bp-wiring th, #bp-wiring td { text-align: left; padding: 2px 4px; border-bottom: 1px solid var(--line, #e5e5e5); }

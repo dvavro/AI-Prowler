@@ -140,7 +140,11 @@ def test_the_wiring_schematic(tmp_path):                                        
     assert {"S-PANEL", "S-BREAKER", "S-HOT-L1", "S-HOT-L2", "S-NEUTRAL", "S-GROUND", "S-DEVICE"} <= layers
     texts = [t.dxf.text for t in msp.query("TEXT")]
     assert texts[0].startswith("WIRING SCHEMATIC - Test house")
-    assert "MAIN 200A" in texts and all(c["id"] in texts for c in r["circuits"])
+    assert "MAIN 200A" in texts
+    # 2026-11-21: each breaker's name and rating sit above its box ("C-1  20A 1P"), not squeezed inside it
+    brk_labels = [t.dxf.text for t in msp.query('TEXT[layer=="S-BREAKER"]')]
+    assert all(any(lab.startswith(c["id"] + "  ") for lab in brk_labels) for c in r["circuits"]
+               if c.get("assigned") or c.get("devices"))
     assert "RNG" in texts and texts.count("R") >= 2 and "GF" in texts                    # the devices, coded
     assert wiring_schematic.conductors({"amps": 20, "poles": 1, "wire": "12/2"}) == [("L1", ""), ("N", ""), ("G", "")]
     assert [b for b, _ in wiring_schematic.conductors({"amps": 30, "poles": 2, "wire": "10/3"})] == ["L1", "L2", "N", "G"]
@@ -151,3 +155,32 @@ def test_the_wiring_schematic(tmp_path):                                        
     # Every circuit row has its conductors: 3 for a /2 120 V circuit, out past its first device.
     c1 = next(c for c in r["circuits"] if c["id"] == "C-1")
     assert c1["devices"] == 2
+    # 2026-11-21 (David: "the circuit breakers lettering is cut off. Review does it look correct?"):
+    from ezdxf import bbox
+    boxes = [bbox.extents([b]) for b in msp.query('LWPOLYLINE[layer=="S-BREAKER"]')]
+    brk = [b for b in boxes if b.extmin.x >= 25]
+    assert brk
+    lines = list(msp.query("LINE"))
+    for b in brk:
+        x0, y0, x1, y1 = b.extmin.x, b.extmin.y, b.extmax.x, b.extmax.y
+        # the hot goes in the breaker's left side and out its right side...
+        assert any(l.dxf.layer.startswith("S-HOT") and abs(l.dxf.end.x - x0) < 1e-6 and y0 < l.dxf.end.y < y1 for l in lines)
+        assert any(l.dxf.layer.startswith("S-HOT") and abs(l.dxf.start.x - x1) < 1e-6 and y0 < l.dxf.start.y < y1 for l in lines)
+        # ...and the neutral and ground never pass through a breaker
+        for l in lines:
+            if l.dxf.layer in ("S-NEUTRAL", "S-GROUND") and abs(l.dxf.start.y - l.dxf.end.y) < 1e-6 and y0 <= l.dxf.start.y <= y1:
+                lo, hi = sorted((l.dxf.start.x, l.dxf.end.x))
+                assert not (lo < x1 and hi > x0), "a neutral or ground runs through a breaker"
+    # breaker labels clear of the boxes and every wire
+    for t in msp.query('TEXT[layer=="S-BREAKER"]'):
+        tb = bbox.extents([t], fast=False)
+        if tb.extmin.x < 25:
+            continue
+        for b in brk:
+            assert tb.extmax.y <= b.extmin.y or tb.extmin.y >= b.extmax.y or tb.extmax.x <= b.extmin.x \
+                or tb.extmin.x >= b.extmax.x, t.dxf.text
+    # the utility brings two hots and a neutral - the ground starts at the panel (bonding jumper, ground rod)
+    assert not [l for l in lines if l.dxf.layer == "S-GROUND" and max(l.dxf.start.y, l.dxf.end.y) > -2
+                and min(l.dxf.start.x, l.dxf.end.x) < 19]
+    assert "MBJ" in texts and "GROUND ROD (GEC)" in texts
+    assert len(msp.query("HATCH")) > 10                                   # connection dots

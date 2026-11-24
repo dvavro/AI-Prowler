@@ -192,6 +192,60 @@ def test_run_wiring_from_the_toolbar(page, db, job):
     assert page.locator("#bp-wiring-routes .bp-wire-c").count() == 6
 
 
+def test_wiring_schematic_from_the_toolbar(page, db, job, tmp_path):
+    """2026-11-21 (David: "I thought we can generate a schematic diagram after the wiring is ran? I don't see it"): the
+    schematic was only in the Wiring card at the bottom of the To measure tab - 📐 Wiring schematic is on the toolbar now,
+    beside ⚡ Run wiring. Before any run it says to run the wiring first."""
+    page.goto(page.base + f"#/takeoffs/{job}")
+    page.wait_for_selector("#bp-viewer [data-oid]", state="attached")
+    sch = page.locator("#bp-tool-schematic")
+    assert sch.is_visible() and "conductors" in sch.get_attribute("title")
+    sch.click()                                                   # no run yet: a toast, no download
+    page.wait_for_selector("#toast:visible")
+    assert "Run wiring first" in page.inner_text("#toast")
+    page.click("#bp-run-wiring")
+    page.wait_for_selector("#bp-wiring-options", state="visible")
+    page.click("#bp-wiring-options-run")
+    page.wait_for_function("() => { const b = document.querySelector('#bp-run-wiring');"
+                           " return b && !b.disabled && !b.textContent.includes('Routing'); }", timeout=30000)
+    # 2026-11-21 (David: "why does the file have to be downloaded when it can be just displayed or downloaded or
+    # both?"): it opens on the screen - zoom, fit, the other drawing - with the DXF download in the viewer.
+    page.click("#bp-tool-schematic")
+    page.wait_for_selector("#bp-wiring-viewer[data-ready='1']", timeout=20000)
+    assert "schematic" in page.inner_text("#bp-wiring-viewer-title")
+    size = page.evaluate("() => { const i = document.querySelector('#bp-wiring-viewer-img');"
+                         " return [i.naturalWidth, i.getBoundingClientRect().width]; }")
+    assert size[0] > 100 and size[1] > 300                         # a real picture, fitted to the window
+    before = page.evaluate("() => document.querySelector('#bp-wiring-viewer-img').getBoundingClientRect().width")
+    page.click("#bp-wiring-viewer-in")
+    page.click("#bp-wiring-viewer-in")
+    after = page.evaluate("() => document.querySelector('#bp-wiring-viewer-img').getBoundingClientRect().width")
+    assert after > before * 1.4                                     # zoomed in
+    box = page.locator("#bp-wiring-viewer-stage").bounding_box()
+    page.mouse.move(box["x"] + 300, box["y"] + 200)
+    page.mouse.wheel(0, 400)                                        # scroll: zoom out about the pointer
+    page.wait_for_function(f"() => document.querySelector('#bp-wiring-viewer-img').getBoundingClientRect().width < {after}")
+    page.click("#bp-wiring-viewer-fit")
+    with page.expect_download() as dl:
+        page.click("#bp-wiring-viewer-download")
+    out = tmp_path / "schematic.dxf"
+    dl.value.save_as(out)
+    assert dl.value.suggested_filename == f"estimate_{job}_schematic.dxf"
+    assert b"WIRING SCHEMATIC" in out.read_bytes()
+    page.click("#bp-wiring-viewer-other")                           # the wiring drawing, same viewer
+    page.wait_for_selector("#bp-wiring-viewer[data-ready='1']", timeout=20000)
+    assert "Wiring drawing" in page.inner_text("#bp-wiring-viewer-title")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#bp-wiring-viewer", state="detached")
+    # The Wiring card: View and Download for each drawing.
+    page.click("#bp-tab-guide")
+    page.wait_for_selector("#bp-wiring-files")
+    page.click("#bp-wiring-view-schematic")
+    page.wait_for_selector("#bp-wiring-viewer[data-ready='1']", timeout=20000)
+    page.click("#bp-wiring-viewer-x")
+    page.wait_for_selector("#bp-wiring-viewer", state="detached")
+
+
 def test_rerun_with_other_options_offers_the_new_lengths(page, db, job):
     """2026-11-21 (David: "I reran the run wiring with different defaults and I don't see any changes to approve"):
     with everything approved and "Keep approved items" on, a rerun with other routing shows the changed lengths to

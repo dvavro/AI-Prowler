@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import re
 
-VERSION = 6                         # Sprint 12: fuller electrical and plumbing libraries, and what each one feeds
+VERSION = 7                         # Sprint 12: fuller electrical and plumbing libraries, and what each one feeds
+                                    # 2026-11-21: the subpanel (Panel work = Add a subpanel)
                                     # 2026-11-20: range and dryer receptacles; disconnects are counted
                                     # Sprint 14: the HVAC library; Sprint 15: the landscape library
                                     # 2026-11-13: low voltage, architectural and fire alarm symbols
@@ -47,6 +48,9 @@ _ROWS = (
     # (2026-11-19: a plain FAN block is a ceiling fan on a house plan; FAN_EXH is the exhaust fan below.)
     ("ceiling_fan", "electrical", "Ceiling fan", ("CF",), ("CEILFAN", "CEILING_FAN", "FAN")),
     ("panel", "electrical", "Electrical panel", (), ("PANEL", "PNL")),
+    # 2026-11-21 (David: "a 100A sub panel" in the shed, fed from the house): a subpanel isn't a new main service - it
+    # answers Panel work = Add a subpanel (a variant of "panel", so SUBPANEL beats PANEL in a block name).
+    ("panel_sub", "electrical", "Subpanel", ("SP", "SUB-PANEL"), ("SUBPANEL", "SUBPNL", "SUBPANL")),
     ("junction_box", "electrical", "Junction box", ("J", "JB"), ("JBOX", "JUNCTION")),
     # Sprint 12: the rest of a house's electrical devices
     ("duplex_receptacle_usb", "electrical", "Duplex receptacle with USB", ("USB",), ("USB",)),
@@ -157,6 +161,7 @@ FEEDS = {
     # 2026-11-20 (David): smoke detectors and the main panel on the plan are counted too.
     "smoke_detector": ("electrical", "smoke_detectors"), "smoke_co_detector": ("electrical", "smoke_detectors"),
     "panel": ("electrical", "main_panels"),
+    "panel_sub": ("electrical", "panel", "subpanel"),   # 2026-11-21: Panel work = Add a subpanel (size: 100 A default)
     "receptacle_240v": ("electrical", "appliance_circuits"), "receptacle_dedicated": ("electrical", "appliance_circuits"),
     "range_receptacle": ("electrical", "range_receptacles"), "dryer_receptacle": ("electrical", "dryer_receptacles"),
     "disconnect": ("electrical", "disconnects"),       # 2026-11-20: the A/C and water heater disconnects
