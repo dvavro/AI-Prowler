@@ -190,8 +190,9 @@ def test_cp_06_order_total(box, person, qty):
     tax = float(http("GET", box.base + "/support-api/info")[1]["tax_rate"] or 0)
     total = f"{round(45 * qty * (1 + tax), 2):,.2f}"
     who, p = _open(box, person, "buy")
-    p.locator("[data-buy='ZAG-PROD']").click()
-    p.locator("#fQty").fill(str(qty))
+    p.locator("[data-buy='ZAG-PROD']").click()                     # 🛒 add to cart, then check out
+    p.locator("#viewCart").click()
+    p.locator(".cartQty[data-code='ZAG-PROD']").fill(str(qty))
     p.locator("#fSum", has_text=total).wait_for()
     c = _who()
     _address(who)
@@ -205,7 +206,8 @@ def test_cp_06_order_total(box, person, qty):
 def test_cp_07_bad_quantity_is_refused(box, person, qty):
     who, p = _open(box, person, "buy")
     p.locator("[data-buy='ZAG-PROD']").click()
-    p.locator("#fQty").evaluate("(e, v) => { e.type = 'text'; e.value = v; e.dispatchEvent(new Event('input')); }", qty)
+    p.locator("#viewCart").click()
+    p.locator(".cartQty[data-code='ZAG-PROD']").evaluate("(e, v) => { e.type = 'text'; e.value = v; e.dispatchEvent(new Event('input')); }", qty)
     c = _who()
     _address(who)
     _details(who, c)
