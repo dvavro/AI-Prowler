@@ -204,7 +204,7 @@ def test_read_prompt_tells_the_symbols_apart_by_shape():
 
 
 def test_lights_are_counted_by_type():                                                    # 2026-11-20
-    """David: "for the lights we need to count separately each type of light needed for the BOM so ask AI Auto Run
+    """David: "for the lights we need to count separately each type of light needed for the BOM so ask AI Auto Measure/Count
     not to bundle symbols"."""
     prompt = _prompt()
     assert "never bundled together" in prompt and "each kind is a different fixture to order" in prompt
@@ -306,7 +306,7 @@ def test_a_rerun_replaces_the_earlier_run(db, plans, keep):                     
     assert db.execute("SELECT COUNT(*) FROM measurements WHERE id = ?", (typed,)).fetchone()[0] == 1
     reasons = [json.loads(r[0])["reason"] for r in db.execute(
         "SELECT after_json FROM estimate_events WHERE action = 'measurement_deleted'")]
-    assert reasons == [f"replaced by AI Auto Run #{rid2}"] * (len(first) - (1 if keep else 0))
+    assert reasons == [f"replaced by AI Auto Measure/Count #{rid2}"] * (len(first) - (1 if keep else 0))
 
 
 def test_create_measurements_all_zero_proposes_nothing(db, plans):

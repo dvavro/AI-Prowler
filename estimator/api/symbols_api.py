@@ -49,7 +49,7 @@ def handles(sub: str) -> bool:
 
 
 def _auto_runs(conn, ctx, reg) -> list[dict]:
-    """The recent 🤖 AI Auto Runs, every trade (2026-11-21, David: "Why were there no measured runs?" - the Agents page
+    """The recent 🤖 AI Auto Measure/Count runs, every trade (2026-11-21, David: "Why were there no measured runs?" - the Agents page
     listed only the Director's runs): project, trade, status, the step it reached or why it failed, when, how long, what
     it proposed, and what its AI calls cost (from the AI log)."""
     from datetime import datetime
@@ -246,7 +246,7 @@ def route(m: str, sub: str, req, ctx, conn):
             prog = round(sum(t["progress"] or 0 for t in tasks) / len(tasks)) if tasks else 0
             runs.append({**dict(r), "estimate_title": r["title"], "progress": prog, "tasks": tasks})
         return _ok(agents=cfg["agents"], enabled=cfg["enabled"], turned_off=cfg["turned_off"], runs=runs,
-                   auto_runs=_auto_runs(conn, ctx, get_registry()),           # 2026-11-21: 🤖 AI Auto Run, every trade
+                   auto_runs=_auto_runs(conn, ctx, get_registry()),           # 2026-11-21: 🤖 AI Auto Measure/Count, every trade
                    task_states=list(runner.TASK_STATES), can_configure=False,
                    settings_where="AI-Prowler's 🏗 Estimator tab → 🏗 Trades",
                    can_start=ctx.role in runner.START_ROLES)

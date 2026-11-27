@@ -23,7 +23,7 @@ const TOOLS = [
   ["length", "📏", "Length", "Click along the line; double-click (or Enter) to finish."],
   ["area", "⬠", "Area", "Click the corners; click the first point, double-click or press Enter to finish."],
   ["rect", "▭", "Rectangle", "Click two opposite corners."],
-  // 2026-11-18 (David): no Count tool — it counted badly and took view room; 🤖 AI Auto Run counts now.
+  // 2026-11-18 (David): no Count tool — it counted badly and took view room; 🤖 AI Auto Measure/Count counts now.
   ["calibrate", "📐", "Calibrate", "Click both ends of a distance you know, then type its real length."],
   ["symbol", "✳", "Add symbol", "Click a symbol the plan engine missed, then say what it is."],
 ];
@@ -92,7 +92,16 @@ async function renderReview(main, estimateId) {
   const lineSheet = RV.lineId ? (lineMeasurements(RV.lineId).find(m => m.sheet_id) || {}).sheet_id : null;
   const wanted = +(q.get("sheet") || 0) || lineSheet;
   // 2026-11-15 (David): open on a sheet switched ON for the project's trades (Plans screen), not on one that's off.
-  const firstSheet = d.sheets.find(s => s.id === wanted) || d.sheets.find(s => s.id === RV.sheetId && sheetOn(s)) ||
+  // 2026-11-25 (David: "if the user asked to update the plans, then the updated plans are assumed as the latest and should
+  // be the default viewed plans in any viewer"): a drawing ✨ AI design just made or changed opens first - once; after
+  // that the screen stays on whatever sheet the person picks
+  const aiSheets = d.sheets.filter(s => s.design_rev);
+  const newest = aiSheets.length ? aiSheets.reduce((a, b) => (b.plan_set_id > a.plan_set_id ? b : a)) : null;
+  const newestKey = newest ? estimateId + ":" + newest.plan_set_id + ":" + newest.design_rev : null;
+  const openNewest = !!newest && !wanted && RV.newestSeen !== newestKey;
+  if (newestKey) RV.newestSeen = newestKey;
+  const firstSheet = d.sheets.find(s => s.id === wanted) || (openNewest ? newest : null) ||
+    d.sheets.find(s => s.id === RV.sheetId && sheetOn(s)) ||
     d.sheets.find(s => sheetOn(s) && s.objects) || d.sheets.find(sheetOn) || d.sheets.find(s => s.objects) || d.sheets[0];
   const head = [el("p", {}, el("a", { href: "#/projects/" + estimateId }, "← " + d.estimate.title), " · ",
       el("a", { id: "bp-quantities", href: "#/quantities/" + estimateId }, "📐 Plan quantities")),
@@ -108,13 +117,22 @@ async function renderReview(main, estimateId) {
       el("h3", {}, "Measurements"), measurementPanel(msg), msg);
     return;
   }
+  // 2026-11-25 (David: "when AI Design redraw the plan the window did not use the latest and there is no way to refresh
+  // it"): each sheet says which revision of its plans it is and when that was read, and 🔄 Reload reads them again
   const sheetPick = el("select", { id: "review-sheet", "aria-label": "Sheet" },
     d.sheets.map(s => el("option", { value: s.id, selected: s.id === firstSheet.id },
       (sheetOn(s) ? "✅ " : "⛔ ") + (s.sheet_no || "Page " + s.page_no) + (s.title ? " — " + s.title : "") +
+      // a sheet ✨ AI design drew says its design revision - the number its window shows (2026-11-25: the plans' own
+      // count, 3, didn't match the window's 6 and looked like the wrong drawing)
+      (s.design_rev ? " · AI design revision " + s.design_rev : s.plan_revision > 1 ? " · revision " + s.plan_revision : "") +
+      (s.read_at ? " · read " + when(s.read_at) : "") +
       (sheetOn(s) ? "" : " (switched off)") + (s.needs_scale ? " (needs a scale)" : ""))));
   sheetPick.addEventListener("change", () => openSheet(+sheetPick.value, msg));
   const prev = el("button", { class: "button", type: "button", id: "review-prev", title: "Previous sheet" }, "◀");
   const next = el("button", { class: "button", type: "button", id: "review-next", title: "Next sheet" }, "▶");
+  const reload = el("button", { class: "button", type: "button", id: "review-reload",
+    title: "Read the project's plans again - after the plans were redrawn or replaced" }, "🔄 Reload");
+  reload.addEventListener("click", () => reloadReview());
   const step = dir => {
     const i = d.sheets.findIndex(s => s.id === RV.sheetId) + dir;
     if (i >= 0 && i < d.sheets.length) { sheetPick.value = d.sheets[i].id; openSheet(d.sheets[i].id, msg); }
@@ -139,12 +157,16 @@ async function renderReview(main, estimateId) {
   // picker stays up top, and the help line + toolbar render immediately above the split.
   // Full screen is unaffected: it fullscreens #bp-viewer only, and the toolbar was outside it before.
   main.replaceChildren(...head,
-    el("div", { class: "row bp-bar" }, prev, sheetPick, next, viewButtons()),
+    el("div", { class: "row bp-bar" }, prev, sheetPick, next, reload, viewButtons()),
+    // (no note: nothing - replaceChildren writes a null as the word "null", 2026-11-25)
+    ...[designWaitingNote(d.design_waiting)].filter(Boolean),
     el("div", { id: "bp-readout-slot" }), el("div", { id: "bp-notes" }),
     msg, el("div", { id: "bp-auto-slot" }),
     el("p", { class: "muted small", id: "bp-tool-help" }, TOOLS.find(t => t[0] === RV.tool)[3]),
     toolPalette(msg), el("div", { class: "bp-split" }, viewerBox, side));
   RV.viewer = new Viewer(viewerBox, msg);
+  RV.sheetList = d.sheets;                     // the file label on the drawing (fileLabel) says which file each sheet is
+  RV.designWaitingNow = d.design_waiting || null;
   $("bp-pane-list").replaceChildren(measurementPanel(msg));
   $("bp-pane-detail").replaceChildren(detailEmpty());      // the Detail tab is never blank without explanation
   await openSheet(firstSheet.id, msg);
@@ -382,7 +404,7 @@ function toolPalette(msg) {
     const run = el("button", { class: "button", type: "button", id: "bp-auto-run",
       disabled: !trade,
       title: autoRunTitle(trade, true) },
-      "🤖 AI Auto Run");
+      "🤖 AI Auto Measure/Count");
     run.addEventListener("click", () => startAutoRun());
     box.append(attachHoverCard(run, "bp-auto-run-help", autoRunHelp));    // what this trade's run needs (2026-11-21)
     // More than one runnable trade: a picker next to the button, so the run goes to the trade the user
@@ -390,13 +412,13 @@ function toolPalette(msg) {
     // keeps the picker in step), and the choice is kept in AUTO.pickedTrade so a redraw never loses it.
     const runnable = autoRunTrades();
     if (runnable.length > 1) {
-      const pick = el("select", { id: "bp-auto-trade", "aria-label": "Trade for AI Auto Run",
-        title: "Which trade AI Auto Run measures" },
+      const pick = el("select", { id: "bp-auto-trade", "aria-label": "Trade for AI Auto Measure/Count",
+        title: "Which trade AI Auto Measure/Count measures" },
         runnable.map(t => el("option", { value: t.module_id, selected: t.module_id === trade }, t.name)));
       pick.addEventListener("change", () => { AUTO.pickedTrade = pick.value; drawAutoRunStatus(); });
       box.append(pick);
     }
-    // 2026-11-23 (David: "move the Let AI Design to the main measure window by the AI Auto Run, let's not hide it in the
+    // 2026-11-23 (David: "move the Let AI Design to the main measure window by the AI Auto Measure/Count, let's not hide it in the
     // 'to measure' tab"): ✨ AI design on the toolbar, opening its own window (openDesignPanel).
     const design = el("button", { class: "button", type: "button", id: "bp-ai-design",
       title: "Describe what to add (e.g. lighting, receptacles and a subpanel for your shed) — the AI reads the building, " +
@@ -405,7 +427,7 @@ function toolPalette(msg) {
     design.addEventListener("click", () => openDesignPanel());
     box.append(design);
     if (RV.designFor !== RV.estimateId) drawDesign();     // the button says when a design is working or ready
-    // 2026-11-20 (David: "I don't see the run wiring"): just the wiring, beside AI Auto Run - routes the cable from the
+    // 2026-11-20 (David: "I don't see the run wiring"): just the wiring, beside AI Auto Measure/Count - routes the cable from the
     // floor plan and the panel drawing (plain geometry, no AI tokens), the same run as the Wiring card's button.
     if (RV.data.trades.some(t => t.module_id === "electrical")) {
       const wire = el("button", { class: "button", type: "button", id: "bp-run-wiring",
@@ -438,7 +460,7 @@ function toolPalette(msg) {
     const keep = el("input", { type: "checkbox", id: "bp-auto-keep", checked: keepApproved() ? "" : null });
     keep.addEventListener("change", () => setKeepApproved(keep.checked));
     box.append(el("label", { class: "small", for: "bp-auto-keep", id: "bp-auto-keep-label",
-      title: "Ticked: a rerun (AI Auto Run or ⚡ Run wiring) keeps what you already approved and only proposes the rest; " +
+      title: "Ticked: a rerun (AI Auto Measure/Count or ⚡ Run wiring) keeps what you already approved and only proposes the rest; " +
              "when the rerun measures an approved item differently, the new value waits as a suggested change for you to accept. " +
              "Unticked: a rerun starts the trade over from scratch — approved AI results on the sheet are replaced too " +
              "(what you drew or typed is never touched)." },
@@ -455,7 +477,7 @@ function toolPalette(msg) {
   }
   return box;
 }
-// Keep approved items on an AI Auto Run / Wiring rerun (default yes), remembered in this browser.
+// Keep approved items on an AI Auto Measure/Count / Wiring rerun (default yes), remembered in this browser.
 const KEEP_APPROVED_STORE = "est_auto_keep_approved";
 function keepApproved() {
   try { return localStorage.getItem(KEEP_APPROVED_STORE) !== "0"; } catch (e) { return true; }
@@ -570,12 +592,34 @@ async function openSheet(sheetId, msg) {
   if (!isCadSheet() && s.viewports.some(v => !v.measurable && !v.is_nts)) warn.push("Part of this sheet has no scale yet — set it with 📐 Calibrate or on the Plans screen before measuring there.");
   $("bp-notes").replaceChildren(...(warn.length ? [el("p", { class: "note warn", id: "bp-sheet-note" }, warn.join(" "))] : []));
   RV.viewer.load();
+  fileLabel();
   drawLayersPanel();
   drawSymbolsPanel(msg);
   drawLinesPanel();
   refreshList(msg);
   loadAutoCandidates();      // what the agent found on this sheet, in the background (never blocks the sheet)
   loadLatestRun();           // a run still going, or the last run's results on this sheet (2026-11-15)
+}
+
+// 2026-11-25 (David: "show what file is being uploaded on top to the plan viewer so the user can look to see what being
+// viewed"): the file this sheet came from, the sheet, and - for an AI design drawing - its revision and whether it's
+// approved, on top of the drawing (it stays there in full screen; clicks go through it)
+function fileLabel() {
+  const box = $("bp-viewer");
+  if (!box) return;
+  let tag = $("bp-file-label");
+  if (!tag) { tag = el("div", { class: "bp-file-label", id: "bp-file-label", role: "status" }); box.append(tag); }
+  const s = (RV.sheetList || []).find(x => x.id === RV.sheetId) || {};
+  const w = RV.designWaitingNow;
+  const waiting = !!(s.design_rev && w && w.on_screen && w.rev === s.design_rev);
+  const sheet = (s.sheet_no || (s.page_no ? "Page " + s.page_no : "")) + (s.title ? " — " + s.title : "");
+  const rev = s.design_rev ? "AI design revision " + s.design_rev + (waiting ? " — not approved yet" : "")
+    : s.plan_revision > 1 ? "revision " + s.plan_revision : "";
+  const file = s.file || "(file name not known)";
+  tag.classList.toggle("waiting", waiting);
+  tag.title = ["File: " + file, sheet, rev].filter(Boolean).join(" · ");
+  tag.replaceChildren(el("strong", {}, "📄 " + file),
+    el("span", { class: "bp-file-sheet" }, [sheet, rev].filter(Boolean).map(t => " · " + t).join("")));
 }
 
 // ------------------------------------------------------------------ the viewer: tiles + SVG overlay
@@ -899,8 +943,10 @@ function snapPoint(p, tol, along) {
 }
 
 // The tile comes through the API with the same sign-in (cookie, or the Jobs app's token - then fetched as a blob).
+// ?v= is which drawing it is (2026-11-25): a redrawn sheet can get the old one's number, and the browser keeps tiles.
 async function tileUrl(sheetId, level, x, y) {
-  const path = API + "/sheets/" + sheetId + "/tiles/" + level + "/" + x + "/" + y + ".png";
+  const v = RV.tiles && RV.tiles.version ? "?v=" + encodeURIComponent(RV.tiles.version) : "";
+  const path = API + "/sheets/" + sheetId + "/tiles/" + level + "/" + x + "/" + y + ".png" + v;
   if (!APP_TOKEN) return path;
   const r = await fetch(path, { credentials: "same-origin", headers: { Authorization: "Bearer " + APP_TOKEN } });
   if (!r.ok) throw new Error("tile " + r.status);
@@ -1318,6 +1364,36 @@ async function reviewAsk(msg, btn, path, body, doneText, prefix, reloadSheet, sk
   } finally { btn.disabled = false; }
 }
 
+// 2026-11-25 (David: "I just reran AI Design ... it did not bring up rev 4", then "lets always show the latest drawing to
+// not confuse the user, then the user still need to approve the new drawing"): the newest AI drawing is the one on this
+// screen; until it's approved, say so - its measurements wait for review - with the way to approve it.
+function designWaitingNote(w) {
+  if (!w) return null;
+  const open = el("button", { class: "primary", type: "button", id: "bp-design-waiting-open" }, "✨ Open AI design to approve it");
+  open.addEventListener("click", () => {
+    RV.designMode = w.trade; RV.designModeFor = RV.estimateId;       // open on the job that's waiting
+    const b = $("bp-ai-design");
+    if (b) b.click();
+  });
+  const was = w.approved_rev ? " (the approved one is revision " + w.approved_rev + "; 🗑 Discard puts it back)" : "";
+  return el("div", { class: "note warn", id: "bp-design-waiting", role: "status" },
+    el("strong", {}, w.on_screen ? "✨ This is AI design revision " + w.rev + " — not approved yet. "
+      : "✨ AI design revision " + w.rev + " is drawn but not approved yet. "),
+    (w.on_screen ? "Its measurements wait for your review" + was + ". Approve it to price it. "
+      : "This screen shows the approved plans" + was + ". Approve revision " + w.rev + " to make it the plans. "), open);
+}
+
+// The whole screen again - the plans, the sheet list and the drawing - for plans that were redrawn or replaced (an
+// approved AI design, a new revision uploaded). It stays on the same sheet when it's still there; the ✨ AI design
+// window stays open. 2026-11-25 (David: "there is no way to refresh it").
+async function reloadReview() {
+  const main = $("main");
+  if (!main || !RV.estimateId || !location.hash.startsWith("#/takeoffs/" + RV.estimateId)) return;
+  const wasOpen = !!$("bp-design-panel");
+  await renderReview(main, RV.estimateId);
+  if (wasOpen && !$("bp-design-panel") && $("bp-ai-design")) $("bp-ai-design").click();
+}
+
 async function refreshData() {
   RV.data = await api("GET", "/estimates/" + RV.estimateId + "/takeoff");
   drawMeasurements();
@@ -1345,7 +1421,7 @@ const AUTO = { runId: null, estimateId: null, sheetId: null, viewportId: null, t
 
 function hasConcreteTrade() { return !!(RV.data && RV.data.trades.some(t => t.module_id === "concrete")); }
 
-// Every trade AI Auto Run can measure (2026-11-18): the 15 construction trades with an auto-run reader.
+// Every trade AI Auto Measure/Count can measure (2026-11-18): the 15 construction trades with an auto-run reader.
 // Services trades never deal with plans, so they never appear here.
 const AUTO_RUN_TRADES = ["concrete", "electrical", "plumbing", "hvac", "flooring", "roofing", "framing",
   "windows_doors", "insulation", "demolition", "drywall", "siding", "fencing", "landscaping", "painting"];
@@ -1353,7 +1429,7 @@ function autoRunTrades() {
   return ((RV.data && RV.data.trades) || []).filter(t => AUTO_RUN_TRADES.includes(t.module_id));
 }
 
-// Which trade AI Auto Run measures on this project (2026-11-18): all 15 construction trades run now.
+// Which trade AI Auto Measure/Count measures on this project (2026-11-18): all 15 construction trades run now.
 // The open sheet's discipline picks when it matches a runnable trade — an electrical sheet means the
 // electrical count — otherwise concrete wins (it was first), and a project with only one runnable trade
 // runs that one.
@@ -1388,7 +1464,7 @@ const AUTO_RUN_BLURBS = {
   drywall: "read the ceiling area and the openings", siding: "read the wall areas and count the corners and openings",
   fencing: "read the fence length and count the gates", landscaping: "read the landscaped areas and count the shrubs, trees and zones",
   painting: "read the ceiling and exterior areas and count the doors" };
-// 2026-11-21 (David): a hover card on 🤖 AI Auto Run and ⚡ Run wiring saying what each trade's run needs from the plans,
+// 2026-11-21 (David): a hover card on 🤖 AI Auto Measure/Count and ⚡ Run wiring saying what each trade's run needs from the plans,
 // with recommendations - focused on the trade the button will run. needs: what has to be there; tips: what makes it
 // read well. Every trade's run also needs the sheet switched ON for the trade (Plans screen) and the AI turned on.
 const AUTO_RUN_NEEDS = {
@@ -1463,11 +1539,11 @@ function needsCard(title, intro, warn, needs, tips) {
 
 function autoRunHelp() {
   const trade = AUTO.status === "running" && AUTO.moduleId ? AUTO.moduleId : selectedAutoRunTrade();
-  if (!trade) return needsCard("🤖 AI Auto Run", null, "Add a construction trade to this project first.",
+  if (!trade) return needsCard("🤖 AI Auto Measure/Count", null, "Add a construction trade to this project first.",
     ["A construction trade on the project (Concrete, Electrical, Roofing…)", "The plans uploaded and read on the project page"], []);
   const anyOn = ((RV.data && RV.data.sheets) || []).some(s => !(s.inactive_trades || []).includes(trade));
   const n = AUTO_RUN_NEEDS[trade] || { needs: ["The plan sheet for " + tradeName(trade) + ", switched on for it"], tips: [] };
-  return needsCard("🤖 AI Auto Run — " + tradeName(trade),
+  return needsCard("🤖 AI Auto Measure/Count — " + tradeName(trade),
     "It will " + (AUTO_RUN_BLURBS[trade] || "read the quantities") + ", then you review and approve what it proposes.",
     anyOn ? null : "Every sheet is switched off for " + tradeName(trade) + " — switch the right sheet on from the Plans screen.",
     n.needs.concat(["AI measuring turned on with an API key (AI-Prowler's 🏗 Estimator tab → 🤖 AI agents)"]), n.tips);
@@ -1480,10 +1556,10 @@ function wiringHelp() {
 }
 
 function autoRunTitle(trade, anyOn) {
-  if (!trade) return "Add a construction trade to this project first — AI Auto Run measures the quantities on the plans for that trade.";
+  if (!trade) return "Add a construction trade to this project first — AI Auto Measure/Count measures the quantities on the plans for that trade.";
   const name = tradeName(trade);
   if (!anyOn) return "Every sheet is switched off for " + name + " — switch the sheets on from the Plans screen.";
-  return "AI Auto Run: " + (AUTO_RUN_BLURBS[trade] || "read the quantities") +
+  return "AI Auto Measure/Count: " + (AUTO_RUN_BLURBS[trade] || "read the quantities") +
     " on the sheets switched on for " + name + ", then review what it proposes.";
 }
 
@@ -1603,7 +1679,7 @@ function drawAutoRunStatus() {
   const slot = $("bp-auto-slot");
   if (!slot || !RV.data) return;
   const runBtn = $("bp-auto-run");
-  // 2026-11-15 (David): AI Auto Run measures the sheets switched ON for the trade being run, whichever sheet is
+  // 2026-11-15 (David): AI Auto Measure/Count measures the sheets switched ON for the trade being run, whichever sheet is
   // open — so an open sheet that's switched off doesn't disable it; the run goes to the sheet that is on.
   // While a run works, the button names the trade that is running — the open sheet may have changed since it started.
   const trade = AUTO.status === "running" && AUTO.moduleId ? AUTO.moduleId : selectedAutoRunTrade();
@@ -1623,14 +1699,14 @@ function drawAutoRunStatus() {
   const parts = [];
   if (offForTrade && trade) {
     const psId = RV.sheet && RV.sheet.plan_set_id;
-    parts.push(el("p", { class: "note warn", id: "bp-auto-off" }, "This sheet is switched off for " + tradeName(trade) + " — AI Auto Run skips it" +
+    parts.push(el("p", { class: "note warn", id: "bp-auto-off" }, "This sheet is switched off for " + tradeName(trade) + " — AI Auto Measure/Count skips it" +
       (anyOn ? " and measures the sheets that are on. " : ". "),
       psId ? el("a", { href: "#/plan-sets/" + psId }, "Change which sheets are on (Plans screen)") : "Change which sheets are on on the Plans screen", "."));
   }
   if (runBtn) {
     // While a run works the button says so and can't be clicked again (2026-11-15, David almost clicked it twice).
     const busy = AUTO.status === "running";
-    runBtn.textContent = busy ? "⏳ AI Auto Run working…" : "🤖 AI Auto Run";
+    runBtn.textContent = busy ? "⏳ AI Auto Measure/Count working…" : "🤖 AI Auto Measure/Count";
     runBtn.classList.toggle("bp-auto-run-busy", busy);
     runBtn.setAttribute("aria-busy", busy ? "true" : "false");
   }
@@ -1640,8 +1716,8 @@ function drawAutoRunStatus() {
     const n = (AUTO.measurementIds || []).length;
     const src = AUTO.source === "llm" ? " read from the plan by the AI" : "";
     parts.push(el("p", { class: "note", id: "bp-auto-status", role: "status" }, n
-      ? "AI Auto Run finished: " + n + " proposed measurement(s)" + src + " — review and approve them below."
-      : "AI Auto Run finished: no measurements proposed on this sheet."));
+      ? "AI Auto Measure/Count finished: " + n + " proposed measurement(s)" + src + " — review and approve them below."
+      : "AI Auto Measure/Count finished: no measurements proposed on this sheet."));
     // The AI (API key) reads the dimensions written on the plan and the app does the maths: no scale, no
     // calibration - say so instead of naming a scale it never used (2026-11-13, David).
     if (AUTO.source === "llm") parts.push(el("p", { class: "muted small", id: "bp-auto-scale" },
@@ -1655,10 +1731,10 @@ function drawAutoRunStatus() {
       (AUTO.calibration.view || "the view") + ": " + cal[1]));
   } else if (runHere && AUTO.status === "failed") {
     parts.push(el("p", { class: "error", id: "bp-auto-status", role: "alert" },
-      "AI Auto Run failed — " + (AUTO.error || "unknown error")));
+      "AI Auto Measure/Count failed — " + (AUTO.error || "unknown error")));
   } else if (runHere && AUTO.status === "timeout") {
     parts.push(el("p", { class: "error", id: "bp-auto-status", role: "alert" },
-      "AI Auto Run stopped answering (no news for 10 minutes) — try re-running it."));
+      "AI Auto Measure/Count stopped answering (no news for 10 minutes) — try re-running it."));
   }
   const vp = autoRunViewport();
   if (vp && trade === "concrete" && AUTO.candidates.has(vp.id)) {
@@ -1697,7 +1773,7 @@ function drawAutoRunStatus() {
   drawStepsPanel();      // the calc lives in the Measure steps tab, beside the drawing
 }
 
-// "Please wait" while AI Auto Run works (2026-11-15, David): a spinner, the steps it goes through with the current one
+// "Please wait" while AI Auto Measure/Count works (2026-11-15, David): a spinner, the steps it goes through with the current one
 // marked, and how long it has been going — so nobody clicks it twice. The run's own step names come from the server
 // (llm_takeoff.run_llm_takeoff's on_step); an unknown step just shows as the current line.
 // The steps differ by trade (2026-11-18): concrete calibrates and measures a slab, electrical counts devices,
@@ -1734,7 +1810,7 @@ function autoRunningBanner() {
   return el("div", { class: "bp-running", id: "bp-auto-status", role: "status", "aria-live": "polite" },
     el("div", { class: "bp-spinner", "aria-hidden": "true" }),
     el("div", {},
-      el("strong", {}, "🤖 AI Auto Run is working — please wait"),
+      el("strong", {}, "🤖 AI Auto Measure/Count is working — please wait"),
       el("div", { class: "muted small" }, "This usually takes 1–2 minutes (a busy plan can take 10 or more). You don't need to click again; the results show here when it's done. ",
         "Running for ", el("span", { id: "bp-auto-elapsed" }, secs + " s"), "."),
       el("ol", { id: "bp-auto-steps" }, items),
@@ -2181,7 +2257,7 @@ function drawHighlight(zoom) {
 // "I want the user to be able to add area to be included in the calculation, for example the sloped edge ... by adding
 // three points and assuming to scale drawing" — and to take away an area the AI counted that shouldn't be. Click the
 // corners on the drawing (3 or more), Finish; the server works out the real area from the view's scale (a footer
-// detail has its own scale: AI Auto Run calibrates it; else 🤖 Auto-calibrate / 📏 Calibrate it), asks, and the
+// detail has its own scale: AI Auto Measure/Count calibrates it; else 🤖 Auto-calibrate / 📏 Calibrate it), asks, and the
 // formulas above change.
 const ADJUST_WHAT = { footer: "the footer cross-section", slab: "the slab area" };
 function drawnAreasBox(c) {
@@ -2491,8 +2567,8 @@ function pollAutoRun() {
       // Electrical's run also routes the wiring (2026-11-19): say what it did, or why it didn't.
       const wired = elec && elec.wiring;
       const wiring = wired ? (wired.ran ? " ⚡ Wiring: " + wired.summary + "." : " ⚡ " + wired.why + ".") : "";
-      toast(n ? "AI Auto Run finished: " + n + " proposed measurement(s)" + src + extra + " to review." + wiring
-              : "AI Auto Run finished: nothing proposed." + wiring);
+      toast(n ? "AI Auto Measure/Count finished: " + n + " proposed measurement(s)" + src + extra + " to review." + wiring
+              : "AI Auto Measure/Count finished: nothing proposed." + wiring);
       if (wired) { RV.wiringFor = null; RV.showWiringNext = !!wired.ran; }   // the Wiring card reloads with the new run, routes on
       drawAutoRunStatus();
       await refreshData();
@@ -2525,13 +2601,13 @@ async function startAutoRun() {
   AUTO.error = null;
   AUTO.startedAt = Date.now();
   drawAutoRunStatus();
-  toast("AI Auto Run started — please wait, it usually takes 1–2 minutes.");
+  toast("AI Auto Measure/Count started — please wait, it usually takes 1–2 minutes.");
   const slot = $("bp-auto-slot");
   if (slot && slot.scrollIntoView) slot.scrollIntoView({ block: "nearest", behavior: "smooth" });
   try {
     const r = await api("POST", "/auto-run", { estimate_id: RV.estimateId, sheet_id: here ? RV.sheetId : null,
                                                module_id: trade, keep_approved: keepApprovedNow() });
-    if (!r.run_id) throw new Error("AI Auto Run didn't start (no run id)");
+    if (!r.run_id) throw new Error("AI Auto Measure/Count didn't start (no run id)");
     trackAutoRun(r.run_id, null);
   } catch (e) {
     if (e.status === 401) { AUTO.status = null; AUTO.step = ""; drawAutoRunStatus(); }
@@ -2567,7 +2643,7 @@ async function rerunAutoRun(btn) {
   const id = await resolveRunIdForSheet();
   if (!id) {
     AUTO.status = "failed";
-    AUTO.error = "No agent run to re-run on this sheet yet — use 🤖 AI Auto Run first.";
+    AUTO.error = "No agent run to re-run on this sheet yet — use 🤖 AI Auto Measure/Count first.";
     drawAutoRunStatus();
     return;
   }
@@ -2650,8 +2726,8 @@ function refreshList(msg) {
   if (RV.data.can_approve && t.counts.proposed) parts.push(bulkApprove(msg));
   if (!rows.length) {
     parts.push(el("div", { class: "card empty", id: "bp-list-empty" }, t.measurements.length ? "Nothing matches." :
-      // 2026-11-21 (David): measuring by hand is too much work - AI Auto Run (and the wiring run) measure the plans.
-      RV.data.can_measure ? "No measurements yet. Click 🤖 AI Auto Run — it reads the plans and measures and counts everything for you" +
+      // 2026-11-21 (David): measuring by hand is too much work - AI Auto Measure/Count (and the wiring run) measure the plans.
+      RV.data.can_measure ? "No measurements yet. Click 🤖 AI Auto Measure/Count — it reads the plans and measures and counts everything for you" +
         ((RV.data.trades || []).some(x => x.module_id === "electrical") ? ", then ⚡ Run wiring for the cable runs" : "") +
         ". Then approve what it found. (Missed something? The drawing tools — 📏 Length, ⬠ Area — are there for the odd extra.)" :
         "No measurements yet."));
@@ -2696,8 +2772,8 @@ function refreshList(msg) {
 const GUIDE_TOOLS = {
   area: { tool: "rect", label: "▭ Rectangle or ⬠ Area" },
   length: { tool: "length", label: "📏 Length" },
-  count: { tool: null, label: "🤖 AI Auto Run" },   // 2026-11-18: no Count tool — AI Auto Run is the only way to count
-  wiring: { tool: null, label: "⚡ Wiring" },        // cable sizes/lengths: the Wiring stage (AI Auto Run, Electrical)
+  count: { tool: null, label: "🤖 AI Auto Measure/Count" },   // 2026-11-18: no Count tool — AI Auto Measure/Count is the only way to count
+  wiring: { tool: null, label: "⚡ Wiring" },        // cable sizes/lengths: the Wiring stage (AI Auto Measure/Count, Electrical)
 };
 // Why this quantity needs that tool. The concrete lines are the ones David tripped over;
 // everything else falls back to the unit: sqft is priced by the square foot, lf by the foot.
@@ -2718,10 +2794,10 @@ function guideWhyFor(mod, q) {
   const key = mod + "." + q.id;
   if (GUIDE_WHY[key]) return GUIDE_WHY[key];
   const kind = guideToolFor(q);
-  if (kind === "wiring") return "routed from the panel to every device by 🤖 AI Auto Run (or ⚡ Run wiring below) — needs the floor plan and the panel drawing as DXF files";
+  if (kind === "wiring") return "routed from the panel to every device by 🤖 AI Auto Measure/Count (or ⚡ Run wiring below) — needs the floor plan and the panel drawing as DXF files";
   if (kind === "area") return "priced by the square foot — Rectangle for a straight-sided shape, Area for an odd one";
   if (kind === "length") return "priced by the linear foot — click along it";
-  return "priced each — 🤖 AI Auto Run counts them from the plan";
+  return "priced each — 🤖 AI Auto Measure/Count counts them from the plan";
 }
 // [state, text]: approved (from approved_answers, already in the question's unit), to review
 // (a proposed measurement feeds it), or not yet measured.
@@ -2818,6 +2894,28 @@ async function runAutoCalibrate(v, button, confirm) {
   }
 }
 
+// 2026-11-25 (David: "it does not count the drive double gates and inspections because they don't exist on the
+// drawing, so how do I remove them?"): a quantity the job doesn't have is answered 0 — saved as an approved 0 (a person
+// can approve) or a 0 waiting for review, the same typed measurement a zero count in Measure steps saves. It prices as
+// nothing, the row turns ✓, and AI Auto Measure/Count has nothing left to look for.
+function guideNoneButton(mod, q) {
+  if (!RV.data.can_measure) return null;
+  const kind = guideToolFor(q);
+  if (kind === "wiring") return null;            // cable comes from the Wiring run, not a typed number
+  const unit = q.unit || "ea";
+  const b = el("button", { class: "button bp-guide-none", type: "button", "data-module": mod, "data-question": q.id,
+    title: "This job has none — save 0 for " + q.label + " so it's priced as nothing and stops asking" }, "0 — none on this job");
+  b.addEventListener("click", ev => {
+    ev.stopPropagation();          // not the row's tool or highlight
+    reviewAsk($("review-message"), b, "/estimates/" + RV.estimateId + "/measurements",
+      { module_id: mod, feeds: q.id, qty: "0", unit: unit, kind: kind === "area" ? "area" : kind === "length" ? "length" : "count",
+        label: q.label + " — none on this job", approve: !!RV.data.can_approve },
+      () => q.label + ": 0 — none on this job" + (RV.data.can_approve ? "" : " (waiting for approval)"), "bp-none", false, true);
+  });
+  b.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") ev.stopPropagation(); });
+  return b;
+}
+
 function drawTakeoffGuide() {
   const slot = $("bp-pane-guide");
   if (!slot || !RV.data) return;
@@ -2855,7 +2953,7 @@ function drawTakeoffGuide() {
     const rows = tr.questions.map(q => {
       const kind = guideToolFor(q), tool = GUIDE_TOOLS[kind];
       const [state, text] = guideStatusFor(tr.module_id, q);
-      // A count row has no tool to pick (AI Auto Run counts) — instead it highlights the
+      // A count row has no tool to pick (AI Auto Measure/Count counts) — instead it highlights the
       // symbols it counts on the drawing, the way the Measure steps rows do (same rule:
       // only when the sheet has classified symbols behind the question).
       const pickable = !!(RV.data.can_measure && tool.tool);
@@ -2867,12 +2965,13 @@ function drawTakeoffGuide() {
         title: pickable ? "Use the " + tool.label + " tool"
           : symbols.length ? "Show these on the drawing"
           : wiringRow ? "Go to the ⚡ Wiring card (routes, cable totals, Run wiring)"
-          : !tool.tool ? "Run 🤖 AI Auto Run (above the drawing) to count these" : null },
+          : !tool.tool ? "Run 🤖 AI Auto Measure/Count (above the drawing) to count these" : null },
         el("span", { class: "bp-row-name" },
           symbols.length ? el("span", { class: "bp-step-eye", "aria-hidden": "true" }, "🔍 ") : null, q.label, el("br", {}),
           el("span", { class: "muted small" }, guideWhyFor(tr.module_id, q))),
         el("span", { class: "bp-row-qty" }, tool.label),
-        el("span", { class: "status" + (state === "approved" ? "" : " sample") }, text));
+        el("span", { class: "status" + (state === "approved" ? "" : " sample") }, text),
+        state === "missing" ? guideNoneButton(tr.module_id, q) : null);
       if (pickable) {
         const pick = () => setTool(tool.tool, $("review-message"));
         li.addEventListener("click", pick);
@@ -2913,7 +3012,7 @@ const DESIGN_TYPES = {
   exhaust_fan: "exhaust fans", smoke: "smoke alarms", smoke_co: "smoke/CO alarms", junction_box: "junction boxes",
   data: "data drops", tv: "TV drops" };
 
-// 2026-11-23 (David: "move it to the main measure window by the AI Auto Run ... it will not let me type anything"):
+// 2026-11-23 (David: "move it to the main measure window by the AI Auto Measure/Count ... it will not let me type anything"):
 // the card lives in its own window opened from the toolbar's ✨ AI design - the To measure tab redrew itself (and the
 // card with it) whenever the screen refreshed, which threw away what was being typed. The window is only redrawn when
 // the design itself changes, and what is typed is kept in RV.designDraft across any redraw.
@@ -2935,8 +3034,23 @@ function designPanelKeys(e) { if (e.key === "Escape" && !$("bp-wiring-viewer-bac
 window.addEventListener("hashchange", () => { closeDesignPanel(); closeWiringViewer(); });   // leaving the screen closes them
 function closeDesignPanel() {
   const b = $("bp-design-back");
-  if (b) b.remove();
+  if (!b) return;
+  b.remove();
   document.removeEventListener("keydown", designPanelKeys);
+  refreshDesignWaiting();
+}
+// After the window closes: a redraw made in it, waiting for approval, is said above the drawing (or the note goes).
+async function refreshDesignWaiting() {
+  if (!RV.estimateId || !location.hash.startsWith("#/takeoffs/" + RV.estimateId)) return;
+  try {
+    const d = await api("GET", "/estimates/" + RV.estimateId + "/takeoff");
+    const now = designWaitingNote(d.design_waiting), old = $("bp-design-waiting"), bar = document.querySelector(".bp-bar");
+    if (old) { if (now) old.replaceWith(now); else old.remove(); }
+    else if (now && bar) bar.after(now);
+    RV.designWaitingNow = d.design_waiting || null;             // the file label on the drawing says approved / not yet
+    if (Array.isArray(d.sheets)) RV.sheetList = d.sheets;
+    fileLabel();
+  } catch (e) { /* the note is a convenience: the screen works without it */ }
 }
 
 function designButtonText() {
@@ -2979,8 +3093,11 @@ function designPoll() {
       RV.design.designs.electrical = r.design;
       renderDesign();
       if (r.design && r.design.status !== "working") {
-        if (r.design.status === "proposed") toast(r.design.rev > 1 ? "The AI made the change — open ✨ AI design to have a look."
-                                                                     : "The AI design is ready — open ✨ AI design to have a look.");
+        if (r.design.status === "proposed") {
+          toast(r.design.rev > 1 ? "The AI made the change — it's the drawing on this screen now; approve it in ✨ AI design."
+                                 : "The AI design is ready — it's the drawing on this screen now; approve it in ✨ AI design.");
+          reloadReview();                 // 2026-11-25: the new drawing is the one shown (the design window stays open)
+        }
         else if (r.design.status === "failed") toast("The AI design didn't finish — open ✨ AI design to see why.");
         else if (r.design.status === "approved") designApproved(r.design);
       }
@@ -3073,6 +3190,24 @@ function designShotBox(key) {
       : "or paste one into the box (Ctrl+V) — mark it up to show what goes where"));
 }
 
+// 2026-11-25 (David: "The AI Design should know what trade I am in as a default (it should come up as fence) ... there is
+// no fence option"): the window designs either the job's plans (any trade - drawn, or redrawn with changes, the same card
+// as on the project page) or the electrical on the drawings. It opens on the project's own trade.
+function designMode(d) {
+  if (RV.designModeFor !== RV.estimateId) { RV.designMode = d.default_trade || "electrical"; RV.designModeFor = RV.estimateId; }
+  return RV.designMode;
+}
+
+function designModePicker(d) {
+  const names = (d.project_trades || []).filter(t => t.id !== "electrical").map(t => t.name);
+  const sel = el("select", { id: "bp-design-mode", "aria-label": "What to design" },
+    el("option", { value: "plans" }, (names.length ? names.join(", ") : "Any trade") + " — draw or redraw the job's plans"),
+    el("option", { value: "electrical" }, "Electrical — add it to the drawings"));
+  sel.value = designMode(d);
+  sel.addEventListener("change", () => { RV.designMode = sel.value; renderDesign(); });
+  return el("div", { class: "row", id: "bp-design-mode-row" }, el("label", { for: "bp-design-mode" }, el("strong", {}, "Design ")), sel);
+}
+
 function renderDesign() {
   const box = $("bp-design");
   if (!box) return;
@@ -3080,7 +3215,13 @@ function renderDesign() {
   const d = RV.design;
   if (!d) { box.replaceChildren(head, el("p", { class: "muted small" }, "Loading…")); return; }
   if (d.error) { box.replaceChildren(head, errorBox(d.error)); return; }
-  const parts = [head, el("p", { class: "muted small" },
+  if (designMode(d) === "plans") {
+    if (box.querySelector("#ai-plans")) return;                   // already showing: the card keeps itself up to date
+    AIP.open[RV.estimateId] = true;
+    box.replaceChildren(head, d.can_run ? designModePicker(d) : null, aiPlansCard(RV.estimateId, true));
+    return;
+  }
+  const parts = [head, d.can_run ? designModePicker(d) : null, el("p", { class: "muted small" },
     "Tell the AI what to add to your drawings — it reads the building, places every symbol to the code rules and your specs, " +
     "and draws a new plan and panel schedule for you to review. Nothing is priced until you approve it. " +
     "Uses the agent API key" + (d.ai_label ? " (" + d.ai_label + ")" : "") + ".")];
@@ -3098,8 +3239,9 @@ function renderDesign() {
 }
 
 function designForm(d, j) {
+  // "Plans from a description" needs no drawings: it lives on the project page (✨ AI design: describe the job), not here
   const trade = el("select", { id: "bp-design-trade", "aria-label": "Trade" },
-    ...d.trades.map(t => el("option", { value: t.id, disabled: t.ready ? null : "" }, t.label + (t.ready ? "" : " (coming)"))));
+    ...d.trades.filter(t => !t.no_plans).map(t => el("option", { value: t.id, disabled: t.ready ? null : "" }, t.label + (t.ready ? "" : " (coming)"))));
   const sets = d.plan_sets || [];
   const ps = el("select", { id: "bp-design-plans", "aria-label": "The drawings to design on" },
     ...sets.map(p => el("option", { value: p.id }, "#" + p.id + " " + p.name + (p.file_type === "dxf" ? " (CAD)" : ""))));
@@ -3112,16 +3254,23 @@ function designForm(d, j) {
   const go = el("button", { class: "primary", type: "button", id: "bp-design-go",
     disabled: d.ai_on && sets.length ? null : "" }, "✨ Design it");
   go.addEventListener("click", () => designStart(go, req, specs, ps, trade));
+  // 2026-11-25 (David: "the design it button does not allow to be clicked"): say why it can't be clicked
+  const why = !d.ai_on ? "AI measuring is off — turn it on in 🤖 AI agents (Setup)."
+    : !sets.length ? "There are no drawings to add the electrical to yet." : "";
   const cancel = RV.designNew ? el("button", { class: "button", type: "button", id: "bp-design-cancel" }, "Back to the design") : null;
   if (cancel) cancel.addEventListener("click", () => { RV.designNew = false; renderDesign(); });
+  const toPlans = el("button", { class: "link-btn", type: "button", id: "bp-design-noplans" },
+    "no drawings? ✨ draw the job's plans from a description");
+  toPlans.addEventListener("click", () => { RV.designMode = "plans"; renderDesign(); });
   return el("div", { id: "bp-design-form" },
-    !sets.length ? el("p", { class: "note warn small" }, "Upload the building's drawings first (PDF, photo or CAD) on the project page.") : null,
+    !sets.length ? el("p", { class: "note warn small" }, "Electrical is added to the building's drawings, and this project has none"
+      + " yet — upload them on the project page (PDF, photo or CAD), or ", toPlans, ".") : null,
     el("div", { class: "row" }, el("label", { for: "bp-design-trade" }, "Trade "), trade,
-      el("label", { for: "bp-design-plans" }, " on "), ps),
+      el("label", { for: "bp-design-plans" }, " on the drawings "), ps),
     el("label", { for: "bp-design-request", class: "small" }, "What do you want added?"), req, designShotBox("start"),
     el("details", { id: "bp-design-specs-box", open: (j && j.specs) ? "" : null },
       el("summary", { class: "small" }, "Specs and preferences (optional)"), specs),
-    el("div", { class: "row" }, go, cancel));
+    el("div", { class: "row" }, go, cancel, why ? el("span", { class: "muted small", id: "bp-design-why" }, why) : null));
 }
 
 async function designStart(btn, req, specs, ps, trade) {
@@ -3174,8 +3323,14 @@ function designResult(j, d) {
       (j.approved_plan_set_ids || []).map(i => "#" + i).join(" and ") + ")" +
       (a.approved ? " — the counts and the cable are approved; see them in the measurement list." : ".")));
   }
+  // 2026-11-25 (David: "the updated plans are assumed as the latest and should be the default viewed plans"): the newest
+  // design is the electrical drawing on the Measure screen; approving it is what prices it
   else out.push(el("p", { class: "note warn small", id: "bp-design-proposed" },
-    "Proposed — revision " + j.rev + ". Have a look, change anything in plain words, then approve it."));
+    j.placed && j.placed.rev === j.rev
+      ? "Revision " + j.rev + " is on the Measure screen now — not approved yet: its devices are counted and wait for review. " +
+        "Change anything in plain words, then approve it — your older electrical drawings are replaced, the wiring is run and " +
+        "Electrical is priced" + (j.approved_rev ? "; 🗑 Discard puts revision " + j.approved_rev + " back" : "") + "."
+      : "Proposed — revision " + j.rev + ". Have a look, change anything in plain words, then approve it."));
   if (j.error) out.push(el("p", { class: "error", id: "bp-design-error" }, j.error));
   out.push(el("p", { class: "small", id: "bp-design-building" },
     el("strong", {}, b.name || "Building"), " · " + (b.size || "") + " · " + (b.kind || "") +
@@ -3312,8 +3467,10 @@ async function designDiscard(btn) {
   try {
     const r = await api("POST", "/design/" + RV.estimateId + "/electrical/discard", {});
     RV.design.designs.electrical = r.design;
-    toast("Discarded — nothing on the estimate changed.");
+    toast(r.design && r.design.approved_rev ? "Discarded — revision " + r.design.approved_rev + " is back on this screen."
+      : "Discarded — nothing on the estimate changed.");
     renderDesign();
+    reloadReview();                       // 2026-11-25: the drawing it had put on this screen goes too
   } catch (e) {
     if (e.status !== 401) $("bp-design-msg").replaceChildren(errorBox(e));
     btn.disabled = false;
@@ -3367,7 +3524,7 @@ async function drawWiring() {
   if (RV.wiringFor !== RV.estimateId) {
     RV.wiringFor = RV.estimateId;
     // 2026-11-21 (David: "after hitting run wiring ... nothing shows up in the cad window"): a reload right after a
-    // wiring run (⚡ Run wiring, AI Auto Run) keeps the routes showing; opening the screen starts with them hidden.
+    // wiring run (⚡ Run wiring, AI Auto Measure/Count) keeps the routes showing; opening the screen starts with them hidden.
     RV.wiring = null; RV.wiringPick = null; RV.showWiring = !!RV.showWiringNext; RV.showWiringNext = false;
     renderWiring();
     try { wiringReset(await api("GET", "/wiring/" + RV.estimateId)); }
@@ -4232,7 +4389,7 @@ function totalsText(ms) {
   return s || "nothing yet";
 }
 
-// 2026-11-20 (David: "why AI counted 18 but the highlighted shows 12"): AI Auto Run's and the wiring run's
+// 2026-11-20 (David: "why AI counted 18 but the highlighted shows 12"): AI Auto Measure/Count's and the wiring run's
 // measurements sit on a sheet; one with no sheet is from before the plans were read again (its sheet went). Such an
 // approved count is replaced when the new count for the same question is approved (the server retires it then).
 const WIRING_AGENT = "wiring-takeoff";
@@ -4823,7 +4980,7 @@ function renderAudit(panel, r) {
       const show = f.feeds && (f.sheet_id || /^wire_/.test(f.feeds))
         ? el("a", { href: "#", class: "small bp-audit-show" }, "Show on drawing") : null;
       if (show) show.addEventListener("click", ev => { ev.preventDefault(); auditShow(f); });
-      // 2026-11-20 (David): old cable needs the wiring run again - offer it right here (no AI Auto Run needed).
+      // 2026-11-20 (David): old cable needs the wiring run again - offer it right here (no AI Auto Measure/Count needed).
       let runIt = null;
       if (f.rerun === "wiring" && r.can_apply) {
         runIt = el("button", { class: "button small bp-audit-run-wiring", type: "button" }, "⚡ Run wiring now");

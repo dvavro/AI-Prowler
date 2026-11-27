@@ -254,6 +254,7 @@ def create_measurements(conn, ctx: RequestContext, run: dict, reading: dict, qua
     values = quantities["values"]
     with service.transaction(conn):
         kept = lt.replace_earlier_proposals(conn, ctx, run, module_id, sheet_id)   # a rerun replaces, never adds
+        covered = lt.plans_measured(conn, ctx, run, module_id, sheet_id)         # the plan reader's approved ones
         for feeds, label, _plural, kind, unit in spec["questions"]:
             qty = values.get(feeds)
             if qty is None or feeds in kept:     # kept: already approved, and the run keeps approved items
@@ -262,6 +263,8 @@ def create_measurements(conn, ctx: RequestContext, run: dict, reading: dict, qua
                 if Decimal(str(qty)) <= 0:
                     continue
             except Exception:  # noqa: BLE001 - a non-number is never proposed
+                continue
+            if lt.already_measured(conn, ctx, run, covered, feeds, qty):   # never priced twice (2026-11-25)
                 continue
             how = reading["evidence"].get(feeds) or f"{qty} {unit} read on the {spec['label']} plan"
             calc = {"source": "llm", "auto_run_id": run["id"], "candidate_id": lt.CANDIDATE_ID,

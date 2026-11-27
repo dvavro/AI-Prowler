@@ -18,7 +18,10 @@ TRADE_WORDS = {
     "concrete": ["concrete", "slab", "footing", "foundation", "flatwork pour", "sidewalk pour"],
     "framing": ["framing", "frame the", "studs", "joists", "trusses"],
     "roofing": ["roof", "roofing", "shingle", "re-roof", "reroof"],
-    "flooring": ["flooring", "floor install", "tile floor", "hardwood", "laminate", "carpet", "lvp"],
+    "flooring": ["flooring", "floor install", "tile floor", "hardwood", "laminate", "carpet", "lvp",
+                 # 2026-11-27: garage / concrete floor coatings are flooring
+                 "floor coating", "garage floor coating", "concrete floor coating", "concrete coating", "epoxy",
+                 "epoxy floor", "garage epoxy", "polyaspartic", "polyurea", "paint chips", "paint chip", "flake floor"],
     "drywall": ["drywall", "sheetrock"],
     "painting": ["paint", "painting", "repaint"],
     "plumbing": ["plumbing", "repipe", "water heater", "fixtures"],
@@ -51,7 +54,9 @@ INTENT_PAIRS = [
     ("flooring", _BUILD, ("carpet", "floor", "floors", "flooring", "tile", "lvp", "laminate", "hardwood")),
     ("painting", ("paint", "painted", "painting", "repaint"),
      ("room", "rooms", "bedroom", "bedrooms", "house", "home", "interior", "exterior", "walls", "ceilings", "cabinets",
-      "trim", "garage", "kitchen", "bathroom")),
+      "trim", "garage", "kitchen", "bathroom"),
+     # not a garage floor coating with paint chips (2026-11-27) - that's flooring
+     ("paint chips", "paint chip", "epoxy", "floor coating", "polyaspartic", "polyurea", "garage floor")),
     ("plumbing", _BUILD, ("toilet", "toilets", "sink", "sinks", "faucet", "faucets", "shower", "tub", "water heater")),
     ("windows_doors", _BUILD, ("window", "windows", "door", "doors", "slider", "sliding door")),
     ("landscaping", _BUILD, ("gravel", "rock", "plants", "turf", "artificial turf", "trees", "shrubs", "drip")),

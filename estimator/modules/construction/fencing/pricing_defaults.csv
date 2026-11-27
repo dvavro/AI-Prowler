@@ -4,6 +4,7 @@ fn_wood_sqft,Wood fence materials per sq ft of face (sample),material,sqft,4.50
 fn_vinyl_sqft,Vinyl fence materials per sq ft of face (sample),material,sqft,6.50
 fn_chain_sqft,Chain link materials per sq ft of face (sample),material,sqft,2.00
 fn_iron_sqft,Wrought iron panels per sq ft of face (sample),material,sqft,9.00
+fn_aluminum_sqft,Aluminum fence panels powder coated per sq ft of face (sample),material,sqft,8.00
 fn_post_ea,Post set in concrete (sample),material,ea,25.00
 fn_labor_hr,Fence labor per hour (sample),labor,hr,65.00
 fn_footing_lf,Wall footing per linear ft (sample),other,lf,18.00

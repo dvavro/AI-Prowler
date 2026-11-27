@@ -167,7 +167,7 @@ def ask_vision(provider: str, system: str, user: str, images: list, model: str =
 
 def set_progress(callback) -> None:
     """Report this thread's streamed AI answers to callback(info) while they arrive ({phase, thought, item,
-    thinking_chars, answer_chars}); None stops (2026-11-21: AI Auto Run shows it with its waiting message).
+    thinking_chars, answer_chars}); None stops (2026-11-21: AI Auto Measure/Count shows it with its waiting message).
     A host (or a test fake) without streaming simply reports nothing."""
     h = _host()
     fn = getattr(h, "set_progress", None) if h is not None else None

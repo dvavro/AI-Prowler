@@ -3,7 +3,7 @@
 It finds the project's two CAD drawings - the electrical floor plan (devices, rooms, the panel) and the panel drawing
 (the panel schedule) - runs the wiring takeoff (estimator/takeoff/wiring.py), keeps the result and the wiring DXF in
 the data folder (wiring/estimate_<id>.json and .dxf), and proposes one measurement per cable size
-(feeds wire_12_2_ft ...) for a person to approve, the same way AI Auto Run proposes its counts. Approved, they price
+(feeds wire_12_2_ft ...) for a person to approve, the same way AI Auto Measure/Count proposes its counts. Approved, they price
 the cable on the estimate and fill the Bill of Materials; the 'average run per device' wire lines step aside.
 
 Plain geometry: no AI tokens. Rerunning replaces the run's proposed measurements (approved ones stay).
@@ -201,7 +201,7 @@ def options(ctx: RequestContext, estimate_id: int | None = None) -> dict:
 def run(conn, ctx: RequestContext, estimate_id: int, settings: dict | None = None,
         overrides: dict | None = None, keep_approved: bool = True, on_step=None) -> dict:
     """Run the wiring takeoff for an estimate and propose its cable measurements (keep_approved: see _propose).
-    on_step(text): each stage as it starts, for AI Auto Run's waiting message (2026-11-21, David)."""
+    on_step(text): each stage as it starts, for AI Auto Measure/Count's waiting message (2026-11-21, David)."""
     say = on_step or (lambda _t: None)
     est = service.get_estimate(conn, ctx, int(estimate_id))
     src = sources(conn, ctx, est["id"])

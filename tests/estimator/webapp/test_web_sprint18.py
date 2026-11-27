@@ -152,7 +152,7 @@ def test_every_tour_step_names_a_real_control():                          # C2S1
     src = _web_text()
     steps = _steps()
     assert len(steps) == 88          # 2026-11-17: the Estimate tour gains Reopen, Change order and the total;
-                                     # 2026-11-21: the Agents tour gains AI Auto Runs; the Projects tour loses
+                                     # 2026-11-21: the Agents tour gains AI Auto Measure/Count runs; the Projects tour loses
                                      # Name / Create project and the Project tour loses Upload the plans (the Director's job)
     screens = {s["id"] for s in nav.SCREENS}
     for sel, _go, title, body in steps:
@@ -257,7 +257,7 @@ def test_empty_states_name_the_next_step():                              # C2S18
     cases = [
         ("review.js", ["takeoffs-empty", "No plans or measurements yet.", "Open Projects", "#/projects"]),
         ("verify.js", ["runs-empty", "No Director measure runs yet.", "a project's estimate",   # 2026-11-17: no agents table
-                       "auto-runs-empty", "No AI Auto Runs yet."]),                  # 2026-11-21: AI Auto Runs listed too
+                       "auto-runs-empty", "No AI Auto Measure/Count runs yet."]),                  # 2026-11-21: AI Auto Measure/Count runs listed too
         ("estimates.js", ["estimates-empty", "No estimates", "Create one from Projects"]),
         ("app.js", ["No trades priced yet.", "Open the estimate", "start a quick estimate",
                     "No projects yet — create one to start."]),

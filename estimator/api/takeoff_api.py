@@ -134,13 +134,25 @@ def route(m: str, sub: str, req, ctx, conn):
         sets = store.list_plan_sets(conn, ctx, eid)["plan_sets"]
         from estimator.director import engine as director
         from estimator.takeoff import sheet_trades
+        # 2026-11-25 (David: "it did not bring up rev 4"): the AI design revision behind each plan set it made, and a
+        # redraw that's drawn but not approved (it isn't the plans until it is)
+        try:
+            from estimator.design import runs as design_runs
+            ai = design_runs.on_measure(eid)
+        except Exception:  # noqa: BLE001 - AI design's own files unreadable: the screen works without it
+            ai = {"plan_sets": {}, "waiting": None}
         for ps in sets:
             if ps["status"] != "processed":
                 continue
             for s in store.sheets(conn, ctx, ps["id"])["sheets"]:
                 # 2026-11-15 (David): each sheet says which trades it is switched off for (Plans screen), so the
                 # review page can mark those sheets and open on one that is on.
-                sheets.append({**s, "plan_set_id": ps["id"], "file": ps.get("original_name"),
+                # 2026-11-25 (David: "the window did not use the latest"): the plan's revision and when it was read, so
+                # the picker says which drawing this is
+                # (list_plan_sets names the upload's file name "file" - 2026-11-25: "original_name" was always empty)
+                sheets.append({**s, "plan_set_id": ps["id"], "file": ps.get("file"),
+                               "plan_revision": ps.get("revision"), "read_at": ps.get("processed_at"),
+                               "design_rev": ai["plan_sets"].get(int(ps["id"])),
                                "inactive_trades": sheet_trades.inactive_for_sheet(conn, ctx.company_id, s["id"])})
         # The trades to measure: the ones already priced, then the ones picked for the project and not priced yet
         # (2026-11-15: a picked trade is measured from the plans BEFORE it can be priced).
@@ -169,8 +181,8 @@ def route(m: str, sub: str, req, ctx, conn):
         from estimator.api import links
         return _ok(estimate={"id": est["id"], "title": est["title"], "status": est["status"]},
                    links=links.estimate_links(conn, ctx, eid, est, reg),
-                   plan_sets=[{"id": p["id"], "file": p.get("original_name"), "status": p["status"]} for p in sets],
-                   sheets=sheets, trades=trades, other_trades=others, takeoff=listing,
+                   plan_sets=[{"id": p["id"], "file": p.get("file"), "status": p["status"]} for p in sets],
+                   sheets=sheets, trades=trades, other_trades=others, takeoff=listing, design_waiting=ai["waiting"],
                    can_measure=can_measure, can_approve=can_approve, can_correct=can_correct)
 
     mm = _ADD.match(sub)

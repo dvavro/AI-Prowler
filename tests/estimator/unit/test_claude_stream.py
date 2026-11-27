@@ -1,4 +1,4 @@
-"""Claude calls stream (2026-11-21, David: AI Auto Run on the rev2 electrical plan "timed out" - the AI thought for
+"""Claude calls stream (2026-11-21, David: AI Auto Measure/Count on the rev2 electrical plan "timed out" - the AI thought for
 over 10 minutes without sending a byte, and the 600 s read timeout gave up). Streamed, the answer arrives in pieces
 with pings, and _post still hands back the same whole message as before."""
 import io

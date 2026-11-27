@@ -1,4 +1,4 @@
-"""AI Auto Run shows what the AI is doing while its answer streams in (2026-11-21, David: "show only its latest
+"""AI Auto Measure/Count shows what the AI is doing while its answer streams in (2026-11-21, David: "show only its latest
 sentence, trimmed, plus the progress counts, and this also happens for all trades").
 
 - The stream readers report {phase, thought, item, thinking_chars, answer_chars} to the thread's progress callback.

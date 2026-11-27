@@ -45,6 +45,46 @@ def test_a_new_project_gets_a_director_job_that_says_what_to_do_and_why(db):  # 
     assert r["estimate"]["total_cents"] == 0
 
 
+def test_every_open_step_links_to_where_it_is_done(db):  # PD-02b
+    """2026-11-24 (David: "when I click that it takes me no where. We need all the steps from the director to be a link to
+    take me to the next page"): no open step without a link, and no link that is just the project page again."""
+    est, r = _project(db)
+    eid = est["id"]
+    todo = {t["key"]: t for t in r["next_step"]["todo"]}
+    for key, t in todo.items():
+        if not t["done"]:
+            assert t["link"], key
+            assert t["link"] != f"#/projects/{eid}", key                 # the same page: clicking it went nowhere
+    assert todo["plans"]["link"] == f"#/projects/{eid}?go=plans"
+    assert "no plans?" in todo["plans"]["text"] and "typed measurements" in todo["plans"]["text"]
+    assert todo["customer"]["link"] == f"#/projects/{eid}?go=customer"
+    assert todo["trades"]["link"] == f"#/projects/{eid}?go=trades"
+    # no plans: the AI draws them from a description (the ✨ AI design card on the project page)
+    assert todo["design"]["link"] == f"#/projects/{eid}?go=design" and "AI design" in todo["design"]["text"]
+
+
+def test_the_director_says_when_ai_design_is_busy_and_when_its_plans_are_ready(db):  # PD-02c
+    """2026-11-25 (David: "the user is not notified of a plan to look at, and it would be nice if there is an AI Busy")."""
+    from estimator.design import runs
+    est, r = _project(db)
+    eid = est["id"]
+
+    def todo():
+        return {t["key"]: t for t in engine.adopt(db, CTX, eid, registry=REG)["next_step"]["todo"]}
+    assert "design" in todo() and "design_busy" not in todo()
+    runs.save({"estimate_id": eid, "trade": runs.PLANS, "status": "working", "step": "the AI is laying out the job", "rev": 0})
+    t = todo()
+    assert "AI busy" in t["design_busy"]["text"] and t["design_busy"]["link"] == f"#/projects/{eid}?go=design"
+    assert "design" not in t                                         # not "describe the job" while it's drawing them
+    runs.save({"estimate_id": eid, "trade": runs.PLANS, "status": "proposed", "step": "", "rev": 2})
+    t = todo()
+    assert "design_busy" not in t and "plans are ready (revision 2)" in t["design_review"]["text"]
+    assert t["design_review"]["link"] == f"#/projects/{eid}?go=design" and not t["design_review"]["done"]
+    runs.save({"estimate_id": eid, "trade": runs.PLANS, "status": "working", "step": "approving: reading the new plans",
+               "rev": 2})
+    assert not {"design_busy", "design_review"} & set(todo())        # approving takes seconds: nothing to wait for
+
+
 def test_asking_again_reuses_the_job_and_writes_nothing(db):  # PD-03
     est, r = _project(db)
     again = engine.adopt(db, CTX, est["id"], registry=REG)

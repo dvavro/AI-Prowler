@@ -9,7 +9,7 @@ measurements stay locked.
 
 When the owner turned LLM takeoff on (the llm_takeoff agent role, off by default)
 and its API key is ready, the run is the AI reading the foundation sheet
-(estimator/takeoff/llm_takeoff.py) after calibrating it (2026-11-15: AI Auto Run);
+(estimator/takeoff/llm_takeoff.py) after calibrating it (2026-11-15: AI Auto Measure/Count);
 otherwise the drawing-only agent runs when the drawing has slab outlines.
 The AI runner needs no browser: it reads the dimensions, the app does the maths,
 and the measurements are proposed as "llm-takeoff" for a person to approve.
@@ -298,7 +298,7 @@ def _start_run(conn, ctx, run_id: int, candidates: list, module_id: str):
     from estimator.takeoff import llm_takeoff
     strategy = STRATEGIES[module_id]
     setting = llm_takeoff.llm_setting(conn, ctx.company_id)
-    # 2026-11-15 (David): with LLM takeoff on and its API key ready, AI Auto Run sends the sheet to the AI (after
+    # 2026-11-15 (David): with LLM takeoff on and its API key ready, AI Auto Measure/Count sends the sheet to the AI (after
     # calibrating it) even when the drawing has outlines - the AI reads the written dimensions and the footer detail,
     # the app does the maths. The drawing-only agent runs when the AI is off, not ready, or out of budget.
     if setting["enabled"] and setting["ready"] and roles.budget_left(conn, ctx.company_id)[0]:
@@ -322,7 +322,7 @@ def _start_run(conn, ctx, run_id: int, candidates: list, module_id: str):
     return _start_llm_agent(conn, ctx, run_id)
 
 
-# ------------------------------------------------------------------ which sheet AI Auto Run measures (2026-11-15)
+# ------------------------------------------------------------------ which sheet AI Auto Measure/Count measures (2026-11-15)
 
 def _sheet_on(conn, ctx, sheet_id: int, module_id: str) -> bool:
     from estimator.takeoff import sheet_trades
@@ -330,7 +330,7 @@ def _sheet_on(conn, ctx, sheet_id: int, module_id: str) -> bool:
 
 
 def pick_run_sheet(conn, ctx, estimate_id: int, module_id: str) -> int:
-    """The sheet AI Auto Run measures when none (or a switched-off one) is named: of the project's read plans, the
+    """The sheet AI Auto Measure/Count measures when none (or a switched-off one) is named: of the project's read plans, the
     sheets switched ON for the trade, best match first for the trade's sheet rules (the same ranking the AI uses).
     Refuses when every sheet is switched off, or no plans have been read."""
     from estimator.takeoff import llm_takeoff
@@ -1218,7 +1218,7 @@ def route(m: str, sub: str, req, ctx, conn):
         strategy = STRATEGIES[module_id]
         from estimator.estimating import service
         service.get_estimate(conn, ctx, estimate_id)          # not found / another company's estimate
-        # 2026-11-15 (David): AI Auto Run runs on the sheets switched ON for the trade. With no sheet named (or the
+        # 2026-11-15 (David): AI Auto Measure/Count runs on the sheets switched ON for the trade. With no sheet named (or the
         # open sheet switched off), it picks the best sheet for the trade that is on, and the trade's view on it.
         if sheet_id is None or not _sheet_on(conn, ctx, sheet_id, module_id):
             sheet_id = strategy["pick_sheet"](conn, ctx, estimate_id)

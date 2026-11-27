@@ -643,10 +643,13 @@ Source: "estimator\takeoff\wiring_schematic.py"; DestDir: "{app}\estimator\takeo
 Source: "estimator\takeoff\wiring_svg.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\design\__init__.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
 Source: "estimator\design\building.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
+Source: "estimator\design\describe.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
 Source: "estimator\design\draw_electrical.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
+Source: "estimator\design\draw_plans.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
 Source: "estimator\design\electrical.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
 Source: "estimator\design\reference.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
 Source: "estimator\design\runs.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
+Source: "estimator\design\trade_answers.py"; DestDir: "{app}\estimator\design"; Flags: ignoreversion
 Source: "estimator\takeoff\wiring_run.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\conduit.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion
 Source: "estimator\takeoff\audit.py"; DestDir: "{app}\estimator\takeoff"; Flags: ignoreversion

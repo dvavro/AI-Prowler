@@ -96,7 +96,7 @@ def test_run_show_approve_move_download(page, job, tmp_path):
     # Move the C-1 outlet at (12, 0.5) to the kitchen circuit and run again: C-1 drops to 1 device.
     page.wait_for_selector("#bp-wiring-devices")                                          # C-1 is still picked
     page.select_option("#bp-wiring-devices select[data-device='OUTLET@12.0,0.5']", "C-2")
-    # "Keep approved items" (beside AI Auto Run, on by default) unticked: this rerun starts the cable over.
+    # "Keep approved items" (beside AI Auto Measure/Count, on by default) unticked: this rerun starts the cable over.
     assert page.is_checked("#bp-auto-keep")
     page.uncheck("#bp-auto-keep")
     page.click("#bp-wiring-rerun")
@@ -120,8 +120,8 @@ def test_run_show_approve_move_download(page, job, tmp_path):
 
 
 def test_audit_runs_the_wiring_again_without_ai_auto_run(page, db, job):
-    """2026-11-20 (David: "how do I just run the wiring estimate? is it the same as AI Auto Run? the hover says nothing
-    about wiring"): the AI Auto Run hover says it routes the wiring too, and the audit's "needs a run done again" item
+    """2026-11-20 (David: "how do I just run the wiring estimate? is it the same as AI Auto Measure/Count? the hover says nothing
+    about wiring"): the AI Auto Measure/Count hover says it routes the wiring too, and the audit's "needs a run done again" item
     for old cable has its own ⚡ Run wiring now button - the new cable then waits, ticked, for one-click approval."""
     from estimator.takeoff import measurements as ms
     from estimator.takeoff import wiring_run
@@ -135,7 +135,7 @@ def test_audit_runs_the_wiring_again_without_ai_auto_run(page, db, job):
     page.click("#bp-audit-open")
     page.wait_for_selector("#bp-audit-list")
     assert "Needs a run done again" in page.inner_text("#bp-audit")
-    assert "don't need AI Auto Run" in page.inner_text("#bp-audit")
+    assert "don't need 🤖 AI Auto Measure/Count" in page.inner_text("#bp-audit")
     page.locator(".bp-audit-run-wiring").first.click()
     page.wait_for_selector("#bp-audit .bp-audit-item.replace_old", timeout=30000)
     text = page.inner_text("#bp-audit")
@@ -152,7 +152,7 @@ def test_audit_runs_the_wiring_again_without_ai_auto_run(page, db, job):
 
 
 def test_run_wiring_from_the_toolbar(page, db, job):
-    """2026-11-20 (David: "I don't see the run wiring"): ⚡ Run wiring sits beside AI Auto Run on the toolbar - just the
+    """2026-11-20 (David: "I don't see the run wiring"): ⚡ Run wiring sits beside AI Auto Measure/Count on the toolbar - just the
     wiring, no AI - and proposes the cable sizes."""
     page.goto(page.base + f"#/takeoffs/{job}")
     page.wait_for_selector("#bp-viewer [data-oid]", state="attached")

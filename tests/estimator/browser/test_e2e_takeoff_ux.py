@@ -6,7 +6,7 @@ measurements table duplicated above the drawing, and a tab bar truncating "Measu
 Now:
   * the toolbar sits immediately above the drawing (the sheet picker stays up top);
   * the steps tab reads "AI Count steps" for an electrical run, "Measure steps" otherwise;
-  * the Count tool is gone from the toolbar and the guide - AI Auto Run is the only way to count;
+  * the Count tool is gone from the toolbar and the guide - AI Auto Measure/Count is the only way to count;
   * the above-drawing measurements table is gone, but the status line, Re-run and AI Log stay;
   * the Device counts table's Count column is editable by hand (ask-first, like every change),
     and a zero row creates its measurement when a number is typed in;
@@ -43,7 +43,7 @@ def test_E2E_toolbar_sits_with_the_drawing_and_sheet_picker_stays_up_top(page, s
     # The sheet picker stays in the top bar, with the toolbar gone from it.
     assert page.locator(".bp-bar #review-sheet").count() == 1
     assert page.locator(".bp-bar #bp-tools").count() == 0
-    # No Count tool anywhere on the page (2026-11-18: AI Auto Run counts now).
+    # No Count tool anywhere on the page (2026-11-18: AI Auto Measure/Count counts now).
     assert page.locator('[data-tool="count"]').count() == 0
 
 
@@ -84,8 +84,8 @@ def test_E2E_no_count_button_in_the_guide_either(page, db, ehouse):
     page.click("#bp-tab-guide")
     guide = page.inner_text("#bp-guide")
     assert "✚ Count" not in guide
-    # The count rows point at AI Auto Run instead of offering a Count tool, and keep their badges.
-    assert "🤖 AI Auto Run" in guide
+    # The count rows point at AI Auto Measure/Count instead of offering a Count tool, and keep their badges.
+    assert "🤖 AI Auto Measure/Count" in guide
     assert "to review — 12 ea" in guide
     assert page.locator('[data-tool="count"]').count() == 0
 
@@ -102,7 +102,7 @@ def test_E2E_no_above_drawing_table_but_status_rerun_and_ai_log_remain(page, db,
                            "document.querySelector('#bp-auto-status').innerText.includes('finished: 4 proposed')",
                            timeout=20000)
     assert page.locator("#bp-auto-results").count() == 0
-    assert "AI Auto Run finished: 4 proposed measurement(s)" in page.inner_text("#bp-auto-status")
+    assert "AI Auto Measure/Count finished: 4 proposed measurement(s)" in page.inner_text("#bp-auto-status")
     assert page.locator("#bp-auto-rerun").count() == 1
     assert page.locator("a[href*='#/agents/ai-log']").count() >= 1
 

@@ -1,6 +1,6 @@
 """How long a Claude answer may be, and what happens when one is cut off.
 
-2026-11-19 (David): the Electrical AI Auto Run, 17 counts with evidence, failed as "didn't answer with JSON".
+2026-11-19 (David): the Electrical AI Auto Measure/Count, 17 counts with evidence, failed as "didn't answer with JSON".
 2026-11-20 (David: "let's don't put limits on AI for tokens, that is done with the day limit"): an Inspection review
 on Opus 5.5 was "cut off at the 1500-token limit (0 characters came back)" - the model reasons first. Every Claude
 call now gets the model's full output room (the daily budget caps the spend), and a cut-off call's tokens are counted.

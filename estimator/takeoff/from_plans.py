@@ -74,15 +74,20 @@ def plan_answers(conn, ctx: RequestContext, module_id: str, *, estimate_id: int 
 
 
 def propose(conn, ctx: RequestContext, estimate_id: int, module_id: str, *, plan_set_id: int | None = None,
-            height_ft=None, include_proposed: bool = False, confirm: bool = False, registry=None) -> dict:
-    """Propose (or refresh) one measurement per trade question the plans answer. Asks first, listing each one."""
+            height_ft=None, include_proposed: bool = False, confirm: bool = False, registry=None,
+            found: dict | None = None) -> dict:
+    """Propose (or refresh) one measurement per trade question the plans answer. Asks first, listing each one.
+    found: the answers already worked out (2026-11-25: concrete from the AI design's own foundation plan) - the same
+    shape the plan readers give ({answers, from, source, method, plan_set_ids})."""
     m._role(ctx, m.PROPOSE_ROLES, "propose measurements")
     est = service._load_row(conn, ctx, int(estimate_id))
     reg = m._registry(registry)
     module_id = (module_id or "").strip().lower()
     mod, _ = m._feed(reg, module_id, None)
-    found = plan_answers(conn, ctx, module_id, estimate_id=est["id"], plan_set_id=plan_set_id, height_ft=height_ft,
-                         include_proposed=include_proposed)
+    if found is None:
+        found = plan_answers(conn, ctx, module_id, estimate_id=est["id"], plan_set_id=plan_set_id, height_ft=height_ft,
+                             include_proposed=include_proposed)
+    found.setdefault("from", {})
     if plan_set_id and est["id"] not in {r["estimate_id"] for r in conn.execute(
             "SELECT estimate_id FROM plan_sets WHERE id = ? AND company_id = ?", (int(plan_set_id), ctx.company_id))}:
         raise InvalidInput(f"plan set {plan_set_id} isn't on estimate {est['id']}", plan_set_id=plan_set_id)

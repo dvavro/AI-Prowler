@@ -65,7 +65,15 @@ def info(sheet: dict, plan_set: dict) -> dict | None:
         top = math.ceil(math.log2(max(1.0, px / TILE)))
         source = "image"
     return {"tile": TILE, "max_level": max(0, min(MAX_LEVEL, top)), "width": w, "height": h,
-            "units": sheet.get("units"), "source": source}
+            "units": sheet.get("units"), "source": source, "version": version(sheet, plan_set)}
+
+
+def version(sheet: dict, plan_set: dict) -> str:
+    """Which drawing the tiles are of (2026-11-25, David: "when AI Design redraw the plan the window did not use the
+    latest"): a replaced plan set can hand its sheet number to the new one, so the page puts this in each tile's address
+    and the browser never shows the old drawing's tiles it kept."""
+    return hashlib.sha1("|".join(str(v) for v in (plan_set.get("id"), plan_set.get("processed_at"), sheet.get("image_path"),
+                                                  sheet.get("width"), sheet.get("height"))).encode()).hexdigest()[:12]
 
 
 def grid(width: float, height: float, level: int) -> tuple[int, int, float]:
@@ -83,10 +91,7 @@ def tile_box(width: float, height: float, level: int, x: int, y: int) -> tuple[f
 
 
 def _cache_dir(sheet: dict, plan_set: dict, root: Path) -> Path:
-    key = hashlib.sha1("|".join(str(v) for v in (plan_set.get("id"), plan_set.get("processed_at"),
-                                                 sheet.get("image_path"), sheet.get("width"),
-                                                 sheet.get("height"))).encode()).hexdigest()[:12]
-    return Path(root) / "tiles" / f"sheet{int(sheet['id'])}_{key}"
+    return Path(root) / "tiles" / f"sheet{int(sheet['id'])}_{version(sheet, plan_set)}"
 
 
 def render(sheet: dict, plan_set: dict, level: int, x: int, y: int, root: Path) -> Path:

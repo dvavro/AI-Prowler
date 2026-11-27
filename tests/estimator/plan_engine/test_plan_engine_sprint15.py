@@ -150,7 +150,9 @@ def test_zone_words(text, kind):                                                
 def test_fence_and_gate_notes():                                                 # C2S15-W03
     assert site.fence_info("6' WOOD PRIVACY FENCE") == {"material": "wood", "height_ft": 6.0, "remove": False}
     assert site.fence_info('4\'-0" HIGH CHAIN LINK FENCE')["material"] == "chain_link"
-    assert site.fence_info("5' BLACK ALUMINUM FENCE") == {"material": "iron", "height_ft": 5.0, "remove": False}
+    # 2026-11-25: aluminum is its own fencing material now (it was priced as wrought iron)
+    assert site.fence_info("5' BLACK ALUMINUM FENCE") == {"material": "aluminum", "height_ft": 5.0, "remove": False}
+    assert site.fence_info("5' ORNAMENTAL IRON FENCE")["material"] == "iron"
     assert site.fence_info("6' VINYL FENCE")["material"] == "vinyl"
     assert site.fence_info("8' CMU SCREEN WALL") == {"material": "block", "height_ft": 8.0, "remove": False}
     assert site.fence_info("REMOVE EXISTING FENCE")["remove"] is True and site.fence_info("FENCE")["height_ft"] is None

@@ -91,7 +91,12 @@ def test_a_design_from_a_cad_drawing_is_proposed_not_priced(db, fake, shed):    
     assert job["counts"]["total"] == 46 and job["counts"]["circuits"] == 6 and job["errors"] == 0
     assert job["can_approve"] and job["has_drawings"] and job["rev"] == 1
     assert runs.drawing(shed["est"], "electrical", "plan").is_file()
-    assert db.execute("SELECT COUNT(*) FROM measurements WHERE estimate_id = ?", (shed["est"],)).fetchone()[0] == 0
+    # 2026-11-25 (David: "the updated plans ... should be the default viewed plans in any viewer"): the plan and panel
+    # schedule are on the Measure screen at once and every device is counted - as proposals; nothing is priced yet
+    assert job["placed"]["rev"] == 1 and len(job["placed"]["plan_set_ids"]) == 2 and job["approved_rev"] is None
+    st = {r[0] for r in db.execute("SELECT status FROM measurements WHERE estimate_id = ?", (shed["est"],))}
+    assert st == {"proposed"}
+    assert not service.get_estimate(db, CTX, shed["est"])["sections"]
     log = db.execute("SELECT purpose, ok, estimate_id FROM ai_log ORDER BY id DESC LIMIT 1").fetchone()
     assert tuple(log) == ("AI design: electrical design", 1, shed["est"])
     assert job["cost_usd"] > 0
@@ -194,7 +199,10 @@ def test_approving_replaces_the_older_electrical_work_and_prices_it(db, fake, sh
     # the old drawing is gone (replaced by the design's plan), the stray count is set aside, not deleted
     assert db.execute("SELECT COUNT(*) FROM plan_sets WHERE id = ?", (old_ps,)).fetchone()[0] == 0
     new_plan = out["approved_plan_set_ids"][0]
-    assert db.execute("SELECT revision FROM plan_sets WHERE id = ?", (new_plan,)).fetchone()[0] == 2     # its next rev
+    # the design's drawing went on the project when it was drawn (2026-11-25); approving took the old one away
+    assert new_plan == runs.load(est, "electrical")["placed"]["sheets"]["plan"]
+    live = {r[0] for r in db.execute("SELECT id FROM plan_sets WHERE estimate_id = ?", (est,))}
+    assert live == {shed["ps"], *out["approved_plan_set_ids"]}
     s = db.execute("SELECT status, reject_reason FROM measurements WHERE id = ?", (stray,)).fetchone()
     assert tuple(s) == ("rejected", "replaced by the approved AI design")
     assert db.execute("SELECT COUNT(*) FROM measurements WHERE id = ?", (a,)).fetchone()[0] == 0   # went with its plan
@@ -211,6 +219,63 @@ def test_approving_replaces_the_older_electrical_work_and_prices_it(db, fake, sh
     from estimator.api.estimate_api import plan_changes
     from estimator.modules import get_registry
     assert not [t for t in plan_changes(db, CTX, e, get_registry()) if t["module_id"] == "electrical"]  # up to date
+
+
+def _counts(db, est, status="approved"):
+    out = {}
+    for feeds, qty, calc in db.execute("SELECT feeds, qty, calc_json FROM measurements WHERE estimate_id = ? AND"
+                                       " module_id = 'electrical' AND status = ?", (est, status)):
+        if json.loads(calc or "{}").get("from") == "plans":
+            out[feeds] = float(qty)
+    return out
+
+
+def test_an_electrical_change_is_the_drawing_shown_and_its_counts_take_over(db, fake, shed):   # AR-10
+    """2026-11-25 (David: "the updated plans are assumed as the latest and should be the default viewed plans in any
+    viewer so the user is not confused what he is approving" - "the electrical and cement as well")."""
+    _on(db)
+    est = shed["est"]
+    service.add_trade(db, CTX, est, "electrical", int(service.get_estimate(db, CTX, est)["rev"]))
+    fake.text = [json.dumps(shed_design())]
+    runs.start(db, CTX, est, "electrical", ASK, shed["ps"])
+    runs.approve(db, CTX, est, "electrical", confirm=True)
+    first = runs.load(est, "electrical")["approved_plan_set_ids"]
+    before = _counts(db, est)
+    # the change: four fewer LED lights, no exterior lights
+    fewer = shed_design()
+    leds = [i for i, d in enumerate(fewer["devices"]) if d["type"] == "light_led"][:4]
+    fewer["devices"] = [d for i, d in enumerate(fewer["devices"]) if i not in leds and d["type"] != "light_exterior"]
+    fake.text = [json.dumps(fewer)]
+    job = runs.change(db, CTX, est, "electrical", "four fewer shop lights and no exterior lights")
+    assert job["status"] == "proposed" and job["placed"]["rev"] == 2 and job["approved_rev"] == 1
+    live = {r[0] for r in db.execute("SELECT id FROM plan_sets WHERE estimate_id = ?", (est,))}
+    assert live == {shed["ps"], *job["placed"]["plan_set_ids"]} and not live & set(first)   # the new drawing, shown
+    seen = runs.on_measure(est)
+    assert seen["waiting"] == {"trade": "electrical", "rev": 2, "approved_rev": 1, "on_screen": True}
+    sug = {r[0]: (float(r[1]), r[2] or "") for r in db.execute(
+        "SELECT feeds, suggested_qty, suggested_reason FROM measurements WHERE estimate_id = ? AND module_id = 'electrical'"
+        " AND status = 'approved' AND suggested_qty IS NOT NULL", (est,))}
+    assert any(q == 0 and runs.GONE in why for q, why in sug.values())                     # exterior lights: gone
+    assert any(0 < q < before[f] for f, (q, why) in sug.items())                           # fewer shop lights
+    assert _counts(db, est) == before                                                      # not priced until approved
+    out = runs.approve(db, CTX, est, "electrical", confirm=True)
+    assert out["status"] == "approved" and out["approval"]["removed"] >= 1 and out["approval"]["changed"] >= 1, out
+    after = _counts(db, est)
+    gone = [f for f, (q, _w) in sug.items() if q == 0]
+    assert all(f not in after for f in gone) and all(after[f] == q for f, (q, _w) in sug.items() if q)
+    e = service.get_estimate(db, CTX, est)
+    sec = next(s for s in e["sections"] if s["module_id"] == "electrical")
+    assert all(str(sec["answers"].get(f) or 0) in ("0", "0.0") for f in gone)               # priced as none
+    # 🗑 Discard a change that wasn't approved: revision 2's drawing is back, its counts as they were
+    fake.text = [json.dumps(shed_design())]
+    runs.change(db, CTX, est, "electrical", "put the exterior lights back")
+    assert runs.load(est, "electrical")["placed"]["rev"] == 3
+    runs.discard(db, CTX, est, "electrical")
+    st = runs.load(est, "electrical")
+    assert st["placed"]["rev"] == 2 and runs.on_measure(est)["waiting"] is None
+    assert _counts(db, est) == after and not _counts(db, est, "proposed")
+    assert not db.execute("SELECT COUNT(*) FROM measurements WHERE estimate_id = ? AND module_id = 'electrical' AND"
+                          " status = 'approved' AND suggested_qty IS NOT NULL", (est,)).fetchone()[0]
 
 
 def test_a_design_approved_the_old_way_can_be_put_in_place(db, fake, shed):                 # AR-09

@@ -161,7 +161,7 @@ def test_no_candidates_llm_off_fails_fast_saying_the_ai_did_not_run(call, db, em
 
 
 def test_candidates_llm_on_sends_the_sheet_to_the_ai(call, db, slab, agent_spawns, fake):
-    """2026-11-15 (David): AI Auto Run - with LLM takeoff on and its key ready, the sheet goes to the AI (after
+    """2026-11-15 (David): AI Auto Measure/Count - with LLM takeoff on and its key ready, the sheet goes to the AI (after
     calibrating) even when the drawing has outlines."""
     _on(db)
     r = call("POST", f"{API}/auto-run", _body(slab))
@@ -241,7 +241,7 @@ def test_get_run_reports_the_source(call, db, empty):
     assert call("GET", f"{API}/auto-run/{llm}").json()["run"]["source"] == "llm"
 
 
-# ---------------------------------------------------------------- AI Auto Run on the sheets that are ON (2026-11-15)
+# ---------------------------------------------------------------- AI Auto Measure/Count on the sheets that are ON (2026-11-15)
 
 def _off(db, sheet):
     from estimator.takeoff import sheet_trades

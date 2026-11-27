@@ -20,3 +20,16 @@
   # hardwood 600 x 1.08 x $5.50 = $3,564; underlayment 630 x $0.45 = $283.50
   expected_lines: {remove_hard: 120000, hardwood: 356400, underlayment: 28350, install_hardwood: 270000}
   expected_total_cents: 774750
+# 2026-11-27: garage / concrete floor coatings
+- name: 500 sq ft garage epoxy with full paint chips and clear top coat (the defaults)
+  answers: {area_sqft: 500, material: coating_epoxy}
+  # grind 500 x $0.75; epoxy 550 x $0.80 = $440; chips 550 x $0.50 = $275; top coat 550 x $0.75 = $412.50; apply 500 x $1.50
+  expected_lines: {coat_grind: 37500, coat_epoxy: 44000, coat_chips_full: 27500, coat_topcoat: 41250, coat_apply: 75000}
+  expected_total_cents: 225250
+- name: 400 sq ft polyaspartic, acid etch, light chips, no top coat, 30 ft of cracks, 60 ft of stem wall
+  answers: {area_sqft: 400, material: coating_poly, coat_prep: etch, coat_chips: light, coat_topcoat: false,
+            coat_crack_lf: 30, coat_stem_lf: 60}
+  # etch 400 x $0.30; cracks 30 x $2.50; poly 440 x $1.25 = $550; chips 440 x $0.15 = $66; apply 400 x $1.50; stem 60 x $4
+  expected_lines: {coat_etch: 12000, coat_cracks: 7500, coat_poly: 55000, coat_chips_light: 6600, coat_apply: 60000,
+                   coat_stem: 24000}
+  expected_total_cents: 165100

@@ -45,7 +45,7 @@ def _shed(db, tmp_path, ai_on=True):
 
 
 def open_design(page, estimate_id):
-    """2026-11-23 (David): ✨ AI design is on the toolbar beside AI Auto Run, in its own window - not in To measure."""
+    """2026-11-23 (David): ✨ AI design is on the toolbar beside AI Auto Measure/Count, in its own window - not in To measure."""
     page.goto(page.base + f"#/takeoffs/{estimate_id}")
     page.wait_for_selector("#bp-viewer [data-oid]", state="attached")
     page.click("#bp-ai-design")
@@ -81,7 +81,8 @@ def test_describe_view_change_approve(page, db, fake, tmp_path):
     page.wait_for_selector("#bp-design-counts", timeout=30000)                              # polled until it's ready
     assert "46 devices · 6 circuits · 100 A subpanel" in page.inner_text("#bp-design-counts")
     assert "20 LED shop lights" in page.inner_text("#bp-design-counts")
-    assert "Proposed — revision 1" in page.inner_text("#bp-design-proposed")
+    # 2026-11-25 (David: the updated plans "should be the default viewed plans"): it's on Measure at once, not approved
+    assert "Revision 1 is on the Measure screen now — not approved yet" in page.inner_text("#bp-design-proposed")
     assert "No code errors" in page.inner_text("#bp-design-findings")
     assert "46' x 45'" in page.inner_text("#bp-design-building") and "the CAD drawing" in page.inner_text("#bp-design-building")
     assert "100A subpanel in the house garage" in page.inner_text("#bp-design-feeder")

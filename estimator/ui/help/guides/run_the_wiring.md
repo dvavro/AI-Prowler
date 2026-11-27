@@ -1,9 +1,9 @@
 # Run the wiring (Electrical cable)
 <!-- screen: takeoffs; words: wiring, run wiring, cable, wire, 12/2, 14/2, 10/3, circuits, panel, panel schedule, breakers, routing, route, basement, crawlspace, slab, studs, attic, wiring options, defaults, colour key, color code, wiring drawing, schematic, dxf, conduit, emt, pvc, thhn, surface mount, metal shed, garage, expansion, expansion fitting, thermal -->
-**⚡ Run wiring** routes the cable from the panel to every device and proposes the cable lengths by size, plus the breaker and range/dryer receptacle counts. It's plain geometry from the CAD plan: no AI tokens, and your device counts aren't touched. 🤖 AI Auto Run on Electrical runs it too.
+**⚡ Run wiring** routes the cable from the panel to every device and proposes the cable lengths by size, plus the breaker and range/dryer receptacle counts. It's plain geometry from the CAD plan: no AI tokens, and your device counts aren't touched. 🤖 AI Auto Measure/Count on Electrical runs it too.
 
 1. Upload the electrical floor plan as a **DXF** file (devices drawn as symbols, the panel symbol where the panel is, each floor titled GROUND FLOOR, SECOND FLOOR…). The panel drawing with its schedule (CIRCUIT / DESCRIPTION / AMPS / POLES / WIRE) is optional: without it the circuits are laid out the usual residential way, and each one is flagged to check.
-2. On Measure, click **⚡ Run wiring** (beside AI Auto Run, or in the ⚡ Wiring card on the **To measure** tab). The **Wiring options** box opens first.
+2. On Measure, click **⚡ Run wiring** (beside AI Auto Measure/Count, or in the ⚡ Wiring card on the **To measure** tab). The **Wiring options** box opens first.
 3. Set how the cable runs. Each drop-down says, under it, what the choice you picked does:
    - **Foundation**: **Basement** (runs along the basement ceiling and up into the walls), **Crawlspace** (along the crawlspace joists), or **Slab on grade** (nothing ever goes in the concrete; the ground floor is fed from its ceiling).
    - **Outlets wired**: **Through the studs** (outlet to outlet at outlet height — the usual way), **From below** or **From the ceiling**. Lights always go through the ceiling, with the switches dropped from them.

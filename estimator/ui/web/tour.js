@@ -167,9 +167,9 @@ const TOURS = [
   { id: "agents", title: "Agents", steps: [
     { sel: "#agents-settings-where", title: "Trade settings",
       body: "Which trades you quote, and how sure each trade's measuring agent must be, are set once in AI-Prowler's 🏗 Estimator tab → 🏗 Trades. This screen shows them." },
-    // 2026-11-21: the AI Auto Runs are listed here too, every trade.
-    { sel: "#auto-runs-head", title: "AI Auto Runs",
-      body: "Every 🤖 AI Auto Run from the Measure screen, for every trade: how it went, what it proposed, what its AI calls cost, and why it failed if it did." },
+    // 2026-11-21: the AI Auto Measure/Count runs are listed here too, every trade.
+    { sel: "#auto-runs-head", title: "AI Auto Measure/Count runs",
+      body: "Every 🤖 AI Auto Measure/Count from the Measure screen, for every trade: how it went, what it proposed, what its AI calls cost, and why it failed if it did." },
     { sel: "#runs-list", title: "Director measure runs",
       body: "The Director starts one run per plan job. Open one to see each trade's task and what it's waiting on." },
   ]},

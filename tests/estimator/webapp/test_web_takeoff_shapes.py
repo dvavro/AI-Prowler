@@ -1,4 +1,4 @@
-"""AI Auto Run's measurements on the drawing, and areas a person adds or takes away (2026-11-16, David).
+"""AI Auto Measure/Count's measurements on the drawing, and areas a person adds or takes away (2026-11-16, David).
 
 "Is it possible that when you click on the equations to compute the volume say of the footer or the base or the slab
 area ... it would select it and highlight the area in the drawing" - and "I want the user to be able to add area to be

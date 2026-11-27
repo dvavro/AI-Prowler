@@ -284,9 +284,12 @@ def create_measurements(conn, ctx: RequestContext, run: dict, reading: dict, qua
     now = lt._now()
     with service.transaction(conn):
         kept = lt.replace_earlier_proposals(conn, ctx, run, MODULE_ID, sheet_id)   # a rerun replaces, never adds
+        covered = lt.plans_measured(conn, ctx, run, MODULE_ID, sheet_id)         # the plan reader's approved ones
         for feeds in COUNT_IDS:
             qty = quantities["counts"][feeds]
             if qty <= 0 or feeds in kept:        # kept: already approved, and the run keeps approved items
+                continue
+            if lt.already_measured(conn, ctx, run, covered, feeds, qty):   # never priced twice (2026-11-25)
                 continue
             how = reading["evidence"].get(feeds) or f"{qty} counted on the electrical plan"
             calc = {"source": "llm", "auto_run_id": run["id"], "candidate_id": lt.CANDIDATE_ID,
@@ -451,4 +454,4 @@ def electrical_results(conn, ctx, row: dict) -> dict | None:
             "electrical": {"counts": out_counts, "sheet_id": sheet_id,
                            "confidence": (cand or {}).get("confidence"),
                            "notes": (cand or {}).get("notes") or "",
-                           "wiring": (cand or {}).get("wiring")}}     # the Wiring stage, when AI Auto Run routed it
+                           "wiring": (cand or {}).get("wiring")}}     # the Wiring stage, when AI Auto Measure/Count routed it

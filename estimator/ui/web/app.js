@@ -427,8 +427,9 @@ async function renderProject(main, id) {
 
   // Plans: list + upload (Documents)
   const planMsg = el("div", { id: "plan-remove-message", role: "status" });
-  parts.push(el("h3", {}, "Plans and documents"), planTable(p.plan_sets, planMsg, p.can_edit), planMsg);
+  parts.push(el("h3", { id: "project-plans" }, "Plans and documents"), planTable(p.plan_sets, planMsg, p.can_edit), planMsg);
   if (p.can_upload) parts.push(uploadBox(est.id, p.plan_sets));
+  if (canOpen("takeoffs")) parts.push(aiPlansCard(est.id, p.plan_sets.length > 0));
 
   // History
   const hist = el("details", { class: "card section", id: "history" }, el("summary", {}, "History"));
@@ -445,6 +446,523 @@ async function renderProject(main, id) {
   parts.push(hist);
   if (state.me && state.me.role === "owner" && !est.practice) parts.push(projectAdminBox(est));
   main.replaceChildren(...parts);
+  projectGo();
+}
+
+// 2026-11-24 (David: "when I click that it takes me no where. We need all the steps from the director to be a link to
+// take me to the next page"): a Director step's link "#/projects/<id>?go=<part>" jumps to that part of the project page
+// - plans (the upload box), trades (the trade picker), customer (the name box) - highlights it for a moment and puts
+// the cursor there. The Director panel loads after the page, so it runs again once the panel is drawn.
+const PROJECT_GO = {
+  plans: () => { const f = $("plan-file"); return (f && (f.closest("form") || f.parentNode)) || $("project-plans"); },
+  trades: () => { const d = $("director-trades-edit"); if (d) d.open = true; return $("director-trades"); },
+  customer: () => $("director-customer"),
+  design: () => { const d = $("ai-plans"); if (d) d.open = true; return d; },
+};
+function projectGo(want) {
+  const part = want || new URLSearchParams(location.hash.split("?")[1] || "").get("go");
+  if (!part || !PROJECT_GO[part]) return false;
+  if (!want && state.projectWent === location.hash) return false;      // once per click, not on every panel refresh
+  const target = PROJECT_GO[part]();
+  if (!target) return false;                                            // not drawn yet (the Director panel): try again then
+  state.projectWent = location.hash;
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.classList.add("go-flash");
+  setTimeout(() => target.classList.remove("go-flash"), 2000);
+  const field = target.querySelector("input:not([type=hidden]), select, button");
+  if (field && field.focus) field.focus({ preventScroll: true });
+  return true;
+}
+
+// ✨ AI design: describe the job (2026-11-24, David: "If the user does not have plans I want the user to be able to use AI
+// Design button so the user can just describe the plans and have AI Design it for him" - every trade, as a drawn plan).
+// The AI lays out the job from the description, the app draws the sheets (site, floor, foundation, roof, demolition),
+// the person looks them over and changes them in plain words, and approving makes them the project's plans: read,
+// measured, approved and priced like a designer's (estimator/design/runs.py, trade "plans"; /design/<id>/plans).
+const AIP = { draft: {}, open: {} };
+function aiPlansCard(eid, hasPlans) {
+  if (AIP.eid !== eid) AIP.draft = {};
+  AIP.eid = eid; AIP.fresh = false;
+  // open when there are no plans yet; after that it stays the way the person left it (the page redraws often)
+  const open = AIP.open[eid] !== undefined ? AIP.open[eid] : !hasPlans;
+  const card = el("details", { class: "card section", id: "ai-plans", open: open ? "" : null },
+    el("summary", {}, el("strong", {}, "✨ AI design: describe the job"),
+      el("span", { class: "muted small" }, hasPlans ? " — or start from a description instead of the plans"
+        : " — no plans? Describe it and the AI draws them")),
+    el("div", { id: "ai-plans-body" }, el("p", { class: "muted small" }, "Loading…")));
+  card.addEventListener("toggle", () => { AIP.open[eid] = card.open; });
+  aiPlansLoad(eid);
+  return card;
+}
+
+async function aiPlansLoad(eid) {
+  const before = AIP.eid === eid ? aiPlansJob() : null;
+  try { AIP.d = await api("GET", "/design/" + eid); }
+  catch (e) { if (e.status === 401) return; AIP.d = { error: e }; }
+  aiPlansDraw();
+  // 2026-11-25: the drawing goes on the project while the job runs, so the page can redraw (and load the card again)
+  // just as it finishes - the finish is still announced, once
+  const j = aiPlansJob();
+  if (before && before.status === "working" && j && j.status !== "working") aiPlansFinished(j);
+}
+
+function aiPlansFinished(j) {
+  const key = [AIP.eid, j.id, j.rev, j.status, j.approved_at || ""].join(":");
+  if (AIP.announced === key) return;
+  AIP.announced = key;
+  if (j.status === "approved") aiPlansApproved(j);
+  else if (j.status === "proposed") aiPlansReady(j);
+  else if (j.status === "failed") { aiPlansShow(); toast("The AI design didn't finish — see why in ✨ AI design."); }
+}
+
+function aiPlansJob() { return AIP.d && AIP.d.designs ? AIP.d.designs.plans : null; }
+
+function aiPlansKeep(t, key) {
+  if (AIP.draft[key] !== undefined) t.value = AIP.draft[key];
+  t.addEventListener("input", () => { AIP.draft[key] = t.value; });
+  return t;
+}
+
+function aiPlansDraw() {
+  const body = $("ai-plans-body");
+  if (!body) return;
+  const d = AIP.d;
+  if (d.error) { body.replaceChildren(errorBox(d.error)); return; }
+  const j = aiPlansJob();
+  aiPlansBadge(j);
+  const parts = [el("p", { class: "muted small" },
+    "Say what the job is in your own words — sizes, materials, where things go — and pick what AI design does: " +
+    "draw the plans (site plan, floor plan, foundation, roof, demolition — whatever the job needs; each drawing goes on " +
+    "the Measure screen right away and every trade is measured from it), price the estimate (it fills in each trade from " +
+    "your description — a demolition job needs no drawing), and include permits and inspections. You look it over and " +
+    "change it in plain words — nothing is priced until you approve it. " +
+    "Uses the agent API key" + (d.ai_label ? " (" + d.ai_label + ")" : "") + ".")];
+  if (!d.ai_on) parts.push(el("p", { class: "note warn small", id: "ai-plans-off" }, d.why_off));
+  parts.push(el("div", { id: "ai-plans-msg", role: "status" }));
+  if (j && j.status === "working") {
+    parts.push(aiPlansBusy(j));
+  } else if (j && (j.status === "proposed" || j.status === "approved") && !AIP.fresh) {
+    parts.push(...aiPlansResult(j, d));
+  } else {
+    if (j && j.status === "failed") parts.push(el("p", { class: "error", id: "ai-plans-failed" }, "The last design didn't finish: " + j.error));
+    parts.push(d.can_run ? aiPlansForm(j, d) : el("p", { class: "muted small" }, "An owner or estimator can start an AI design."));
+  }
+  if (!(j && j.status === "working")) { clearInterval(AIP.tick); AIP.since = null; }
+  body.replaceChildren(...parts);
+  aiPlansPoll();
+}
+
+// 2026-11-25 (David: "it would be nice if there is an AI Busy so the user knows that its working"): the same blue
+// "working, please wait" banner as AI Auto Measure/Count, with what the AI is doing and how long it has been at it.
+function aiPlansBusy(j) {
+  if (!AIP.since) AIP.since = Date.now();
+  const clock = el("span", { id: "ai-plans-clock" }, "0:00");
+  const tickNow = () => {
+    const s = Math.max(0, Math.round((Date.now() - AIP.since) / 1000));
+    const c = $("ai-plans-clock");
+    if (c) c.textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+    else clearInterval(AIP.tick);
+  };
+  clearInterval(AIP.tick);
+  AIP.tick = setInterval(tickNow, 1000);
+  setTimeout(tickNow, 0);
+  const approving = (j.step || "").startsWith("approving");
+  return el("div", { class: "bp-running", id: "ai-plans-working", role: "status", "aria-live": "polite" },
+    el("span", { class: "bp-spinner", "aria-hidden": "true" }),
+    el("div", {},
+      el("strong", {}, approving ? "⏳ Making them the project's plans…" : "⏳ AI busy — drawing your plans…"),
+      el("div", { id: "ai-plans-step" }, (j.step ? j.step.charAt(0).toUpperCase() + j.step.slice(1) : "The AI is working") + " · ", clock),
+      el("div", { class: "muted small" }, approving ? "Reading, measuring and pricing — a few seconds."
+        : "Usually under a minute. You can keep working or leave this page — the plans open here when they're ready, and the 🧭 Director says so too.")));
+}
+
+// The card's heading says where the design is, so it shows with the card closed too
+function aiPlansBadge(j) {
+  const s = $("ai-plans") && $("ai-plans").querySelector("summary");
+  if (!s) return;
+  let b = $("ai-plans-badge");
+  if (!b) {
+    b = el("span", { id: "ai-plans-badge", class: "chip" });
+    // 2026-11-27 (David: "when I hit the plans ready look them over button it takes me to a blank page with no
+    // drawings"): the chip sits in the card's heading, so a click folded the card shut. It opens the card and the
+    // newest drawing now (the rest of the heading still folds and unfolds the card).
+    b.addEventListener("click", ev => {
+      const cur = aiPlansJob();
+      if (!cur || !["proposed", "approved"].includes(cur.status)) return;      // busy or failed: just the heading
+      ev.preventDefault();
+      ev.stopPropagation();
+      aiPlansShow();
+      const i = (cur.sheets || []).findIndex(x => x.ready);       // nothing drawn (2026-11-27): the card shows the answers
+      if (i >= 0 && !$("bp-wiring-viewer")) aiPlansView(i);
+    });
+    s.append(" ", b);
+  }
+  const drawn = !!(j && (j.sheets || []).length);
+  const st = j ? (j.status === "working" ? ["⏳ AI busy", "busy"]
+    : j.status === "proposed" ? [drawn ? "✅ Plans ready — look them over" : "✅ Ready — look it over", "ready"]
+    : j.status === "approved" ? ["Approved", "done"] : j.status === "failed" ? ["⚠ Didn't finish", "failed"] : null) : null;
+  b.hidden = !st;
+  if (st) { b.textContent = st[0]; b.dataset.state = st[1]; }
+  const canLook = !!(j && ["proposed", "approved"].includes(j.status));
+  b.classList.toggle("link", canLook);
+  if (canLook) { b.setAttribute("role", "button"); b.title = drawn ? "Open the newest drawing" : "Open AI design"; }
+  else { b.removeAttribute("role"); b.removeAttribute("title"); }
+}
+
+function aiPlansForm(j, d) {
+  const ex = (d.trades.find(t => t.id === "plans") || {}).example || "";
+  // 2026-11-25 (David: "I took a screen clip of the area where I want a fence ... there is no way to Ctrl V add an image"):
+  // screenshots and photos go with the description - 📎 or pasted into the box, the same as AI design on Measure
+  const req = designPaste(aiPlansKeep(el("textarea", { id: "ai-plans-request", rows: "5", maxlength: "3000",
+    placeholder: "e.g. " + ex + "  —  paste a screenshot here (Ctrl+V): an aerial view with the fence line marked, a plot plan…" },
+    (j && j.request) || ""), "request"), "plans-start");
+  const specs = aiPlansKeep(el("textarea", { id: "ai-plans-specs", rows: "3", maxlength: "3000",
+    placeholder: "e.g. posts 8 ft on center, cap and trim on the fence, 4 in slab with a thickened edge, 4:12 roof" },
+    (j && j.specs) || ""), "specs");
+  // 2026-11-27 (David: "The draw the plans button should say run AI Design and add a selection to draw plans and other
+  // options like include pricing and inspections and that would help the user control what gets done"): what it does is
+  // picked here, so the button says what it is
+  const go = el("button", { class: "primary", type: "button", id: "ai-plans-go", disabled: d.ai_on ? null : "" }, "✨ Run AI design");
+  go.addEventListener("click", () => aiPlansStart(go, req, specs));
+  const back = AIP.fresh && j ? el("button", { class: "button", type: "button", id: "ai-plans-back" }, "Back to the design") : null;
+  if (back) back.addEventListener("click", () => { AIP.fresh = false; aiPlansDraw(); });
+  return el("div", { id: "ai-plans-form" },
+    el("label", { for: "ai-plans-request", class: "small" }, "Describe the job"), req, designShotBox("plans-start"),
+    el("details", { id: "ai-plans-specs-box", open: (j && j.specs) ? "" : null },
+      el("summary", { class: "small" }, "Specs and preferences (optional)"), specs),
+    aiPlansDoBox(AIP.fresh ? null : j, d), el("div", { class: "row" }, go, back), aiPlansAutoBox(j));
+}
+
+// What ✨ Run AI design does (2026-11-27): draw the plans, price the estimate, permits and inspections. Starts from this
+// project's last choices, else the defaults (no drawing for a demolition-only job); what's ticked here is kept while the
+// page redraws.
+const AIP_DO = [
+  ["draw", "📐 Draw the plans", "Draw the sheets the job needs and put them on the Measure screen; every trade they show is measured from them."],
+  ["price", "💲 Price the estimate", "Fill in each of the project's trades from your description (square feet, counts, choices) and price them when you approve — a trade the drawing measures is priced from the drawing."],
+  ["permits", "📋 Include permits and inspections", "Answer each trade's permit and inspection questions as this job needs them. Off: they stay as the estimate has them."]];
+function aiPlansDoValues(j, d) {
+  const base = (j && j.do) || (d && d.do_default) || { draw: true, price: true, permits: false };
+  return { ...base, ...(AIP.doDraft || {}) };
+}
+function aiPlansDoBox(j, d) {
+  const v = aiPlansDoValues(j, d);
+  const boxes = AIP_DO.map(([k, label, help]) => {
+    const box = el("input", { type: "checkbox", id: "ai-plans-do-" + k, checked: v[k] ? "" : null });
+    box.addEventListener("change", () => {
+      AIP.doDraft = { ...(AIP.doDraft || {}), [k]: box.checked };
+      const say = $("ai-plans-do-none");
+      if (say) say.hidden = !!(aiPlansDo().draw || aiPlansDo().price);
+    });
+    return el("label", { class: "small", title: help }, box, " " + label);
+  });
+  return el("fieldset", { class: "ai-plans-do", id: "ai-plans-do" },
+    el("legend", { class: "small" }, "What should AI design do?"), ...boxes,
+    el("span", { class: "note warn small", id: "ai-plans-do-none", hidden: (v.draw || v.price) ? "" : null },
+      "Pick Draw the plans, Price the estimate, or both."));
+}
+function aiPlansDo() {
+  const out = {};
+  for (const [k] of AIP_DO) {
+    const box = $("ai-plans-do-" + k);
+    if (box) out[k] = box.checked;
+  }
+  return out;
+}
+
+const AIP_COUNTS = [["fence_lf", " ft of fence"], ["gates", " gates"], ["zones_sqft", " sq ft of planting"],
+  ["concrete_sqft", " sq ft of flatwork"], ["rooms", " rooms"], ["floor_sqft", " sq ft floor"], ["doors", " doors"],
+  ["windows", " windows"], ["fixtures", " fixtures"], ["slab_sqft", " sq ft slab"], ["roof_squares", " roofing squares"],
+  ["demolition", " demolition items"]];
+
+function aiPlansResult(j, d) {
+  const ds = j.design || {}, c = j.counts || {}, eid = AIP.eid;
+  const out = [];
+  if (j.status === "approved") out.push(el("p", { class: "ok", id: "ai-plans-approved" },
+    "✅ " + ((j.approval && j.approval.say) || "Approved — these are the project's plans now.")));
+  if (j.status === "approved" && j.error) out.push(el("p", { class: "note warn small", id: "ai-plans-todo" }, j.error));
+  const onScreen = aiPlansOnScreen(j);
+  if (onScreen) out.push(onScreen);
+  out.push(el("p", { id: "ai-plans-summary" }, el("strong", {}, ds.summary || "The AI's plans"),
+    el("span", { class: "muted small" }, " · revision " + j.rev)));
+  out.push(el("div", { class: "chips", id: "ai-plans-counts" },
+    ...AIP_COUNTS.filter(([k]) => c[k]).map(([k, w]) => el("span", { class: "chip" }, c[k] + w))));
+  const answers = aiPlansAnswers(j);
+  if (answers) out.push(answers);
+  const sheets = j.sheets || [];
+  if (sheets.length) out.push(el("p", { class: "small", id: "ai-plans-sheets-say" },
+    el("strong", {}, "📐 " + sheets.length + " sheet" + (sheets.length === 1 ? "" : "s") + " drawn"),
+    " — click one to look at it (zoom, move around, ⬇ download the DXF)."));
+  out.push(el("div", { class: "row", id: "ai-plans-sheets" }, ...sheets.map((s, i) => {
+    const b = el("button", { class: i === 0 ? "primary" : "button", type: "button", id: "ai-plans-sheet-" + s.key,
+      disabled: s.ready ? null : "" }, "👁 " + s.title);
+    b.addEventListener("click", () => aiPlansView(i));
+    return b;
+  })));
+  out.push(designFindings(j));
+  const notes = [...(ds.assumptions || []).map(a => "Assumed: " + a), ...(ds.notes || [])];
+  if (notes.length) out.push(el("details", { id: "ai-plans-notes" }, el("summary", { class: "small" }, "Assumptions and notes (" + notes.length + ")"),
+    el("ul", { class: "small" }, ...notes.map(n => el("li", {}, n)))));
+  if ((ds.changes || []).length && j.rev > 1) out.push(el("div", { class: "small", id: "ai-plans-changes" },
+    el("strong", {}, "What changed: "), el("ul", {}, ...ds.changes.map(x => el("li", {}, x)))));
+  if (d.can_run) out.push(aiPlansActions(j, eid));
+  if (j.cost_usd) out.push(el("p", { class: "muted small", id: "ai-plans-cost" },
+    "AI cost of this design: $" + (j.cost_usd || 0).toFixed(2) + (j.model ? " (" + j.model + ")" : "") +
+    " · " + (j.revisions || []).length + " revision" + ((j.revisions || []).length === 1 ? "" : "s")));
+  return out;
+}
+
+// 2026-11-27: what AI design filled in for the estimate (Price the estimate) - priced when it's approved
+function aiPlansAnswers(j) {
+  const ta = j.trade_answers || [];
+  const drawn = (j.sheets || []).length > 0;
+  if (!ta.length) {
+    if (!drawn && (j.do || {}).price) return el("p", { class: "note warn small", id: "ai-plans-answers-none" },
+      "AI design didn't fill in any trade from the description — say more about the job (sizes, counts, what comes out), or fill the trades in on the estimate.");
+    return null;
+  }
+  return el("div", { id: "ai-plans-answers" },
+    el("p", { class: "small" }, el("strong", {}, "💲 Fills in the estimate"),
+      j.status === "approved" ? " — priced when you approved it." : " — priced when you approve it" +
+        (drawn ? " (a trade the drawing measures is priced from the drawing)." : ".")),
+    ...ta.map(t => el("details", { class: "ai-plans-trade", id: "ai-plans-answers-" + t.trade, open: "" },
+      el("summary", { class: "small" }, el("strong", {}, t.name), el("span", { class: "muted" }, " · " + t.answers.length + " answer" + (t.answers.length === 1 ? "" : "s"))),
+      el("table", { class: "small" }, el("tbody", {}, ...t.answers.map(a => el("tr", {},
+        el("td", { class: "muted" }, a.label), el("td", {}, a.value))))))));
+}
+
+function aiPlansView(i) {
+  const j = aiPlansJob(), s = (j.sheets || [])[i], n = (j.sheets || []).length;
+  if (!s) return;
+  openDrawingViewer({
+    title: "AI design — " + s.title + " (revision " + j.rev + ")",
+    url: "/design/" + AIP.eid + "/plans/sheet/" + s.key + "/svg",
+    download: b => aiPlansDownload(b, s.key),
+    other: n > 1 ? { label: "▶ Next sheet", title: "Show the next sheet", go: () => aiPlansView((i + 1) % n) } : null });
+}
+
+async function aiPlansDownload(btn, key) {
+  btn.disabled = true;
+  try {
+    const opts = { credentials: "same-origin", headers: {} };
+    if (APP_TOKEN) opts.headers["Authorization"] = "Bearer " + APP_TOKEN;
+    const r = await fetch(API + "/design/" + AIP.eid + "/plans/sheet/" + key, opts);
+    if (!r.ok) {
+      let data = null;
+      try { data = await r.json(); } catch (e) { data = null; }
+      throw new ApiError(r.status, data);
+    }
+    const name = ((r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/) || [])[1] || "ai_plans_" + key + ".dxf";
+    const url = URL.createObjectURL(await r.blob());
+    const a = el("a", { href: url, download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) {
+    if (e.status !== 401) toast("The download didn't work — " + (e.message || "unknown error"));
+  } finally { btn.disabled = false; }
+}
+
+// 2026-11-25 (David: "lets always show the latest drawing ... the user still need to approve the new drawing, dont auto
+// approve unless the user selects that and also conform to the keep approved items on rerun"): every drawing goes on the
+// Measure screen at once and waits for approval. The page sends Measure's "Keep approved items on rerun" (remembered in
+// this browser) and this project's "Approve each new drawing automatically".
+function aiPlansKeepApproved() {
+  if (typeof keepApproved === "function") return keepApproved();
+  try { return localStorage.getItem("est_auto_keep_approved") !== "0"; } catch (e) { return true; }
+}
+function aiPlansOptions() {
+  const box = $("ai-plans-auto");
+  const j = aiPlansJob();
+  // 2026-11-27: and what it does (only the choices on the page - the job keeps the rest)
+  return { keep_approved: aiPlansKeepApproved(), auto_approve: box ? box.checked : !!(j && j.auto_approve), ...aiPlansDo() };
+}
+function aiPlansAutoBox(j) {
+  const box = el("input", { type: "checkbox", id: "ai-plans-auto", checked: j && j.auto_approve ? "" : null });
+  return el("label", { class: "small", id: "ai-plans-auto-row",
+    title: "Off: each new design waits for you to approve it. On: it's approved as soon as it's ready (measured, approved and priced, as you picked above)." },
+    box, " Approve each new design automatically");
+}
+function aiPlansOnScreen(j) {
+  const p = j.placed;
+  if (j.status !== "proposed" || !p || p.rev !== j.rev) return null;
+  const go = location.hash.startsWith("#/takeoffs/") ? null
+    : el("a", { href: "#/takeoffs/" + AIP.eid, id: "ai-plans-measure-link" }, "📏 See it in Measure");
+  return el("p", { class: "note warn small", id: "ai-plans-on-screen" },
+    el("strong", {}, "📏 Revision " + j.rev + " is on the Measure screen now — not approved yet. "),
+    "Its measurements wait for your review" + (p.gone ? " (" + p.gone + " approved item(s) aren't on it any more — they're taken off when you approve)" : "") +
+    ". Approve it to price it" + (j.approved_rev ? "; 🗑 Discard puts revision " + j.approved_rev + " back" : "") + ". ", go);
+}
+
+function aiPlansActions(j, eid) {
+  const text = designPaste(aiPlansKeep(el("textarea", { id: "ai-plans-change", rows: "3", maxlength: "3000",
+    placeholder: j.errors ? "e.g. fix the errors" : "e.g. make the fence 8 ft tall · move the drive gate to the left side · add a 10 x 12 patio off the back door · or paste a marked-up screenshot (Ctrl+V)" }),
+    "change"), "plans-change");
+  const change = el("button", { class: "button", type: "button", id: "ai-plans-change-go" }, "✏️ Make the change");
+  change.addEventListener("click", () => aiPlansPost(change, "change",
+    { text: text.value, images: designShots("plans-change").map(s => s.url), ...aiPlansOptions() },
+    () => { AIP.draft.change = ""; RV.designShotList["plans-change"] = []; }));
+  const approve = el("button", { class: "primary", type: "button", id: "ai-plans-approve",
+    disabled: j.can_approve ? null : "", title: j.errors ? "Fix the errors first (ask for it above)" : null },
+    j.status === "approved" ? "✅ Approved" : (j.sheets || []).length ? "✅ Approve this drawing" : "✅ Approve and price");
+  approve.addEventListener("click", () => aiPlansApprove(approve, false));
+  const fresh = el("button", { class: "button", type: "button", id: "ai-plans-new" }, "＋ Start over");
+  fresh.addEventListener("click", () => { AIP.fresh = true; aiPlansDraw(); });
+  const drop = el("button", { class: "button", type: "button", id: "ai-plans-discard",
+    title: j.approved_rev ? "Forget this drawing and put the approved one (revision " + j.approved_rev + ") back" : "Forget this drawing" }, "🗑 Discard");
+  drop.addEventListener("click", () => aiPlansPost(drop, "discard", {}, () => {
+    toast(j.approved_rev ? "Discarded — revision " + j.approved_rev + " is back on the Measure screen." : "Discarded.");
+    if (location.hash.startsWith("#/takeoffs/" + AIP.eid) && typeof reloadReview === "function") reloadReview();
+  }));
+  // 2026-11-25: the page can redraw while the approve question is up (the new drawing's sheets finish reading) -
+  // the question stays, for the same drawing
+  const ask = AIP.ask && AIP.ask.key === aiPlansAskKey(j) && j.status === "proposed" ? AIP.ask : null;
+  if (ask) approve.disabled = true;
+  return el("div", { id: "ai-plans-actions" },
+    el("label", { for: "ai-plans-change", class: "small" }, "Change it in plain words"), text, designShotBox("plans-change"),
+    aiPlansDoBox(j, AIP.d),                 // 2026-11-27: a change can draw the plans, price the estimate or not, too
+    el("div", { class: "row" }, change, approve, fresh, j.status === "proposed" ? drop : null), aiPlansAutoBox(j),
+    el("div", { id: "ai-plans-confirm-slot" }, ask ? aiPlansConfirmBox(ask.question, approve) : null));
+}
+
+function aiPlansAskKey(j) { return [AIP.eid, j.id, j.rev].join(":"); }
+
+function aiPlansConfirmBox(question, btn) {
+  const yes = el("button", { class: "primary", type: "button", id: "ai-plans-confirm" }, "Yes, approve them");
+  const no = el("button", { class: "button", type: "button", id: "ai-plans-confirm-cancel" }, "Cancel");
+  yes.addEventListener("click", () => aiPlansApprove(yes, true));
+  no.addEventListener("click", () => {
+    AIP.ask = null;
+    const slot = $("ai-plans-confirm-slot");
+    if (slot) slot.replaceChildren();
+    const b = $("ai-plans-approve");
+    if (b) b.disabled = false;
+  });
+  return el("div", { class: "confirm", id: "ai-plans-confirm-box" }, el("p", {}, el("strong", {}, question)),
+    el("div", { class: "row" }, yes, no));
+}
+
+async function aiPlansStart(btn, req, specs) {
+  const doing = aiPlansDo();
+  if (doing.draw === false && doing.price === false) {                     // 2026-11-27: it has to do something
+    toast("Pick what AI design should do: Draw the plans, Price the estimate, or both.");
+    return;
+  }
+  await aiPlansPost(btn, "", { request: req.value, specs: specs.value, images: designShots("plans-start").map(s => s.url),
+                               ...aiPlansOptions() },
+    () => { AIP.fresh = false; AIP.draft = {}; AIP.doDraft = null; RV.designShotList["plans-start"] = []; });
+}
+
+// start / change / discard: the job comes back (working while the AI thinks); the card polls until it's done
+async function aiPlansPost(btn, action, body, after) {
+  const msg = $("ai-plans-msg");
+  btn.disabled = true;
+  if (msg) msg.replaceChildren();
+  try {
+    const r = await api("POST", "/design/" + AIP.eid + "/plans" + (action ? "/" + action : ""), body);
+    AIP.d.designs = AIP.d.designs || {};
+    AIP.d.designs.plans = r.design;
+    if (after) after();
+    aiPlansDraw();
+    const busy = $("ai-plans-working");                               // the AI is on it: show that, right where they look
+    if (busy) busy.scrollIntoView({ behavior: "smooth", block: "center" });
+  } catch (e) {
+    if (e.status !== 401 && $("ai-plans-msg")) $("ai-plans-msg").replaceChildren(errorBox(e));
+    btn.disabled = false;
+  }
+}
+
+async function aiPlansApprove(btn, confirmed) {
+  const slot = $("ai-plans-confirm-slot"), msg = $("ai-plans-msg");
+  btn.disabled = true;
+  msg.replaceChildren();
+  try {
+    const r = await api("POST", "/design/" + AIP.eid + "/plans/approve",
+      { keep_approved: aiPlansKeepApproved(), ...(confirmed ? { confirm: true } : {}) });
+    if (r.needs_confirmation) {
+      const j = aiPlansJob();
+      AIP.ask = j ? { key: aiPlansAskKey(j), question: r.question } : null;
+      const now = $("ai-plans-confirm-slot") || slot;                     // the card may have been drawn again meanwhile
+      now.replaceChildren(aiPlansConfirmBox(r.question, btn));
+      const yes = $("ai-plans-confirm");
+      if (yes) yes.focus();
+      return;
+    }
+    AIP.ask = null;
+    AIP.d.designs.plans = r;
+    aiPlansDraw();
+    if (r.status === "approved") aiPlansApproved(r);
+  } catch (e) {
+    if (e.status !== 401) ($("ai-plans-msg") || msg).replaceChildren(errorBox(e));
+    btn.disabled = false;
+    const b = $("ai-plans-approve");
+    if (b) b.disabled = false;
+  }
+}
+
+// Approved: the plans, trades and totals on this page changed - draw the page again (the card stays open)
+// The card is on the project page, and (2026-11-25) in the ✨ AI design window on the Measure screen
+function aiPlansHere(eid) {
+  const h = location.hash;
+  return h.startsWith("#/projects/" + eid) || h.startsWith("#/takeoffs/" + eid);
+}
+
+function aiPlansApproved(j) {
+  toast((j.approval && j.approval.say) || "Approved — the plans are the project's plans now.");
+  if (location.hash.startsWith("#/takeoffs/" + AIP.eid)) {            // Measure: the new plans, sheets and drawing show
+    if (typeof reloadReview === "function") reloadReview();           // (2026-11-25: not only the measurements list)
+    return;
+  }
+  if (location.hash.startsWith("#/projects/" + AIP.eid)) {
+    state.projectWent = location.hash;                                 // don't jump around the page again
+    AIP.open[AIP.eid] = true;                                          // the card stays open to show what was done
+    route();
+  }
+}
+
+function aiPlansPoll() {
+  clearTimeout(AIP.timer);
+  const j = aiPlansJob();
+  if (!j || j.status !== "working") return;
+  const eid = AIP.eid;
+  AIP.timer = setTimeout(async () => {
+    if (AIP.eid !== eid || !aiPlansHere(eid) || !$("ai-plans-body")) return;                     // left the page
+    try {
+      const r = await api("GET", "/design/" + eid + "/plans");
+      AIP.d.designs.plans = r.design;
+      aiPlansDraw();
+      // approved: by the person, or as soon as it was drawn (Approve each new drawing automatically)
+      if (r.design && r.design.status !== "working") aiPlansFinished(r.design);
+    } catch (e) { if (e.status === 401) return; aiPlansPoll(); }
+  }, 2000);
+}
+
+// Open the card and bring it into view, highlighted for a moment
+function aiPlansShow() {
+  const card = $("ai-plans");
+  if (!card) return;
+  card.open = true;
+  AIP.open[AIP.eid] = true;
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+  card.classList.add("go-flash");
+  setTimeout(() => card.classList.remove("go-flash"), 2500);
+}
+
+// 2026-11-25 (David: "where is the plan that I can look at, the user is not notified of a plan to look at"): when the
+// AI's plans (or a change) are ready, the card opens with them and the first sheet opens in the viewer by itself.
+async function aiPlansReady(j) {
+  const drawn = (j.sheets || []).length > 0;
+  toast(!drawn ? (j.rev > 1 ? "✅ The AI made the change — look over what it filled in, then approve it to price it."
+                            : "✅ AI design is ready — look over what it filled in for the estimate, then approve it to price it.")
+    : j.rev > 1 ? "✅ The AI made the change — here's the new plan. It's on the Measure screen; approve it to price it."
+    : "✅ The AI's plans are ready — here they are. They're on the Measure screen; approve them to price them.");
+  // Measure: the new drawing is the one there now (2026-11-25) - the screen shows it (the design window stays open),
+  // then the plan opens on top
+  if (location.hash.startsWith("#/takeoffs/" + AIP.eid) && typeof reloadReview === "function") {
+    try { await reloadReview(); } catch (e) { /* the screen stays as it was; the plan still opens */ }
+  }
+  aiPlansShow();
+  if (!$("bp-wiring-viewer") && (j.sheets || []).some(s => s.ready)) aiPlansView((j.sheets || []).findIndex(s => s.ready));
 }
 
 // Archive / restore / delete the project (owner; 2026-11-12, David). Every action asks first; delete needs the name.
@@ -639,7 +1157,7 @@ function uploadBox(estimateId, planSets) {
   const box = el("form", { class: "card section", id: "upload-box" },
     el("strong", {}, "Upload plans"),
     el("p", { class: "muted" }, "PDF, PNG, JPG, TIFF, DXF or DWG, up to 300 MB. One click: the file is checked, added to the project and read. It only stops to ask if the check finds a problem. To read plans already in the project again, pick them in “This is” and press Read again — no new file needed."),
-    planSets.length ? el("p", { class: "muted" }, "Got updated plans? Choose the file, pick “New revision of …” in “This is”, and upload. The old plans and everything measured on them are removed, so measure the new plans from scratch (AI Auto Run, ⚡ Run wiring), approve, then click 🔄 Update from the plans on the estimate.") : null,
+    planSets.length ? el("p", { class: "muted" }, "Got updated plans? Choose the file, pick “New revision of …” in “This is”, and upload. The old plans and everything measured on them are removed, so measure the new plans from scratch (AI Auto Measure/Count, ⚡ Run wiring), approve, then click 🔄 Update from the plans on the estimate.") : null,
     el("div", { class: "row" }, el("label", {}, "File", file), planSets.length ? el("label", {}, "This is", replaces) : null, send, reread),
     bar, msg);
   box.addEventListener("submit", async ev => {
@@ -2531,8 +3049,20 @@ async function loadDirectorPanel(card, eid, notes, last) {
   if (ns.why) kids.push(el("p", { class: "muted small", id: "director-why" }, "Why: " + ns.why + "."));
     if (ns.error) kids.push(el("p", { class: "error" }, "The last step didn't work (" + idWords(ns.error) + ")."));
   if (Array.isArray(ns.todo) && ns.todo.length) {
+    // A step that's done on this page (?go=...) jumps there even when the link is the page's own address already.
+    const stepLink = t => {
+      const a = el("a", { href: t.link }, t.text);
+      a.addEventListener("click", ev => {
+        const go = new URLSearchParams(t.link.split("?")[1] || "").get("go");
+        if (go && t.link.split("?")[0] === location.hash.split("?")[0] && projectGo(go)) {
+          ev.preventDefault();
+          if (location.hash !== t.link) history.replaceState(null, "", t.link);
+        }
+      });
+      return a;
+    };
     kids.push(el("ul", { class: "checklist", id: "director-todo" }, ns.todo.map(t => el("li", { "data-key": t.key, class: t.done ? "done" : "" },
-      (t.done ? "✅ " : "⬜ ") , t.link && !t.done ? el("a", { href: t.link }, t.text) : t.text))));
+      (t.done ? "✅ " : "⬜ ") , t.link && !t.done ? stepLink(t) : t.text))));
   }
   const msg = el("div", { id: "director-message", role: "status" });
   if (!done && ns.stage === "build") {
@@ -2595,6 +3125,7 @@ async function loadDirectorPanel(card, eid, notes, last) {
     "Quote " + d.bid.number + " · " + words(d.bid.status) + " · " + money(d.bid.total_cents))));
   kids.push(msg);
   card.replaceChildren(...kids);
+  projectGo();                    // a "?go=trades" or "?go=customer" link lands here once the panel is drawn
 }
 
 // ------------------------------------------------------------------ Bids (Sprint 4)

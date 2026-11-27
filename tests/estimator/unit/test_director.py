@@ -101,6 +101,10 @@ TRIAGE_CASES = [
     ("replace 8 windows", "standard_estimate", "windows_doors"),
     ("paint 3 bedrooms", "standard_estimate", "painting"),
     ("replace carpet in 3 bedrooms", "standard_estimate", "flooring"),
+    # 2026-11-27 (David): garage / concrete floor coatings are flooring - "paint chips" and "garage" aren't painting
+    ("epoxy the garage floor with paint chips", "standard_estimate", "flooring"),
+    ("polyaspartic coating on my garage floor", "standard_estimate", "flooring"),
+    ("concrete floor coating for a 2 car garage", "standard_estimate", "flooring"),
     ("new driveway slab", "standard_estimate", "concrete"),
     ("wash the siding on my house", "quick_quote", "pressure_washing"),
     ("clean my roof", "quick_quote", "pressure_washing"),

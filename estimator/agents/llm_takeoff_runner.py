@@ -54,7 +54,7 @@ def _run_trade_reader(conn, ctx, run_row, module_id, on_step=None):
 
 
 def run_wiring_stage(conn, ctx, estimate_id, on_step=None, keep_approved: bool = True) -> dict:
-    """Electrical's second stage inside AI Auto Run: route the wiring from the panel to every device (plain geometry,
+    """Electrical's second stage inside AI Auto Measure/Count: route the wiring from the panel to every device (plain geometry,
     no AI tokens) and propose the cable measurements - when the project has both CAD drawings (the electrical floor
     plan and the panel drawing). The last Wiring run's settings and device moves are kept. A missing drawing or a
     wiring problem never fails the device count; it is reported instead."""

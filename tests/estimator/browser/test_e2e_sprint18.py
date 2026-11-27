@@ -309,8 +309,8 @@ def test_E2E_S18_M7_empty_states_links(page, db):
     # empty state (no measure runs yet) names the next step.
     assert "Estimator tab" in page.inner_text("#agents-settings-where")
     assert "No Director measure runs yet" in page.inner_text("#runs-empty")
-    # 2026-11-21: AI Auto Run's own runs are listed too - none yet here either.
-    assert "No AI Auto Runs yet" in page.inner_text("#auto-runs-empty")
+    # 2026-11-21: AI Auto Measure/Count's own runs are listed too - none yet here either.
+    assert "No AI Auto Measure/Count runs yet" in page.inner_text("#auto-runs-empty")
     page.goto(page.base + "#/jobs")
     page.wait_for_selector("#jobs-empty")
     dismiss_tour(page)

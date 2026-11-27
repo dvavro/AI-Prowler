@@ -1,7 +1,7 @@
 """The Director as the master guide (2026-11-21, David: "my director list did not follow me, so the user gets lost";
-"I don't think it makes sense to measure manually anymore ... he can push AI Auto Run").
+"I don't think it makes sense to measure manually anymore ... he can push AI Auto Measure/Count").
 
-- Measuring means 🤖 AI Auto Run (and ⚡ Run wiring for Electrical), then approving what it found.
+- Measuring means 🤖 AI Auto Measure/Count (and ⚡ Run wiring for Electrical), then approving what it found.
 - Priced trades behind their approved measurements: the Director says 🔄 Update from the plans.
 - After approval, plans measured again come first: approve the new counts, then update (POST /director plans_changed).
 - The Director panel is on Measure and the plan-set page too, and looks again when the project changes.
@@ -35,14 +35,14 @@ def test_measuring_means_ai_auto_run_and_the_wiring_run(call, db):              
     _plans(db, e["id"])
     _, todo = _todo(call, e["id"])
     m = todo["measure"]
-    assert not m["done"] and "AI Auto Run" in m["text"] and "Run wiring" in m["text"]
+    assert not m["done"] and "AI Auto Measure/Count" in m["text"] and "Run wiring" in m["text"]
     assert m["link"] == f"#/takeoffs/{e['id']}" and "measures and counts everything" in m["why"]
     # A trade with no wiring run doesn't mention it.
     e2 = call("POST", f"{API}/estimates", {"title": "Roof", "trades": ["roofing"]}).json()
     _plans(db, e2["id"])
     _, todo2 = _todo(call, e2["id"])
-    assert "AI Auto Run" in todo2["measure"]["text"] and "Run wiring" not in todo2["measure"]["text"]
-    assert "AI Auto Run" in todo2["price_roofing"]["text"] and "Update from the plans" in todo2["price_roofing"]["text"]
+    assert "AI Auto Measure/Count" in todo2["measure"]["text"] and "Run wiring" not in todo2["measure"]["text"]
+    assert "AI Auto Measure/Count" in todo2["price_roofing"]["text"] and "Update from the plans" in todo2["price_roofing"]["text"]
 
 
 def test_then_approve_what_it_found(call, db):                                             # DG-02
@@ -50,7 +50,7 @@ def test_then_approve_what_it_found(call, db):                                  
     _plans(db, e["id"])
     ms.manual(db, CTX, e["id"], "roofing", feeds="roof_area_sqft", qty="1800", unit="sqft", confirm=True)
     _, todo = _todo(call, e["id"])
-    assert todo["measure"]["text"].startswith("Approve the 1 measurement(s) 🤖 AI Auto Run found")
+    assert todo["measure"]["text"].startswith("Approve the 1 measurement(s) 🤖 AI Auto Measure/Count found")
 
 
 def test_prices_behind_the_measurements_say_update_from_the_plans(call, db):             # DG-03
@@ -92,4 +92,4 @@ def test_the_director_follows_the_user():                                       
                    "/\\/director$/.test(path)"):
         assert needed in app, needed
     assert "head.push(directorGuide(estimateId))" in review
-    assert "Click 🤖 AI Auto Run" in review and "Pick a tool (📏 Length" not in review
+    assert "Click 🤖 AI Auto Measure/Count" in review and "Pick a tool (📏 Length" not in review

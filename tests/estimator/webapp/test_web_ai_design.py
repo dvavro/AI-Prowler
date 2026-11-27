@@ -36,9 +36,11 @@ def shed(db, tmp_path, monkeypatch):
 def test_design_start_view_change_approve(call, shed):                                    # WAD-01
     est, ps, fake = shed["est"], shed["ps"], shed["fake"]
     r = call("GET", f"{API}/design/{est}").json()
-    assert r["ai_on"] is False and "AI measuring is off" in r["why_off"] and r["designs"] == {"electrical": None}
+    assert r["ai_on"] is False and "AI measuring is off" in r["why_off"]
+    assert r["designs"] == {"electrical": None, "plans": None}          # 2026-11-24: plans from a description
     assert [p["id"] for p in r["plan_sets"]] == [ps] and r["trades"][0]["id"] == "electrical"
-    assert [t["ready"] for t in r["trades"]] == [True, False, False, False]
+    assert [t["ready"] for t in r["trades"]] == [True, False, False, False, True]          # ... and plans, no plan set
+    assert [t["no_plans"] for t in r["trades"]] == [False, False, False, False, True]
     roles.update_role(shed["db"], shed["ctx"], "llm_takeoff", {"provider": "claude_api"}, confirm=True)
     shed["db"].commit()
     assert call("GET", f"{API}/design/{est}").json()["ai_on"] is True

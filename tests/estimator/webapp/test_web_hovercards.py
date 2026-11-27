@@ -1,4 +1,4 @@
-"""Hover cards on 🤖 AI Auto Run and ⚡ Run wiring (2026-11-21, David: "make a hover popup over the AI auto run to explain
+"""Hover cards on 🤖 AI Auto Measure/Count and ⚡ Run wiring (2026-11-21, David: "make a hover popup over the AI auto run to explain
 what it needed for electrical to run and also the run wiring with recommendation what's needed. Do the same for all the
 trades but the hover info should be focused on what is needed for each trade"). Checked in the page's own files."""
 import re

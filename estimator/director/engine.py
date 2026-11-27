@@ -1120,6 +1120,16 @@ def adopt(conn, ctx: RequestContext, estimate_id: int, registry=None) -> dict | 
     return _run(conn, ctx, job_id, reg)
 
 
+def _ai_plans_job(estimate_id: int) -> dict:
+    """The project's "plans from a description" AI design job (estimator/design/runs.py), or {} - read from its file, so
+    the Director can say when the AI is busy and when its plans are waiting to be looked at (2026-11-25)."""
+    try:
+        from estimator.design import runs
+        return runs.load(int(estimate_id), runs.PLANS) or {}
+    except Exception:  # noqa: BLE001 - no design, or one that can't be read: nothing to say about it
+        return {}
+
+
 def project_trades(job: dict) -> list[str]:
     """The trades a project is quoting (picked when it was made, or on the project page), in order."""
     ans = job.get("answers") or {}
@@ -1315,15 +1325,40 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
     item("trades", want or trades,
          ("Trades in this quote: " + ", ".join(name(t) for t in (want or trades)) if (want or trades) else
           "Pick the trades this project needs (one or more)"),
-         "each trade is measured and priced on its own, then they go out together in one quote", f"#/projects/{eid}")
+         "each trade is measured and priced on its own, then they go out together in one quote",
+         f"#/projects/{eid}?go=trades")
     # Service-only projects (car detailing, pool, ...) have no plans to add (2026-11-15, Jamie).
     services_only = bool(want) and all(t in reg.modules and reg.modules[t].category == "service" for t in want)
+    # 2026-11-24 (David: "the director asked me ... to download plans or price the trade from typed measurements, when I
+    # click that it takes me no where. We need all the steps from the director to be a link to take me to the next
+    # page"): every step links to the place it's done - "?go=" jumps to that part of the project page.
+    design_job = _ai_plans_job(eid)                       # a "plans from a description" AI design, if there is one
     if not (services_only and not have_plans):
         item("plans", have_plans or trades,
-             "Add the plans on the project page" + ("" if have_plans else " (or skip this and price the trades from "
-                                                                        "typed measurements)"),
+             "Add the plans: upload them under Plans and documents (PDF, DWG or photos)" + (
+                 "" if have_plans else " — no plans? use ✨ AI design below, or skip this and price each trade from"
+                                       " typed measurements"),
              "the quantities come from the plans; without plans, type the measurements into each trade",
-             f"#/projects/{eid}")
+             f"#/projects/{eid}?go=plans")
+        # 2026-11-24 (David: "If the user does not have plans I want the user to be able to use AI Design button so the
+        # user can just describe the plans and have AI Design it for him"): the AI draws the plans from a description
+        busy_or_ready = design_job.get("status") in ("working", "proposed")
+        if not have_plans and not trades and not busy_or_ready:
+            item("design", False, "No plans? ✨ Describe the job and AI design draws the plans (then every trade is"
+                                  " measured from them)",
+                 "a few sentences - sizes, materials, where things go - become a site plan, floor plan, foundation and"
+                 " roof sheets you review and approve", f"#/projects/{eid}?go=design")
+    # 2026-11-25 (David: "the user is not notified of a plan to look at ... it would be nice if there is an AI Busy"): the
+    # Director says when the AI is drawing the plans, and when they're ready to look over and approve
+    if design_job.get("status") == "working" and not str(design_job.get("step") or "").startswith("approving"):
+        item("design_busy", False, "⏳ AI busy: ✨ AI design is drawing the plans - they open on the project page when"
+                                   " they're ready",
+             "it usually takes under a minute; nothing is priced until you approve the plans", f"#/projects/{eid}?go=design")
+    elif design_job.get("status") == "proposed":
+        item("design_review", False, f"✅ The AI's plans are ready (revision {design_job.get('rev') or 1}): look them over,"
+                                     " change anything in plain words, then approve them",
+             "approving makes them the project's plans: every trade they answer is measured and priced from them"
+             " (or 🗑 Discard them)", f"#/projects/{eid}?go=design")
     # An uploaded plan set isn't read until someone starts it (📖 Read the plans on its page), so say that,
     # with a link straight to it; "wait" is only for a set that is actually being read (2026-11-15, David).
     if plans.get("uploaded"):
@@ -1334,31 +1369,31 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
         sets = ", ".join(f"#{plan_set_number(conn, ctx.company_id, eid, i)}" for i in unread) or "the uploaded plans"
         item("read", False, f"Read the plans: open plan set {sets} and click 📖 Read the plans",
              "uploaded plans aren't read until you start the reading, and the sheets have to be read before they can be measured",
-             f"#/plan-sets/{unread[0]}" if unread else f"#/projects/{eid}")
+             f"#/plan-sets/{unread[0]}" if unread else f"#/projects/{eid}?go=plans")
     if plans.get("processing"):
         item("reading", False, "Wait for the plans to be read (it runs in the background)",
-             "the sheets have to be read before they can be measured", f"#/projects/{eid}")
+             "the sheets have to be read before they can be measured", f"#/projects/{eid}?go=plans")
     if plans.get("failed"):
         item("failed", False, f"{plans['failed']} plan set(s) couldn't be read: open the project and upload them again",
-             "a plan set that wasn't read can't be measured", f"#/projects/{eid}")
+             "a plan set that wasn't read can't be measured", f"#/projects/{eid}?go=plans")
     if plans.get("need_scale"):
         item("scale", False, f"Set the scale on {plans['need_scale']} sheet(s)",
-             "a measurement on a sheet with no scale can't be turned into feet", f"#/projects/{eid}")
+             "a measurement on a sheet with no scale can't be turned into feet", f"#/projects/{eid}?go=plans")
     if sym.get("to_check"):
         item("symbols", False, f"Check {sym['to_check']} symbol(s) the plans reader wasn't sure of",
              "only symbols a person approved are counted", "#/reviews")
     if have_plans or tk:
-        # 2026-11-21 (David): measuring by hand is too much work - the Director sends people to AI Auto Run (and, for
+        # 2026-11-21 (David): measuring by hand is too much work - the Director sends people to AI Auto Measure/Count (and, for
         # Electrical, ⚡ Run wiring for the cable), then to approve what they found.
         waiting = tk.get("proposed", 0)
         wiring = "electrical" in (want or trades)
-        runs = "🤖 AI Auto Run" + (" and ⚡ Run wiring" if wiring else "")
+        runs = "🤖 AI Auto Measure/Count" + (" and ⚡ Run wiring" if wiring else "")
         item("measure", (tk.get("approved") and not waiting) or (trades and not tk),
              (f"Approve the {waiting} measurement(s) {runs} found (Measure → Measurements: Approve all, or one by one)"
               if waiting else
               f"Measure the plans: on Measure, click {runs}" if not tk.get("approved") else
               f"Measurements approved ({tk['approved']})"),
-             ("AI Auto Run reads the plans and measures and counts everything for you"
+             ("AI Auto Measure/Count reads the plans and measures and counts everything for you"
               + (", and the wiring run routes the cable from the panel" if wiring else "")
               + "; only approved measurements are priced"), f"#/takeoffs/{eid}")
     # 2026-11-20 (David): the measurement audit is part of the estimating stage - a step the user can run any time
@@ -1395,7 +1430,7 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
     still = [t for t in want if t not in trades]
     for t in still:
         item("price_" + t, False,
-             (f"Price {name(t)}: measure it with 🤖 AI Auto Run, approve, then 🔄 Update from the plans on the estimate"
+             (f"Price {name(t)}: measure it with 🤖 AI Auto Measure/Count, approve, then 🔄 Update from the plans on the estimate"
               " (or type the measurements in a ⚡ quick estimate)") if have_plans else
              f"Price {name(t)}: type the measurements (⚡ quick estimate)",
              f"{name(t)} is in this quote but has no price yet", f"#/quick/{eid}?module={t}")
@@ -1404,7 +1439,7 @@ def _guide_build(conn, ctx, job, reg, stage, notes, inputs, **_):
     item("customer", has_customer,
          ("Customer: " + (cust.get("name") or cust.get("email") or cust.get("customer_id")) if has_customer else
           "Add the customer's name and email"),
-         "the quote is made out to the customer and sent to their email", None)
+         "the quote is made out to the customer and sent to their email", f"#/projects/{eid}?go=customer")
 
     if ready:
         if total <= 0:

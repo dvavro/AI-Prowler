@@ -1,4 +1,4 @@
-"""E2E (Playwright, human mode): Blueprint Review follows the sheet switches, and AI Auto Run lists its results
+"""E2E (Playwright, human mode): Blueprint Review follows the sheet switches, and AI Auto Measure/Count lists its results
 (2026-11-15, David).
 
 David switched three sheets off for Concrete and kept the foundation sheet on, then opened Blueprint Review: it
@@ -6,7 +6,7 @@ showed every sheet as if on, said "No trade on this project needs a measurement 
 project but not priced), and the auto-run button couldn't run. Now:
   * the sheet list marks the switched-off sheets and opens on one that is on;
   * a trade picked for the project shows in "What to measure" before it is priced;
-  * 🤖 AI Auto Run lists what it measured and the concrete volume it adds up to.
+  * 🤖 AI Auto Measure/Count lists what it measured and the concrete volume it adds up to.
 The run itself is not started here (no real AI): POST /auto-run is answered with a finished run made in the test,
 and the page reads that run from the real server.
 (2026-11-18) With both trades on the project, the open sheet's discipline picks the trade: the
@@ -90,9 +90,9 @@ def test_E2E_review_opens_on_a_sheet_that_is_on_and_marks_the_off_ones(page, she
     page.click("#bp-tab-guide")
     guide = page.inner_text("#bp-guide")
     assert "No trade on this project needs a measurement yet" not in guide and "Concrete" in guide
-    # The button is AI Auto Run, and it can run.
+    # The button is AI Auto Measure/Count, and it can run.
     btn = page.locator("#bp-auto-run")
-    assert "AI Auto Run" in btn.inner_text() and btn.is_enabled()
+    assert "AI Auto Measure/Count" in btn.inner_text() and btn.is_enabled()
     # No run yet, so the Measure steps tab stays hidden; the Detail tab says to select a measurement.
     assert page.locator("#bp-tab-steps").is_hidden()
     page.click("#bp-tab-detail")
@@ -100,7 +100,7 @@ def test_E2E_review_opens_on_a_sheet_that_is_on_and_marks_the_off_ones(page, she
     # Layers: the Measurements row counts the measurements on this sheet (none yet).
     page.click("#bp-tab-layers")
     assert "0" in page.inner_text("#bp-layers tr[data-group=measurements]")
-    # Open the switched-off sheet: it says AI Auto Run skips it, and the button still runs (the sheets that are on).
+    # Open the switched-off sheet: it says AI Auto Measure/Count skips it, and the button still runs (the sheets that are on).
     page.select_option("#review-sheet", str(shed["off"]))
     page.wait_for_selector("#bp-auto-off")
     assert "skips it" in page.inner_text("#bp-auto-off")
@@ -160,7 +160,7 @@ def test_E2E_ai_auto_run_lists_its_measurements_and_the_concrete_volume(page, db
     assert "38.05 cu yd" in row("Order with waste")
     # The AI checked its footer reading against the plan, and every value agreed.
     assert "every value agrees (3 checked)" in page.inner_text("#bp-footer-check")
-    assert "AI Auto Run finished: 3 proposed measurement(s)" in page.inner_text("#bp-auto-status")
+    assert "AI Auto Measure/Count finished: 3 proposed measurement(s)" in page.inner_text("#bp-auto-status")
     # Correct the section by hand: add the 4 x 2 in ledge notch. It asks first, then works the footer out again.
     page.click("#bp-footer-edit summary")
     assert page.input_value("#bp-footer-outside_in") == "22"
@@ -416,7 +416,7 @@ def test_E2E_ai_auto_run_counts_devices_on_the_electrical_sheet(page, db, ehouse
                            timeout=20000)
     assert page.locator(".bp-running").count() == 0 and btn.is_enabled() and "working" not in btn.inner_text()
     assert page.locator("#bp-auto-results").count() == 0   # the above-drawing table is gone (2026-11-18)
-    assert "AI Auto Run finished: 4 proposed measurement(s)" in page.inner_text("#bp-auto-status")
+    assert "AI Auto Measure/Count finished: 4 proposed measurement(s)" in page.inner_text("#bp-auto-status")
     # The counts live in the Measure steps tab, zeros included, with the evidence for each.
     page.click("#bp-tab-steps")
     page.wait_for_selector("#bp-auto-count-table", timeout=20000)
@@ -558,7 +558,7 @@ def test_E2E_ai_auto_run_picks_a_quantity_trade_and_shows_its_quantities(page, d
                            timeout=20000)
     assert page.locator(".bp-running").count() == 0 and btn.is_enabled() and "working" not in btn.inner_text()
     assert page.locator("#bp-auto-results").count() == 0   # the above-drawing table is gone (2026-11-18)
-    assert "AI Auto Run finished: 6 proposed measurement(s)" in page.inner_text("#bp-auto-status")
+    assert "AI Auto Measure/Count finished: 6 proposed measurement(s)" in page.inner_text("#bp-auto-status")
     # The quantities live in the Measure steps tab, zeros included, with the evidence for each.
     page.click("#bp-tab-steps")
     page.wait_for_selector("#bp-auto-quantities-table", timeout=20000)

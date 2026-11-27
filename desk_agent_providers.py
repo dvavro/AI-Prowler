@@ -378,7 +378,7 @@ def ask_vision(provider: str, system: str, user: str, images, *, model: str = ""
 
 
 def _post(url, body, headers):
-    # 2026-11-21 (David: AI Auto Run on the rev2 electrical plan "timed out"): a Claude call that reasons a long time
+    # 2026-11-21 (David: AI Auto Measure/Count on the rev2 electrical plan "timed out"): a Claude call that reasons a long time
     # sent nothing back for 10 minutes and the read timed out (HTTP_TIMEOUT). Claude calls now stream: the answer
     # arrives in pieces (with keep-alive pings), so the timeout only trips when the connection goes quiet, not when
     # the AI is simply thinking. The caller still gets the same whole message back.
@@ -409,7 +409,7 @@ def _post(url, body, headers):
         raise ProviderError(f"request failed: {e}") from None
 
 
-# ── live progress while an answer streams in (2026-11-21, David: show it with AI Auto Run's waiting message) ──
+# ── live progress while an answer streams in (2026-11-21, David: show it with AI Auto Measure/Count's waiting message) ──
 # Whoever wants to watch sets a callback for its own thread (set_progress); the stream readers call it every
 # PROGRESS_EVERY seconds with {phase: "thinking"|"writing", thought: the latest sentence (trimmed), thinking_chars,
 # answer_chars}. Nothing is set = nothing is reported, so other callers are untouched.

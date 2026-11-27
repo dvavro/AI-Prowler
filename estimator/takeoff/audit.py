@@ -153,16 +153,56 @@ def audit(conn, ctx: RequestContext, estimate_id: int) -> dict:
             add(f"rerun:{o['id']}", "rerun", f"{_name(o)} is from before the plans were read again",
                 f"The approved {_q(o)} was measured on the plans as they read before; nothing new has been measured for"
                 f" it since. It's still priced.", "", False, feeds=o["feeds"], module_id=o["module_id"])
-            # 2026-11-20 (David: "how do I just run the wiring estimate? is it the same as AI Auto Run?"): say exactly
+            # 2026-11-20 (David: "how do I just run the wiring estimate? is it the same as AI Auto Measure/Count?"): say exactly
             # which button, and the audit window offers it (rerun = "wiring" or "auto").
             findings[-1]["rerun"] = "wiring" if wired else "auto"
             findings[-1]["advice"] = (
                 "Run the wiring again: ⚡ Run wiring now (here, or in the ⚡ Wiring card under Electrical on this screen)."
-                " It routes the cable from the plans as they read now - plain geometry, no AI tokens; you don't need AI"
-                " Auto Run for it. Then audit again and approve the new length: that takes this one off." if wired else
-                f"Run 🤖 AI Auto Run for {o['module_id'].replace('_', ' ').title()} again (the button above the drawing),"
+                " It routes the cable from the plans as they read now - plain geometry, no AI tokens; you don't need"
+                " 🤖 AI Auto Measure/Count for it. Then audit again and approve the new length: that takes this one off." if wired else
+                f"Run 🤖 AI Auto Measure/Count for {o['module_id'].replace('_', ' ').title()} again (the button above the drawing),"
                 f" then audit again: approving the new {_name(o).lower()} takes this one off.")
-    handled = {i for f in findings for i in f["approve_ids"]}
+    # 2026-11-25 (David: "I hit AI Count and now I have 2 lengths and 2 gates counted twice, then I ran audit and clean up
+    # and it did not remove the double counting"): a question a plan reader measured from the plans (approved) that AI
+    # Auto Measure/Count measured again on the same plans - both priced. Keep the plans' measurement (read off the
+    # drawing itself), take the AI's off; ticked when they agree, a person decides when they don't.
+    sheet_set = {}
+    live_sets = {r[0] for r in conn.execute("SELECT id FROM plan_sets WHERE company_id = ? AND estimate_id = ?",
+                                            (ctx.company_id, est["id"]))}
+    sids = {m["sheet_id"] for m in current if m["sheet_id"]}
+    if sids:
+        marks = ",".join("?" * len(sids))
+        sheet_set = {r[0]: r[1] for r in conn.execute(f"SELECT id, plan_set_id FROM sheets WHERE id IN ({marks})", tuple(sids))}
+
+    def from_plans(m):
+        try:
+            c = json.loads(m.get("calc_json") or "{}")
+        except ValueError:
+            return None
+        return c if c.get("from") == "plans" else None
+    for (module_id, feeds), ms_ in by_q.items():
+        plans = [(m, from_plans(m)) for m in ms_ if m["status"] == "approved" and from_plans(m) is not None]
+        if not plans:
+            continue
+        keep, calc = plans[0]
+        # the plans it was measured on, if they're still on the project (replaced plans: it stands for the current ones)
+        ps_ids = set(calc.get("plan_set_ids") or []) & live_sets
+        ai = [m for m in ms_ if m["proposed_by"] in ms.SHEET_AGENTS and m["sheet_id"] and m["status"] in ("approved", "proposed")
+              and (not ps_ids or sheet_set.get(m["sheet_id"]) in ps_ids)]
+        if not ai:
+            continue
+        priced = [m for m in ai if m["status"] == "approved"]
+        total = _num(keep["qty"]) + sum(_num(m["qty"]) for m in priced)
+        ai_q = " + ".join(_q(m) for m in ai)
+        agree = all(_num(m["qty"]) == _num(keep["qty"]) for m in ai)
+        add(f"twice:{module_id}:{feeds}", "double_counted", f"{_name(keep)} is " + ("priced twice" if priced else "measured twice"),
+            f"The plans' reader measured {_q(keep)} from the drawing, and 🤖 AI Auto Measure/Count measured {ai_q} on the"
+            f" same plans" + (f" - both are priced ({_fmt(total)} {keep['unit']})." if priced else " - waiting for review.")
+            + ("" if agree else f" They don't agree: check the drawing; if the AI is right, change the {_q(keep)} to its"
+                                f" number after taking it off."),
+            f"Take the AI's {ai_q} off; keep {_q(keep)} from the plans.", agree, ids=[m["id"] for m in ai],
+            feeds=feeds, module_id=module_id, sheet_id=ai[0]["sheet_id"])
+    handled = {i for f in findings for i in f["approve_ids"] + f["reject_ids"]}
     for m in current:
         if m["status"] == "proposed" and m["id"] not in handled and m["proposed_by"] == "wiring-takeoff":
             # 2026-11-20 (David: "3 of these items don't have symbols"): the wiring run isn't the AI - it routes the

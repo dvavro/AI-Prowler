@@ -7,7 +7,7 @@ The Director asks what the job is, then walks you through every step to sending 
 3. For construction work the Director asks **Do you have plans?** Pick **📐 Yes** to upload them, or **✏ No** to type the measurements.
 4. Add the customer's name and email (you can skip this and add it later), then click **Start →**.
 5. You land on the next page: the project page to upload plans, or the measurements form for the trade. Service jobs (washing, cleaning) become a quick quote.
-6. Every project page, plan set page, Measure page and estimate page has the **🧭 Director** box: the next step, **Why**, and a checklist of what's done. Click a step to go there. It follows along as you work — measure with **🤖 AI Auto Run** (and **⚡ Run wiring** for Electrical), approve, and the next step updates by itself. When new plans or approvals mean the estimate is behind, it offers **🔄 Update from the plans**.
+6. Every project page, plan set page, Measure page and estimate page has the **🧭 Director** box: the next step, **Why**, and a checklist of what's done. Click a step to go there. It follows along as you work — measure with **🤖 AI Auto Measure/Count** (and **⚡ Run wiring** for Electrical), approve, and the next step updates by itself. When new plans or approvals mean the estimate is behind, it offers **🔄 Update from the plans**.
 7. When the estimate is complete, click **✓ The estimate is ready — check it and get it approved**. The Director runs the checks, then shows **✓ Approve**, makes the quote and shows **📨 Send the quote…**.
 
 ## Good to know

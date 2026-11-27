@@ -142,14 +142,14 @@ def test_approved_cable_prices_the_estimate(db, tmp_path):                      
 
 
 def test_ai_auto_run_routes_the_wiring(db, tmp_path):                                    # WRR-08
-    """2026-11-19 (David): AI Auto Run on Electrical routes the wiring after the device count - keeping the last Wiring
+    """2026-11-19 (David): AI Auto Measure/Count on Electrical routes the wiring after the device count - keeping the last Wiring
     run's settings and device moves - and says why when it can't."""
     from estimator.agents.llm_takeoff_runner import run_wiring_stage
     est = _job(db, tmp_path)
     wiring_run.run(db, CTX, est["id"], {"route": {"0": "walls"}}, {"OUTLET@12.0,0.5": "C-2"})
     steps = []
     w = run_wiring_stage(db, CTX, est["id"], on_step=steps.append)
-    # 2026-11-21: each wiring stage is said as it starts, for AI Auto Run's waiting message.
+    # 2026-11-21: each wiring stage is said as it starts, for AI Auto Measure/Count's waiting message.
     assert w["ran"] is True and steps[0] == "routing the wiring" and len(w["measurement_ids"]) == len(ALL)
     assert [s.split(":")[0] for s in steps[1:]] == ["wiring"] * 3
     assert "reading the panel schedule" in steps[1] and "6 circuits routed" in steps[2] and "cable lengths" in steps[3]
@@ -238,7 +238,7 @@ def test_rerun_after_the_plans_were_read_again_proposes_the_cable_again(db, tmp_
     before = {f["id"]: f for f in audit.audit(db, CTX, est["id"])["findings"]}
     reruns = [f for f in before.values() if f["kind"] == "rerun"]
     assert len(reruns) == len(ALL) and all(f["rerun"] == "wiring" and "Run wiring now" in f["advice"]
-                                    and "don't need AI Auto Run" in f["advice"] for f in reruns)
+                                    and "don't need 🤖 AI Auto Measure/Count" in f["advice"] for f in reruns)
     again = wiring_run.run(db, CTX, est["id"])                                           # keep approved: on
     assert len(again["measurement_ids"]) == len(ALL)                                     # every size proposed again
     old = db.execute("SELECT COUNT(*) FROM measurements WHERE estimate_id = ? AND status = 'approved'"

@@ -15,7 +15,7 @@ or with a zone hatch pattern (GRASS, GRAVEL).
 Fences: in a PDF, a fence note ("6' WOOD PRIVACY FENCE") is followed to its line (along a leader if there is one), and
 the line is followed through its dashes and corners until it ends or meets another line (a junction stops it); these
 are marked for checking. In a DXF, every line on a fence layer (L-FENC, C-FENCE...) is a fence run. The note gives the
-material (wood, vinyl, chain link, block, iron/aluminum) and the height; "REMOVE EXISTING FENCE" means the old fence goes.
+material (wood, vinyl, chain link, block, aluminum, iron) and the height (4'-6" = 4.5 ft); "REMOVE EXISTING FENCE" means the old fence goes.
 
 Gates: a gate note ("4' GATE", "(2) 12' DBL DRIVE GATE") or a GATE block: a drive gate is double, drive, rolling or
 sliding, or 8 ft and wider; the rest are walk gates.
@@ -56,12 +56,18 @@ EXISTING_RE = re.compile(r"\bEXIST(ING)?\b|\bEXIST\.|\(E\)|\bTO\s+REMAIN\b", re.
 REMOVE_RE = re.compile(r"\bREMOVE\b|\bDEMO(LISH)?\b", re.I)
 FENCE_RE = re.compile(r"\bFENC(E|ES|ING)\b|\b(BLOCK|CMU|MASONRY|GARDEN|SCREEN)\s+WALL\b", re.I)
 FENCE_LAYER_RE = re.compile(r"FENC", re.I)
+# A general-notes layer: A-ANNO-NOTE, G-ANNO-NOTE, NOTES, GEN-NOTES, GENERAL NOTES (not L-ANNO-GATE, L-ANNO-FENC)
+GENERAL_NOTE_LAYER_RE = re.compile(r"(^|[-_ .])(GEN(ERAL)?[-_ ]?)?NOTES?$", re.I)
 MATERIALS = (("block", re.compile(r"\bBLOCK\b|\bCMU\b|\bMASONRY\b|\bGARDEN\s+WALL\b|\bSCREEN\s+WALL\b", re.I)),
              ("chain_link", re.compile(r"CHAIN[\s-]*LINK|\bC\.?L\.?\s+FENCE", re.I)),
              ("vinyl", re.compile(r"\bVINYL\b|\bPVC\b", re.I)),
-             ("iron", re.compile(r"\bIRON\b|\bALUM(INUM|\.)?\b|\bORNAMENTAL\b|\bSTEEL\b|\bMETAL\b", re.I)),
+             # 2026-11-25 (David: a pool fence of "Aluminum powder coated" panels, not wrought iron): its own material now
+             ("aluminum", re.compile(r"\bALUM(INUM|INIUM|\.)?\b|\bPOWDER[\s-]*COAT(ED)?\b", re.I)),
+             ("iron", re.compile(r"\bIRON\b|\bORNAMENTAL\b|\bSTEEL\b|\bMETAL\b", re.I)),
              ("wood", re.compile(r"\bWOOD\b|\bCEDAR\b|\bPRIVACY\b|\bSHADOW\s*BOX\b|\bBOARD\b|\bPICKET\b", re.I)))
 FEET_RE = re.compile(r"(\d{1,2}(?:\.\d)?)\s*(?:'|’|FT\b|FOOT\b|FEET\b)(?:\s*-?\s*0\s*(?:\"|”|IN\b))?", re.I)
+# feet and inches: 4'-6", 4' 6", 4 FT 6 IN (2026-11-25: a 4' 6" pool fence read as 4 ft)
+FEET_INCH_RE = re.compile(r"(\d{1,2})\s*(?:'|’|FT\b|FEET\b)\s*-?\s*(\d{1,2}(?:\.\d+)?)\s*(?:\"|”|IN\b|INCH(?:ES)?\b)", re.I)
 HT_FIRST_RE = re.compile(r"\b(?:HT|HEIGHT|HGT)\.?\s*[:=]?\s*(\d{1,2}(?:\.\d)?)\s*(?:'|’|FT\b)?", re.I)
 DEPTH_RE = re.compile(r"(\d(?:\.\d)?)\s*(?:\"|”|IN\b|INCH(ES)?\b)\s*(?:DEEP|DEPTH|THICK|MIN)", re.I)
 GATE_RE = re.compile(r"\bGATES?\b", re.I)
@@ -111,9 +117,15 @@ def is_existing(text: str | None) -> bool:
 
 
 def feet_in(text: str | None) -> float | None:
-    """The first height or width written in feet ("6'", "6'-0\\"", "6 FT", "HT 6")."""
+    """The first height or width written in feet ("6'", "6'-0\\"", "6 FT", "HT 6", "4'-6\\"" = 4.5)."""
     t = text or ""
-    m = HT_FIRST_RE.search(t) or FEET_RE.search(t)
+    m = HT_FIRST_RE.search(t)
+    if m:
+        fi = FEET_INCH_RE.match(t, m.start(1))
+        return round(int(fi.group(1)) + float(fi.group(2)) / 12, 2) if fi and float(fi.group(2)) < 12 else float(m.group(1))
+    fi, m = FEET_INCH_RE.search(t), FEET_RE.search(t)
+    if fi and float(fi.group(2)) < 12 and (not m or fi.start() <= m.start()):
+        return round(int(fi.group(1)) + float(fi.group(2)) / 12, 2)
     return float(m.group(1)) if m else None
 
 
@@ -428,7 +440,10 @@ def dxf_objects(paths, texts, inserts, hatches, tr, k: float, discipline: str | 
         have_shapely = True
     except ImportError:
         have_shapely = False
-    tnotes = [(t, tr(p)) for t, _layer, p in texts]
+    # 2026-11-27 (David: the AI's gate notes - "GATE LOCATION ...", "CHILD-SAFETY GATES ..." - were left off its drawing so
+    # they weren't counted as gates): text on a general-notes layer (A-ANNO-NOTE, NOTES, GENERAL NOTES) is a note about
+    # the job, not a callout - it never names a fence, a gate or a zone. A drawing's "ALL GATES SELF-CLOSING" is the same.
+    tnotes = [(t, tr(p)) for t, layer, p in texts if not GENERAL_NOTE_LAYER_RE.search(layer or "")]
 
     # Zones on zone layers (closed polylines) and hatches.
     zone_polys = []

@@ -89,14 +89,29 @@ def plan_changes(conn, ctx, est: dict, reg) -> list[dict]:
         if mod is None:
             continue
         try:
-            answers, changes = links.answers_from_measurements(conn, ctx, est, mod.id, reg)
+            # the quantities from the approved measurements, and what the plans' notes choose (a fence's material
+            # and height - 2026-11-25, an AI redraw from wrought iron to aluminum changed no quantity)
+            answers, changes = links.answers_from_measurements(conn, ctx, est, mod.id, reg, with_plans=True)
         except InvalidInput:
             continue                                    # nothing measured for this trade
         if changes:
             out.append({"module_id": mod.id, "name": mod.name, "answers": answers, "changes": changes,
-                        "said": "; ".join(f"{mod.question(q).label}: {c['from'] if c['from'] is not None else 'none'}"
-                                          f" → {c['to']}" for q, c in changes.items())})
+                        "said": "; ".join(f"{mod.question(q).label}: {_shown(mod, q, c['from'])}"
+                                          f" → {_shown(mod, q, c['to'])}" for q, c in changes.items())})
     return out
+
+
+def _shown(mod, qid: str, v) -> str:
+    """An answer as the person reads it: a choice's label (Wrought iron, Aluminum (powder coated)), else the value."""
+    if v is None or v == "":
+        return "none"
+    q = mod.question(qid)
+    for c in getattr(q, "choices", None) or []:
+        value, label = (c.get("value"), c.get("label")) if isinstance(c, dict) else (getattr(c, "value", None),
+                                                                                    getattr(c, "label", None))
+        if str(value) == str(v):
+            return label or str(v)
+    return str(v)
 
 
 def _update_from_plans(conn, ctx, eid: int, b: dict, confirm: bool, see: bool):
@@ -135,9 +150,16 @@ def _update_from_plans(conn, ctx, eid: int, b: dict, confirm: bool, see: bool):
     if must_reopen:
         reopen.reopen(conn, ctx, eid, rev, reason="Updated from the plans: "
                       + "; ".join(f"{t['name']} ({t['said']})" for t in todo)[:450], confirm=True)
+    from estimator.api import links
+    from estimator.errors import InvalidInput
     for t in todo:
         cur = service.get_estimate(conn, ctx, eid)
-        quick.answer(conn, ctx, eid, t["module_id"], t["answers"], int(cur["rev"]), reg)
+        try:
+            quick.answer(conn, ctx, eid, t["module_id"], t["answers"], int(cur["rev"]), reg)
+        except InvalidInput:
+            # a choice the plans' notes give that the trade doesn't take as written: the measurements alone, then
+            answers, _changes = links.answers_from_measurements(conn, ctx, cur, t["module_id"], reg)
+            quick.answer(conn, ctx, eid, t["module_id"], answers, int(cur["rev"]), reg)
     out = service.get_estimate(conn, ctx, eid)
     return _json(200, {**redact(out, see), "updated": [{k: t[k] for k in ("module_id", "name", "changes")} for t in todo],
                        "reopened": must_reopen})

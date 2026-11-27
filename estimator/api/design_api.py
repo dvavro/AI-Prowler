@@ -10,6 +10,9 @@ add electricity to it, design me the lighting and receptacles").
   POST /design/<estimate id>/<trade>/approve       {"confirm": true} - becomes plan sets (asks first)
   POST /design/<estimate id>/<trade>/discard
   GET  /design/<estimate id>/<trade>/(plan|panel)  the drawing (DXF download); .../svg the same as a picture
+  GET  /design/<estimate id>/plans/sheet/<key>     plans from a description (2026-11-24): one sheet - site, floor,
+                                                   foundation, roof, demolition - as DXF; .../svg as a picture
+  (trade "plans": POST start needs no plan_set_id - the description is the plans)
 
 Who: anyone who can open the Measure screen sees it; owners and estimators design.
 """
@@ -23,6 +26,7 @@ _ONE = re.compile(r"^/design/(\d+)$")
 _TRADE = re.compile(r"^/design/(\d+)/([a-z_]+)(?:/(change|approve|discard))?$")
 _DRAW = re.compile(r"^/design/(\d+)/([a-z_]+)/(plan|panel)(/svg)?$")
 _REF = re.compile(r"^/design/(\d+)/([a-z_]+)/reference$")
+_SHEET = re.compile(r"^/design/(\d+)/plans/sheet/([a-z]+)(/svg)?$")
 
 
 def handles(sub: str) -> bool:
@@ -57,6 +61,27 @@ def route(m: str, sub: str, req, ctx, conn):
                         {"Cache-Control": "no-store", **SECURITY_HEADERS,
                          "Content-Disposition": f'inline; filename="{name}"'})
 
+    # 2026-11-24: one sheet of plans from a description (site, floor, foundation, roof, demolition) - DXF, or as a picture
+    mm = _SHEET.match(sub)
+    if mm and m == "GET":
+        from estimator.design import draw_plans
+        est = service.get_estimate(conn, ctx, int(mm.group(1)))
+        st = runs.load(est["id"], runs.PLANS)
+        key = mm.group(2)
+        if not st or not st.get("rev") or key not in draw_plans.SHEETS:
+            return _fail(404, "not_found", "there's no such AI plans sheet yet")
+        path = runs.sheet_path(est["id"], st["rev"], key)
+        if not path.is_file():
+            return _fail(404, "not_found", "there's no such AI plans sheet yet")
+        if mm.group(3):
+            from estimator.takeoff import wiring_svg
+            return Response(200, "image/svg+xml", wiring_svg.get(path).encode("utf-8"),
+                            {"Cache-Control": "no-store", **SECURITY_HEADERS})
+        name = f"{draw_plans.SHEETS[key]} - AI design (estimate {est['id']}).dxf"
+        return Response(200, "application/dxf", path.read_bytes(),
+                        {"Cache-Control": "no-store", **SECURITY_HEADERS,
+                         "Content-Disposition": f'attachment; filename="{name}"'})
+
     mm = _DRAW.match(sub)
     if mm and m == "GET":
         est = service.get_estimate(conn, ctx, int(mm.group(1)))
@@ -77,17 +102,32 @@ def route(m: str, sub: str, req, ctx, conn):
             return _ok(design=runs.get(conn, ctx, eid, trade))
         if m == "POST":
             b = _body(req)
+            # 2026-11-25: Measure's "Keep approved items on rerun", and "Approve automatically" (AI plans) - each only
+            # when the page sends it
+            keep, auto = _flag(b, "keep_approved"), _flag(b, "auto_approve")
+            # 2026-11-27: what ✨ Run AI design does - draw the plans, price the estimate, permits and inspections
+            do = {k: _flag(b, k) for k in runs.DO_KEYS}
             if not action:
                 return _ok(design=runs.start(conn, ctx, eid, trade, str(b.get("request") or ""),
                                              int(b.get("plan_set_id") or 0), str(b.get("specs") or ""),
-                                             open_conn=open_conn, images=b.get("images") or None))
+                                             open_conn=open_conn, images=b.get("images") or None,
+                                             keep_approved=keep, auto_approve=auto, do=do))
             if action == "change":
                 return _ok(design=runs.change(conn, ctx, eid, trade, str(b.get("text") or ""), open_conn=open_conn,
-                                              images=b.get("images") or None))
+                                              images=b.get("images") or None, keep_approved=keep, auto_approve=auto,
+                                              do=do))
             if action == "approve":
                 return _ask_first(lambda: runs.approve(conn, ctx, eid, trade, confirm=b.get("confirm") is True,
-                                                       open_conn=open_conn))
+                                                       open_conn=open_conn, keep_approved=keep))
             if action == "discard":
                 return _ok(design=runs.discard(conn, ctx, eid, trade))
 
     return _fail(404, "not_found", f"no such Estimator API call: {m} {sub}")
+
+
+def _flag(b: dict, key: str):
+    """True / False when the request says it, else None (the job keeps its own choice)."""
+    if key not in (b or {}) or b[key] is None:
+        return None
+    v = b[key]
+    return not (v is False or str(v).strip().lower() in ("0", "false", "no", "off"))

@@ -32,14 +32,14 @@ KINDS = ("area", "length", "perimeter", "count", "volume", "other")
 KIND_UNITS = {"area": "sqft", "length": "lf", "perimeter": "lf", "count": "ea"}
 SOURCE_METHODS = {"cad": "cad", "vector": "vector", "raster": "raster", "ai": "ai", "manual": "manual"}
 MAX_OBJECTS = 5000
-# The agents whose measurements always sit on a sheet (AI Auto Run's counts, the wiring run's cable). One of theirs
+# The agents whose measurements always sit on a sheet (AI Auto Measure/Count's counts, the wiring run's cable). One of theirs
 # with no sheet lost it when the plans were read again (the old sheets go; sheet_id becomes NULL).
 SHEET_AGENTS = ("llm-takeoff", "wiring-takeoff")
 
 
 def _superseded(conn, ctx, m: dict) -> list[dict]:
     """Approved measurements a newly approved one replaces (2026-11-20, David: "why AI counted 18 but the highlighted
-    shows 12"): the same question's approved counts from AI Auto Run or the wiring run whose sheet is gone because the
+    shows 12"): the same question's approved counts from AI Auto Measure/Count or the wiring run whose sheet is gone because the
     plans were read again. Reading again flags them to re-measure; a rerun then proposes the new count on the new sheet,
     and approving it used to leave the old one approved too, so both were priced (outlets 41 + 41). Approving the new
     one retires the old one.

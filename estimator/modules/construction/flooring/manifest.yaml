@@ -5,9 +5,11 @@ name: Flooring
 version: 0.1.0
 category: construction
 path: both
-description: LVP, laminate, tile, hardwood and carpet priced from floor area, with waste, underlayment, removal, prep, baseboard, stairs and transitions.
+description: LVP, laminate, tile, hardwood and carpet priced from floor area, with waste, underlayment, removal, prep, baseboard, stairs and transitions - and garage / concrete floor coatings (epoxy or enamel with paint chips, polyurea / polyaspartic) with grinding, crack repair, chips, clear top coat and stem walls.
 minimum_charge: "500.00"
-keywords: [flooring, floor install, new floors, new floor, tile floor, hardwood, laminate, carpet install, install carpet, new carpet, install lvp, install tile, install hardwood, install laminate, install flooring, lvp, vinyl plank, luxury vinyl]
+# 2026-11-27 (David: "add estimating for Floor coating like Enamel coating with paint chips and poly coating for garage
+# or concrete applications"): the two coating systems are flooring types (6, 7) with their own questions below
+keywords: [flooring, floor install, new floors, new floor, tile floor, hardwood, laminate, carpet install, install carpet, new carpet, install lvp, install tile, install hardwood, install laminate, install flooring, lvp, vinyl plank, luxury vinyl, floor coating, garage floor coating, garage floor, epoxy floor, epoxy garage, epoxy coating, concrete coating, concrete floor coating, flake floor, chip floor, paint chips, polyaspartic, polyurea, poly coating]
 # Good / better / best for the bid: same rooms, different flooring.
 scenarios:
   - {id: good, label: "Good: laminate", answers: {material: laminate}}
@@ -17,7 +19,7 @@ scenarios:
 questions:
   - {id: area_sqft, label: "Floor area", type: number, unit: sqft, required: true, min: 10, max: 50000, help: "Floor area to cover, in square feet. Extra for waste is added automatically."}
   - id: material
-    help: "LVP and laminate are budget-friendly, tile is durable and waterproof, hardwood costs the most, carpet is softest."
+    help: "LVP and laminate are budget-friendly, tile is durable and waterproof, hardwood costs the most, carpet is softest. For a garage or other concrete floor, pick a coating: epoxy / enamel with paint chips, or polyurea / polyaspartic (faster cure, UV-stable, tougher)."
     label: "Flooring type"
     type: choice
     required: true
@@ -28,6 +30,30 @@ questions:
       - {value: tile, label: "Ceramic / porcelain tile", factor: "3"}
       - {value: hardwood, label: "Hardwood", factor: "4"}
       - {value: carpet, label: "Carpet", factor: "5"}
+      - {value: coating_epoxy, label: "Concrete coating: epoxy / enamel (garage)", factor: "6"}
+      - {value: coating_poly, label: "Concrete coating: polyurea / polyaspartic (garage)", factor: "7"}
+  # --- concrete coatings only (flooring type 6 or 7); they change nothing for the other flooring types
+  - id: coat_prep
+    help: "Coatings only. Diamond grinding opens the concrete so the coating bonds - the pro standard. Acid etching is cheaper but bonds less well."
+    label: "Coating: concrete prep"
+    type: choice
+    default: grind
+    choices:
+      - {value: grind, label: "Diamond grind", factor: "1"}
+      - {value: etch, label: "Acid etch and rinse", factor: "2"}
+      - {value: none, label: "None (already prepared)", factor: "0"}
+  - id: coat_chips
+    help: "Coatings only. Paint chips (flakes) broadcast into the base coat: a full broadcast covers the floor solid, a light one is a sprinkle."
+    label: "Coating: paint chips (flakes)"
+    type: choice
+    default: full
+    choices:
+      - {value: full, label: "Full broadcast", factor: "2"}
+      - {value: light, label: "Light broadcast", factor: "1"}
+      - {value: none, label: "No chips (solid color)", factor: "0"}
+  - {id: coat_topcoat, label: "Coating: clear top coat?", type: boolean, default: true, help: "Coatings only. A clear polyaspartic top coat over the chips - glossy, UV-stable and easy to clean."}
+  - {id: coat_crack_lf, label: "Coating: cracks and joints to fill", type: number, unit: lf, default: 0, min: 0, max: 5000, help: "Coatings only. Feet of cracks and control joints to fill before coating."}
+  - {id: coat_stem_lf, label: "Coating: stem wall / cove", type: number, unit: lf, default: 0, min: 0, max: 5000, help: "Coatings only. Feet of garage stem wall (the low concrete curb) or cove base to coat as well."}
   - id: pattern
     help: "Straight is standard. Diagonal or herringbone takes more cuts and about 5% more material."
     label: "Layout"
@@ -85,7 +111,28 @@ lines:
   - {id: install_carpet, description: "Install carpet", kind: labor, unit: sqft, quantity: "area_sqft",
      price_key: fl_lab_carpet_sqft, when: "material == 5"}
   - {id: diagonal, description: "Diagonal / herringbone layout (extra labor)", kind: labor, unit: sqft,
-     quantity: "area_sqft", price_key: fl_diagonal_sqft, when: "pattern > 0"}
+     quantity: "area_sqft", price_key: fl_diagonal_sqft, when: "pattern > 0 and material < 6"}
+  # Concrete coatings (2026-11-27): prep, repair, base coat, chips, clear top coat, application, stem wall
+  - {id: coat_grind, description: "Diamond grind concrete (coating prep)", kind: labor, unit: sqft, quantity: "area_sqft",
+     price_key: fl_coat_grind_sqft, when: "material >= 6 and coat_prep == 1"}
+  - {id: coat_etch, description: "Acid etch and rinse concrete (coating prep)", kind: labor, unit: sqft, quantity: "area_sqft",
+     price_key: fl_coat_etch_sqft, when: "material >= 6 and coat_prep == 2"}
+  - {id: coat_cracks, description: "Fill cracks and control joints", kind: material, unit: lf, quantity: "coat_crack_lf",
+     price_key: fl_coat_crack_lf, when: "material >= 6 and coat_crack_lf > 0"}
+  - {id: coat_epoxy, description: "Epoxy / enamel base coat", kind: material, unit: sqft, quantity: "area_sqft",
+     waste: "0.10", price_key: fl_coat_epoxy_sqft, when: "material == 6"}
+  - {id: coat_poly, description: "Polyurea / polyaspartic base coat", kind: material, unit: sqft, quantity: "area_sqft",
+     waste: "0.10", price_key: fl_coat_poly_sqft, when: "material == 7"}
+  - {id: coat_chips_full, description: "Paint chips (flakes), full broadcast", kind: material, unit: sqft, quantity: "area_sqft",
+     waste: "0.10", price_key: fl_coat_chip_full_sqft, when: "material >= 6 and coat_chips == 2"}
+  - {id: coat_chips_light, description: "Paint chips (flakes), light broadcast", kind: material, unit: sqft, quantity: "area_sqft",
+     waste: "0.10", price_key: fl_coat_chip_light_sqft, when: "material >= 6 and coat_chips == 1"}
+  - {id: coat_topcoat, description: "Clear polyaspartic top coat", kind: material, unit: sqft, quantity: "area_sqft",
+     waste: "0.10", price_key: fl_coat_top_sqft, when: "material >= 6 and coat_topcoat"}
+  - {id: coat_apply, description: "Apply coating system (base, chips, scrape, top coat)", kind: labor, unit: sqft,
+     quantity: "area_sqft", price_key: fl_lab_coat_sqft, when: "material >= 6"}
+  - {id: coat_stem, description: "Coat stem wall / cove base", kind: labor, unit: lf, quantity: "coat_stem_lf",
+     price_key: fl_coat_stem_lf, when: "material >= 6 and coat_stem_lf > 0"}
   - {id: baseboard, description: "Baseboard, supplied and installed", kind: material, unit: lf, quantity: "baseboard_lf",
      waste: "0.10", price_key: fl_baseboard_lf, when: "baseboard_lf > 0"}
   - {id: stairs, description: "Stairs", kind: labor, unit: ea, quantity: "stairs", price_key: fl_stair_ea,

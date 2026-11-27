@@ -308,18 +308,18 @@ async function renderAgents(main, screen) {
   parts.push(el("p", { class: "muted small", id: "agents-ai-settings-where" },
     "Which AI runs the agents, what each one does (AI measuring, Reviewer, Bid writer, Follow-up …) and the AI budget are set in AI-Prowler's 🏗 Estimator tab → 🤖 AI agents and budget; the models come from the top of the 🏢 Small Business tab."));
 
-  // 🤖 AI Auto Runs - every trade (2026-11-21, David: "Why were there no measured runs?" - only the Director's runs
-  // were listed, and most measuring is done with the AI Auto Run button on the Measure screen).
+  // 🤖 AI Auto Measure/Count runs - every trade (2026-11-21, David: "Why were there no measured runs?" - only the Director's runs
+  // were listed, and most measuring is done with the AI Auto Measure/Count button on the Measure screen).
   const autos = r.auto_runs || [];
-  parts.push(el("h3", { id: "auto-runs-head" }, "🤖 AI Auto Runs"));
+  parts.push(el("h3", { id: "auto-runs-head" }, "🤖 AI Auto Measure/Count runs"));
   parts.push(autos.length ? el("div", { id: "auto-runs-list" }, autos.map(autoRunCard))
-    : el("div", { class: "card empty", id: "auto-runs-empty" }, "No AI Auto Runs yet. Open a project's plans on the Measure screen and click 🤖 AI Auto Run — every trade's run is listed here."));
+    : el("div", { class: "card empty", id: "auto-runs-empty" }, "No AI Auto Measure/Count runs yet. Open a project's plans on the Measure screen and click 🤖 AI Auto Measure/Count — every trade's run is listed here."));
 
   // The Director's runs (a queue of agent tasks per plan job).
   parts.push(el("h3", {}, "Director measure runs"));
   parts.push(r.runs.length ? el("div", { id: "runs-list" }, r.runs.map(run => runCard(run, r.can_start, msg)))
     : el("div", { class: "card empty", id: "runs-empty" }, "No Director measure runs yet. The Director starts one for each plan job, or start one from ",
-      el("a", { href: "#/projects" }, "a project's estimate"), ". (🤖 AI Auto Runs from the Measure screen are listed above.)"));
+      el("a", { href: "#/projects" }, "a project's estimate"), ". (🤖 AI Auto Measure/Count runs from the Measure screen are listed above.)"));
 
   // AI Log: every call the Estimator made to the AI, and what came back.
   parts.push(el("h3", {}, "AI Log"));
@@ -328,7 +328,7 @@ async function renderAgents(main, screen) {
   main.replaceChildren(...parts);
 }
 
-// One 🤖 AI Auto Run: project, trade, how it went, what it proposed and cost, with links to its Measure page and its
+// One 🤖 AI Auto Measure/Count: project, trade, how it went, what it proposed and cost, with links to its Measure page and its
 // AI calls in the AI Log. Any trade: the trade name comes from the server (the trade's own name).
 const AUTO_STATUS = { done: "✓ done", failed: "✗ failed", running: "running…", queued: "waiting to start" };
 function autoRunCard(a) {

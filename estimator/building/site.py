@@ -19,7 +19,7 @@ TREE_RE = re.compile(r"\bTREES?\b|\bPALMS?\b|\bBOX\b|\bB\s*&\s*B\b|\bCAL(IPER)?\
 COVER_RE = re.compile(r"\bGROUND\s*COVER\b|\bFLATS?\b|\bPLUGS?\b|\bSOD\b|\bSEED\b|\bVINES?\b|\bANNUALS?\b|\bS\.?F\.?\b", re.I)
 SHRUB_RE = re.compile(r"\bSHRUBS?\b|\bGAL(LON)?\.?\b|\b\d+\s*G\b|#\s*\d+\b|\bHEDGE\b|\bGRASSES\b", re.I)
 GATE_LABEL_RE = re.compile(r"^(\d+)\s+(walk|drive)\s+gate", re.I)
-FENCE_HEIGHTS = (4, 5, 6, 8)
+FENCE_HEIGHTS = (4, 4.5, 5, 6, 8)          # the fencing trade's height choices (4.5 = 4 ft 6 in, 2026-11-25)
 
 
 def _r(v: float, nd: int = 1) -> float:

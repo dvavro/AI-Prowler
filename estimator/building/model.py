@@ -229,7 +229,13 @@ def build(conn, ctx: RequestContext, *, estimate_id: int | None = None, plan_set
 
     # Which sheets: floor plans with measured rooms; architectural ones when there are any; repeat views left out.
     per_sheet = []
+    from estimator.plan_engine import site as _site
     for s in sheets:
+        # 2026-11-24: a site, civil or landscape plan's outlines are areas (a lawn, a lot, the house's footprint), never
+        # rooms - a sod area named "ST AUGUSTINE SOD" was counted as an 8,000 sq ft room for flooring. Its fences,
+        # gates and zones are still read (building.site).
+        if (s["discipline"] or "") in ("site", "landscape", "civil") or _site.is_site_view(s["title"] or ""):
+            continue
         objs = _objects(conn, s["id"], ("room", "wall", "text"))
         rooms = [o for o in objs if o["kind"] == "room" and o["geometry"].get("type") == "polygon"]
         if rooms:

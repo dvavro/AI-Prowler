@@ -93,7 +93,7 @@ def upload(conn, ctx: RequestContext, estimate_id: int, file_path: str, supersed
     A revised set (supersedes_plan_set_id) REPLACES the old one (2026-11-21, David: keeping Rev 1 and Rev 2 side by
     side "is too complex and problematic for most users and confusing"): once the new file is attached, the old plan
     set is removed with everything that came from it - its sheets and every measurement on them, approved or not
-    (plan_delete.delete_plan_set). The person then measures the new plans from scratch (AI Auto Run, ⚡ Run wiring),
+    (plan_delete.delete_plan_set). The person then measures the new plans from scratch (AI Auto Measure/Count, ⚡ Run wiring),
     approves, and prices with 🔄 Update from the plans. The priced estimate itself is untouched until then. The question
     says exactly what goes, and replacing needs a role that may remove plans.
     keep_old=True keeps the old set beside the new one (the older Rev A / Rev B compare report, drawing_model.revisions,
@@ -137,7 +137,7 @@ def upload(conn, ctx: RequestContext, estimate_id: int, file_path: str, supersed
             f"{gone['sheets']} sheet{'s' if gone['sheets'] != 1 else ''}" if gone["sheets"] else "",
             (f"{n} measurement{'s' if n != 1 else ''}" + (f" ({ok} approved)" if ok else "")) if n else "") if b)
         question += (" The old plans are removed" + (f" with {what}" if what else "") + ", and this can't be undone."
-                     " Then measure the new plans from scratch (AI Auto Run, ⚡ Run wiring), approve the counts, and"
+                     " Then measure the new plans from scratch (AI Auto Measure/Count, ⚡ Run wiring), approve the counts, and"
                      " click 🔄 Update from the plans on the estimate. The estimate's prices stay as they are until then.")
         summary["replaces"] = {"plan_set_id": prev["id"], "file": prev["original_name"], "sheets": gone["sheets"],
                                "measurements": n, "measurements_approved": ok}
@@ -175,7 +175,7 @@ def upload(conn, ctx: RequestContext, estimate_id: int, file_path: str, supersed
            "next": "plan_process to read the sheets (needs the plan engine), then plan_get_sheets"}
     if removed:
         out["replaced"] = removed["summary"]
-        out["next"] += ("; then measure them again (AI Auto Run, wiring run), approve, and price the estimate with the "
+        out["next"] += ("; then measure them again (AI Auto Measure/Count, wiring run), approve, and price the estimate with the "
                         "approved measurements (Update from the plans)")
     if ctx.mode == "server":                       # heavy work: queued for a processing PC (spec: compute limits)
         from estimator.drawing_model import server_jobs

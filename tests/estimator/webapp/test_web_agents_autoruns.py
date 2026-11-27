@@ -1,5 +1,5 @@
-"""The Agents page lists the 🤖 AI Auto Runs, every trade (2026-11-21, David: "Why were there no measured runs?" -
-"make sure it works for all trades"). Only the Director's runs were listed; AI Auto Run's own runs are the measuring
+"""The Agents page lists the 🤖 AI Auto Measure/Count runs, every trade (2026-11-21, David: "Why were there no measured runs?" -
+"make sure it works for all trades"). Only the Director's runs were listed; AI Auto Measure/Count's own runs are the measuring
 most people do."""
 import re
 
@@ -85,19 +85,19 @@ def test_the_guides_name_real_buttons():                                        
         assert label in js, label
         assert label in wiring["text"], label
     measure = guides.get_guide("measure_and_approve_on_the_plans")["text"]
-    for label in ("AI Auto Run", "Keep approved items on rerun", "Audit & clean up", "✕ Reject"):
+    for label in ("AI Auto Measure/Count", "Keep approved items on rerun", "Audit & clean up", "✕ Reject"):
         assert label in js and label in measure, label
     replace = guides.get_guide("compare_plan_revisions")
     assert replace["screen"] == "plans"
     for label in ("(removes the old one)", "Replace the old plans and read the new ones", "Update from the plans"):
         assert label in js and label in replace["text"], label
     agents = guides.get_guide("manage_trade_agents")["text"]
-    for label in ("🤖 AI Auto Runs", "Director measure runs", "Open its Measure page", "📋 Its AI calls"):
+    for label in ("🤖 AI Auto Measure/Count runs", "Director measure runs", "Open its Measure page", "📋 Its AI calls"):
         assert label in js and label in agents, label
 
 
 def test_the_page_shows_them():                                                         # AG-03
-    for needed in ("🤖 AI Auto Runs", "function autoRunCard(", 'id: "auto-runs-list"', 'id: "auto-runs-empty"',
+    for needed in ("🤖 AI Auto Measure/Count runs", "function autoRunCard(", 'id: "auto-runs-list"', 'id: "auto-runs-empty"',
                    "Why it failed: ", '"#/takeoffs/" + a.estimate_id', '"#/agents/ai-log?auto_run_id=" + a.id',
-                   "Director measure runs", "(🤖 AI Auto Runs from the Measure screen are listed above.)"):
+                   "Director measure runs", "(🤖 AI Auto Measure/Count runs from the Measure screen are listed above.)"):
         assert needed in VERIFY, needed

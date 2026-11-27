@@ -399,7 +399,7 @@ SECTION_UNIT = "sqft/lf"            # the footer cross-section: square feet of c
 
 
 def replace_earlier_proposals(conn, ctx: RequestContext, run: dict, module_id: str, sheet_id) -> set[str]:
-    """A rerun of AI Auto Run recalculates the trade on that sheet: the earlier AI Auto Run measurements of the trade
+    """A rerun of AI Auto Measure/Count recalculates the trade on that sheet: the earlier AI Auto Measure/Count measurements of the trade
     on the sheet go (2026-11-19, David: two runs' proposals waiting side by side showed 4 weatherproof outlets where
     there were 2). Whether the items a person already approved stay is the run's keep_approved choice (on by
     default - "this can cost the user lots of review time"): kept, they are not proposed again; off, the trade starts
@@ -407,7 +407,7 @@ def replace_earlier_proposals(conn, ctx: RequestContext, run: dict, module_id: s
     removal. Call it inside the transaction that inserts the new proposals; it returns the questions (feeds) whose
     approved AI measurement was kept, for the caller to skip."""
     keep = bool(run.get("keep_approved", 1))
-    reason = f"replaced by AI Auto Run #{run['id']}"
+    reason = f"replaced by AI Auto Measure/Count #{run['id']}"
     rows = [dict(r) for r in conn.execute(
         "SELECT id, feeds, qty, unit, status FROM measurements WHERE company_id = ? AND estimate_id = ?"
         " AND module_id = ? AND sheet_id = ? AND proposed_by = ?",
@@ -422,6 +422,52 @@ def replace_earlier_proposals(conn, ctx: RequestContext, run: dict, module_id: s
                      {"measurement_id": r["id"], "qty": r["qty"], "unit": r["unit"], "feeds": r["feeds"],
                       "status": r["status"], "reason": reason})
     return kept
+
+
+def plans_measured(conn, ctx: RequestContext, run: dict, module_id: str, sheet_id) -> dict:
+    """2026-11-25 (David: "I hit AI Count and now I have 2 lengths and 2 gates counted twice"): the trade's questions a
+    plan reader already measured from these plans and a person approved (measurements from takeoff/from_plans.py - the
+    fence lines on a CAD site plan, the walls and rooms, the schedules ...): {feeds: measurement row}. AI Auto
+    Measure/Count reading the same plans doesn't add a second measurement for them - see already_measured()."""
+    ps = conn.execute("SELECT plan_set_id FROM sheets WHERE id = ?", (sheet_id,)).fetchone() if sheet_id else None
+    ps_id = ps[0] if ps else None
+    live = {r[0] for r in conn.execute("SELECT id FROM plan_sets WHERE company_id = ? AND estimate_id = ?",
+                                       (ctx.company_id, run["estimate_id"]))}
+    out = {}
+    for r in conn.execute("SELECT * FROM measurements WHERE company_id = ? AND estimate_id = ? AND module_id = ?"
+                          " AND status = 'approved' AND feeds IS NOT NULL ORDER BY id",
+                          (ctx.company_id, run["estimate_id"], module_id)):
+        try:
+            calc = json.loads(r["calc_json"] or "{}")
+        except ValueError:
+            continue
+        if calc.get("from") != "plans":
+            continue
+        # measured on other plans that are still on the project: not the same reading. Plans it was measured on that
+        # were replaced since (a newer revision re-checked it unchanged) don't count: it stands for the current plans.
+        known = set(calc.get("plan_set_ids") or []) & live
+        if ps_id is not None and known and ps_id not in known:
+            continue
+        out.setdefault(r["feeds"], dict(r))
+    return out
+
+
+def already_measured(conn, ctx: RequestContext, run: dict, covered: dict, feeds: str, qty) -> bool:
+    """True when a plan reader's approved measurement already answers this question: the AI's number isn't priced a
+    second time. The same number is nothing new; another number goes on the approved measurement as a suggested change
+    a person accepts or not (takeoff_confirm accept_suggestion=true), the way a re-read of the plans suggests one."""
+    from estimator.takeoff import measurements as ms
+    m = covered.get(feeds)
+    if not m:
+        return False
+    try:
+        new, now = Decimal(str(qty)).quantize(Decimal("0.01")), Decimal(str(m["qty"])).quantize(Decimal("0.01"))
+    except Exception:  # noqa: BLE001 - not a number: nothing to suggest
+        return True
+    if new != now and (m.get("suggested_qty") is None or Decimal(str(m["suggested_qty"])) != new):
+        ms._suggest(conn, ctx, m, new, f"🤖 AI Auto Measure/Count #{run['id']} read {new} {m['unit']} on the plan"
+                                       f" (approved {now} from the plans)")
+    return True
 
 
 def create_measurements(conn, ctx: RequestContext, run: dict, reading: dict, quantities: dict,
@@ -463,8 +509,11 @@ def create_measurements(conn, ctx: RequestContext, run: dict, reading: dict, qua
     ]
     with service.transaction(conn):
         kept = replace_earlier_proposals(conn, ctx, run, MODULE_ID, sheet_id)
+        covered = plans_measured(conn, ctx, run, MODULE_ID, sheet_id)           # the plan reader's approved ones
         for kind, feeds, label, qty, unit, how, shape_key in planned:
             if feeds in kept:                    # already approved, and the run keeps approved items
+                continue
+            if already_measured(conn, ctx, run, covered, feeds, qty):  # never priced twice (2026-11-25)
                 continue
             shape = shapes.get(shape_key)       # in sheet units, so it draws wherever its view is on the sheet
             geometry = json.dumps({"type": shape["type"], "points": shape["points"]}) if shape else None

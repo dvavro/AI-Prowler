@@ -127,7 +127,7 @@ def test_sheet_carries_inactive_trades(call, plans):                            
 # ---------------------------------------------------------------- the auto-run honours it
 
 def test_auto_run_never_measures_a_deactivated_sheet(call, db, plans):                      # ST-A09
-    """2026-11-15 (David): AI Auto Run measures only the sheets switched on. Asked for a switched-off sheet it moves
+    """2026-11-15 (David): AI Auto Measure/Count measures only the sheets switched on. Asked for a switched-off sheet it moves
     to one that is on (here none of those has a picture yet, so it says so); with every sheet off it refuses."""
     call("POST", f"{API}/sheets/{plans['found']}/trade-active",
          {"module_id": "concrete", "active": False})

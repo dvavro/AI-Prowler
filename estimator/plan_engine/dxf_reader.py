@@ -98,6 +98,21 @@ def _render_text(e, text):
     return (text, float(p.x), float(p.y), height, anchor, rotation)
 
 
+TEXT_WIDTH = 0.7          # a character is at most about 0.7 of the text height wide (capitals in Arial)
+
+
+def _text_box(text: str, x: float, y: float, height: float, anchor: str) -> tuple[float, float, float, float]:
+    """(x0, x1, y0, y1) in CAD coords (y up) that one line of drawn text covers, from its anchor ("ls", "mt" ...).
+    A generous estimate (no font metrics here): it only has to keep the text on the sheet picture."""
+    rows = (text or "").split("\n") or [""]
+    w = max(len(r) for r in rows) * height * TEXT_WIDTH
+    tall = height * (1 + 1.5 * (len(rows) - 1))                  # an MTEXT's later lines run on below the first
+    h_al, v_al = (anchor or "ls")[0], (anchor or "ls")[-1]
+    x0 = x if h_al == "l" else (x - w / 2 if h_al == "m" else x - w)
+    y0 = {"t": y - tall, "m": y - tall / 2, "b": y}.get(v_al, y - height * 0.25)   # "s": the baseline, descenders below
+    return x0, x0 + w, y0, y0 + tall + (height * 0.25 if v_al == "s" else 0)
+
+
 def read(path: Path, work: Path | None, max_sheets: int) -> dict:
     try:
         import ezdxf
@@ -185,6 +200,13 @@ def read(path: Path, work: Path | None, max_sheets: int) -> dict:
     for _, _, p, *_ in texts + inserts:
         xs.append(p[0])
         ys.append(p[1])
+    # 2026-11-25 (David: the AI redraw's notes - "4'-6" ALUMINUM ..." - weren't on the Measure screen): a note's text
+    # runs on past its insertion point. A notes column written at the drawing's right edge was cut off the sheet
+    # picture, so the sheet now reaches as far as each drawn line of text does.
+    for text, x, y, height, anchor, _rot in render_texts[:MAX_TEXT]:
+        x0, x1, y0, y1 = _text_box(text, x, y, height, anchor)
+        xs += [x0, x1]
+        ys += [y0, y1]
     for _, _, loops in hatches:
         for lp in loops:
             xs += [p[0] for p in lp]
@@ -267,15 +289,85 @@ def read(path: Path, work: Path | None, max_sheets: int) -> dict:
                              [[tr(p) for p in pts] for pts in render_extra], w, h, texts_for_render)
     layers = [layer for _, layer, _, _ in paths]
     title = Path(path).stem.replace("_", " ")[:120]
+    # 2026-11-24: schedules and tags in CAD too (door, window, room finish ... schedules written as text, and the D1 /
+    # W1 tags on the plan), read by the same readers as a PDF's - so doors and windows get their sizes and rooms their
+    # ceiling heights from a CAD drawing (an AI design's, or any designer's).
+    scheds, tag_objs = cad_schedules(render_texts, tr, w, h)
+    if scheds:
+        boxes = [s["bbox"] for s in scheds]
+        objects = [o for o in objects if o["kind"] not in ("room", "text") or not any(
+            _in_box(o["geometry"]["points"][0] if o["kind"] == "text" else _mid(o["geometry"]["points"]), b) for b in boxes)]
+        objects += tag_objs
     sheet = {"page_no": 1, "sheet_no": None, "title": title, "discipline": _discipline(layers, title),
              "units": units, "width": round(w, 4), "height": round(h, 4), "image_path": image_path,
              "confidence": 0.9, "viewports": [{"key": "model", "label": "Model space", "bbox": [0, 0, round(w, 4),
                                                                                                    round(h, 4)],
                                                   "scale_method": "cad", "scale_confidence": 1}],
              "objects": objects}
+    if scheds:
+        sheet["schedules"] = scheds
     if notes:
         sheet["note"] = "; ".join(notes)
     return {"page_count": 1, "sheets": [sheet]}
+
+
+def _in_box(p, b) -> bool:
+    return b[0] <= p[0] <= b[2] and b[1] <= p[1] <= b[3]
+
+
+def _mid(pts) -> tuple:
+    return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+
+
+PAPER_TEXT_IN = 0.1            # CAD text is laid out as if it were printed this high (a normal 7 pt note)
+
+
+def cad_schedules(render_texts, tr, w: float, h: float) -> tuple[list[dict], list[dict]]:
+    """Schedules and tags from a CAD drawing's text (2026-11-24). Each unrotated TEXT/MTEXT becomes a line of words at a
+    paper scale where the drawing's usual text is PAPER_TEXT_IN high, so the PDF readers' tolerances (in inches) fit;
+    then plan_engine.schedules finds the tables and plan_engine.tags the marks on the plan. Returns (schedules, tag
+    objects) in the drawing model's units (the sheet's own frame)."""
+    from estimator.plan_engine import schedules as sch
+    from estimator.plan_engine import tags as tg
+    from estimator.plan_engine.pdf_pages import Line, Page, Word
+    items = [t for t in render_texts if abs((t[5] or 0) % 360) < 0.5 and t[3] > 0 and t[0].strip()]
+    if not items:
+        return [], []
+    hs = sorted(t[3] for t in items)
+    f = PAPER_TEXT_IN / hs[len(hs) // 2]                # drawing units -> paper inches
+    words, lines = [], []
+    for text, x, y, ht, anchor, _rot in items[:MAX_TEXT]:
+        X, Y = tr((x, y))                               # y down from the top-left
+        cw = 0.6 * ht                                   # a character's width
+        full = len(text) * cw
+        x0 = X - (full / 2 if anchor[0] == "m" else full if anchor[0] == "r" else 0)
+        top = {"t": Y, "m": Y - ht / 2, "b": Y - ht}.get(anchor[1], Y - ht)       # baseline ("s"): the text sits above
+        ws, cur = [], x0
+        for part in text.split(" "):
+            if part:
+                ws.append(Word(part, cur * f, top * f, (cur + len(part) * cw) * f, (top + ht) * f, ht * f * 72))
+            cur += (len(part) + 1) * cw
+        if ws:
+            words += ws
+            lines.append(Line(ws))
+    page = Page(page_no=1, width=w * f, height=h * f, words=words, lines=lines)
+    try:
+        found = sch.find(page, None)
+    except Exception:  # noqa: BLE001 - odd text never breaks reading the drawing
+        return [], []
+    if not found:
+        return [], []
+    tables = [s["bbox"] for s in found]
+    marks = tg.marks_of({1: found})
+    vp = [{"key": "model", "label": "Model space", "bbox": [0, 0, w * f, h * f]}]
+    tags = tg.find(page, marks, vp, skip=tables, zone=None, source="cad")
+    scheds = [{"schedule_type": s["schedule_type"], "title": s["title"], "confidence": s["confidence"], "rows": s["rows"],
+               "bbox": [round(v / f, 4) for v in s["bbox"]]} for s in found]
+    for o in tags:
+        o["viewport"] = "model"
+        o["geometry"]["points"] = [[round(p[0] / f, 4), round(p[1] / f, 4)] for p in o["geometry"]["points"]]
+        o["source"] = "cad"
+    return scheds, tags
 
 
 def _dim_text(value: float, units: str) -> str:

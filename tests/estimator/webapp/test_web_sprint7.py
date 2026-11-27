@@ -342,10 +342,10 @@ def test_point_dimensions_not_drawn_as_dots():                          # C2S7-W
 def test_agent_auto_run_markers():                                              # C2S7-W04
     js = (router.WEB_DIR / "review.js").read_text(encoding="utf-8")
     for needed in (
-            # 2026-11-15: the button is "AI Auto Run"; the volume is in the Measure steps tab
+            # 2026-11-15: the button is "AI Auto Measure/Count"; the volume is in the Measure steps tab
             # (the above-drawing measurements table was removed 2026-11-18).
-            "bp-auto-run", "AI Auto Run", "/auto-run", '"concrete"',
-            "bp-auto-slot", "bp-auto-status", "AI Auto Run finished", "no news for 10 minutes",
+            "bp-auto-run", "AI Auto Measure/Count", "/auto-run", '"concrete"',
+            "bp-auto-slot", "bp-auto-status", "AI Auto Measure/Count finished", "no news for 10 minutes",
             "bp-auto-volume", "cu yd",
             "bp-auto-rerun", "Re-run agent", "/rerun",
             "concrete-agent", "bp-agent", "Show outline",
@@ -379,7 +379,7 @@ def test_auto_run_picks_concrete_or_electrical_by_sheet():                   # C
     assert "count the outlets, switches, lights and circuits" in js
     assert 'concrete: "measure the concrete"' in js
     assert 'plumbing: "count the fixtures"' in js
-    assert '"AI Auto Run: " + (AUTO_RUN_BLURBS[trade]' in js
+    assert '"AI Auto Measure/Count: " + (AUTO_RUN_BLURBS[trade]' in js
     assert "Add a construction trade to this project first" in js
     assert '"Every sheet is switched off for " + name' in js
     # While a run works, the button names the running trade, not the open sheet's.
@@ -413,14 +413,14 @@ def test_takeoff_ux_toolbar_counts_and_no_count_tool():                     # C2
     css = (router.WEB_DIR / "app.css").read_text(encoding="utf-8")
     # The toolbar sits with the drawing: it renders immediately above the split, not in the top bar.
     assert 'toolPalette(msg), el("div", { class: "bp-split" }' in js
-    assert 'el("div", { class: "row bp-bar" }, prev, sheetPick, next, viewButtons())' in js
-    # The Count tool is gone from the toolbar and the guide; AI Auto Run is the only way to count.
+    assert 'el("div", { class: "row bp-bar" }, prev, sheetPick, next, reload, viewButtons())' in js   # 🔄 Reload 2026-11-25
+    # The Count tool is gone from the toolbar and the guide; AI Auto Measure/Count is the only way to count.
     assert '"count", "✚", "Count"' not in js
     assert 'setTool("count"' not in js
-    assert 'count: { tool: null, label: "🤖 AI Auto Run" }' in js
+    assert 'count: { tool: null, label: "🤖 AI Auto Measure/Count" }' in js
     # The above-drawing measurements table is gone; the status line, Re-run and AI Log stay.
     assert "autoResultsBox" not in js and "bp-auto-results" not in js
-    assert "AI Auto Run finished" in js and "bp-auto-rerun" in js and "AI Log" in js
+    assert "AI Auto Measure/Count finished" in js and "bp-auto-rerun" in js and "AI Log" in js
     # The steps tab reads "AI Count steps" for an electrical run, "Measure steps" otherwise.
     assert '"AI Count steps" : "Measure steps"' in js
     # Count rows click to highlight their symbols, and the Count column is editable.

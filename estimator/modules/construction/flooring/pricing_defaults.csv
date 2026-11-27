@@ -18,5 +18,15 @@ fl_diagonal_sqft,Diagonal layout extra labor per sq ft (sample),labor,sqft,0.75
 fl_baseboard_lf,Baseboard supplied and installed per linear ft (sample),material,lf,3.25
 fl_stair_ea,Stair step (sample),labor,ea,60.00
 fl_transition_ea,Transition strip (sample),material,ea,25.00
+fl_coat_grind_sqft,Diamond grind concrete for coating per sq ft (sample),labor,sqft,0.75
+fl_coat_etch_sqft,Acid etch and rinse concrete per sq ft (sample),labor,sqft,0.30
+fl_coat_crack_lf,Crack and joint fill per linear ft (sample),material,lf,2.50
+fl_coat_epoxy_sqft,Epoxy / enamel base coat per sq ft (sample),material,sqft,0.80
+fl_coat_poly_sqft,Polyurea / polyaspartic base coat per sq ft (sample),material,sqft,1.25
+fl_coat_chip_full_sqft,Paint chips full broadcast per sq ft (sample),material,sqft,0.50
+fl_coat_chip_light_sqft,Paint chips light broadcast per sq ft (sample),material,sqft,0.15
+fl_coat_top_sqft,Clear polyaspartic top coat per sq ft (sample),material,sqft,0.75
+fl_lab_coat_sqft,Coating application labor per sq ft (sample),labor,sqft,1.50
+fl_coat_stem_lf,Stem wall or cove coating per linear ft (sample),labor,lf,4.00
 fl_permit_ea,Flooring permit (sample),other,ea,75.00
 fl_inspect_ea,Flooring inspection fee (sample),other,ea,100.00

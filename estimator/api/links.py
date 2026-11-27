@@ -115,8 +115,15 @@ def estimate_links(conn, ctx, estimate_id: int, est: dict | None = None, registr
     for mid in sorted({q["module_id"] for q in out_q}):
         mod = reg.modules.get(mid)
         qs = [q for q in out_q if q["module_id"] == mid]
-        trades.append({"module_id": mid, "name": mod.name if mod else mid, "questions": qs,
-                       "can_use_measurements": any(q["state"] in ("differs", "waiting") for q in qs)})
+        # the plans' notes choose something else (an AI redraw: wrought iron -> aluminum, 4 ft -> 4 ft 6 in)
+        sec = next((s for s in est["sections"] if s["module_id"] == mid), None)
+        notes = {}
+        if sec and approved.get(mid):
+            now = sec["answers"] or {}
+            notes = {q: {"from": now.get(q), "to": v} for q, v in plan_choices(conn, ctx, est, mid, reg).items()
+                     if not _same(now.get(q), v)}
+        trades.append({"module_id": mid, "name": mod.name if mod else mid, "questions": qs, "plan_notes": notes,
+                       "can_use_measurements": bool(notes) or any(q["state"] in ("differs", "waiting") for q in qs)})
     return {"estimate_id": est["id"], "lines": lines, "trades": trades,
             "measurements": [{"id": m["id"], "module_id": m["module_id"], "feeds": m["feeds"], "label": m["label"],
                               "room": m["room"], "qty": m["qty"], "unit": m["unit"], "status": m["status"],
@@ -124,9 +131,11 @@ def estimate_links(conn, ctx, estimate_id: int, est: dict | None = None, registr
                               "line_ids": to_lines.get(m["id"], [])} for m in rows]}
 
 
-def answers_from_measurements(conn, ctx, est: dict, module_id: str, registry=None) -> tuple[dict, dict]:
+def answers_from_measurements(conn, ctx, est: dict, module_id: str, registry=None,
+                              with_plans: bool = False) -> tuple[dict, dict]:
     """(new answers for the trade, what changed): the trade's current answers with each measured question replaced
-    by its approved measurements' total. Raises InvalidInput when nothing is approved for the trade."""
+    by its approved measurements' total. Raises InvalidInput when nothing is approved for the trade.
+    with_plans=True also takes the choices the plans' notes give (plan_choices: a fence's material and height)."""
     from estimator.errors import InvalidInput
     from estimator.takeoff import measurements as ms
     approved = ms.approved_answers(conn, ctx, est["id"], module_id, registry).get(module_id, {})
@@ -138,7 +147,40 @@ def answers_from_measurements(conn, ctx, est: dict, module_id: str, registry=Non
     approved = {**_wiring_cleared(module_id, approved, current), **approved}
     changes = {q: {"from": current.get(q), "to": v} for q, v in approved.items()
                if _num(current.get(q)) is None or abs(_num(current.get(q)) - _num(v)) > TOLERANCE}
+    if with_plans:
+        chosen = {q: v for q, v in plan_choices(conn, ctx, est, module_id, registry).items() if q not in approved}
+        changes.update({q: {"from": current.get(q), "to": v} for q, v in chosen.items() if not _same(current.get(q), v)})
+        approved = {**approved, **chosen}
     return {**current, **approved}, changes
+
+
+def _same(a, b) -> bool:
+    na, nb = _num(a), _num(b)
+    if na is not None and nb is not None:
+        return abs(na - nb) <= TOLERANCE
+    return str(a if a is not None else "").strip().lower() == str(b if b is not None else "").strip().lower()
+
+
+def plan_choices(conn, ctx, est: dict, module_id: str, registry=None) -> dict:
+    """2026-11-25 (David: an AI redraw changed the fence to aluminum, 4'-6", but the Lines still said wrought iron and
+    🔄 Update from the plans had nothing to update): what the plans' notes choose for the trade - its choice and yes/no
+    questions (a fence's material and height) - read by the plan reader from the project's current plans. The
+    quantities stay with the approved measurements. {} for a trade the plans don't answer, or when they can't be read."""
+    from estimator.building import trades as plan_trades
+    from estimator.modules import get_registry
+    if module_id not in plan_trades.TRADES:
+        return {}
+    mod = (registry or get_registry()).modules.get(module_id)
+    if mod is None:
+        return {}
+    try:
+        read = (plan_trades.answers(conn, ctx, module_id, estimate_id=est["id"]) or {}).get("answers") or {}
+    except Exception:  # noqa: BLE001 - the plans can't be read for this trade: nothing to add
+        return {}
+    kinds = {q.id: q.type for q in mod.questions}
+    # a yes/no only when the plans say yes (a note that asks for it); silence on the plans never turns one off
+    return {k: v for k, v in read.items() if v not in (None, "")
+            and (kinds.get(k) == "choice" or (kinds.get(k) == "boolean" and v is True))}
 
 
 _WIRING_FEED = re.compile(r"^(wire_\d+_\d+_ft|thhn_\d+_ft|emt_\w+|pvc_\w+|conduit_bodies|surface_boxes|wp_boxes)$")
