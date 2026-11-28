@@ -34,7 +34,8 @@ def test_switch_follows_ai_prowler(switch):  # S16-M01
 
 def test_overview(db_home):  # S16-M02
     ov = model.overview()
-    assert len(ov["trades"]) == 15 and len(ov["services"]) == 9 and ov["tools"] >= 55
+    # 2026-11-27: + Garage Doors trade, + Carpet Cleaning service
+    assert len(ov["trades"]) == 16 and len(ov["services"]) == 10 and ov["tools"] >= 55
     assert ov["db_version"] >= 8 and ov["setup"]["total"] == 10 and ov["module_errors"] == {}
 
 

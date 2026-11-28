@@ -180,7 +180,7 @@ def test_audit_trail(db):  # S14-P02
 
 def test_agent_config_defaults_and_confirm(db):  # S14-A01
     cfgs = agent_manager.list_configs(db, "default", REG)
-    assert len(cfgs["agents"]) == 15 and cfgs["turned_off"] == []
+    assert len(cfgs["agents"]) == 16 and cfgs["turned_off"] == []        # + garage_doors (2026-11-27)
     roof = agent_manager.get_config(db, "default", "roofing", REG)
     assert roof["enabled"] and roof["confidence_threshold"] == 85 and not roof["auto_advance"]
     assert "roof plan" in roof["sheet_rules"]["titles"]
@@ -319,7 +319,7 @@ def test_runner_tools(db):  # S14-T01
 
 
 def test_agent_config_tools(db):  # S14-T02
-    assert len(j(t.agent_config_get())["agents"]) == 15
+    assert len(j(t.agent_config_get())["agents"]) == 16
     assert j(t.agent_config_get("fencing"))["agent"]["sheet_rules"]["prefixes"] == ["C", "L", "A"]
     assert j(t.agent_config_update("fencing", {"auto_advance": True}))["confirmed"] is False
     assert j(t.agent_config_update("fencing", '{"auto_advance": true}', confirm=True))["config"]["auto_advance"]

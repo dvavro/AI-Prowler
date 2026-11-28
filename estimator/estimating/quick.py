@@ -141,6 +141,19 @@ def build_lines(mod, variables: dict) -> list[dict]:
     return out
 
 
+def check_warnings(mod, variables: dict) -> list[str]:
+    """2026-11-27 (Jamie): the module's checks that these answers trip - answers that price but probably aren't what
+    the person meant (a hedge 'by the foot' with no length charges the 42 ft minimum). Shown with the price."""
+    out = []
+    for c in getattr(mod, "checks", ()) or ():
+        try:
+            if evaluate(c["when"], variables):
+                out.append(c["say"])
+        except FormulaError:
+            continue
+    return out
+
+
 def plan_items(conn, company_id: str, mod, answers: dict) -> tuple[list, bool, dict]:
     """Price a module's answers without saving anything: (pricing-stack lines, uses sample prices, answers)."""
     stored, variables = resolve_answers(mod, answers)
@@ -251,7 +264,7 @@ def answer(conn, ctx: RequestContext, estimate_id: int, module_id: str, answers:
     _refuse_trade_off(conn, ctx, estimate_id, mod)
     stored, variables = resolve_answers(mod, answers)
     planned = build_lines(mod, variables)
-    warnings: list[str] = []
+    warnings: list[str] = check_warnings(mod, variables)
     carried = 0
     with service.transaction(conn):
         service._check_writable(conn, ctx, estimate_id, rev, service.QUICK_ROLES)

@@ -22,7 +22,7 @@ def test_every_planned_trade_has_a_module():  # S13-M01
     mods = {m.id: m for m in REG.list()}
     construction = {m for m in mods if mods[m].category == "construction"}
     assert NEW <= construction and not REG.errors
-    assert set(TRADE_WORDS) == construction and len(construction) == 15
+    assert set(TRADE_WORDS) == construction and len(construction) == 16     # + garage_doors (2026-11-27)
     assert all(mods[m].notes for m in NEW)
     assert [s["id"] for s in mods["fencing"].scenarios] == ["good", "better", "best"]
 

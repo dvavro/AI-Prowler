@@ -8,7 +8,7 @@ from estimator.modules import get_registry
 EXPECTED_COUNTS = {"electrical": 18, "concrete": 8, "demolition": 4, "drywall": 4,
                    "fencing": 3, "flooring": 3, "framing": 7, "hvac": 6,
                    "insulation": 5, "landscaping": 3, "plumbing": 8, "roofing": 7,
-                   "siding": 4, "windows_doors": 7}
+                   "siding": 4, "windows_doors": 7, "garage_doors": 3}     # garage_doors 2026-11-27
 
 
 def _trades(category):
@@ -17,7 +17,7 @@ def _trades(category):
 
 def test_every_construction_trade_is_covered():
     construction = _trades("construction")
-    assert len(construction) == 15
+    assert len(construction) == 16          # + garage_doors (2026-11-27)
     covered = set(refs.REFERENCE_REQUIREMENTS) | set(refs.NO_CHECKLIST)
     assert covered == set(construction)
     assert not (set(refs.REFERENCE_REQUIREMENTS) & set(refs.NO_CHECKLIST))
@@ -25,7 +25,7 @@ def test_every_construction_trade_is_covered():
 
 def test_no_service_trade_has_a_list():
     services = _trades("service")
-    assert len(services) == 9
+    assert len(services) == 10              # + carpet_cleaning (2026-11-27)
     for mid in services:
         assert mid not in refs.REFERENCE_REQUIREMENTS
         assert not refs.has_references(mid)

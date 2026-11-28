@@ -1,0 +1,63 @@
+# Carpet cleaning: quick estimate per room (2026-11-27, Jamie). Sample prices are placeholders based on national averages;
+# the setup wizard asks the company to replace them with its own.
+id: carpet_cleaning
+name: Carpet Cleaning
+version: 0.1.0
+category: service
+path: quick_estimate
+description: Carpet cleaning priced per room, adjusted for cleaning method and how dirty it is, with stairs, area rugs, sofas and chairs, pet odor treatment, carpet protector and moving furniture.
+minimum_charge: "125.00"
+keywords: [carpet cleaning, clean my carpet, clean my carpets, clean the carpet, clean the carpets, carpet cleaner,
+           carpet cleaners, steam clean, steam cleaning, steam clean carpet, carpet shampoo, shampoo carpet,
+           shampoo the carpet, shampoo the carpets, rug cleaning, area rug cleaning, upholstery cleaning,
+           couch cleaning, sofa cleaning, pet stains, pet odor, carpet stains, hot water extraction]
+notes:
+  - "Walk the rooms with the customer and point out stains that may not come out all the way."
+  - "Ask for a nearby water spigot and a place to park the truck-mounted unit if you use one."
+# Options for the quote.
+scenarios:
+  - {id: basic, label: "Carpet cleaning", answers: {protector: false}}
+  - {id: protect, label: "Carpet cleaning with protector", answers: {protector: true}}
+  - {id: whole_home, label: "Carpets, stairs and sofa", answers: {stairs: 13, sofas: 1, protector: true}}
+
+questions:
+  - {id: rooms, label: "Rooms of carpet", type: integer, required: true, min: 1, max: 50,
+     help: "Count each bedroom, living room and hallway. A room is up to about 200 sq ft - count a big room as two."}
+  - id: method
+    help: "Steam (hot water extraction) is the deepest clean. Low-moisture cleaning dries in an hour or two but costs a little more."
+    label: "Cleaning method"
+    type: choice
+    default: steam
+    choices:
+      - {value: steam, label: "Steam / hot water extraction", factor: "1.0"}
+      - {value: low_moisture, label: "Low-moisture (fast dry)", factor: "1.1"}
+  - id: condition
+    help: "Heavy traffic lanes, lots of stains or a long time since the last cleaning take extra passes."
+    label: "How dirty is it?"
+    type: choice
+    default: normal
+    choices:
+      - {value: light, label: "Light (cleaned in the last year)", factor: "1.0"}
+      - {value: normal, label: "Normal", factor: "1.15"}
+      - {value: heavy, label: "Heavy (traffic lanes, lots of stains)", factor: "1.4"}
+  - {id: stairs, label: "Carpeted stairs (steps)", type: integer, default: 0, min: 0, max: 100, help: "Number of carpeted steps."}
+  - {id: area_rugs, label: "Area rugs", type: integer, default: 0, min: 0, max: 30, help: "Rugs up to about 8 x 10 ft cleaned on site."}
+  - {id: sofas, label: "Sofas or sectionals (per seat section)", type: integer, default: 0, min: 0, max: 20,
+     help: "Upholstery cleaning. Count each sofa, or each piece of a sectional."}
+  - {id: chairs, label: "Upholstered chairs", type: integer, default: 0, min: 0, max: 30, help: "Armchairs, recliners and dining chairs with fabric seats."}
+  - {id: pet_rooms, label: "Rooms needing pet odor treatment", type: integer, default: 0, min: 0, max: 50,
+     help: "Enzyme treatment for pet urine spots and odor."}
+  - {id: protector, label: "Carpet protector?", type: boolean, default: false, help: "A stain-resistant coating applied after cleaning, priced per room."}
+  - {id: move_furniture, label: "Move furniture?", type: boolean, default: false, help: "Move and put back beds, couches and tables in each room."}
+
+lines:
+  - {id: rooms, description: "Carpet cleaning (method and condition adjusted)", kind: other, unit: ea,
+     quantity: "rooms * method * condition", price_key: cc_room_ea, show: "rooms", show_unit: room}
+  - {id: stairs, description: "Carpeted stairs", kind: other, unit: ea, quantity: "stairs", price_key: cc_stair_ea, when: "stairs > 0"}
+  - {id: area_rugs, description: "Area rugs", kind: other, unit: ea, quantity: "area_rugs", price_key: cc_rug_ea, when: "area_rugs > 0"}
+  - {id: sofas, description: "Sofa / sectional upholstery cleaning", kind: other, unit: ea, quantity: "sofas", price_key: cc_sofa_ea, when: "sofas > 0"}
+  - {id: chairs, description: "Upholstered chair cleaning", kind: other, unit: ea, quantity: "chairs", price_key: cc_chair_ea, when: "chairs > 0"}
+  - {id: pet, description: "Pet odor treatment", kind: other, unit: ea, quantity: "pet_rooms", price_key: cc_pet_room_ea, when: "pet_rooms > 0"}
+  - {id: protector, description: "Carpet protector", kind: other, unit: ea, quantity: "rooms", price_key: cc_protector_room_ea, when: "protector"}
+  - {id: move_furniture, description: "Move and replace furniture", kind: other, unit: ea, quantity: "rooms",
+     price_key: cc_move_room_ea, when: "move_furniture"}

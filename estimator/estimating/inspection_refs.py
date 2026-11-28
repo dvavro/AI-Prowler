@@ -261,6 +261,17 @@ REFERENCE_REQUIREMENTS: dict[str, tuple[dict, ...]] = {
         {"id": "energy", "description": "Fenestration U-factor 0.40 or less and SHGC 0.25 or less (Climate Zone 2)",
          "code_ref": "FBC-EC Table R402.1.2"},
     ),
+    # 2026-11-27 (Jamie): garage doors - wind rating for the door, entrapment protection for the opener
+    "garage_doors": (
+        {"id": "wind_rating", "description": "Garage door tested and labeled for the design wind pressure",
+         "code_ref": "R609.4"},
+        {"id": "entrapment", "description": "Automatic opener listed for entrapment protection, with photo eyes"
+                                           " mounted no more than 6 in above the floor",
+         "code_ref": "UL 325"},
+        {"id": "auto_reverse", "description": "Opener reverses when the door hits an object or the photo-eye beam"
+                                             " is blocked while closing",
+         "code_ref": "16 CFR 1211"},
+    ),
 }
 
 # Construction trades deliberately WITHOUT a reference list: the trade has no
@@ -289,6 +300,7 @@ TRADE_CODE = {
     "roofing": "the Florida Building Code",
     "siding": "the Florida Building Code",
     "windows_doors": "the Florida Building Code and the Florida Energy Code",
+    "garage_doors": "the International Residential Code (IRC), UL 325 and the federal opener safety rule (16 CFR 1211)",
 }
 
 

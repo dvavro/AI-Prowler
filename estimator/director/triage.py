@@ -34,6 +34,8 @@ TRADE_WORDS = {
     "insulation": ["insulation", "insulate"],
     "landscaping": ["landscaping", "sod", "irrigation", "pavers"],
     "demolition": ["demolition", "demo ", "tear out", "tear-out"],
+    # 2026-11-27 (Jamie, per David): garage door installs and repairs are a trade
+    "garage_doors": ["garage door", "garage doors", "overhead door", "garage door opener", "garage door spring"],
 }
 
 
@@ -46,19 +48,30 @@ _CLEAN = ("clean", "cleaned", "cleaning", "wash", "washed", "washing", "power wa
 INTENT_PAIRS = [
     ("pressure_washing", _CLEAN, ("siding", "roof", "driveway", "deck", "fence", "patio", "sidewalk", "pavers")),
     ("house_cleaning", ("clean", "cleaned", "cleaning", "deep clean"),
-     ("house", "home", "apartment", "condo", "bed", "beds", "bath", "baths", "bedroom", "bedrooms")),
+     ("house", "home", "apartment", "condo", "bed", "beds", "bath", "baths", "bedroom", "bedrooms"),
+     ("carpet", "carpets", "rug", "rugs", "upholstery")),          # 2026-11-27: carpets are carpet cleaning
+    # 2026-11-27 (Jamie): cleaning carpets, rugs or a couch is carpet cleaning - not a car's carpets
+    ("carpet_cleaning", _CLEAN + ("shampoo", "shampooed", "steam", "steam clean", "steam cleaned", "stains", "stain"),
+     ("carpet", "carpets", "rug", "rugs", "upholstery", "couch", "sofa", "sofas", "sectional"),
+     ("car", "cars", "truck", "suv", "van", "jeep", "vehicle")),
+    # 2026-11-27 (Jamie): anything wrong with or done to a garage door is the garage doors trade
+    ("garage_doors", ("repair", "fix", "fixed", "replace", "service", "tune", "tune-up", "broke", "broken", "stuck",
+                            "install", "new", "noisy", "spring", "springs", "cable", "cables", "opener", "off"),
+     ("garage door", "garage doors", "overhead door")),
     ("car_detailing", _CLEAN + ("detail", "detailed", "ceramic", "ceramic coat", "wax", "polish"),
      ("car", "cars", "truck", "suv", "van", "jeep", "vehicle", "vehicles", "minivan"),
      ("clean out", "cleanout", "half a truck", "truck load", "truckload", "a truck", "junk", "haul")),
     ("concrete", _BUILD, ("slab", "driveway", "patio", "sidewalk", "footing", "footings")),
-    ("flooring", _BUILD, ("carpet", "floor", "floors", "flooring", "tile", "lvp", "laminate", "hardwood")),
+    ("flooring", _BUILD, ("carpet", "floor", "floors", "flooring", "tile", "lvp", "laminate", "hardwood"),
+     ("clean", "cleaned", "cleaning", "shampoo", "steam clean")),   # 2026-11-27: cleaning carpet isn't new flooring
     ("painting", ("paint", "painted", "painting", "repaint"),
      ("room", "rooms", "bedroom", "bedrooms", "house", "home", "interior", "exterior", "walls", "ceilings", "cabinets",
       "trim", "garage", "kitchen", "bathroom"),
      # not a garage floor coating with paint chips (2026-11-27) - that's flooring
      ("paint chips", "paint chip", "epoxy", "floor coating", "polyaspartic", "polyurea", "garage floor")),
     ("plumbing", _BUILD, ("toilet", "toilets", "sink", "sinks", "faucet", "faucets", "shower", "tub", "water heater")),
-    ("windows_doors", _BUILD, ("window", "windows", "door", "doors", "slider", "sliding door")),
+    ("windows_doors", _BUILD, ("window", "windows", "door", "doors", "slider", "sliding door"),
+     ("garage door", "garage doors", "overhead door")),            # 2026-11-27: garage doors have their own service
     ("landscaping", _BUILD, ("gravel", "rock", "plants", "turf", "artificial turf", "trees", "shrubs", "drip")),
 ]
 INTENT_BONUS = 15

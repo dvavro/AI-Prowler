@@ -139,7 +139,7 @@ def test_practice_delete_removes_what_was_made(db, fake_host):  # S18-P03
 def test_modules_list_for_the_tab(db):  # S18-M01
     from estimator.ui import model
     mods = model.modules()
-    assert len(mods) == 24 and {m["category"] for m in mods} == {"construction", "service"}   # +1 car_detailing (2026-11-14)
+    assert len(mods) == 26 and {m["category"] for m in mods} == {"construction", "service"}   # +1 car_detailing (2026-11-14); +2 carpet cleaning, garage doors (2026-11-27)
     roof = next(m for m in mods if m["id"] == "roofing")
     assert roof["how"] == "quick or plans" and roof["version"]
     ok, msg = model.practice_create()

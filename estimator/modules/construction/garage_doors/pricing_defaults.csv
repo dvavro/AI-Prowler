@@ -1,0 +1,21 @@
+price_key,description,kind,unit,cost
+gd_service_call_ea,Garage door service call and diagnosis (sample),other,ea,59.53
+gd_tune_up_ea,Garage door tune-up and safety check per door (sample),labor,ea,60.20
+gd_spring_torsion_one_ea,One torsion spring replaced per door (sample),material,ea,121.41
+gd_spring_torsion_pair_ea,Pair of torsion springs replaced per door (sample),material,ea,166.13
+gd_spring_extension_pair_ea,Pair of extension springs replaced per door (sample),material,ea,108.63
+gd_cables_pair_ea,Lift cables replaced per door (sample),material,ea,95.85
+gd_rollers_set_ea,Full set of rollers per door (sample),material,ea,95.85
+gd_off_track_ea,Door put back on track per door (sample),labor,ea,117.06
+gd_panel_ea,Garage door panel replaced each (sample),material,ea,223.64
+gd_weatherstrip_ea,Bottom seal and weatherstripping per door (sample),material,ea,76.68
+gd_removal_ea,Remove and haul away old garage door each (sample),labor,ea,66.89
+gd_new_door_ea,New single insulated steel garage door (sample),material,ea,607.03
+gd_install_ea,Install a new single garage door (sample),labor,ea,234.11
+gd_opener_repair_ea,Opener repair (sample),labor,ea,80.27
+gd_opener_chain_ea,New chain-drive opener installed (sample),material,ea,255.59
+gd_opener_belt_ea,New belt-drive opener installed (sample),material,ea,306.71
+gd_opener_wall_ea,New wall-mount opener installed (sample),material,ea,543.13
+gd_after_hours_ea,After-hours or weekend fee (sample),other,ea,83.61
+gd_permit_ea,Garage door permit (sample),other,ea,100.00
+gd_inspect_ea,Inspection fee each (sample),other,ea,100.00

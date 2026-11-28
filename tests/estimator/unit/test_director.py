@@ -113,6 +113,15 @@ TRIAGE_CASES = [
     ("ceramic coat my car", "quick_quote", "car_detailing"),
     ("clean my 3 bed 2 bath house", "quick_quote", "house_cleaning"),
     ("put down gravel and plants in the front yard", "standard_estimate", "landscaping"),
+    # 2026-11-27 (Jamie): garage doors (a trade, per David), carpet cleaning (a service)
+    ("my garage door is stuck", "standard_estimate", "garage_doors"),
+    ("replace the broken spring on my garage door", "standard_estimate", "garage_doors"),
+    ("new garage door opener", "standard_estimate", "garage_doors"),
+    ("garage door tune-up", "standard_estimate", "garage_doors"),
+    ("clean the carpets in 3 bedrooms", "quick_quote", "carpet_cleaning"),
+    ("steam clean my carpet", "quick_quote", "carpet_cleaning"),
+    ("shampoo the couch and area rugs", "quick_quote", "carpet_cleaning"),
+    ("carpet cleaning for a 4 bedroom house", "quick_quote", "carpet_cleaning"),
 ]
 
 

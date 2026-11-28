@@ -1,0 +1,23 @@
+# Golden cases: sample prices, no markups (Personal-mode defaults). Totals in cents.
+# Sample costs (2026-11-27) are set so the price after the default markups (15% overhead, 30% profit) lands on 2026
+# national market prices: about $45 a room (light), $5 a step, $150 a sofa, $125 minimum.
+- name: one lightly soiled room hits the minimum charge
+  answers: {rooms: 1, condition: light}
+  # 1 x 1.0 x 1.0 x 30.10 = 30.10 -> minimum 125
+  expected_subtotal_cents: 3010
+  expected_total_cents: 12500
+- name: three rooms, steam, normal - still under the minimum
+  answers: {rooms: 3}
+  # 3 x 1.0 x 1.15 x 30.10 = 103.845 -> 103.85 (half up) -> minimum 125
+  expected_lines: {rooms: 10385}
+  expected_total_cents: 12500
+- name: five heavy rooms with stairs, sofa, pet treatment and protector
+  answers: {rooms: 5, condition: heavy, stairs: 13, sofas: 1, pet_rooms: 2, protector: true}
+  # rooms 5 x 1.4 x 30.10 = 210.70; stairs 13 x 3.34 = 43.42; sofa 100.33; pet 2 x 30.10 = 60.20; protector 5 x 16.72 = 83.60
+  expected_lines: {rooms: 21070, stairs: 4342, sofas: 10033, pet: 6020, protector: 8360}
+  expected_total_cents: 49825
+- name: four rooms low-moisture with rugs, chairs and moving furniture
+  answers: {rooms: 4, method: low_moisture, condition: light, area_rugs: 2, chairs: 2, move_furniture: true}
+  # rooms 4 x 1.1 x 1.0 x 30.10 = 132.44; rugs 2 x 50.17 = 100.34; chairs 2 x 40.13 = 80.26; furniture 4 x 13.38 = 53.52
+  expected_lines: {rooms: 13244, area_rugs: 10034, chairs: 8026, move_furniture: 5352}
+  expected_total_cents: 36656

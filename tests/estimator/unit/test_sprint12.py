@@ -31,7 +31,7 @@ def test_expansion_trades_load():  # S12-M01
 @pytest.mark.parametrize("text, module", [
     ("replace the ac unit", "hvac"), ("new heat pump", "hvac"), ("install a mini split in the garage", "hvac"),
     ("furnace replacement", "hvac"), ("replace the windows", "windows_doors"), ("new front door", "windows_doors"),
-    ("install a garage door", "windows_doors"), ("sliding door replacement", "windows_doors"),
+    ("install a garage door", "garage_doors"),          # 2026-11-27: garage doors have their own trade ("sliding door replacement", "windows_doors"),
     ("restucco the house", "siding"), ("new vinyl siding", "siding"), ("replace the fascia and soffit", "siding"),
     ("blow insulation in the attic", "insulation"), ("spray foam the garage", "insulation"),
 ])

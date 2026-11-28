@@ -114,6 +114,7 @@ class TradeModule:
                                       #  "per_month": {choice value: visits a month}, "once": (one-time line ids)}
     notes: tuple[str, ...] = ()       # reminders the Reviewer shows (e.g. hot-weather pour timing)
     scenarios: tuple[dict, ...] = ()  # good/better/best: ({"id", "label", "answers"}, ...)
+    checks: tuple[dict, ...] = ()     # 2026-11-27: warnings shown with the price ({"when": formula, "say": text}, ...)
 
     def question(self, qid: str) -> Question:
         for q in self.questions:
@@ -377,13 +378,31 @@ def load_module(folder: Path) -> TradeModule:
     if not isinstance(raw_notes, list) or not all(isinstance(n, str) and n.strip() for n in raw_notes):
         raise ManifestError(f"{where}: notes must be a list of sentences")
     scenarios = parse_scenarios(raw.get("scenarios"), questions, f"{where}")
+    # 2026-11-27 (Jamie): answers that price but probably aren't what the person meant (hedges "by the foot" with no
+    # length charge the 42 ft minimum) - each check's warning shows with the price
+    raw_checks = raw.get("checks") or []
+    if not isinstance(raw_checks, list):
+        raise ManifestError(f"{where}: checks must be a list of {{when, say}}")
+    checks = []
+    for i, c in enumerate(raw_checks, start=1):
+        cw = f"{where} check {i}"
+        if not isinstance(c, dict) or not str(c.get("when") or "").strip() or not str(c.get("say") or "").strip():
+            raise ManifestError(f"{cw}: needs when (a formula) and say (the warning)")
+        try:
+            compile_formula(str(c["when"]))
+            unknown = formula_variables(str(c["when"])) - known_vars
+        except FormulaError as exc:
+            raise ManifestError(f"{cw} when: {exc}") from exc
+        if unknown:
+            raise ManifestError(f"{cw} when: unknown variables {sorted(unknown)}")
+        checks.append({"when": str(c["when"]), "say": str(c["say"]).strip()})
 
     return TradeModule(
         id=mid, name=raw.get("name", mid), version=str(raw.get("version", "0.0.0")), category=category,
         path=path, description=raw.get("description", ""), folder=folder, questions=questions,
         lines=tuple(lines), minimum_charge_cents=min_cents, sample_prices=samples, keywords=keywords,
         required_any=required_any, recurrence=recurrence, notes=tuple(n.strip() for n in raw_notes),
-        scenarios=scenarios,
+        scenarios=scenarios, checks=tuple(checks),
     )
 
 

@@ -1,0 +1,27 @@
+# Golden cases: sample prices, no markups (Personal-mode defaults). Totals in cents.
+- name: service call only hits the minimum charge
+  answers: {doors: 1}
+  # service call 59.53 -> minimum 95
+  expected_subtotal_cents: 5953
+  expected_total_cents: 9500
+- name: single door tune-up
+  answers: {doors: 1, tune_up: true}
+  # service call 59.53; tune-up 1 x 1.0 x 60.20
+  expected_lines: {service_call: 5953, tune_up: 6020}
+  expected_total_cents: 11973
+- name: double door, torsion spring pair, cables and rollers
+  answers: {doors: 1, door_size: double, springs: torsion_pair, cables: true, rollers: true}
+  # service call 59.53; springs 166.13; cables 95.85; rollers 1 x 1.25 x 95.85 = 119.8125 -> 119.81
+  expected_lines: {service_call: 5953, spring_pair: 16613, cables: 9585, rollers: 11981}
+  expected_total_cents: 44132
+- name: new belt opener on a weekend
+  answers: {doors: 1, opener: belt, after_hours: true}
+  # service call 59.53; belt opener 306.71; after hours 83.61
+  expected_lines: {service_call: 5953, opener_belt: 30671, after_hours: 8361}
+  expected_total_cents: 44985
+- name: a new double door with a belt opener and permit leaves out the repairs and service call
+  answers: {doors: 1, door_size: double, new_door: true, opener: belt, permit: true, springs: torsion_pair, tune_up: true}
+  # removal 66.89; door 1 x 1.25 x 1.25 x 607.03 = 948.484 -> 948.48; install 1 x 1.25 x 234.11 = 292.6375 -> 292.64;
+  # belt opener 306.71; permit 100
+  expected_lines: {removal: 6689, new_door: 94848, door_install: 29264, opener_belt: 30671, permit: 10000}
+  expected_total_cents: 171472

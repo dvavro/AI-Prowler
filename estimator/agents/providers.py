@@ -89,6 +89,7 @@ def model_for(provider: str, model: str | None = None) -> str:
 STEP_GROUPS: dict[str, dict[str, str]] = {
     "llm_takeoff": {"classify": "simple", "read": "complex", "check": "complex"},
     "ai_design": {"read": "complex", "design": "complex"},      # 2026-11-21: AI design (estimator/design/runs.py)
+    "photo_fill": {"read": "complex"},     # 2026-11-27: Quick estimate from a drawing (estimator/estimating/photo_fill.py)
     "inspector": {"review": "complex"},
     "auto_calibrate": {"find": "complex", "pinpoint": "complex"},
     "plan_reader": {"classify": "simple"},

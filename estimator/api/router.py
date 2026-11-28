@@ -597,6 +597,17 @@ def _api_data(m: str, sub: str, req: Request, caller: auth.Caller, conn) -> Resp
     if sub == "/quick" and m == "POST":
         return _quick(req, ctx, conn, see)
 
+    # 2026-11-27 (Jamie): "Upload your drawing - let's get an estimate" - the AI answers a service's questions from a
+    # drawing or photo; the page fills the form for a person to check, nothing is priced here
+    if sub == "/quick/photo-fill" and m == "POST":
+        from estimator.estimating import photo_fill, service
+        if ctx.role not in service.QUICK_ROLES:
+            raise _Refuse(403, "permission_denied", f"only {', '.join(service.QUICK_ROLES)} can give quick quotes")
+        b = _body(req)
+        eid = b.get("estimate_id")
+        return _json(200, photo_fill.fill(conn, ctx, str(b.get("module_id") or "").strip(), b.get("images"),
+                                          str(b.get("note") or ""), int(eid) if eid else None))
+
     # ---------------------------------------------------------- Sprint 3: Price Book screen (basic)
     if sub.startswith("/price-book"):
         return _price_book(m, sub, req, ctx, conn)

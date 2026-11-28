@@ -100,6 +100,25 @@ td.money { text-align: right; font-variant-numeric: tabular-nums; }
 .coming-page ul { columns: 2; }
 code { background: #eef1f4; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
 
+/* 2026-11-27 (Jamie): Quick estimate - "Upload your drawing - let's get an estimate" (services only) */
+.drawing-box { border: 1px dashed #93c5fd; background: #f8fbff; margin: 12px 0; }
+.drawing-box .row { margin: 8px 0; }
+.ai-filled { background: #fff7d6; border-radius: 6px; box-shadow: 0 0 0 2px #fde68a; }
+.ai-filled::after { content: " ✨"; }
+.drawing-buttons { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+/* the picture, big: dark backdrop, click outside or Esc to close */
+.drawing-viewer { position: fixed; inset: 0; z-index: 1000; background: rgba(15, 23, 42, 0.85); display: flex;
+                  flex-direction: column; align-items: center; justify-content: center; padding: 16px; }
+.drawing-viewer img { max-width: 95vw; max-height: 82vh; object-fit: contain; background: #fff; border-radius: 6px; }
+.drawing-viewer .bar { display: flex; gap: 10px; align-items: center; margin-top: 12px; color: #fff; }
+/* the picture, pinned in the corner while you fill in the questions */
+.drawing-pin { position: fixed; right: 16px; bottom: 84px; z-index: 900; width: 340px; max-width: 45vw; background: #fff;
+               border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25); padding: 6px; }
+.drawing-pin img { display: block; width: 100%; max-height: 50vh; object-fit: contain; cursor: zoom-in; }
+.drawing-pin .bar { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 13px; }
+.drawing-pin .bar button { background: none; border: none; color: #1e3a8a; padding: 2px 6px; font-size: 16px; cursor: pointer; }
+.drawing-pin .bar button:hover { background: #e5edf8; border-radius: 4px; }
+
 /* Sprint 2: page heads, buttons as links, project page, upload, quick estimate */
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .page-head h2, .page-head h3 { margin: 0 0 12px; }

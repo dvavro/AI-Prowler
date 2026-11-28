@@ -1,0 +1,117 @@
+# Garage doors: new doors and openers, plus service and repair, from counts (no plans needed) (2026-11-27, Jamie;
+# a trade, not a quick service, per David). Sample prices are placeholders based on national averages; the setup wizard
+# asks the company to replace them with its own. Sample costs are set so the price after the default markups (15%
+# overhead, 30% profit, 7% tax on materials) lands on 2026 national market prices, e.g. spring pair + service call ~$349,
+# belt opener installed + service call ~$569, new single door installed ~$1,400, double ~$2,000.
+id: garage_doors
+name: Garage Doors
+version: 0.1.0
+category: construction
+path: both
+description: New garage doors and openers, and garage door service and repair - tune-ups, springs, cables, rollers, off-track doors, panels, weatherstripping and opener repair - adjusted for door size, with old-door removal, an after-hours fee, permit and inspections.
+minimum_charge: "95.00"
+keywords: [garage door, garage doors, garage door repair, garage door service, garage door tune up, garage door tune-up,
+           garage door spring, garage door springs, broken spring, torsion spring, extension spring, garage door cable,
+           garage door rollers, garage door off track, garage door stuck, garage door opener, opener repair, new opener,
+           garage door panel, overhead door, new garage door, garage door install, garage door installation,
+           replace the garage door, noisy garage door, garage door weatherstrip]
+notes:
+  - "Check the door's balance and the safety sensors on every visit, and tell the customer about any other worn parts."
+  - "Torsion springs are under high tension - only trained techs should adjust or replace them."
+  - "Measure the opening, headroom and side room before ordering a new door."
+
+scenarios:
+  - {id: tune_up, label: "Tune-up and safety check", answers: {tune_up: true}}
+  - {id: springs_rollers, label: "New springs and rollers", answers: {springs: torsion_pair, rollers: true}}
+  - {id: new_door_opener, label: "New door and belt-drive opener", answers: {new_door: true, opener: belt}}
+
+questions:
+  - {id: doors, label: "Number of garage doors", type: integer, default: 1, min: 1, max: 10, help: "How many garage doors are being worked on."}
+  - id: door_size
+    help: "Bigger, heavier doors take more time and bigger parts."
+    label: "Door size"
+    type: choice
+    default: single
+    choices:
+      - {value: single, label: "Single (one car, about 8-9 ft wide)", factor: "1.0"}
+      - {value: double, label: "Double (two car, about 16 ft wide)", factor: "1.25"}
+      - {value: oversize, label: "Oversize / RV / extra tall", factor: "1.6"}
+  - {id: new_door, label: "Install a new door?", type: boolean, default: false,
+     help: "A new standard insulated steel door with tracks, springs and hardware, sized by the door size above. Leaves out the repair items."}
+  - {id: remove_old, label: "Remove and haul away the old door?", type: boolean, default: true, help: "Only used with a new door."}
+  - {id: tune_up, label: "Tune-up and safety check?", type: boolean, default: false,
+     help: "Lubricate, tighten hardware, adjust the balance and limits, and test the safety sensors and auto-reverse."}
+  - id: springs
+    help: "Torsion springs sit above the door; extension springs run along the tracks on each side. Most techs replace springs in pairs."
+    label: "Springs to replace"
+    type: choice
+    default: none
+    # factor is a code: 0 none, 1 one torsion spring, 2 pair of torsion springs, 3 pair of extension springs
+    choices:
+      - {value: none, label: "None", factor: "0"}
+      - {value: torsion_one, label: "One torsion spring", factor: "1"}
+      - {value: torsion_pair, label: "Pair of torsion springs", factor: "2"}
+      - {value: extension_pair, label: "Pair of extension springs", factor: "3"}
+  - {id: cables, label: "Replace lift cables?", type: boolean, default: false, help: "Frayed or broken cables on both sides of the door."}
+  - {id: rollers, label: "Replace rollers?", type: boolean, default: false, help: "A full set of new rollers for a quieter, smoother door."}
+  - {id: off_track, label: "Door off track?", type: boolean, default: false, help: "Put the door back on its tracks and straighten bent track."}
+  - {id: panels, label: "Panels to replace", type: integer, default: 0, min: 0, max: 20, help: "Dented or cracked door sections to replace."}
+  - {id: weatherstrip, label: "New bottom seal and weatherstripping?", type: boolean, default: false, help: "Keeps out water, dust and bugs."}
+  - id: opener
+    help: "Fix the opener the customer has, or put in a new one. Belt drives are quieter; wall-mount openers save ceiling space."
+    label: "Opener"
+    type: choice
+    default: none
+    # factor is a code: 0 none, 1 repair, 2 new chain drive, 3 new belt drive, 4 new wall-mount
+    choices:
+      - {value: none, label: "No opener work", factor: "0"}
+      - {value: repair, label: "Repair the current opener", factor: "1"}
+      - {value: chain, label: "New chain-drive opener (installed)", factor: "2"}
+      - {value: belt, label: "New belt-drive opener (installed)", factor: "3"}
+      - {value: wall_mount, label: "New wall-mount opener (installed)", factor: "4"}
+  - {id: after_hours, label: "After hours or weekend?", type: boolean, default: false, help: "One extra fee for emergency, evening or weekend visits."}
+  - {id: permit, label: "Pull a permit?", type: boolean, default: false, help: "Some places need a permit for a new garage door. Adds the permit fee."}
+  - {id: inspections, label: "Inspections to schedule", type: integer, default: 0, min: 0, max: 20, help: "Inspection or re-inspection fees not already in the permit."}
+
+lines:
+  - {id: service_call, description: "Service call and diagnosis", kind: other, unit: ea, quantity: "1",
+     price_key: gd_service_call_ea, when: "not new_door"}
+  - {id: tune_up, description: "Tune-up and safety check (size adjusted)", kind: labor, unit: ea,
+     quantity: "doors * door_size", price_key: gd_tune_up_ea, when: "tune_up and not new_door", show: "doors", show_unit: door}
+  - {id: spring_one, description: "Torsion spring replaced (one)", kind: material, unit: ea, quantity: "doors",
+     price_key: gd_spring_torsion_one_ea, when: "springs == 1 and not new_door"}
+  - {id: spring_pair, description: "Torsion springs replaced (pair)", kind: material, unit: ea, quantity: "doors",
+     price_key: gd_spring_torsion_pair_ea, when: "springs == 2 and not new_door"}
+  - {id: spring_ext, description: "Extension springs replaced (pair)", kind: material, unit: ea, quantity: "doors",
+     price_key: gd_spring_extension_pair_ea, when: "springs == 3 and not new_door"}
+  - {id: cables, description: "Lift cables replaced (pair)", kind: material, unit: ea, quantity: "doors",
+     price_key: gd_cables_pair_ea, when: "cables and not new_door"}
+  - {id: rollers, description: "Rollers replaced (full set, size adjusted)", kind: material, unit: ea,
+     quantity: "doors * door_size", price_key: gd_rollers_set_ea, when: "rollers and not new_door", show: "doors", show_unit: door}
+  - {id: off_track, description: "Door put back on track", kind: labor, unit: ea, quantity: "doors",
+     price_key: gd_off_track_ea, when: "off_track and not new_door"}
+  - {id: panels, description: "Door panels replaced", kind: material, unit: ea, quantity: "panels",
+     price_key: gd_panel_ea, when: "panels > 0 and not new_door"}
+  - {id: weatherstrip, description: "Bottom seal and weatherstripping (size adjusted)", kind: material, unit: ea,
+     quantity: "doors * door_size", price_key: gd_weatherstrip_ea, when: "weatherstrip and not new_door", show: "doors", show_unit: door}
+  - {id: removal, description: "Remove and haul away the old door", kind: labor, unit: ea, quantity: "doors",
+     price_key: gd_removal_ea, when: "new_door and remove_old"}
+  # door_size twice: a double door costs about 1.5x a single (national averages ~$1,400 vs ~$2,100 installed)
+  - {id: new_door, description: "New insulated steel garage door with tracks, springs and hardware (size adjusted)",
+     kind: material, unit: ea, quantity: "doors * door_size * door_size", price_key: gd_new_door_ea, when: "new_door",
+     show: "doors", show_unit: door}
+  - {id: door_install, description: "Install the new door (size adjusted)", kind: labor, unit: ea, quantity: "doors * door_size",
+     price_key: gd_install_ea, when: "new_door", show: "doors", show_unit: door}
+  - {id: opener_repair, description: "Opener repair", kind: labor, unit: ea, quantity: "1",
+     price_key: gd_opener_repair_ea, when: "opener == 1"}
+  - {id: opener_chain, description: "New chain-drive opener, installed", kind: material, unit: ea, quantity: "doors",
+     price_key: gd_opener_chain_ea, when: "opener == 2"}
+  - {id: opener_belt, description: "New belt-drive opener, installed", kind: material, unit: ea, quantity: "doors",
+     price_key: gd_opener_belt_ea, when: "opener == 3"}
+  - {id: opener_wall, description: "New wall-mount opener, installed", kind: material, unit: ea, quantity: "doors",
+     price_key: gd_opener_wall_ea, when: "opener == 4"}
+  - {id: after_hours, description: "After-hours / weekend fee", kind: other, unit: ea, quantity: "1",
+     price_key: gd_after_hours_ea, when: "after_hours"}
+  - {id: permit, description: "Building permit", kind: other, unit: ea, quantity: "1", price_key: gd_permit_ea, when: "permit"}
+  - {id: inspections, description: "Inspections", kind: other, unit: ea, quantity: "inspections", price_key: gd_inspect_ea,
+     when: "inspections > 0"}

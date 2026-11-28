@@ -156,7 +156,7 @@ def test_tab_is_added_with_its_sections(root, db_home, switch, wizard):  # S16-G
     texts = _texts(frame)
     assert any("🧭 Estimator setup" in t for t in texts)                  # Setup AI-Prowler scrolls to this
     assert any("The Estimator is ON" in t for t in texts) and any("Setup checklist: 0 of 10" in t for t in texts)
-    assert len(tab.trade_vars) == 15 and all(v.get() for v in tab.trade_vars.values())
+    assert len(tab.trade_vars) == 16 and all(v.get() for v in tab.trade_vars.values())
 
 
 def test_show_hide_is_sticky_between_restarts(root, db_home, switch, wizard):  # S16-G01b (2026-11-18)
@@ -236,7 +236,7 @@ def test_trade_takeoff_settings_live_in_the_tab(root, db_home, switch, wizard): 
     app = FakeApp(root)
     build_estimator_tab(app)
     tab = app._estimator_tab
-    assert len(tab.trade_conf_vars) == 15 and tab.trade_conf_vars["framing"].get() == "85"
+    assert len(tab.trade_conf_vars) == 16 and tab.trade_conf_vars["framing"].get() == "85"
     assert tab.trade_auto_vars["framing"].get() is False
     tab.trade_conf_vars["framing"].set("90")
     tab.trade_auto_vars["framing"].set(True)

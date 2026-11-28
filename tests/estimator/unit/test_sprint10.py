@@ -39,7 +39,7 @@ def test_triage_new_trades(text, module):  # S10-T01
 @pytest.mark.parametrize("text", ["carpet cleaning", "clean the carpets in 3 rooms"])
 def test_carpet_cleaning_is_a_service(text):  # S10-T02
     r = triage(text, REG)
-    assert (r.lane, r.module_id) == ("quick_quote", "generic_service")
+    assert (r.lane, r.module_id) == ("quick_quote", "carpet_cleaning")     # its own service since 2026-11-27
 
 
 def test_framing_asks_for_something_to_frame(db):  # S10-D01

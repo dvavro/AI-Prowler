@@ -17,7 +17,7 @@ def j(s):
 def test_list_modules():  # S2-T01
     r = j(t.est_list_modules())
     assert r["ok"] and {m["id"] for m in r["modules"]} >= {"pressure_washing", "house_cleaning"}
-    assert j(t.est_list_modules("construction"))["count"] == 15
+    assert j(t.est_list_modules("construction"))["count"] == 16      # + garage_doors (2026-11-27)
 
 
 def test_full_quick_flow():  # S2-T02

@@ -18,6 +18,10 @@ recurrence: {question: visits, map: {weekly: Weekly, biweekly: Biweekly, monthly
              once: [leaves_small, leaves_standard, leaves_large, leaves_xlarge, leaves_exact,
                     palms_under20, palms_mid, palms_40_60, palms_over60, trees,
                     overseed_small, overseed_standard, overseed_large, overseed_xlarge, overseed_exact]}
+# Warnings shown with the price (2026-11-27, Jamie): a hedge priced "by the foot" with no length charges the minimum.
+checks:
+  - {when: "hedges >= 3 and hedge_ft == 0",
+     say: "Hedge trimming is priced by the foot but no hedge length was typed, so the 42 ft minimum was charged. Type the hedge length, or pick 'A few bushes' or 'Full yard' instead."}
 questions:
   - id: yard_size
     label: "Yard size"

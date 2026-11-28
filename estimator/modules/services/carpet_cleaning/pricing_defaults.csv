@@ -1,0 +1,9 @@
+price_key,description,kind,unit,cost
+cc_room_ea,Carpet cleaning per room (sample),other,ea,30.10
+cc_stair_ea,Carpeted stairs per step (sample),other,ea,3.34
+cc_rug_ea,Area rug cleaning each (sample),other,ea,50.17
+cc_sofa_ea,Sofa or sectional piece upholstery cleaning (sample),other,ea,100.33
+cc_chair_ea,Upholstered chair cleaning each (sample),other,ea,40.13
+cc_pet_room_ea,Pet odor treatment per room (sample),other,ea,30.10
+cc_protector_room_ea,Carpet protector per room (sample),other,ea,16.72
+cc_move_room_ea,Move and replace furniture per room (sample),other,ea,13.38

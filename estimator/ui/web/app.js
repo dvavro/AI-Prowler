@@ -1462,8 +1462,10 @@ function buildQuickForm(form, result, q, est, next) {
     extras.push(el("div", { class: "row" }, el("label", {}, "Project name (optional)", title), el("label", {}, "Address", addr)));
   }
   const btn = el("button", { class: "primary", type: "submit", id: "quick-price" }, "Price it");
+  // 2026-11-27 (Jamie): services only - upload a drawing or photo and the AI fills in the questions below
+  const upload = q.module.category === "service" ? drawingBox(form, q, est, next) : null;
   form.replaceChildren(el("strong", {}, q.module.name), q.module.description ? el("p", { class: "muted" }, q.module.description) : null,
-    el("div", { class: "qgrid" }, fields), ...extras, btn);
+    upload, el("div", { class: "qgrid" }, fields), ...extras, btn);
   form.onsubmit = async ev => {
     ev.preventDefault();
     const answers = {};
@@ -1487,6 +1489,144 @@ function buildQuickForm(form, result, q, est, next) {
       result.replaceChildren(el("p", { class: "error", role: "alert" }, e.message + extra));
     } finally { btn.disabled = false; }
   };
+}
+
+// "Upload your drawing - let's get an estimate" (2026-11-27, Jamie). Services only. The company's AI reads the drawing,
+// sketch or photo and answers this service's questions; each answer it filled is marked "AI filled - check it" (hover
+// for what it saw) until a person changes it. Nothing is priced until the person presses Price it.
+const DRAWING_MAX = 3;
+function shrinkDrawing(file) {                    // phone photos are big: send at most 1600 px on the long side
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onerror = () => reject(new Error(file.name + " couldn't be read"));
+    r.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error(file.name + " isn't a picture (PNG, JPG or WebP)"));
+      img.onload = () => {
+        const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+        const g = c.getContext("2d");
+        g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);
+        g.drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL("image/jpeg", 0.88));
+      };
+      img.src = r.result;
+    };
+    r.readAsDataURL(file);
+  });
+}
+
+function drawingBox(form, q, est, next) {
+  const files = el("input", { type: "file", id: "quick-drawing", accept: "image/*", multiple: true,
+                              "aria-label": "Drawing or photo of the job" });
+  const note = el("input", { id: "quick-drawing-note", maxlength: 1000,
+                             placeholder: "Anything the picture doesn't show (optional) - e.g. back yard only, about 1/3 acre" });
+  const go = el("button", { type: "button", class: "primary", id: "quick-drawing-go" }, "✨ Get my estimate from the drawing");
+  const status = el("div", { id: "quick-drawing-status", role: "status" });
+  go.addEventListener("click", async () => {
+    const picked = Array.from(files.files || []);
+    if (!picked.length) { status.replaceChildren(el("p", { class: "error" }, "Pick a drawing or photo first.")); return; }
+    if (picked.length > DRAWING_MAX) {
+      status.replaceChildren(el("p", { class: "error" }, "Upload up to " + DRAWING_MAX + " pictures at a time.")); return;
+    }
+    go.disabled = true;
+    status.replaceChildren(el("p", { class: "note" }, "⏳ The AI is reading your drawing - this takes about 10 to 30 seconds…"));
+    try {
+      const images = [];
+      for (const f of picked) images.push(await shrinkDrawing(f));
+      const body = { module_id: q.module.id, images, note: note.value };
+      if (est) body.estimate_id = est.id;
+      const r = await api("POST", "/quick/photo-fill", body);
+      fillFromDrawing(form, q, r, status);
+      if (next) next.textContent = "Next: check the answers the AI filled in (marked ✨), fill in any it couldn't tell, then press Price it.";
+    } catch (e) {
+      if (e.status === 401) return;
+      status.replaceChildren(el("p", { class: "error", role: "alert" }, e.message || String(e)));
+    } finally { go.disabled = false; }
+  });
+  // 2026-11-27 (Jamie): see the picture yourself - big on the screen, or pinned in the corner while you fill in the
+  // questions the AI couldn't. The picture never leaves the browser for this (it's shown from the file you picked).
+  const view = el("button", { type: "button", class: "button", id: "quick-drawing-view", disabled: true }, "🖼 View picture");
+  const pinBtn = el("button", { type: "button", class: "button", id: "quick-drawing-pin", disabled: true }, "📌 Keep it on screen");
+  const wrap = el("div", { class: "card section drawing-box", id: "quick-drawing-box" },
+    el("strong", {}, "📷 Upload your drawing — let's get an estimate"),
+    el("p", { class: "muted" }, "Upload a drawing, sketch or photo of the job. The AI fills in the questions below — check them, then press Price it."),
+    el("div", { class: "row" }, el("label", {}, "Drawing or photo (up to " + DRAWING_MAX + ")", files), el("label", {}, "Note for the AI", note)),
+    el("div", { class: "row drawing-buttons" }, go, view, pinBtn), status);
+  let urls = [], pinned = null;
+  const unpin = () => { if (pinned) { pinned.remove(); pinned = null; } };
+  files.addEventListener("change", () => {
+    urls.forEach(u => URL.revokeObjectURL(u));
+    urls = Array.from(files.files || []).slice(0, DRAWING_MAX).map(f => URL.createObjectURL(f));
+    view.disabled = pinBtn.disabled = !urls.length;
+    unpin();
+  });
+  view.addEventListener("click", () => urls.length && showDrawingViewer(wrap, urls, 0));
+  pinBtn.addEventListener("click", () => {
+    if (!urls.length) return;
+    if (pinned) { unpin(); return; }
+    let i = 0;
+    const img = el("img", { src: urls[0], alt: "Your drawing or photo - click to see it bigger", title: "Click to see it bigger" });
+    const count = el("span", { class: "muted" }, urls.length > 1 ? "1 of " + urls.length : "");
+    const step = d => { i = (i + d + urls.length) % urls.length; img.src = urls[i]; count.textContent = (i + 1) + " of " + urls.length; };
+    img.addEventListener("click", () => showDrawingViewer(wrap, urls, i));
+    pinned = el("div", { class: "drawing-pin", id: "quick-drawing-pinned", role: "complementary", "aria-label": "Your drawing" },
+      el("div", { class: "bar" }, el("strong", {}, "Your drawing"),
+        urls.length > 1 ? el("span", {}, el("button", { type: "button", class: "link", "aria-label": "Previous picture", onclick: () => step(-1) }, "‹"),
+          " ", count, " ", el("button", { type: "button", class: "link", "aria-label": "Next picture", onclick: () => step(1) }, "›")) : null,
+        el("button", { type: "button", class: "link", "aria-label": "Close", title: "Close", onclick: unpin }, "✕")),
+      img);
+    wrap.append(pinned);
+  });
+  return wrap;
+}
+
+function showDrawingViewer(root, urls, start) {
+  let i = start;
+  const img = el("img", { alt: "Your drawing or photo" });
+  const count = el("span", {});
+  const show = () => { img.src = urls[i]; count.textContent = urls.length > 1 ? (i + 1) + " of " + urls.length : ""; };
+  const close = () => { box.remove(); document.removeEventListener("keydown", onKey); };
+  const step = d => { i = (i + d + urls.length) % urls.length; show(); };
+  const onKey = ev => { if (ev.key === "Escape") close(); else if (ev.key === "ArrowLeft") step(-1); else if (ev.key === "ArrowRight") step(1); };
+  const box = el("div", { class: "drawing-viewer", id: "quick-drawing-viewer", role: "dialog", "aria-modal": "true", "aria-label": "Your drawing" },
+    img,
+    el("div", { class: "bar" },
+      urls.length > 1 ? el("button", { type: "button", class: "button", onclick: () => step(-1) }, "‹ Previous") : null,
+      count,
+      urls.length > 1 ? el("button", { type: "button", class: "button", onclick: () => step(1) }, "Next ›") : null,
+      el("button", { type: "button", class: "primary", id: "quick-drawing-close", onclick: close }, "Close")));
+  box.addEventListener("click", ev => { if (ev.target === box) close(); });
+  document.addEventListener("keydown", onKey);
+  show();
+  root.append(box);
+}
+
+function fillFromDrawing(form, q, r, status) {
+  const labelOf = id => { const x = q.questions.find(z => z.id === id); return x ? x.label : id; };
+  for (const old of form.querySelectorAll(".ai-filled")) { old.classList.remove("ai-filled"); old.removeAttribute("title"); }
+  let filled = 0;
+  for (const [id, value] of Object.entries(r.answers || {})) {
+    const input = form.querySelector('[data-q="' + id + '"]');
+    if (!input) continue;
+    if (input.type === "checkbox") input.checked = value === true;
+    else input.value = String(value);
+    const box = input.closest("label") || input;
+    box.classList.add("ai-filled");
+    box.title = "✨ AI filled - check it" + (r.why && r.why[id] ? ": " + r.why[id] : "");
+    const clear = () => { box.classList.remove("ai-filled"); box.removeAttribute("title"); };
+    input.addEventListener("change", clear, { once: true });
+    input.addEventListener("input", clear, { once: true });
+    filled++;
+  }
+  const missing = (r.not_shown || []).map(labelOf);
+  status.replaceChildren(...[      // replaceChildren shows a null as the word "null", so the empty parts are dropped
+    el("p", { class: "note" }, "✨ The AI filled in " + filled + " answer" + (filled === 1 ? "" : "s") + " (marked ✨ — hover to see what it saw)."
+      + (r.summary ? " " + r.summary : "")),
+    missing.length ? el("p", { class: "note warn" }, "Couldn't tell from the picture — check or fill in: " + missing.join(", ") + ".") : null,
+    (r.dropped || []).length ? el("p", { class: "muted" }, "Left out: " + r.dropped.map(d => labelOf(d.id) + " (" + d.reason + ")").join("; ")) : null]
+    .filter(Boolean));
 }
 
 function showQuickResult(box, r, mod) {
